@@ -1,0 +1,35 @@
+name: flutter_vless
+description: A plugin that allow you to making vless connection (Proxy)
+
+version: 1.0.0
+homepage: https://github.com/XIIIFOX/flutter_vless/
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  plugin_platform_interface: ^2.1.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+# For information on the generic Dart part of this file, see the
+# following page: https://dart.dev/tools/pub/pubspec
+
+# The following section is specific to Flutter packages.
+flutter:
+
+  plugin:
+    platforms:
+      android:
+        package: com.github.tfox.flutter_vless
+        pluginClass: FlutterV2rayPlugin
+      ios:
+        pluginClass: FlutterVlessPlugin
+
+  

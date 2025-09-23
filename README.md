@@ -2,7 +2,7 @@
 
 **Flutter plugin to run VLESS/VMESS as a local proxy and VPN on Android and iOS.**
 
-This package helps parse vless share links, generate vless configurations and run vless as a proxy or VPN from a Flutter app.
+Provides fine-grained routing for domains, sites, and apps, with built-in status tracking, delay testing, and extended configuration options
 
 ## Table of contents
 

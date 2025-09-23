@@ -1,5 +1,5 @@
 name: flutter_vless
-description: A plugin that allow you to making vless connection (Proxy)
+description: Flutter plugin to run VLESS/VMESS as a local proxy and VPN on Android and iOS
 
 version: 1.0.0
 homepage: https://github.com/XIIIFOX/flutter_vless/

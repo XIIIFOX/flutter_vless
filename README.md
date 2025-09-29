@@ -105,7 +105,7 @@ class _MyAppState extends State<MyApp> {
 
 - Flutter SDK (the minimum supported version used by the package).
 - Android: recommended `minSdkVersion` >= 23; set `targetSdkVersion` to a recent API.
-- iOS: `iOS Deployment Target` >= 13.0 (may vary depending on Network Extension usage).
+- iOS: `iOS Deployment Target` >= 15.0 (may vary depending on Network Extension usage).
 - Running VPN mode on iOS requires Network Extension and a provisioning profile that allows it.
 
 ---

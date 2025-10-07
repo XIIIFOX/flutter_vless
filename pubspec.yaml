@@ -3,6 +3,13 @@ description: Flutter plugin to run VLESS/VMESS as a local proxy and VPN on Andro
 
 version: 1.0.0
 homepage: https://github.com/XIIIFOX/flutter_vless/
+tags:
+     - VLESS
+     - v2ray
+     - xray
+     - proxy
+     - vpn
+     - VMESS
 
 environment:
   sdk: '>=3.4.0 <4.0.0'

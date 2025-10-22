@@ -271,4 +271,4 @@ UQBot8FUuYpyW8cjq306-qiEqnpfNjTHxhC1dk_6XDcJ5a1J
 
 
 
-All rights reserved.
+All rights reserved. 13FOX - https://tfox.dev

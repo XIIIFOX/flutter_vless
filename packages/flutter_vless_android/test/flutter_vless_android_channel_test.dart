@@ -53,6 +53,7 @@ void main() {
       'blocked_apps': ['com.browser.blocked'],
       'bypass_subnets': ['192.168.0.0/16'],
       'proxy_only': false,
+      'set_system_proxy': true,
       'notificationDisconnectButtonName': 'DISCONNECT',
     });
   });

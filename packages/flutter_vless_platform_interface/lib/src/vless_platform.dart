@@ -55,6 +55,7 @@ abstract class VlessPlatform extends PlatformInterface {
     List<String>? blockedApps,
     List<String>? bypassSubnets,
     bool proxyOnly = false,
+    bool setSystemProxy = true,
   }) {
     throw UnimplementedError('startVless() has not been implemented.');
   }

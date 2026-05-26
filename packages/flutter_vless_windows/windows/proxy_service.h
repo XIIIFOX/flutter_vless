@@ -45,7 +45,7 @@ class ProxyService {
    * @param config The Xray configuration JSON.
    * @return true if started successfully, false otherwise.
    */
-  bool Start(const std::string& config);
+  bool Start(const std::string& config, bool configure_system_proxy = true);
 
   /**
    * @brief Stops the proxy service.
@@ -110,6 +110,7 @@ class ProxyService {
   std::thread v2ray_thread_;
   std::thread stats_thread_;
   std::string current_config_;
+  bool configure_system_proxy_ = true;
   
   // Traffic statistics
   std::mutex stats_mutex_;

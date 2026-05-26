@@ -22,7 +22,7 @@ class V2rayManager {
  public:
   static V2rayManager& GetInstance();
 
-  bool Start(const std::string& config, bool proxy_only);
+  bool Start(const std::string& config, bool proxy_only, bool configure_system_proxy = true);
   void Stop();
   bool IsRunning() const;
 

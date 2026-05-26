@@ -62,6 +62,7 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     List<String>? blockedApps,
     List<String>? bypassSubnets,
     bool proxyOnly = false,
+    bool setSystemProxy = true,
   }) async {
     await methodChannel.invokeMethod('startVless', {
       'remark': remark,
@@ -69,6 +70,7 @@ class VlessMethodChannelAdapter extends VlessPlatform {
       'blocked_apps': blockedApps,
       'bypass_subnets': bypassSubnets,
       'proxy_only': proxyOnly,
+      'set_system_proxy': setSystemProxy,
       'notificationDisconnectButtonName': notificationDisconnectButtonName,
     });
   }

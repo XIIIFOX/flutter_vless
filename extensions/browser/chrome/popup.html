@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Flutter Vless</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Flutter Vless</h1>
+        <span id="state">...</span>
+      </header>
+
+      <section>
+        <textarea id="profileInput" placeholder="vless://, vmess://, trojan://, ss://, socks://, subscription, or Xray JSON"></textarea>
+      </section>
+
+      <nav>
+        <button id="importButton">Import</button>
+        <button id="connectButton">Connect</button>
+        <button id="disconnectButton">Disconnect</button>
+      </nav>
+
+      <section class="details">
+        <div>
+          <label>Proxy</label>
+          <output id="proxy">...</output>
+        </div>
+        <div>
+          <label>Core</label>
+          <output id="core">...</output>
+        </div>
+      </section>
+
+      <p id="error"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

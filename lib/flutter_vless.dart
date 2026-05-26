@@ -103,6 +103,11 @@ class FlutterVless {
   /// Set [proxyOnly] to `true` when the app should start local Xray proxy
   /// behavior without installing a system VPN or Packet Tunnel route.
   ///
+  /// Set [setSystemProxy] to `false` when a caller, such as a browser
+  /// extension companion, only needs the local Xray listener and will manage
+  /// browser/system proxy settings itself. Existing desktop proxy-only flows
+  /// keep the historical behavior by default.
+  ///
   /// [notificationDisconnectButtonName] controls the Android foreground
   /// notification disconnect action label.
   Future<void> startVless({
@@ -111,6 +116,7 @@ class FlutterVless {
     List<String>? blockedApps,
     List<String>? bypassSubnets,
     bool proxyOnly = false,
+    bool setSystemProxy = true,
     String notificationDisconnectButtonName = "DISCONNECT",
   }) async {
     _configValidator.validateJsonString(config);
@@ -120,6 +126,7 @@ class FlutterVless {
       config: config,
       blockedApps: blockedApps,
       proxyOnly: proxyOnly,
+      setSystemProxy: setSystemProxy,
       bypassSubnets: bypassSubnets,
       notificationDisconnectButtonName: notificationDisconnectButtonName,
     );

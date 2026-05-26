@@ -1,0 +1,12 @@
+name: flutter_vless_native_host
+description: Native Messaging bridge for the flutter_vless browser extension.
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.12.0
+
+dependencies:
+
+dev_dependencies:
+  lints: ^6.0.0

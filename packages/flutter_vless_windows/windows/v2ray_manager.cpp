@@ -78,7 +78,7 @@ V2rayManager& V2rayManager::GetInstance() {
   return instance;
 }
 
-bool V2rayManager::Start(const std::string& config, bool proxy_only) {
+bool V2rayManager::Start(const std::string& config, bool proxy_only, bool configure_system_proxy) {
   if (is_running_.load()) {
     Stop();
   }
@@ -95,7 +95,7 @@ bool V2rayManager::Start(const std::string& config, bool proxy_only) {
     // Proxy Mode: Delegate to ProxyService
     if (proxy_service_) {
       is_running_.store(true);
-      return proxy_service_->Start(config);
+      return proxy_service_->Start(config, configure_system_proxy);
     }
     return false;
   } else {

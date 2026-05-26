@@ -381,11 +381,13 @@ void FlutterVlessPlugin::HandleMethodCall(
       auto remark_it = arguments->find(flutter::EncodableValue("remark"));
       auto config_it = arguments->find(flutter::EncodableValue("config"));
       auto proxy_only_it = arguments->find(flutter::EncodableValue("proxy_only"));
+      auto set_system_proxy_it = arguments->find(flutter::EncodableValue("set_system_proxy"));
       
       if (remark_it != arguments->end() && config_it != arguments->end()) {
         std::string remark = std::get<std::string>(remark_it->second);
         std::string config = std::get<std::string>(config_it->second);
         bool proxy_only = false;
+        bool set_system_proxy = true;
         
         if (proxy_only_it != arguments->end()) {
           const auto* proxy_only_value = std::get_if<bool>(&proxy_only_it->second);
@@ -393,14 +395,20 @@ void FlutterVlessPlugin::HandleMethodCall(
             proxy_only = *proxy_only_value;
           }
         }
+        if (set_system_proxy_it != arguments->end()) {
+          const auto* set_system_proxy_value = std::get_if<bool>(&set_system_proxy_it->second);
+          if (set_system_proxy_value) {
+            set_system_proxy = *set_system_proxy_value;
+          }
+        }
 
         // Convert unique_ptr to shared_ptr to allow capturing in std::function (which requires CopyConstructible)
         std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> shared_result = std::move(result);
         
-        std::thread([this, config, proxy_only, shared_result]() {
+        std::thread([this, config, proxy_only, set_system_proxy, shared_result]() {
           std::lock_guard<std::mutex> lock(lifecycle_mutex_);
           LogMessage("Starting Xray...");
-          if (V2rayManager::GetInstance().Start(config, proxy_only)) {
+          if (V2rayManager::GetInstance().Start(config, proxy_only, set_system_proxy)) {
             LogMessage("Xray started successfully");
             is_running_ = true;
             start_time_ = std::chrono::steady_clock::now();

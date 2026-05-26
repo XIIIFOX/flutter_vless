@@ -49,8 +49,9 @@ license notices required by the license. See [NOTICE](NOTICE) and
 4. Practical scenarios: [Examples](doc/examples.md)
 5. Config formats and advanced editing: [Configuration Guide](doc/configuration.md)
 6. Compatibility and limits: [Compatibility](doc/compatibility.md)
-7. Security and runtime boundaries: [Security](doc/security.md)
-8. If something fails: [Troubleshooting](doc/troubleshooting.md)
+7. Browser extension companion architecture: [Browser Extension Companion](doc/browser-extension-companion.md)
+8. Security and runtime boundaries: [Security](doc/security.md)
+9. If something fails: [Troubleshooting](doc/troubleshooting.md)
 
 ## Try The Example First
 
@@ -175,6 +176,7 @@ The bundled example app shows clipboard import, routing edits, proxy-only mode, 
 - [Examples](doc/examples.md)
 - [Configuration Guide](doc/configuration.md)
 - [Compatibility](doc/compatibility.md)
+- [Browser Extension Companion](doc/browser-extension-companion.md)
 - [Security](doc/security.md)
 - [Architecture Notes](doc/architecture.md)
 - [Real-Device VPN Matrix](doc/device_matrix.md)

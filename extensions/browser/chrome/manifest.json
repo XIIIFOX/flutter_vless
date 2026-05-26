@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Flutter Vless Companion",
+  "description": "Controls a local flutter_vless/Xray companion and routes browser traffic through it.",
+  "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtzUPjNfAA9WzVPBoivLYNQPCAPDDjFtT1Be85JBvF+tMOtLzZBNRg6T6GFFa+/CIOu8Na84R+5AsD01680fKrr4sLoNPIpunLyQvwgw0o4Cela2m7o3rTMz7V4GQ1sAhahg6E6rnKH4S3vqSNpkPNR4MIgtMVbkeXEcAOATRm8rfxQrud7odgB7H8Yh0iwKqvZImY8ya3y2xnPLPr08KVzEOpgNmc7Yu5sJt3K/EHQZtITYQgogqiSAlQLOW7KVzcODPOwAp+q2VeGfFJbu2aAcuH7rBAgsnGQZltRx7e7qYELpAB0TrcUrvdZriBvWNtrLnj3WT46OGHdV0u7VvrwIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "proxy",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Flutter Vless"
+  }
+}

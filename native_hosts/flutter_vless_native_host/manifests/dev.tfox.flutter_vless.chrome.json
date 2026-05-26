@@ -1,0 +1,9 @@
+{
+  "name": "dev.tfox.flutter_vless",
+  "description": "Flutter Vless Native Messaging Host",
+  "path": "/absolute/path/to/flutter_vless_native_host",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://pnknppmnnjjoajkpelpnccddodhheefb/"
+  ]
+}

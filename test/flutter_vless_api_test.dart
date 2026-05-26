@@ -84,6 +84,7 @@ void main() {
       'blocked_apps': ['com.blocked.app'],
       'bypass_subnets': ['172.16.0.0/12'],
       'proxy_only': false,
+      'set_system_proxy': true,
       'notificationDisconnectButtonName': 'STOP',
     });
   });

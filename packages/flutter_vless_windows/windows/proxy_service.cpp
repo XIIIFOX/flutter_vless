@@ -125,7 +125,7 @@ ProxyService::~ProxyService() {
   CleanupTempFiles();
 }
 
-bool ProxyService::Start(const std::string& config) {
+bool ProxyService::Start(const std::string& config, bool configure_system_proxy) {
   if (is_running_.load()) {
     Stop();
   }
@@ -136,6 +136,7 @@ bool ProxyService::Start(const std::string& config) {
   }
 
   current_config_ = config;
+  configure_system_proxy_ = configure_system_proxy;
   
   if (xray_executable_path_.empty()) {
     std::cerr << "Xray executable not found. Please ensure xray.exe is available." << std::endl;
@@ -231,10 +232,12 @@ void ProxyService::RunV2ray() {
       }
     }
     
-    if (!SetSystemProxy("localhost", socks_port)) {
-      std::cerr << "Warning: Failed to set system proxy. Proxy mode may not work correctly." << std::endl;
-    } else {
-      std::cerr << "System proxy set to localhost:" << socks_port << std::endl;
+    if (configure_system_proxy_) {
+      if (!SetSystemProxy("localhost", socks_port)) {
+        std::cerr << "Warning: Failed to set system proxy. Proxy mode may not work correctly." << std::endl;
+      } else {
+        std::cerr << "System proxy set to localhost:" << socks_port << std::endl;
+      }
     }
   }
   

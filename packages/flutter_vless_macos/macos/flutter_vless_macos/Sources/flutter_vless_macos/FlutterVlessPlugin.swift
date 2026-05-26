@@ -582,7 +582,7 @@ private final class ProxyOnlyRunner {
     /// Tracks total bytes downloaded since last start.
     private(set) var totalDownload: Int64 = 0
 
-    func start(configData: Data, configString: String) throws {
+    func start(configData: Data, configString: String, configureSystemProxy: Bool) throws {
         if isRunning {
             stop()
         }
@@ -595,10 +595,12 @@ private final class ProxyOnlyRunner {
             throw startError ?? NSError(domain: "FlutterVless", code: 10, userInfo: [NSLocalizedDescriptionKey: "Failed to start XRay proxy-only mode"])
         }
 
-        // IMPORTANT: pass preparedConfig (not original configString) so setSystemProxy
-        // can see the HTTP inbound that buildProxyOnlyConfigData added.
-        let preparedConfigString = String(data: preparedConfig, encoding: .utf8) ?? configString
-        SystemProxyHelper.setSystemProxy(config: preparedConfigString)
+        if configureSystemProxy {
+            // IMPORTANT: pass preparedConfig (not original configString) so setSystemProxy
+            // can see the HTTP inbound that buildProxyOnlyConfigData added.
+            let preparedConfigString = String(data: preparedConfig, encoding: .utf8) ?? configString
+            SystemProxyHelper.setSystemProxy(config: preparedConfigString)
+        }
 
         isRunning = true
         connectedDate = Date()
@@ -1173,9 +1175,14 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return
         }
         let proxyOnly = arguments["proxy_only"] as? Bool ?? false
+        let setSystemProxy = arguments["set_system_proxy"] as? Bool ?? true
         if proxyOnly {
             do {
-                try proxyOnlyRunner.start(configData: configData, configString: config)
+                try proxyOnlyRunner.start(
+                    configData: configData,
+                    configString: config,
+                    configureSystemProxy: setSystemProxy
+                )
                 pluginLog.info("Proxy-only start requested successfully remark=\(remark, privacy: .public)")
                 startTimer()
                 result(nil)

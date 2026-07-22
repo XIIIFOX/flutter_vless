@@ -1,7 +1,7 @@
 name: flutter_vless
 description: Xray/V2Ray Flutter plugin for VLESS, VMESS, Trojan, Shadowsocks, SOCKS, proxy-only, and VPN tunnel flows on Android, iOS, macOS, and Windows.
 
-version: 1.1.4
+version: 1.1.5
 homepage: https://tfox.dev
 repository: https://github.com/XIIIFOX/flutter_vless
 issue_tracker: https://github.com/XIIIFOX/flutter_vless/issues
@@ -40,8 +40,8 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_vless_platform_interface: ^1.1.0
-  flutter_vless_android: ^1.1.4
-  flutter_vless_macos: ^1.1.4
+  flutter_vless_android: ^1.1.5
+  flutter_vless_macos: ^1.1.5
   flutter_vless_windows: ^1.1.0
   yaml: ^3.1.2
 

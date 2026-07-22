@@ -3,7 +3,7 @@
 The iOS plugin uses `XRay.xcframework`, generated with `gomobile bind` from
 the vendored `third_party/xray-mobile` Go wrapper.
 
-Current target Xray-core version: `v26.6.27`.
+Current target Xray-core version: `v26.7.11`.
 Release commit used by the script: `45cf2898ab12e97a55dd8f1f3d78d903340bdc9e`.
 
 Requirements:

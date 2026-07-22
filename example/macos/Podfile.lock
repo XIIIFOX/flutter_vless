@@ -1,14 +1,20 @@
 PODS:
+  - flutter_vless_macos (1.1.5):
+    - FlutterMacOS
   - FlutterMacOS (1.0.0)
 
 DEPENDENCIES:
+  - flutter_vless_macos (from `Flutter/ephemeral/.symlinks/plugins/flutter_vless_macos/macos`)
   - FlutterMacOS (from `Flutter/ephemeral`)
 
 EXTERNAL SOURCES:
+  flutter_vless_macos:
+    :path: Flutter/ephemeral/.symlinks/plugins/flutter_vless_macos/macos
   FlutterMacOS:
     :path: Flutter/ephemeral
 
 SPEC CHECKSUMS:
+  flutter_vless_macos: bdd9eabf121762799b0921d6c35ed2aca9699882
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
 
 PODFILE CHECKSUM: 72a145d68bd940d5270f2b51d39e5183b43f0d31

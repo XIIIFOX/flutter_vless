@@ -90,7 +90,7 @@ the workspace.
 
 ```yaml
 dependencies:
-  flutter_vless: ^1.1.4
+  flutter_vless: ^1.1.5
 ```
 
 Then run:

@@ -9,7 +9,7 @@ import 'package:integration_test/integration_test.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('Android Xray runtime reports v26.6.27', (tester) async {
+  testWidgets('Android Xray runtime reports v26.7.11', (tester) async {
     if (!Platform.isAndroid) {
       return;
     }
@@ -21,7 +21,7 @@ void main() {
     // ignore: avoid_print
     print('ANDROID_XRAY_CORE_VERSION=$version');
 
-    expect(version, contains('26.6.27'));
+    expect(version, contains('26.7.11'));
     expect(version.toLowerCase(), isNot(contains('not found')));
     expect(version.toLowerCase(), isNot(startsWith('error:')));
   });

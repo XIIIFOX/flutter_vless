@@ -63,7 +63,7 @@ If you see `0x1000`, it is **NOT** compatible with 16KB devices.
 The `flutter_vless_android` Pub.dev package consumes the Android device runtime through the Maven artifact:
 
 ```text
-dev.tfox.fluttervless:xray-android:26.6.27.1
+dev.tfox.fluttervless:xray-android:26.7.11
 ```
 
 After rebuilding `libxray.so`, `libtun2socks.so`, or the geodata files in `android_runtime/xray_android/src/main`, build the local Maven repository from the repository root:

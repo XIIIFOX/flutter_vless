@@ -1,6 +1,6 @@
 name: flutter_vless_android_emulator
 description: "Legacy Android emulator compatibility package for older flutter_vless release trains."
-version: 1.1.4
+version: 1.1.5
 homepage: https://tfox.dev
 repository: https://github.com/XIIIFOX/flutter_vless
 issue_tracker: https://github.com/XIIIFOX/flutter_vless/issues

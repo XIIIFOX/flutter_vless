@@ -1,5 +1,7 @@
 ## 1.1.5
 
+* Updated the Android runtime dependency to `dev.tfox.fluttervless:xray-android:26.7.11`.
+* Rebuilt Android `libxray.so` binaries for `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` against Xray-core `v26.7.11`.
 * Fixed Android VPN app routing: all configured blocked apps are now applied to `VpnService.Builder` as disallowed applications and bypass the Xray VPN tunnel.
 
 ## 1.1.4

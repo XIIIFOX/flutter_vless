@@ -1,5 +1,9 @@
 ## 1.1.5
 
+* Updated bundled and packaged Xray runtimes to upstream Xray-core `v26.7.11` for Android, iOS, and macOS.
+* Rebuilt the Android runtime AAR as `dev.tfox.fluttervless:xray-android:26.7.11` with Xray-core `v26.7.11` for device and emulator ABIs.
+* Updated the default hosted Apple runtime release tags and checksums to `xray-ios-v26.7.11` and `xray-macos-v26.7.11`.
+* Updated the vendored Go dependency pin, native runtime build scripts, release notes, package metadata, docs, and smoke tests for the `1.1.5` release train.
 * Updated iOS and macOS Packet Tunnel support to Tun2SocksKit `5.15.0` / HEV `2.15.0`.
 * Hardened long-running VPN sessions: the Packet Tunnel now detects unexpected HEV exits and repeated SOCKS/HTTP health-check failures, records the cause, and terminates the stale system VPN state instead of leaving a false connected status.
 * Added periodic and post-wake/network-change tunnel health checks, orderly HEV shutdown handling, bounded App Group diagnostics, and error-level log rotation to avoid unbounded extension I/O and memory growth.

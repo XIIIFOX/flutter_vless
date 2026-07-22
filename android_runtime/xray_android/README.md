@@ -21,7 +21,7 @@ The published 26.6.1 device-only artifact and 26.6.1.1 all-ABI artifact are
 immutable. The current runtime revision that includes all Android ABIs is:
 
 ```text
-dev.tfox.fluttervless:xray-android:26.6.27.1
+dev.tfox.fluttervless:xray-android:26.7.11
 ```
 
 The AAR contains Android native libraries and Xray geodata assets:

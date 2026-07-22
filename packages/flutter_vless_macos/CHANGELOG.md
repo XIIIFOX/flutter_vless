@@ -1,3 +1,9 @@
+## 1.1.5
+
+* Updated the macOS XRay core target to upstream `v26.7.11`.
+* Updated the default macOS SwiftPM/CocoaPods release tag and checksum to `xray-macos-v26.7.11`.
+* Updated Packet Tunnel support to Tun2SocksKit `5.15.0` / HEV `2.15.0` and hardened long-running tunnel health checks, shutdown handling, and diagnostics.
+
 ## 1.1.4
 
 * Updated the macOS XRay core target to upstream `v26.6.27`.

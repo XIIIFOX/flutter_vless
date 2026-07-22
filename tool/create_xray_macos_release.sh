@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-XRAY_VERSION="${XRAY_VERSION:-v26.6.27}"
+XRAY_VERSION="${XRAY_VERSION:-v26.7.11}"
 RELEASE_TAG="${RELEASE_TAG:-xray-macos-$XRAY_VERSION}"
 XCFRAMEWORK_PATH="${XCFRAMEWORK_PATH:-$REPO_ROOT/packages/flutter_vless_macos/macos/XRay.xcframework}"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/build/xray-macos-release}"

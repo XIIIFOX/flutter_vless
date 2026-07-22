@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Configuration
 XRAY_REPO="https://github.com/XTLS/Xray-core"
-XRAY_VERSION="${XRAY_VERSION:-v26.6.27}"
+XRAY_VERSION="${XRAY_VERSION:-v26.7.11}"
 TARGET_DIR="${TARGET_DIR:-../../../android_runtime/xray_android/src/main/jniLibs}"
 NDK_PATH="${ANDROID_NDK_HOME:-$HOME/Library/Android/sdk/ndk/28.2.13676358}"
 

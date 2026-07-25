@@ -13,7 +13,7 @@ screenshots:
   - description: iOS example showing an active VPN connection.
     path: screenshots/IMG_4652.PNG
   - description: macOS example showing an active VPN connection.
-    path: screenshots/2026-05-25 в 01.03.20.png
+    path: screenshots/2026-05-25в01.03.20.png
   - description: Android example showing an active VPN connection.
     path: screenshots/Screenshot_1762288388.png
   - description: Android example showing blocked domains and apps routing.

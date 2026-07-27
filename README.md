@@ -25,12 +25,13 @@ license notices required by the license. See [NOTICE](NOTICE) and
 
 ## At A Glance
 
-| Platform | Mode | Notes |
-| --- | --- | --- |
-| Android | VPN, proxy-only | `blockedApps` is supported. The Maven runtime AAR includes device and emulator ABIs. |
-| iOS | VPN, proxy-only | Real device required for packet-tunnel testing. App Group and Network Extension are required. |
-| macOS | VPN, proxy-only | Packet Tunnel setup is required. See the macOS architecture notes for route and DNS details. |
-| Windows | VPN, proxy-only | Xray must be available locally. Admin rights may be required for tunnel mode. |
+| Platform | VPN tunnel | Proxy only | Key setup requirements |
+| :--- | :---: | :---: | :--- |
+| **[Android](doc/platform/android.md)** | ✅ | ✅ | Uses `VpnService`; supports per-app bypass through `blockedApps`. |
+| **[iOS](doc/platform/ios.md)** | ✅ | ✅ | Requires Network Extension, App Group, and a signed physical device for tunnel testing. |
+| **[macOS](doc/platform/macos.md)** | ✅ | ✅ | Requires a Packet Tunnel extension, App Group, and application signing. |
+| **[Windows](doc/platform/windows.md)** | ✅ | ✅ | Requires a local `xray.exe`; tunnel mode may need administrator privileges. |
+
 
 | Protocol/profile |  Clash YAML | sing-box JSON | Raw Xray JSON |
 |---|---:|---:|---:|

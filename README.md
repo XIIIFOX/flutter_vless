@@ -1,13 +1,13 @@
-# flutter_vless
+# flutter_vless — Xray/V2Ray VPN plugin for Flutter
 [![Pub Publisher](https://img.shields.io/pub/publisher/flutter_vless)](https://pub.dev/publishers/tfox.dev/packages)
 [![Pub Version](https://img.shields.io/pub/v/flutter_vless.svg)](https://pub.dev/packages/flutter_vless)
 
-Federated Flutter plugin for VLESS, VMESS, Trojan, Shadowsocks, and SOCKS on Android, iOS, macOS, and Windows.
+Build cross-platform VPN and proxy apps for Android, iOS, macOS and Windows with VLESS Reality/XHTTP, VMess, Trojan, Shadowsocks, SOCKS5 and Hysteria2. Import share links, subscriptions, raw Xray JSON, Clash YAML, sing-box JSON and WireGuard profiles.
 
-This package exposes a small Dart API for parsing share links and subscriptions, generating Xray configs, and starting either proxy-only or VPN/tunnel mode through platform backends.
+`flutter_vless` provides a compact Dart API for parsing share links and subscriptions, importing raw Xray JSON, Clash YAML, and sing-box JSON, generating Xray configurations, and running proxy-only or VPN/tunnel modes through native platform backends. WireGuard profiles are supported through Clash YAML and sing-box JSON imports.
 
-The package is open source and free to use, with Android, iOS, macOS, and Windows support included out of the box. The longer guides live under `doc/`.
-For long-form docs, see the `documentation` link in `pubspec.yaml`.
+The package is open source and free to use. Platform-specific setup may be required for VPN/tunnel mode. See the [documentation](doc/README.md), [platform guides](doc/platform/README.md), and [compatibility matrix](doc/compatibility.md).
+
 
 ## Official Package
 
@@ -31,6 +31,15 @@ license notices required by the license. See [NOTICE](NOTICE) and
 | iOS | VPN, proxy-only | Real device required for packet-tunnel testing. App Group and Network Extension are required. |
 | macOS | VPN, proxy-only | Packet Tunnel setup is required. See the macOS architecture notes for route and DNS details. |
 | Windows | VPN, proxy-only | Xray must be available locally. Admin rights may be required for tunnel mode. |
+
+| Protocol/profile |  Clash YAML | sing-box JSON | Raw Xray JSON |
+|---|---:|---:|---:|
+| VLESS Reality/XHTTP | ✅ | ✅ | ✅ |
+| VMess | ✅ | ✅ | ✅ |
+| Trojan | ✅ | ✅ | ✅ |
+| Shadowsocks | ✅ | ✅ | ✅ |
+| Hysteria2 | ✅ | ✅ | ✅ |
+| WireGuard | ✅ | ✅ | ✅ |
 
 ## Key Capabilities
 

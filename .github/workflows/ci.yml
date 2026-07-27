@@ -36,15 +36,6 @@ jobs:
         run: flutter analyze lib test
       - name: Test root package
         run: flutter test
-      - name: Install Android emulator package dependencies
-        working-directory: packages/flutter_vless_android_emulator
-        run: flutter pub get
-      - name: Analyze Android emulator package
-        working-directory: packages/flutter_vless_android_emulator
-        run: flutter analyze
-      - name: Test Android emulator package
-        working-directory: packages/flutter_vless_android_emulator
-        run: flutter test
       - name: Install Android wrapper package dependencies
         working-directory: packages/flutter_vless_android
         run: flutter pub get

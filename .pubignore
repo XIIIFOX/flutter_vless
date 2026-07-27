@@ -20,6 +20,7 @@ apps/
 extensions/
 native_hosts/
 android_runtime/
+packages/flutter_vless_android_emulator/
 
 # example build outputs
 example/build/
@@ -76,7 +77,7 @@ ios/XRay.xcframework.zip
 # screenshots / big media
 screenshots/*
 !screenshots/IMG_4652.PNG
-!screenshots/2026-05-25 в 01.03.20.png
+!screenshots/2026-05-25в01.03.20.png
 !screenshots/Screenshot_1762288388.png
 !screenshots/Screenshot_1762286345.png
 assets/images/big-*

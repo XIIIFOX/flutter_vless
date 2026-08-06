@@ -53,8 +53,10 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     };
     if (quickSettingsTile != null) {
       arguments['tileLabel'] = quickSettingsTile.tileLabel;
-      arguments['tileIconResourceType'] = quickSettingsTile.tileIconResourceType;
-      arguments['tileIconResourceName'] = quickSettingsTile.tileIconResourceName;
+      arguments['tileIconResourceType'] =
+          quickSettingsTile.tileIconResourceType;
+      arguments['tileIconResourceName'] =
+          quickSettingsTile.tileIconResourceName;
     }
     await methodChannel.invokeMethod('initializeVless', arguments);
   }

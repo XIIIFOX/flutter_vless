@@ -82,21 +82,19 @@ class FlutterVless {
   ///
   /// Call this once during app startup, before [startVless],
   /// [getConnectedServerDelay], or [getCoreVersion].
-  Future<void> initializeVless({
-    String notificationIconResourceType = "mipmap",
-    String notificationIconResourceName = "ic_launcher",
-    String providerBundleIdentifier = "",
-    String groupIdentifier = "",
-    QuickSettingsTile? quickSettingsTile
-  }) async {
+  Future<void> initializeVless(
+      {String notificationIconResourceType = "mipmap",
+      String notificationIconResourceName = "ic_launcher",
+      String providerBundleIdentifier = "",
+      String groupIdentifier = "",
+      QuickSettingsTile? quickSettingsTile}) async {
     await VlessPlatform.instance.initializeVless(
-      onStatusChanged: onStatusChanged,
-      notificationIconResourceType: notificationIconResourceType,
-      notificationIconResourceName: notificationIconResourceName,
-      providerBundleIdentifier: providerBundleIdentifier,
-      groupIdentifier: groupIdentifier,
-      quickSettingsTile: quickSettingsTile
-    );
+        onStatusChanged: onStatusChanged,
+        notificationIconResourceType: notificationIconResourceType,
+        notificationIconResourceName: notificationIconResourceName,
+        providerBundleIdentifier: providerBundleIdentifier,
+        groupIdentifier: groupIdentifier,
+        quickSettingsTile: quickSettingsTile);
   }
 
   /// Starts an Xray-backed proxy or VPN/tunnel session.

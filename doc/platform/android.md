@@ -95,6 +95,51 @@ For the strict runtime update and publishing checklist, see `doc/release/android
 - `requestPermission()` is relevant for VPN mode.
 - `proxyOnly: true` starts the local proxy path without installing the VPN route.
 
+## Quick Settings Tile
+
+Android exposes an optional Quick Settings tile through `VlessTileService`. The
+service is merged from the plugin manifest; host apps should not declare it
+again.
+
+Setup:
+
+1. Pass `notificationIconResourceType` / `notificationIconResourceName` to
+   `initializeVless()` — used for notifications and as the default tile icon.
+2. Optionally pass `quickSettingsTile` for a custom label and tile icon
+   override (`tileIconResource*`); when omitted, the notification icon is used.
+3. Ask the user to add the tile manually in system Quick Settings.
+4. Call `requestPermission()` and `startVless()` at least once so the tile can
+   reuse the saved profile and VPN consent flow.
+
+Behavior:
+
+- Tile toggle uses the last profile persisted by `startVless`.
+- Tile label stays constant (no `On`/`Off` suffix); VPN state is shown by tile
+  highlight (`ACTIVE` / `INACTIVE`).
+- While connecting, the tile is unavailable (gray icon) and ignores taps until
+  `CONNECTED` or `DISCONNECTED`.
+- Tile state follows VPN broadcasts and updates while Quick Settings is closed
+  when the tile has been added (`ACTIVE_TILE`).
+- Without a saved profile, tapping the tile opens the host app.
+- Without VPN permission, the plugin shows a transparent permission activity.
+- The tile works when the Flutter UI is not running, as long as profile and
+  appearance were saved earlier via `initializeVless` / `startVless`.
+
+Example:
+
+```dart
+await flutterVless.initializeVless(
+  onStatusChanged: onStatusChanged,
+  notificationIconResourceType: 'mipmap',
+  notificationIconResourceName: 'ic_launcher',
+  quickSettingsTile: QuickSettingsTile(
+    tileLabel: 'My VPN',
+    tileIconResourceType: 'mipmap',
+    tileIconResourceName: 'ic_launcher', // optional override
+  ),
+);
+```
+
 ## Suggested Setup Flow
 
 1. Run the example on a device or emulator.

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_vless_platform_interface/src/quick_settings_tile.dart';
 
 import 'vless_platform.dart';
 import 'vless_status.dart';
@@ -27,6 +28,7 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     required String notificationIconResourceName,
     required String providerBundleIdentifier,
     required String groupIdentifier,
+    QuickSettingsTile? quickSettingsTile,
   }) async {
     await _statusSubscription?.cancel();
     _statusSubscription = eventChannel
@@ -43,15 +45,18 @@ class VlessMethodChannelAdapter extends VlessPlatform {
       debugPrint('VLESS status stream error: $error');
     });
 
-    await methodChannel.invokeMethod(
-      'initializeVless',
-      {
-        'notificationIconResourceType': notificationIconResourceType,
-        'notificationIconResourceName': notificationIconResourceName,
-        'providerBundleIdentifier': providerBundleIdentifier,
-        'groupIdentifier': groupIdentifier,
-      },
-    );
+    final arguments = <String, dynamic>{
+      'notificationIconResourceType': notificationIconResourceType,
+      'notificationIconResourceName': notificationIconResourceName,
+      'providerBundleIdentifier': providerBundleIdentifier,
+      'groupIdentifier': groupIdentifier,
+    };
+    if (quickSettingsTile != null) {
+      arguments['tileLabel'] = quickSettingsTile.tileLabel;
+      arguments['tileIconResourceType'] = quickSettingsTile.tileIconResourceType;
+      arguments['tileIconResourceName'] = quickSettingsTile.tileIconResourceName;
+    }
+    await methodChannel.invokeMethod('initializeVless', arguments);
   }
 
   @override

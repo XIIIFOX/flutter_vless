@@ -14,8 +14,6 @@ import android.net.VpnService
 import android.os.Build
 import androidx.core.app.ActivityCompat
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
-import com.github.tfox.flutter_vless.xray.dto.XrayConfig
-import com.github.tfox.flutter_vless.xray.service.XrayVPNService
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
@@ -48,6 +46,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
     private var vpnStatusSink: EventChannel.EventSink? = null
     private var activity: Activity? = null
     private var xrayReceiver: BroadcastReceiver? = null
+    private var tileStateReceiver: BroadcastReceiver? = null
     private var pendingResult: MethodChannel.Result? = null
     private lateinit var context: Context
 
@@ -64,6 +63,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
         vpnStatusEvent = EventChannel(binding.binaryMessenger, "flutter_vless/status")
 
         vpnControlMethod.setMethodCallHandler(this)
+        registerTileStateReceiver()
         vpnStatusEvent.setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
                 vpnStatusSink = events
@@ -80,81 +80,67 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "startVless" -> {
-                // 1. Parse configuration from Flutter
-                val config = XrayConfig()
-                config.REMARK = call.argument("remark") ?: ""
-                config.V2RAY_FULL_JSON_CONFIG = call.argument("config") ?: ""
-                config.BLOCKED_APPS = call.argument<ArrayList<String>>("blocked_apps") ?: ArrayList()
-                config.BYPASS_SUBNETS = call.argument<ArrayList<String>>("bypass_subnets") ?: ArrayList()
-                config.NOTIFICATION_DISCONNECT_BUTTON_NAME = call.argument("notificationDisconnectButtonName") ?: "Disconnect"
-                
-                // 2. Handle custom notification icon if set via initializeVless
-                if (AppConfigs.NOTIFICATION_ICON_RESOURCE_NAME.isNotEmpty() && AppConfigs.NOTIFICATION_ICON_RESOURCE_TYPE.isNotEmpty()) {
-                    config.NOTIFICATION_ICON_RESOURCE_NAME = AppConfigs.NOTIFICATION_ICON_RESOURCE_NAME
-                    config.NOTIFICATION_ICON_RESOURCE_TYPE = AppConfigs.NOTIFICATION_ICON_RESOURCE_TYPE
-                    val resId = context.resources.getIdentifier(
-                        AppConfigs.NOTIFICATION_ICON_RESOURCE_NAME, 
-                        AppConfigs.NOTIFICATION_ICON_RESOURCE_TYPE, 
-                        context.packageName
-                    )
-                    config.APPLICATION_ICON = resId
-                }
+                val remark = call.argument<String>("remark") ?: ""
+                val configJson = call.argument<String>("config") ?: ""
+                val blockedApps = call.argument<ArrayList<String>>("blocked_apps") ?: ArrayList()
+                val bypassSubnets = call.argument<ArrayList<String>>("bypass_subnets") ?: ArrayList()
+                val proxyOnly = call.argument<Boolean>("proxy_only") ?: false
+                val disconnectButtonName = call.argument<String>("notificationDisconnectButtonName") ?: "Disconnect"
 
-                // 3. Determine connection mode (VPN vs Proxy Only)
-                if (call.argument<Boolean>("proxy_only") == true) {
-                    AppConfigs.V2RAY_CONNECTION_MODE = AppConfigs.V2RAY_CONNECTION_MODES.PROXY_ONLY
-                } else {
-                    AppConfigs.V2RAY_CONNECTION_MODE = AppConfigs.V2RAY_CONNECTION_MODES.VPN_TUN
-                }
+                val params = VpnLaunchHelper.StartParams(
+                    remark = remark,
+                    configJson = configJson,
+                    blockedApps = blockedApps,
+                    bypassSubnets = bypassSubnets,
+                    proxyOnly = proxyOnly,
+                    disconnectButtonName = disconnectButtonName,
+                )
+                val config = VpnLaunchHelper.buildConfig(context, params)
 
-                // 4. Try to parse the server address to exclude it from VPN routing (avoid loop)
-                try {
-                    val jsonConfig = org.json.JSONObject(config.V2RAY_FULL_JSON_CONFIG)
-                    val outbounds = jsonConfig.optJSONArray("outbounds")
-                    if (outbounds != null && outbounds.length() > 0) {
-                        val firstOutbound = outbounds.getJSONObject(0)
-                        val settings = firstOutbound.optJSONObject("settings")
-                        val vnext = settings?.optJSONArray("vnext")
-                        if (vnext != null && vnext.length() > 0) {
-                            val server = vnext.getJSONObject(0)
-                            config.CONNECTED_V2RAY_SERVER_ADDRESS = server.optString("address", "")
-                            config.CONNECTED_V2RAY_SERVER_PORT = server.optInt("port", 0).toString()
-                        } else if (settings != null) {
-                            config.CONNECTED_V2RAY_SERVER_ADDRESS = settings.optString("address", "")
-                            config.CONNECTED_V2RAY_SERVER_PORT = settings.optInt("port", 0).toString()
-                        }
-                    }
-                } catch (e: Exception) {
-                    // Ignore parsing errors, fallback to not excluding IP
-                }
+                QuickSettingsTileStore.saveProfile(
+                    context = context,
+                    configJson = configJson,
+                    remark = remark,
+                    proxyOnly = proxyOnly,
+                    blockedApps = blockedApps,
+                    bypassSubnets = bypassSubnets,
+                    disconnectButtonName = disconnectButtonName,
+                    connectionMode = AppConfigs.V2RAY_CONNECTION_MODE,
+                )
 
-                // 5. Start the XrayVPNService
-                // We pass the config and PROXY_ONLY flag via Intent extras
-                val intent = Intent(context, XrayVPNService::class.java)
-                intent.putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE)
-                intent.putExtra("V2RAY_CONFIG", config)
-                intent.putExtra("PROXY_ONLY", call.argument<Boolean>("proxy_only") ?: false)
-                
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
-                }
+                VpnLaunchHelper.startService(context, config, proxyOnly)
+                QuickSettingsTileUpdater.requestTileRefresh(context)
                 result.success(null)
             }
             "stopVless" -> {
-                val intent = Intent(context, XrayVPNService::class.java)
-                intent.putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.STOP_SERVICE)
-                context.startService(intent)
+                VpnLaunchHelper.stopService(context)
+                QuickSettingsTileUpdater.requestTileRefresh(context)
                 result.success(null)
             }
             "initializeVless" -> {
-                // Store notification icon settings globally
                 val iconResourceName = call.argument<String>("notificationIconResourceName")
                 val iconResourceType = call.argument<String>("notificationIconResourceType")
                 if (iconResourceName != null && iconResourceType != null) {
                     AppConfigs.NOTIFICATION_ICON_RESOURCE_NAME = iconResourceName
                     AppConfigs.NOTIFICATION_ICON_RESOURCE_TYPE = iconResourceType
+                    QuickSettingsTileStore.saveNotificationIcon(
+                        context,
+                        iconResourceType,
+                        iconResourceName,
+                    )
+                }
+
+                val tileLabel = call.argument<String>("tileLabel")
+                val tileIconType = call.argument<String>("tileIconResourceType")
+                val tileIconName = call.argument<String>("tileIconResourceName")
+                if (tileLabel != null && tileIconType != null && tileIconName != null) {
+                    QuickSettingsTileStore.saveAppearance(
+                        context,
+                        tileLabel,
+                        tileIconType,
+                        tileIconName,
+                    )
+                    QuickSettingsTileUpdater.requestTileRefresh(context)
                 }
                 result.success(null)
             }
@@ -235,6 +221,39 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
         }
     }
 
+    private fun registerTileStateReceiver() {
+        if (tileStateReceiver != null) return
+        tileStateReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (context == null || intent == null) return
+                val state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getSerializableExtra("STATE", AppConfigs.V2RAY_STATES::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getSerializableExtra("STATE") as? AppConfigs.V2RAY_STATES
+                } ?: return
+                QuickSettingsTileStore.saveVpnState(context, state)
+                QuickSettingsTileUpdater.requestTileRefresh(context)
+            }
+        }
+        val filter = IntentFilter(AppConfigs.V2RAY_CONNECTION_INFO)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(tileStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            context.registerReceiver(tileStateReceiver, filter)
+        }
+    }
+
+    private fun unregisterTileStateReceiver() {
+        tileStateReceiver?.let {
+            try {
+                context.unregisterReceiver(it)
+            } catch (_: Exception) {
+            }
+            tileStateReceiver = null
+        }
+    }
+
     /**
      * Registers a BroadcastReceiver to listen for updates from XrayVPNService.
      * This allows us to receive state changes (Connected/Disconnected) and traffic stats.
@@ -290,6 +309,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        unregisterTileStateReceiver()
         vpnControlMethod.setMethodCallHandler(null)
         vpnStatusEvent.setStreamHandler(null)
         executor.shutdown()

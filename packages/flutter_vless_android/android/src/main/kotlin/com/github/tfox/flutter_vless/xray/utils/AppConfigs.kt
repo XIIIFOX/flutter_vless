@@ -38,6 +38,9 @@ object AppConfigs {
         VPN_TUN, PROXY_ONLY
     }
 
+    const val ACTION_REQUEST_VPN_STATE =
+        "com.github.tfox.flutter_vless.REQUEST_VPN_STATE"
+
     var V2RAY_STATE: V2RAY_STATES = V2RAY_STATES.V2RAY_DISCONNECTED
     var V2RAY_CONFIG: XrayConfig? = null
     var V2RAY_CONNECTION_MODE: V2RAY_CONNECTION_MODES = V2RAY_CONNECTION_MODES.VPN_TUN

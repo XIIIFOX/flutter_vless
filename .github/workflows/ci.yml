@@ -38,7 +38,13 @@ jobs:
         run: flutter test
       - name: Install Android wrapper package dependencies
         working-directory: packages/flutter_vless_android
-        run: flutter pub get
+        run: |
+          cat > pubspec_overrides.yaml <<'YAML'
+          dependency_overrides:
+            flutter_vless_platform_interface:
+              path: ../flutter_vless_platform_interface
+          YAML
+          flutter pub get
       - name: Analyze Android wrapper package
         working-directory: packages/flutter_vless_android
         run: flutter analyze

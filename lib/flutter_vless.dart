@@ -60,7 +60,8 @@ class FlutterVless {
   /// Initializes the native backend and subscribes to status events.
   ///
   /// [notificationIconResourceType] and [notificationIconResourceName] are used
-  /// by Android foreground-service notifications.
+  /// by Android foreground-service notifications and as the default Quick
+  /// Settings tile icon.
   ///
   /// [providerBundleIdentifier] is the base app bundle identifier on Apple
   /// platforms, for example `com.example.myapp`. The iOS/macOS implementations
@@ -70,6 +71,15 @@ class FlutterVless {
   /// [groupIdentifier] is the Apple App Group shared by the app and Packet
   /// Tunnel extension, for example `group.com.example.myapp`.
   ///
+  /// [quickSettingsTile] configures the Android Quick Settings tile label and
+  /// optional icon override. When [QuickSettingsTile.tileIconResourceName] is
+  /// omitted, the tile uses [notificationIconResourceName]. The tile must be
+  /// added manually in system Quick Settings. Icons must reference Android
+  /// drawable or mipmap resources in the host app. VPN on/off is shown by tile
+  /// highlight state, not by suffixes in the label. The tile can reconnect
+  /// using the last profile saved by [startVless] after VPN permission has been
+  /// granted at least once through [requestPermission].
+  ///
   /// Call this once during app startup, before [startVless],
   /// [getConnectedServerDelay], or [getCoreVersion].
   Future<void> initializeVless({
@@ -77,6 +87,7 @@ class FlutterVless {
     String notificationIconResourceName = "ic_launcher",
     String providerBundleIdentifier = "",
     String groupIdentifier = "",
+    QuickSettingsTile? quickSettingsTile
   }) async {
     await VlessPlatform.instance.initializeVless(
       onStatusChanged: onStatusChanged,
@@ -84,6 +95,7 @@ class FlutterVless {
       notificationIconResourceName: notificationIconResourceName,
       providerBundleIdentifier: providerBundleIdentifier,
       groupIdentifier: groupIdentifier,
+      quickSettingsTile: quickSettingsTile
     );
   }
 

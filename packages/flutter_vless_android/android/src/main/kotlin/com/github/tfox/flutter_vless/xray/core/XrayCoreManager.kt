@@ -407,11 +407,35 @@ object XrayCoreManager {
                 intent.putExtra("UPLOAD_TRAFFIC", traffic[2])
                 intent.putExtra("DOWNLOAD_TRAFFIC", traffic[3])
                 
-                context.sendBroadcast(intent)
+                deliverConnectionBroadcast(context, intent)
             }
 
             override fun onFinish() {}
         }.start()
+    }
+
+    fun sendCurrentStateBroadcast(context: Context) {
+        val intent = Intent(AppConfigs.V2RAY_CONNECTION_INFO)
+        intent.putExtra("STATE", AppConfigs.V2RAY_STATE)
+        intent.putExtra("DURATION", seconds.toString())
+        if (isXrayRunning()) {
+            val traffic = getV2rayTraffic(context)
+            intent.putExtra("UPLOAD_SPEED", traffic[0])
+            intent.putExtra("DOWNLOAD_SPEED", traffic[1])
+            intent.putExtra("UPLOAD_TRAFFIC", traffic[2])
+            intent.putExtra("DOWNLOAD_TRAFFIC", traffic[3])
+        } else {
+            intent.putExtra("UPLOAD_SPEED", 0L)
+            intent.putExtra("DOWNLOAD_SPEED", 0L)
+            intent.putExtra("UPLOAD_TRAFFIC", 0L)
+            intent.putExtra("DOWNLOAD_TRAFFIC", 0L)
+        }
+        deliverConnectionBroadcast(context, intent)
+    }
+
+    private fun deliverConnectionBroadcast(context: Context, intent: Intent) {
+        intent.setPackage(context.packageName)
+        context.sendBroadcast(intent)
     }
 
     /**
@@ -494,7 +518,7 @@ object XrayCoreManager {
         intent.putExtra("DOWNLOAD_SPEED", 0L)
         intent.putExtra("UPLOAD_TRAFFIC", 0L)
         intent.putExtra("DOWNLOAD_TRAFFIC", 0L)
-        context.sendBroadcast(intent)
+        deliverConnectionBroadcast(context, intent)
     }
 
     private fun showNotification(context: Service, config: XrayConfig) {

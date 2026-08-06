@@ -48,6 +48,11 @@ Parameters:
 - `providerBundleIdentifier`: base app bundle id on iOS/macOS.
 - `groupIdentifier`: Apple App Group shared by the app and Packet Tunnel
   extension.
+- `quickSettingsTile`: optional Android Quick Settings tile label and icon.
+  Icons must be Android resource names in the host app. The tile reconnects with
+  the last profile saved by `startVless()` after VPN permission has been granted
+  once through `requestPermission()`. Users add the tile manually in system
+  Quick Settings.
 
 Apple platforms append the Packet Tunnel extension suffix internally. Pass the
 base app bundle id, not the extension bundle id.

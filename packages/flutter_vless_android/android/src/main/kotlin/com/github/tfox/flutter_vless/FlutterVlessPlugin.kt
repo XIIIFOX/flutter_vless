@@ -47,6 +47,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
     private var activity: Activity? = null
     private var xrayReceiver: BroadcastReceiver? = null
     private var tileStateReceiver: BroadcastReceiver? = null
+    private var lastTileRefreshState: AppConfigs.V2RAY_STATES? = null
     private var pendingResult: MethodChannel.Result? = null
     private lateinit var context: Context
 
@@ -223,24 +224,32 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
 
     private fun registerTileStateReceiver() {
         if (tileStateReceiver != null) return
-        tileStateReceiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                if (context == null || intent == null) return
-                val state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getSerializableExtra("STATE", AppConfigs.V2RAY_STATES::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getSerializableExtra("STATE") as? AppConfigs.V2RAY_STATES
-                } ?: return
-                QuickSettingsTileStore.saveVpnState(context, state)
-                QuickSettingsTileUpdater.requestTileRefresh(context)
+        try {
+            tileStateReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    if (context == null || intent == null) return
+                    val state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getSerializableExtra("STATE", AppConfigs.V2RAY_STATES::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getSerializableExtra("STATE") as? AppConfigs.V2RAY_STATES
+                    } ?: return
+                    QuickSettingsTileStore.saveVpnState(context, state)
+                    if (state != lastTileRefreshState) {
+                        lastTileRefreshState = state
+                        QuickSettingsTileUpdater.requestTileRefresh(context)
+                    }
+                }
             }
-        }
-        val filter = IntentFilter(AppConfigs.V2RAY_CONNECTION_INFO)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(tileStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            context.registerReceiver(tileStateReceiver, filter)
+            val filter = IntentFilter(AppConfigs.V2RAY_CONNECTION_INFO)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(tileStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(tileStateReceiver, filter)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("FlutterVlessPlugin", "Failed to register tile state receiver", e)
+            tileStateReceiver = null
         }
     }
 
@@ -264,7 +273,12 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
             xrayReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     if (intent == null || vpnStatusSink == null) return
-                    val state = intent.getSerializableExtra("STATE") as? AppConfigs.V2RAY_STATES
+                    val state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getSerializableExtra("STATE", AppConfigs.V2RAY_STATES::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getSerializableExtra("STATE") as? AppConfigs.V2RAY_STATES
+                    }
                     val duration = intent.getStringExtra("DURATION")
                     val uploadSpeed = intent.getLongExtra("UPLOAD_SPEED", 0)
                     val downloadSpeed = intent.getLongExtra("DOWNLOAD_SPEED", 0)

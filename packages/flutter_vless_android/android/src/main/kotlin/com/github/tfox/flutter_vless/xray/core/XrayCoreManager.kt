@@ -288,7 +288,7 @@ object XrayCoreManager {
             configFile.writeText(configJson.toString())
         } catch (e: Exception) {
             Log.e(TAG, "Failed to write config file", e)
-            return false
+            return abortStart(context)
         }
 
         // 2. Find Xray executable (libxray.so)
@@ -297,7 +297,7 @@ object XrayCoreManager {
         if (!xrayExecutable.exists()) {
             Log.e(TAG, "Xray executable not found at ${xrayExecutable.absolutePath}")
             // Fallback or error
-            return false
+            return abortStart(context)
         }
 
         // 3. Prepare assets (geoip, geosite)
@@ -323,13 +323,13 @@ object XrayCoreManager {
                 val output = xrayProcess?.inputStream?.bufferedReader()?.readText().orEmpty()
                 Log.e(TAG, "Xray process exited during startup. Output: $output")
                 xrayProcess = null
-                AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
-                return false
+                return abortStart(context)
             }
             
             AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_CONNECTED
             lastProxyUplink = 0L
             lastProxyDownlink = 0L
+            sendCurrentStateBroadcast(context)
             startTimer(context)
             showNotification(context, config)
             
@@ -361,8 +361,14 @@ object XrayCoreManager {
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start Xray process", e)
-            return false
+            return abortStart(context)
         }
+    }
+
+    private fun abortStart(context: Service): Boolean {
+        AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
+        sendDisconnectedBroadcast(context)
+        return false
     }
 
     /**
@@ -434,7 +440,19 @@ object XrayCoreManager {
     }
 
     private fun deliverConnectionBroadcast(context: Context, intent: Intent) {
+        val state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getSerializableExtra("STATE", AppConfigs.V2RAY_STATES::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getSerializableExtra("STATE") as? AppConfigs.V2RAY_STATES
+        }
+        if (state != null && !intent.hasExtra("STATE_NAME")) {
+            intent.putExtra("STATE_NAME", state.name)
+        }
         intent.setPackage(context.packageName)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY)
+        }
         context.sendBroadcast(intent)
     }
 

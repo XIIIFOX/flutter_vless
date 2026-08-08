@@ -106,7 +106,15 @@ jobs:
           profile: pixel_6
           disable-linux-hw-accel: false
           script: |
-            (cd example && flutter pub get && flutter test integration_test/android_xray_runtime_smoke_test.dart -d emulator-5554)
+            adb wait-for-device
+            adb shell pm grant com.example.flutter_vless_example android.permission.POST_NOTIFICATIONS || true
+            set +e
+            (cd example && flutter pub get && flutter test integration_test/android_xray_runtime_smoke_test.dart -d emulator-5554 --verbose)
+            test_exit=$?
+            if [ "$test_exit" -ne 0 ]; then
+              adb logcat -d -t 200 > "$GITHUB_WORKSPACE/android_emulator_smoke.log" || true
+            fi
+            exit "$test_exit"
 
   ios:
     name: iOS Swift and Xcode build

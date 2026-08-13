@@ -105,16 +105,12 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-linux-hw-accel: false
+          # android-emulator-runner runs each script line as a separate `sh -c`,
+          # so multi-line if/fi blocks must stay on one line.
           script: |
             adb wait-for-device
             adb shell pm grant com.example.flutter_vless_example android.permission.POST_NOTIFICATIONS || true
-            set +e
-            (cd example && flutter pub get && flutter test integration_test/android_xray_runtime_smoke_test.dart -d emulator-5554 --verbose)
-            test_exit=$?
-            if [ "$test_exit" -ne 0 ]; then
-              adb logcat -d -t 200 > "$GITHUB_WORKSPACE/android_emulator_smoke.log" || true
-            fi
-            exit "$test_exit"
+            set +e; (cd example && flutter pub get && flutter test integration_test/android_xray_runtime_smoke_test.dart -d emulator-5554 --verbose); test_exit=$?; if [ "$test_exit" -ne 0 ]; then adb logcat -d -t 200 > "$GITHUB_WORKSPACE/android_emulator_smoke.log" || true; fi; exit "$test_exit"
 
   ios:
     name: iOS Swift and Xcode build

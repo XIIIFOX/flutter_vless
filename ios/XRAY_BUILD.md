@@ -42,3 +42,18 @@ before running `go get` and `go mod tidy`, so the tracked vendored source is not
 mutated by release builds.
 
 Note: Xcode Command Line Tools are not enough because `gomobile bind -target=ios` needs the `iphoneos` and `iphonesimulator` SDKs.
+
+## H2BUF scratch-buffer patch
+
+The build script patches a temporary copy of the Go standard library before
+`gomobile bind`: it clones the live GOROOT into `ios/build_xray_ios/goroot-patched`
+and lowers the http2 client's per-stream upload scratch buffer cap from 512 KiB
+to 128 KiB (`H2BUF_CAP_KB` overrides the value, range 16-512). The system Go
+installation is never modified.
+
+Without this cap, Xray's XHTTP server advertises a 1 MiB SETTINGS_MAX_FRAME_SIZE
+and iOS Network Extensions (50 MB hard limit) are jetsam-killed under concurrent
+uploads. See issue #23 for the full analysis and on-device measurements.
+
+Tested toolchain: **Go 1.27** (any Go >= 1.25 stdlib layout should work; the
+build fails with a clear error if the stdlib layout or anchor line changes).

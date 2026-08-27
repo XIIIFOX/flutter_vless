@@ -53,6 +53,28 @@ The plugin appends `.XrayTunnel` internally for the tunnel extension.
 - `bypassSubnets` is the route-level knob to understand first
 - app-level blocking is not the same thing as tunnel routing
 
+## Rebuilding the Xray Framework
+
+Most application integrators use the prebuilt `XRay.xcframework` and do not
+need this step. It is for maintainers rebuilding the iOS runtime.
+
+The build requires full Xcode and Go 1.27 or newer. To keep concurrent XHTTP
+uploads within the iOS Network Extension memory budget, the build patches a
+temporary clone of Go's standard library and caps the HTTP/2 upload scratch
+buffer at 128 KiB per stream. Your installed Go toolchain is never modified.
+
+The cap can be adjusted only for a deliberate runtime experiment:
+
+```bash
+cd ios
+H2BUF_CAP_KB=128 ./build_xray_ios.sh
+```
+
+Accepted values are 16–512 KiB. The build verifies its Go stdlib patch anchor
+and fails instead of creating an unprotected framework if a future Go release
+changes that source layout. For the complete build command, supported
+overrides, and rationale, see [Build XRay.xcframework](../../ios/XRAY_BUILD.md).
+
 ## Suggested Setup Flow
 
 1. Run the bundled example on a real iPhone.

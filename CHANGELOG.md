@@ -1,3 +1,10 @@
+## 1.1.6 (Unreleased)
+
+* Fixed an iOS Network Extension memory-pressure failure during concurrent XHTTP uploads. The iOS Xray framework build now caps Go's HTTP/2 per-stream upload scratch buffer at 128 KiB, preventing the previous 512 KiB-per-stream allocation pattern from exhausting the extension's 50 MB memory limit.
+* The iOS framework build now requires Go 1.27 or newer and patches an isolated copy of `GOROOT`, never the installed Go toolchain. Maintainers can tune the cap with `H2BUF_CAP_KB` (16–512 KiB); the build stops if the expected Go stdlib source layout changes.
+* Documented the iOS Xray framework memory safeguard, toolchain requirements, and release-validation steps in the platform and release guides.
+* Includes [Myo Thura](https://github.com/myothura)'s XHTTP upload-buffer fix in [PR #24](https://github.com/XIIIFOX/flutter_vless/pull/24), resolving [#23](https://github.com/XIIIFOX/flutter_vless/issues/23).
+
 ## 1.1.5
 
 * Updated bundled and packaged Xray runtimes to upstream Xray-core `v26.7.11` for Android, iOS, and macOS.

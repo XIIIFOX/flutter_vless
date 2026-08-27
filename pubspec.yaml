@@ -1,7 +1,7 @@
 name: flutter_vless
 description: "Xray/V2Ray Flutter VPN plugin: VLESS Reality/XHTTP, VMess, Trojan, Shadowsocks, Hysteria2 and WireGuard config import for Android, iOS, macOS and Windows."
 
-version: 1.1.5
+version: 1.1.6
 homepage: https://tfox.dev
 repository: https://github.com/XIIIFOX/flutter_vless
 issue_tracker: https://github.com/XIIIFOX/flutter_vless/issues

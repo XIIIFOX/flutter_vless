@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'flutter_vless'
-  s.version          = '1.1.5'
+  s.version          = '1.1.6'
   s.summary          = 'Flutter VLESS/VMESS proxy and VPN plugin with XRay core.'
   s.description      = <<-DESC
 Flutter plugin to run VLESS/VMESS as a local proxy and VPN on iOS with XRay core.

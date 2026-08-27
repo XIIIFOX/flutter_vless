@@ -100,7 +100,7 @@ the workspace.
 
 ```yaml
 dependencies:
-  flutter_vless: ^1.1.5
+  flutter_vless: ^1.1.6
 ```
 
 Then run:
@@ -217,6 +217,7 @@ The bundled example app shows clipboard import, routing edits, proxy-only mode, 
 - [Protocol Support Roadmap](doc/protocol_support_roadmap.md)
 - [Real-Device VPN Matrix](doc/device_matrix.md)
 - [Troubleshooting](doc/troubleshooting.md)
+- [Release history](CHANGELOG.md)
 
 ## Contributing
 

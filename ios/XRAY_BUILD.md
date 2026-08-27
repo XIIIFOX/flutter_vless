@@ -4,12 +4,12 @@ The iOS plugin uses `XRay.xcframework`, generated with `gomobile bind` from
 the vendored `third_party/xray-mobile` Go wrapper.
 
 Current target Xray-core version: `v26.7.11`.
-Release commit used by the script: `45cf2898ab12e97a55dd8f1f3d78d903340bdc9e`.
+Release commit used by the script: `50231eaff98ccc31b5cbd247a721c16e97fe5ec1`.
 
 Requirements:
 
 - Full Xcode with iOS SDK installed and selected with `xcode-select`.
-- Go installed.
+- Go 1.27 or newer installed.
 - `gomobile` installed, or let the script install it into `$HOME/go/bin`.
 
 Build:
@@ -34,7 +34,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer ./ios/build_xray_ios.sh
 Useful overrides:
 
 ```bash
-XRAY_MOBILE_DIR=../third_party/xray-mobile XRAY_CORE_REF=45cf2898ab12e97a55dd8f1f3d78d903340bdc9e IOS_VERSION=15.0 ./build_xray_ios.sh
+XRAY_MOBILE_DIR=../third_party/xray-mobile XRAY_CORE_REF=50231eaff98ccc31b5cbd247a721c16e97fe5ec1 IOS_VERSION=15.0 ./build_xray_ios.sh
 ```
 
 The build script copies `XRAY_MOBILE_DIR` into `ios/build_xray_ios/xray-mobile`
@@ -55,5 +55,5 @@ Without this cap, Xray's XHTTP server advertises a 1 MiB SETTINGS_MAX_FRAME_SIZE
 and iOS Network Extensions (50 MB hard limit) are jetsam-killed under concurrent
 uploads. See issue #23 for the full analysis and on-device measurements.
 
-Tested toolchain: **Go 1.27** (any Go >= 1.25 stdlib layout should work; the
-build fails with a clear error if the stdlib layout or anchor line changes).
+Required and tested toolchain: **Go 1.27 or newer**. The build fails with a
+clear error if the Go version, stdlib layout, or anchor line is unsupported.

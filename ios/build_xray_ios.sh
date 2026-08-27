@@ -15,6 +15,19 @@ if ! command -v go >/dev/null 2>&1; then
     exit 1
 fi
 
+GO_VERSION="$(go env GOVERSION)"
+if [[ ! "$GO_VERSION" =~ ^go([0-9]+)\.([0-9]+) ]]; then
+    echo "Error: unable to parse Go version '$GO_VERSION'. Go 1.27 or newer is required."
+    exit 1
+fi
+GO_MAJOR="${BASH_REMATCH[1]}"
+GO_MINOR="${BASH_REMATCH[2]}"
+if [ "$GO_MAJOR" -lt 1 ] || { [ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -lt 27 ]; }; then
+    echo "Error: Go 1.27 or newer is required for the stdlib http2 layout used by the H2BUF patch."
+    echo "Your Go version: $(go version)"
+    exit 1
+fi
+
 if ! command -v gomobile >/dev/null 2>&1; then
     echo "gomobile not found, installing it with go install..."
     go install golang.org/x/mobile/cmd/gomobile@latest
@@ -59,7 +72,7 @@ go mod tidy
 #
 # How: clone the live GOROOT (APFS copy-on-write, instant) and patch the
 # stdlib file in the clone only; the system Go installation is never touched.
-# The patch targets the Go >= 1.25 stdlib layout (http2 vendored at
+# The patch targets the Go >= 1.27 stdlib layout (http2 vendored at
 # net/http/internal/http2); tested with Go 1.27. If the layout or the anchor
 # line changes in a future Go release, the build fails loudly below instead
 # of silently shipping an unpatched framework.
@@ -80,12 +93,15 @@ GOROOT_PATCHED="$BUILD_DIR/goroot-patched"
 H2_REL="src/net/http/internal/http2/transport.go"
 if [ ! -f "$GOROOT_LIVE/$H2_REL" ]; then
     echo "Error: $H2_REL not found in GOROOT ($GOROOT_LIVE)."
-    echo "The H2BUF patch supports the Go >= 1.25 stdlib http2 layout (tested: Go 1.27)."
+    echo "The H2BUF patch requires the Go >= 1.27 stdlib http2 layout."
     echo "Your Go version: $(go version)"
     exit 1
 fi
 rm -rf "$GOROOT_PATCHED"
 cp -Rc "$GOROOT_LIVE" "$GOROOT_PATCHED" 2>/dev/null || cp -R "$GOROOT_LIVE" "$GOROOT_PATCHED"
+# Toolchains downloaded through GOTOOLCHAIN live in the read-only module cache.
+# Make only the temporary clone writable so it can be patched and removed later.
+chmod -R u+w "$GOROOT_PATCHED"
 H2_FILE="$GOROOT_PATCHED/$H2_REL"
 H2BUF_CAP_KB="$H2BUF_CAP_KB" python3 - "$H2_FILE" <<'PYEOF'
 import os, sys

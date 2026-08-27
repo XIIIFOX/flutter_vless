@@ -57,7 +57,7 @@ jobs:
           auth_token="$(printf '%s:%s' "$MAVEN_CENTRAL_USERNAME" "$MAVEN_CENTRAL_PASSWORD" | base64 | tr -d '\n')"
           status_url="https://central.sonatype.com/api/v1/publisher/status?id=$DEPLOYMENT_ID"
           publish_url="https://central.sonatype.com/api/v1/publisher/deployment/$DEPLOYMENT_ID"
-          deadline=$((SECONDS + 900))
+          deadline=$((SECONDS + 3600))
           publish_requested=0
 
           while true; do

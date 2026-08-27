@@ -7,7 +7,7 @@ import 'package:integration_test/integration_test.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('Embedded Xray core reports v26.7.11', (tester) async {
+  testWidgets('Embedded Xray core reports v26.7.28', (tester) async {
     if (!(Platform.isAndroid || Platform.isIOS || Platform.isMacOS)) {
       return;
     }
@@ -24,7 +24,7 @@ void main() {
     // ignore: avoid_print
     print('XRAY_CORE_VERSION=$version');
 
-    expect(version, contains('26.7.11'));
+    expect(version, contains('26.7.28'));
     expect(version.toLowerCase(), isNot(contains('not found')));
     expect(version.toLowerCase(), isNot(startsWith('error:')));
   });

@@ -89,7 +89,7 @@ void main() {
         case 'getConnectedServerDelay':
           return 45;
         case 'getCoreVersion':
-          return 'Xray 26.7.11';
+          return 'Xray 26.7.28';
       }
       return null;
     });
@@ -107,7 +107,7 @@ void main() {
       await plugin.getConnectedServerDelay('https://example.com/generate_204'),
       45,
     );
-    expect(await plugin.getCoreVersion(), 'Xray 26.7.11');
+    expect(await plugin.getCoreVersion(), 'Xray 26.7.28');
 
     expect(calls.map((call) => call.method), [
       'requestPermission',

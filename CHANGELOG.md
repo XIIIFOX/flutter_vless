@@ -1,5 +1,8 @@
 ## 1.1.6 (Unreleased)
 
+* Updated bundled and packaged Xray runtimes to upstream Xray-core `v26.7.28` for Android, iOS, and macOS.
+* Rebuilt the Android runtime AAR as `dev.tfox.fluttervless:xray-android:26.7.28` for device and emulator ABIs.
+* Updated the default hosted Apple runtime release tags and checksums to `xray-ios-v26.7.28` and `xray-macos-v26.7.28`.
 * Fixed an iOS Network Extension memory-pressure failure during concurrent XHTTP uploads. The iOS Xray framework build now caps Go's HTTP/2 per-stream upload scratch buffer at 128 KiB, preventing the previous 512 KiB-per-stream allocation pattern from exhausting the extension's 50 MB memory limit.
 * The iOS framework build now requires Go 1.27 or newer and patches an isolated copy of `GOROOT`, never the installed Go toolchain. Maintainers can tune the cap with `H2BUF_CAP_KB` (16–512 KiB); the build stops if the expected Go stdlib source layout changes.
 * Documented the iOS Xray framework memory safeguard, toolchain requirements, and release-validation steps in the platform and release guides.

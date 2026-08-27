@@ -1,3 +1,8 @@
+## 1.1.6
+
+* Updated the macOS XRay core target to upstream `v26.7.28`.
+* Updated the default macOS SwiftPM/CocoaPods release tag and checksum to `xray-macos-v26.7.28`.
+
 ## 1.1.5
 
 * Updated the macOS XRay core target to upstream `v26.7.11`.

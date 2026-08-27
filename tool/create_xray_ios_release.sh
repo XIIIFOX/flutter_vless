@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-XRAY_VERSION="${XRAY_VERSION:-v26.7.11}"
+XRAY_VERSION="${XRAY_VERSION:-v26.7.28}"
 RELEASE_TAG="${RELEASE_TAG:-xray-ios-$XRAY_VERSION}"
 XCFRAMEWORK_PATH="${XCFRAMEWORK_PATH:-$REPO_ROOT/ios/XRay.xcframework}"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/build/xray-ios-release}"

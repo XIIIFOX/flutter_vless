@@ -10,10 +10,17 @@ the public `flutter_vless` package. Each publishable federated package keeps a
 separate `CHANGELOG.md` beside its `pubspec.yaml`; add a versioned entry there
 only when that package itself is being released.
 
-For 1.1.6, the iOS implementation lives in the root package, so PR #24 belongs
-in the root changelog. The Android, macOS, Windows, and platform-interface
-packages have no code change in this release and must not receive artificial
-1.1.6 entries or version bumps.
+For 1.1.6, PR #24 belongs in the root changelog because the iOS implementation
+lives in the root package. The Xray-core `v26.7.28` runtime update also changes
+the Android and macOS implementation packages, so their package versions and
+changelogs must be updated. Windows and the platform-interface package have no
+change in this release and keep their existing versions.
+
+Runtime release notes for this train:
+
+* [Android v26.7.28](xray-android-v26.7.28.md)
+* [iOS v26.7.28](xray-ios-v26.7.28.md)
+* [macOS v26.7.28](xray-macos-v26.7.28.md)
 
 ## Local Checklist
 

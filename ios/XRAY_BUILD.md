@@ -3,8 +3,8 @@
 The iOS plugin uses `XRay.xcframework`, generated with `gomobile bind` from
 the vendored `third_party/xray-mobile` Go wrapper.
 
-Current target Xray-core version: `v26.7.11`.
-Release commit used by the script: `50231eaff98ccc31b5cbd247a721c16e97fe5ec1`.
+Current target Xray-core version: `v26.7.28`.
+Release commit used by the script: `5ca6f4b7d4dc20a881d4330e498892697627ec0c`.
 
 Requirements:
 
@@ -34,7 +34,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer ./ios/build_xray_ios.sh
 Useful overrides:
 
 ```bash
-XRAY_MOBILE_DIR=../third_party/xray-mobile XRAY_CORE_REF=50231eaff98ccc31b5cbd247a721c16e97fe5ec1 IOS_VERSION=15.0 ./build_xray_ios.sh
+XRAY_MOBILE_DIR=../third_party/xray-mobile XRAY_CORE_REF=5ca6f4b7d4dc20a881d4330e498892697627ec0c IOS_VERSION=15.0 ./build_xray_ios.sh
 ```
 
 The build script copies `XRAY_MOBILE_DIR` into `ios/build_xray_ios/xray-mobile`

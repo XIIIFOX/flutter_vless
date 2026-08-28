@@ -1,5 +1,11 @@
 ## 1.1.6 (Unreleased)
 
+* Added dynamic iOS `geoip.dat` and `geosite.dat` loading from an App Group or
+  other extension-readable directory through `geoAssetsDirectory`. The new Go
+  bridge configures Xray's asset lookup inside the Go runtime, validates both
+  files before startup, and supports restoring the default bundled lookup.
+* Prepared the non-overwriting iOS runtime revision `xray-ios-v26.7.28-r2`
+  with the new gomobile symbol and updated SwiftPM/CocoaPods checksums.
 * Updated bundled and packaged Xray runtimes to upstream Xray-core `v26.7.28` for Android, iOS, and macOS.
 * Rebuilt the Android runtime AAR as `dev.tfox.fluttervless:xray-android:26.7.28` for device and emulator ABIs.
 * Updated the default hosted Apple runtime release tags and checksums to `xray-ios-v26.7.28` and `xray-macos-v26.7.28`.

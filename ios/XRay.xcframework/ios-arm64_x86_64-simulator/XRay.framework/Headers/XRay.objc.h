@@ -31,6 +31,17 @@ Caller parses "uplink" and "downlink" from counter names.
  */
 FOUNDATION_EXPORT NSString* _Nonnull XRayQueryStats(NSString* _Nullable tag);
 
+/**
+ * SetAssetLocation configures the directory used by Xray-core to load runtime
+assets such as geoip.dat and geosite.dat.
+
+This function deliberately updates the environment from Go. On iOS, calling
+setenv from Swift after the Go runtime has initialized does not update the
+environment observed by Go's os.LookupEnv. Passing an empty path restores
+Xray's default executable-directory lookup.
+ */
+FOUNDATION_EXPORT BOOL XRaySetAssetLocation(NSString* _Nullable directory, NSError* _Nullable* _Nullable error);
+
 FOUNDATION_EXPORT void XRaySetMemoryLimit(void);
 
 FOUNDATION_EXPORT BOOL XRayStart(NSData* _Nullable config, id<XRayLogger> _Nullable logger, NSError* _Nullable* _Nullable error);

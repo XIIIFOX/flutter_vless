@@ -20,6 +20,8 @@ changes needed by `flutter_vless`:
 - `GetVersion`, `MeasureDelay`, and `MeasureOutboundDelay` exported for the
   Flutter platform layer.
 - `QueryStats` exported for macOS traffic counters.
+- `SetAssetLocation` exported so Apple runtimes can select an App Group asset
+  directory from inside Go before Xray reads `geoip.dat` and `geosite.dat`.
 - `Stop` handles a nil or already-stopped core instance.
 
 Build scripts copy this directory into a temporary build directory before

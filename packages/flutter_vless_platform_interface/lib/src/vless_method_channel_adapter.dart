@@ -62,15 +62,20 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     List<String>? blockedApps,
     List<String>? bypassSubnets,
     bool proxyOnly = false,
+    String? geoAssetsDirectory,
   }) async {
-    await methodChannel.invokeMethod('startVless', {
+    final arguments = <String, Object?>{
       'remark': remark,
       'config': config,
       'blocked_apps': blockedApps,
       'bypass_subnets': bypassSubnets,
       'proxy_only': proxyOnly,
       'notificationDisconnectButtonName': notificationDisconnectButtonName,
-    });
+    };
+    if (geoAssetsDirectory != null) {
+      arguments['geo_assets_directory'] = geoAssetsDirectory;
+    }
+    await methodChannel.invokeMethod('startVless', arguments);
   }
 
   @override
@@ -82,11 +87,16 @@ class VlessMethodChannelAdapter extends VlessPlatform {
   Future<int> getServerDelay({
     required String config,
     required String url,
+    String? geoAssetsDirectory,
   }) async {
-    return await methodChannel.invokeMethod('getServerDelay', {
+    final arguments = <String, Object?>{
       'config': config,
       'url': url,
-    });
+    };
+    if (geoAssetsDirectory != null) {
+      arguments['geo_assets_directory'] = geoAssetsDirectory;
+    }
+    return await methodChannel.invokeMethod('getServerDelay', arguments);
   }
 
   @override

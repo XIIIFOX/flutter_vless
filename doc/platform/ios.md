@@ -53,6 +53,46 @@ The plugin appends `.XrayTunnel` internally for the tunnel extension.
 - `bypassSubnets` is the route-level knob to understand first
 - app-level blocking is not the same thing as tunnel routing
 
+## Updating `geoip.dat` And `geosite.dat`
+
+The iOS runtime can load geodata from a shared App Group directory, so these
+files can be updated without rebuilding or releasing the application. Download
+and validate both files in the containing app, then pass the absolute directory
+path when starting Xray:
+
+```dart
+await flutterVless.startVless(
+  remark: parsed.remark,
+  config: parsed.getFullConfiguration(),
+  geoAssetsDirectory: appGroupGeoDirectory,
+);
+```
+
+The directory must be an absolute path and must contain readable, non-empty,
+regular files named exactly `geoip.dat` and `geosite.dat`. For Packet Tunnel
+mode it must be inside the App Group shared by `Runner` and `XrayTunnel`.
+Invalid custom assets fail startup instead of silently falling back to stale
+bundle files.
+
+Update the files while Xray is stopped. Download to temporary names, validate
+the complete pair, and atomically replace the live files before the next
+`startVless()` call. Do not overwrite a `.dat` file in place while Xray may be
+reading it. Passing a new directory on a later start switches the next runtime
+session; omitting `geoAssetsDirectory` restores Xray's default/bundled lookup.
+
+The Packet Tunnel provider must forward `geoAssetsDirectory` from its
+`providerConfiguration` and call `XRaySetAssetLocation` before `XRayStart`.
+Use the current provider implementation from:
+
+```text
+example/ios/XrayTunnel/PacketTunnelProvider.swift
+```
+
+Calling Darwin `setenv()` in Swift is not equivalent: after gomobile has
+initialized the Go runtime, Xray's Go-side `os.LookupEnv()` does not observe
+that change. `XRaySetAssetLocation` performs the update inside Go and validates
+the file pair first.
+
 ## Rebuilding the Xray Framework
 
 Most application integrators use the prebuilt `XRay.xcframework` and do not

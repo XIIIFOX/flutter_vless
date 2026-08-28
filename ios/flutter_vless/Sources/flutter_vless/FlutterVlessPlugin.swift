@@ -26,7 +26,7 @@ private final class PluginXRayLogger: NSObject, XRayLoggerProtocol {
 private actor ServerDelayRunner {
     private let logger = PluginXRayLogger()
 
-    func measure(config: String, url: String) async -> Int64 {
+    func measure(config: String, url: String, geoAssetsDirectory: String?) async -> Int64 {
         do {
             guard URL(string: url) != nil else {
                 throw NSError(domain: "FlutterVless", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid probe URL"])
@@ -36,6 +36,7 @@ private actor ServerDelayRunner {
             let delayConfig = try Self.buildDelayConfigData(config: config, proxyPort: proxyPort)
 
             XRaySetMemoryLimit()
+            try configureXrayAssetLocation(geoAssetsDirectory)
             var startError: NSError?
             let started = XRayStart(delayConfig, logger, &startError)
             guard started else {
@@ -183,13 +184,14 @@ private final class ProxyOnlyRunner {
     private(set) var isRunning = false
     private(set) var connectedDate: Date?
 
-    func start(configData: Data) throws {
+    func start(configData: Data, geoAssetsDirectory: String?) throws {
         if isRunning {
             stop()
         }
 
         let preparedConfig = try Self.buildProxyOnlyConfigData(configData: configData)
         XRaySetMemoryLimit()
+        try configureXrayAssetLocation(geoAssetsDirectory)
         var startError: NSError?
         let started = XRayStart(preparedConfig, logger, &startError)
         guard started else {
@@ -540,7 +542,11 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return
         }
         Task {
-            let delay = await serverDelayRunner.measure(config: config, url: url)
+            let delay = await serverDelayRunner.measure(
+                config: config,
+                url: url,
+                geoAssetsDirectory: arguments["geo_assets_directory"] as? String
+            )
             result(delay)
         }
     }
@@ -554,9 +560,13 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return
         }
         let proxyOnly = arguments["proxy_only"] as? Bool ?? false
+        let geoAssetsDirectory = arguments["geo_assets_directory"] as? String
         if proxyOnly {
             do {
-                try proxyOnlyRunner.start(configData: configData)
+                try proxyOnlyRunner.start(
+                    configData: configData,
+                    geoAssetsDirectory: geoAssetsDirectory
+                )
                 pluginLog.info("Proxy-only start requested successfully remark=\(remark, privacy: .public)")
                 startTimer(reason: "proxy-only-started")
                 result(nil)
@@ -574,6 +584,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         packetTunnelManager?.xrayConfig = configData
         packetTunnelManager?.bypassSubnets = arguments["bypass_subnets"] as? [String] ?? []
         packetTunnelManager?.proxyOnly = false
+        packetTunnelManager?.geoAssetsDirectory = geoAssetsDirectory
         pluginLog.info("startVless remark=\(remark, privacy: .public) configBytes=\(configData.count, privacy: .public) proxyOnly=\(self.packetTunnelManager?.proxyOnly ?? false, privacy: .public) bypassCount=\(self.packetTunnelManager?.bypassSubnets.count ?? 0, privacy: .public)")
         pluginLog.info("\(self.describeConfig(configData), privacy: .public)")
         Task {
@@ -670,6 +681,31 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         return "Config summary inbounds=[\(inboundSummary)] outbounds=[\(outboundSummary)]"
     }
 }
+
+private func configureXrayAssetLocation(_ directory: String?) throws {
+    if directory?.isEmpty == true {
+        throw NSError(
+            domain: "FlutterVless",
+            code: 12,
+            userInfo: [NSLocalizedDescriptionKey: "Xray geo asset directory must not be empty"]
+        )
+    }
+    var error: NSError?
+    let configured = XRaySetAssetLocation(directory ?? "", &error)
+    guard configured else {
+        throw error ?? NSError(
+            domain: "FlutterVless",
+            code: 13,
+            userInfo: [NSLocalizedDescriptionKey: "Failed to configure Xray geo asset directory"]
+        )
+    }
+    if let directory {
+        pluginLog.info("Configured Xray geo asset directory: \(directory, privacy: .public)")
+    } else {
+        pluginLog.info("Using Xray default geo asset lookup")
+    }
+}
+
 final class PacketTunnelManager: ObservableObject {
     var providerBundleIdentifier: String?
     var groupIdentifier: String?
@@ -677,6 +713,7 @@ final class PacketTunnelManager: ObservableObject {
     var xrayConfig: Data = "".data(using: .utf8)!
     var bypassSubnets: [String] = []
     var proxyOnly: Bool = false
+    var geoAssetsDirectory: String?
     var statusDidChange: ((NEVPNStatus?) -> Void)?
 
     private var cancellables: Set<AnyCancellable> = []
@@ -748,12 +785,16 @@ final class PacketTunnelManager: ObservableObject {
                 let configuration = NETunnelProviderProtocol()
                 configuration.providerBundleIdentifier = providerBundleIdentifier
                 configuration.serverAddress = "Xray"
-                configuration.providerConfiguration = [
+                var providerConfiguration: [String: Any] = [
                     "xrayConfig": self.xrayConfig,
                     "bypassSubnets": self.bypassSubnets,
                     "proxyOnly": self.proxyOnly,
                     "groupIdentifier": self.groupIdentifier ?? ""
                 ]
+                if let geoAssetsDirectory = self.geoAssetsDirectory {
+                    providerConfiguration["geoAssetsDirectory"] = geoAssetsDirectory
+                }
+                configuration.providerConfiguration = providerConfiguration
                 if #available(iOS 14.2, *) {
                     configuration.excludeLocalNetworks = true
                 } else {

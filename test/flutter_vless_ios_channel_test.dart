@@ -56,6 +56,30 @@ void main() {
     });
   });
 
+  test('P0 startVless forwards an iOS geo asset directory', () async {
+    const config = '{"outbounds":[]}';
+    final plugin = FlutterVlessIOS();
+
+    await plugin.startVless(
+      remark: 'Geo routing',
+      config: config,
+      notificationDisconnectButtonName: 'STOP',
+      geoAssetsDirectory:
+          '/private/var/mobile/Containers/Shared/AppGroup/example/geodata',
+    );
+
+    expect(calls.single.arguments, {
+      'remark': 'Geo routing',
+      'config': config,
+      'blocked_apps': null,
+      'bypass_subnets': null,
+      'proxy_only': false,
+      'notificationDisconnectButtonName': 'STOP',
+      'geo_assets_directory':
+          '/private/var/mobile/Containers/Shared/AppGroup/example/geodata',
+    });
+  });
+
   test('P0 initializeVless sends iOS provider and app group identifiers',
       () async {
     final plugin = FlutterVlessIOS();
@@ -120,5 +144,22 @@ void main() {
       'url': 'https://example.com/generate_204',
     });
     expect(calls[2].arguments, {'url': 'https://example.com/generate_204'});
+  });
+
+  test('P1 getServerDelay forwards an iOS geo asset directory', () async {
+    installHandlers(respond: (call) => 123);
+    final plugin = FlutterVlessIOS();
+
+    await plugin.getServerDelay(
+      config: '{"outbounds":[]}',
+      url: 'https://example.com/generate_204',
+      geoAssetsDirectory: '/private/app-group/geodata',
+    );
+
+    expect(calls.single.arguments, {
+      'config': '{"outbounds":[]}',
+      'url': 'https://example.com/generate_204',
+      'geo_assets_directory': '/private/app-group/geodata',
+    });
   });
 }

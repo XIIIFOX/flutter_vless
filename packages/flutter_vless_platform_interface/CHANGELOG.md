@@ -1,3 +1,8 @@
+## 1.1.1 (Unreleased)
+
+* Added optional `geoAssetsDirectory` forwarding for Xray session startup and
+  standalone server-delay probes.
+
 ## 1.1.0
 
 * Added `VlessMethodChannelAdapter` for shared platform channel implementations.

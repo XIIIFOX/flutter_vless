@@ -77,6 +77,7 @@ await flutterVless.startVless(
   remark: parsed.remark,
   config: parsed.getFullConfiguration(),
   proxyOnly: false,
+  geoAssetsDirectory: appGroupGeoDirectory,
 );
 ```
 
@@ -91,6 +92,10 @@ Optional parameters:
 - `blockedApps`: Android package names excluded from the VPN route.
 - `bypassSubnets`: CIDR routes excluded from the tunnel where supported.
 - `proxyOnly`: starts local proxy behavior without installing a VPN route.
+- `geoAssetsDirectory`: iOS-only absolute path to a directory containing
+  non-empty `geoip.dat` and `geosite.dat`. Use an App Group directory for VPN
+  mode so both the app and Packet Tunnel extension can read it. Omit this
+  parameter to keep Xray's default/bundled asset lookup.
 - `notificationDisconnectButtonName`: Android notification action label.
 
 Validation:
@@ -118,10 +123,13 @@ Measures delay for a provided Xray config without relying on an active session.
 final delayMs = await flutterVless.getServerDelay(
   config: parsed.getFullConfiguration(),
   url: 'https://google.com/generate_204',
+  geoAssetsDirectory: appGroupGeoDirectory,
 );
 ```
 
 The config is validated with the same validator used by `startVless()`.
+On iOS, `geoAssetsDirectory` has the same validation and lookup behavior as
+the parameter on `startVless()`.
 
 ## `getConnectedServerDelay()`
 

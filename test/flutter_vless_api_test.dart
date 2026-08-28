@@ -75,6 +75,7 @@ void main() {
       blockedApps: ['com.blocked.app'],
       bypassSubnets: ['172.16.0.0/12'],
       proxyOnly: false,
+      geoAssetsDirectory: '/private/app-group/geodata',
       notificationDisconnectButtonName: 'STOP',
     );
 
@@ -86,6 +87,7 @@ void main() {
       'blocked_apps': ['com.blocked.app'],
       'bypass_subnets': ['172.16.0.0/12'],
       'proxy_only': false,
+      'geo_assets_directory': '/private/app-group/geodata',
       'notificationDisconnectButtonName': 'STOP',
     });
   });

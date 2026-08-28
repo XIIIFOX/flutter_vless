@@ -107,6 +107,10 @@ class FlutterVless {
   /// Set [proxyOnly] to `true` when the app should start local Xray proxy
   /// behavior without installing a system VPN or Packet Tunnel route.
   ///
+  /// On iOS, [geoAssetsDirectory] can select an absolute App Group directory
+  /// containing non-empty `geoip.dat` and `geosite.dat` files for this session.
+  /// Omit it to use Xray's bundled/default asset lookup.
+  ///
   /// [notificationDisconnectButtonName] controls the Android foreground
   /// notification disconnect action label.
   Future<void> startVless({
@@ -115,6 +119,7 @@ class FlutterVless {
     List<String>? blockedApps,
     List<String>? bypassSubnets,
     bool proxyOnly = false,
+    String? geoAssetsDirectory,
     String notificationDisconnectButtonName = "DISCONNECT",
   }) async {
     final normalizedConfig = _normalizeConfigString(config);
@@ -125,6 +130,7 @@ class FlutterVless {
       blockedApps: blockedApps,
       proxyOnly: proxyOnly,
       bypassSubnets: bypassSubnets,
+      geoAssetsDirectory: geoAssetsDirectory,
       notificationDisconnectButtonName: notificationDisconnectButtonName,
     );
   }
@@ -145,12 +151,19 @@ class FlutterVless {
   ///
   /// Returns delay in milliseconds, or the platform-specific failure value when
   /// the native backend cannot complete the probe.
+  ///
+  /// On iOS, [geoAssetsDirectory] has the same behavior and validation as the
+  /// parameter on [startVless].
   Future<int> getServerDelay(
       {required String config,
-      String url = 'https://google.com/generate_204'}) async {
+      String url = 'https://google.com/generate_204',
+      String? geoAssetsDirectory}) async {
     final normalizedConfig = _normalizeConfigString(config);
-    return await VlessPlatform.instance
-        .getServerDelay(config: normalizedConfig, url: url);
+    return await VlessPlatform.instance.getServerDelay(
+      config: normalizedConfig,
+      url: url,
+      geoAssetsDirectory: geoAssetsDirectory,
+    );
   }
 
   /// Measures delay through the currently connected runtime.

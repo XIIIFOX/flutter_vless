@@ -1,6 +1,7 @@
 #include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"
 #include "Generated.xcconfig"
 
-// Do not reuse an integration-test entrypoint that Flutter may have left in
-// Generated.xcconfig. Explicit Flutter CLI targets take precedence for tests.
-FLUTTER_TARGET=lib/main.dart
+// Generated.xcconfig is the source of truth for FLUTTER_TARGET. A normal
+// `flutter run` writes lib/main.dart, while `flutter test integration_test/...`
+// writes its generated test listener. Overriding it here silently launches the
+// example UI instead of the requested integration test.

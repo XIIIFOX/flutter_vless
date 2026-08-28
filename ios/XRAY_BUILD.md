@@ -3,8 +3,13 @@
 The iOS plugin uses `XRay.xcframework`, generated with `gomobile bind` from
 the vendored `third_party/xray-mobile` Go wrapper.
 
+The wrapper exports `XRaySetAssetLocation` in addition to the lifecycle API.
+Keep this symbol when rebuilding: the iOS app and Packet Tunnel use it to set
+Xray's asset directory from inside the Go runtime.
+
 Current target Xray-core version: `v26.7.28`.
 Release commit used by the script: `5ca6f4b7d4dc20a881d4330e498892697627ec0c`.
+Current wrapper artifact tag: `xray-ios-v26.7.28-r2`.
 
 Requirements:
 

@@ -48,6 +48,9 @@ abstract class VlessPlatform extends PlatformInterface {
   }
 
   /// Starts a proxy-only or VPN/tunnel session with a JSON Xray config.
+  ///
+  /// The iOS implementation may use [geoAssetsDirectory] to select external
+  /// `geoip.dat` and `geosite.dat` files for the new runtime session.
   Future<void> startVless({
     required String remark,
     required String config,
@@ -55,6 +58,7 @@ abstract class VlessPlatform extends PlatformInterface {
     List<String>? blockedApps,
     List<String>? bypassSubnets,
     bool proxyOnly = false,
+    String? geoAssetsDirectory,
   }) {
     throw UnimplementedError('startVless() has not been implemented.');
   }
@@ -65,7 +69,14 @@ abstract class VlessPlatform extends PlatformInterface {
   }
 
   /// Measures delay for a provided Xray config.
-  Future<int> getServerDelay({required String config, required String url}) {
+  ///
+  /// The iOS implementation may use [geoAssetsDirectory] to select external
+  /// geodata files for the temporary runtime session.
+  Future<int> getServerDelay({
+    required String config,
+    required String url,
+    String? geoAssetsDirectory,
+  }) {
     throw UnimplementedError('getServerDelay() has not been implemented.');
   }
 

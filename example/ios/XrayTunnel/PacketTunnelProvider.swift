@@ -136,6 +136,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         tunnelLog.info("Received Xray config bytes=\(xrayConfig.count, privacy: .public)")
         let preparedXrayConfig = prepareXrayConfigForTunnel(xrayConfig) ?? xrayConfig
+        let geoAssetsDirectory = providerConfiguration["geoAssetsDirectory"] as? String
         let bypassSubnets = providerConfiguration["bypassSubnets"] as? [String] ?? []
         tunnelLog.info("Bypass subnet count=\(bypassSubnets.count, privacy: .public)")
         if (providerConfiguration["proxyOnly"] as? Bool) == true {
@@ -180,7 +181,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         tunnelLog.info("Applying tunnel network settings")
         try await self.setTunnelNetworkSettings(settings)
         tunnelLog.info("Tunnel network settings applied")
-        try self.startXRay(xrayConfig: preparedXrayConfig)
+        try self.startXRay(
+            xrayConfig: preparedXrayConfig,
+            geoAssetsDirectory: geoAssetsDirectory
+        )
         do {
             try self.startSocks5Tunnel(serverPort: parsedConfig.inboundPort)
         } catch {
@@ -344,13 +348,31 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    private func startXRay(xrayConfig: Data) throws {
+    private func startXRay(xrayConfig: Data, geoAssetsDirectory: String?) throws {
         // This limits the Go runtime only. HEV session caps and bounded Swift/C
         // diagnostics below protect the rest of the extension memory budget.
         XRaySetMemoryLimit()
 
         // Create an error pointer
         var error: NSError?
+
+        // This must cross the gomobile bridge: Swift setenv() is not visible to
+        // Go's os.LookupEnv after the Go runtime has initialized on iOS.
+        if geoAssetsDirectory?.isEmpty == true {
+            throw tunnelError("Xray geo asset directory must not be empty")
+        }
+        guard XRaySetAssetLocation(geoAssetsDirectory ?? "", &error) else {
+            let message = error?.localizedDescription
+                ?? "Failed to configure Xray geo asset directory"
+            rememberTunnelLog(message)
+            throw error ?? tunnelError(message)
+        }
+        if let geoAssetsDirectory {
+            rememberTunnelLog("Using Xray geo assets from \(geoAssetsDirectory)")
+            tunnelLog.info("Using custom Xray geo asset directory: \(geoAssetsDirectory, privacy: .public)")
+        } else {
+            rememberTunnelLog("Using Xray default geo asset lookup")
+        }
 
         // Start XRay with the config data
         tunnelLog.info("Starting XRay version=\(XRayGetVersion(), privacy: .public) configBytes=\(xrayConfig.count, privacy: .public)")

@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_vless_android/flutter_vless_android.dart';
+import 'package:flutter_vless_platform_interface/flutter_vless_platform_interface.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -92,6 +93,35 @@ void main() {
       'notificationIconResourceName': 'ic_vpn',
       'providerBundleIdentifier': '',
       'groupIdentifier': '',
+    });
+  });
+
+  test('P0 initializeVless forwards Quick Settings tile settings', () async {
+    final plugin = FlutterVlessAndroid();
+
+    await plugin.initializeVless(
+      onStatusChanged: (_) {},
+      notificationIconResourceType: 'drawable',
+      notificationIconResourceName: 'ic_vpn',
+      providerBundleIdentifier: '',
+      groupIdentifier: '',
+      quickSettingsTile: QuickSettingsTile(
+        tileLabel: 'My VPN',
+        tileIconResourceType: 'drawable',
+        tileIconResourceName: 'ic_tile_vpn',
+      ),
+    );
+
+    expect(calls, hasLength(1));
+    expect(calls.single.method, 'initializeVless');
+    expect(calls.single.arguments, {
+      'notificationIconResourceType': 'drawable',
+      'notificationIconResourceName': 'ic_vpn',
+      'providerBundleIdentifier': '',
+      'groupIdentifier': '',
+      'tileLabel': 'My VPN',
+      'tileIconResourceType': 'drawable',
+      'tileIconResourceName': 'ic_tile_vpn',
     });
   });
 

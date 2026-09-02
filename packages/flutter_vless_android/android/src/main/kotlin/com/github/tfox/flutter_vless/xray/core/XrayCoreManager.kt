@@ -288,7 +288,7 @@ object XrayCoreManager {
             configFile.writeText(configJson.toString())
         } catch (e: Exception) {
             Log.e(TAG, "Failed to write config file", e)
-            return false
+            return abortStart(context)
         }
 
         // 2. Find Xray executable (libxray.so)
@@ -297,7 +297,7 @@ object XrayCoreManager {
         if (!xrayExecutable.exists()) {
             Log.e(TAG, "Xray executable not found at ${xrayExecutable.absolutePath}")
             // Fallback or error
-            return false
+            return abortStart(context)
         }
 
         // 3. Prepare assets (geoip, geosite)
@@ -323,13 +323,13 @@ object XrayCoreManager {
                 val output = xrayProcess?.inputStream?.bufferedReader()?.readText().orEmpty()
                 Log.e(TAG, "Xray process exited during startup. Output: $output")
                 xrayProcess = null
-                AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
-                return false
+                return abortStart(context)
             }
             
             AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_CONNECTED
             lastProxyUplink = 0L
             lastProxyDownlink = 0L
+            sendCurrentStateBroadcast(context)
             startTimer(context)
             showNotification(context, config)
             
@@ -361,8 +361,14 @@ object XrayCoreManager {
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start Xray process", e)
-            return false
+            return abortStart(context)
         }
+    }
+
+    private fun abortStart(context: Service): Boolean {
+        AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
+        sendDisconnectedBroadcast(context)
+        return false
     }
 
     /**
@@ -407,11 +413,47 @@ object XrayCoreManager {
                 intent.putExtra("UPLOAD_TRAFFIC", traffic[2])
                 intent.putExtra("DOWNLOAD_TRAFFIC", traffic[3])
                 
-                context.sendBroadcast(intent)
+                deliverConnectionBroadcast(context, intent)
             }
 
             override fun onFinish() {}
         }.start()
+    }
+
+    fun sendCurrentStateBroadcast(context: Context) {
+        val intent = Intent(AppConfigs.V2RAY_CONNECTION_INFO)
+        intent.putExtra("STATE", AppConfigs.V2RAY_STATE)
+        intent.putExtra("DURATION", seconds.toString())
+        if (isXrayRunning()) {
+            val traffic = getV2rayTraffic(context)
+            intent.putExtra("UPLOAD_SPEED", traffic[0])
+            intent.putExtra("DOWNLOAD_SPEED", traffic[1])
+            intent.putExtra("UPLOAD_TRAFFIC", traffic[2])
+            intent.putExtra("DOWNLOAD_TRAFFIC", traffic[3])
+        } else {
+            intent.putExtra("UPLOAD_SPEED", 0L)
+            intent.putExtra("DOWNLOAD_SPEED", 0L)
+            intent.putExtra("UPLOAD_TRAFFIC", 0L)
+            intent.putExtra("DOWNLOAD_TRAFFIC", 0L)
+        }
+        deliverConnectionBroadcast(context, intent)
+    }
+
+    private fun deliverConnectionBroadcast(context: Context, intent: Intent) {
+        val state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getSerializableExtra("STATE", AppConfigs.V2RAY_STATES::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getSerializableExtra("STATE") as? AppConfigs.V2RAY_STATES
+        }
+        if (state != null && !intent.hasExtra("STATE_NAME")) {
+            intent.putExtra("STATE_NAME", state.name)
+        }
+        intent.setPackage(context.packageName)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY)
+        }
+        context.sendBroadcast(intent)
     }
 
     /**
@@ -494,7 +536,7 @@ object XrayCoreManager {
         intent.putExtra("DOWNLOAD_SPEED", 0L)
         intent.putExtra("UPLOAD_TRAFFIC", 0L)
         intent.putExtra("DOWNLOAD_TRAFFIC", 0L)
-        context.sendBroadcast(intent)
+        deliverConnectionBroadcast(context, intent)
     }
 
     private fun showNotification(context: Service, config: XrayConfig) {

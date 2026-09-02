@@ -1,6 +1,9 @@
 package com.github.tfox.flutter_vless.xray.service
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.net.VpnService
@@ -34,9 +37,38 @@ class XrayVPNService : VpnService() {
     private var mInterface: ParcelFileDescriptor? = null
     private var tun2socksProcess: Process? = null
     private var isRunning = false
+    private var vpnStateRequestReceiver: BroadcastReceiver? = null
 
     override fun onCreate() {
         super.onCreate()
+        registerVpnStateRequestReceiver()
+    }
+
+    private fun registerVpnStateRequestReceiver() {
+        if (vpnStateRequestReceiver != null) return
+        vpnStateRequestReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (context == null) return
+                XrayCoreManager.sendCurrentStateBroadcast(context)
+            }
+        }
+        val filter = IntentFilter(AppConfigs.ACTION_REQUEST_VPN_STATE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(vpnStateRequestReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(vpnStateRequestReceiver, filter)
+        }
+    }
+
+    private fun unregisterVpnStateRequestReceiver() {
+        vpnStateRequestReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (_: Exception) {
+            }
+            vpnStateRequestReceiver = null
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -292,7 +324,10 @@ for (pkg in config.BLOCKED_APPS) {
     }
 
     override fun onDestroy() {
-        stopAll()
+        unregisterVpnStateRequestReceiver()
+        cleanup()
+        XrayCoreManager.stopCore(this)
+        stopForeground(true)
         super.onDestroy()
     }
 

@@ -38,7 +38,13 @@ jobs:
         run: flutter test
       - name: Install Android wrapper package dependencies
         working-directory: packages/flutter_vless_android
-        run: flutter pub get
+        run: |
+          cat > pubspec_overrides.yaml <<'YAML'
+          dependency_overrides:
+            flutter_vless_platform_interface:
+              path: ../flutter_vless_platform_interface
+          YAML
+          flutter pub get
       - name: Analyze Android wrapper package
         working-directory: packages/flutter_vless_android
         run: flutter analyze
@@ -99,8 +105,12 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-linux-hw-accel: false
+          # android-emulator-runner runs each script line as a separate `sh -c`,
+          # so multi-line if/fi blocks must stay on one line.
           script: |
-            (cd example && flutter pub get && flutter test integration_test/android_xray_runtime_smoke_test.dart -d emulator-5554)
+            adb wait-for-device
+            adb shell pm grant com.example.flutter_vless_example android.permission.POST_NOTIFICATIONS || true
+            set +e; (cd example && flutter pub get && flutter test integration_test/android_xray_runtime_smoke_test.dart -d emulator-5554 --verbose); test_exit=$?; if [ "$test_exit" -ne 0 ]; then adb logcat -d -t 200 > "$GITHUB_WORKSPACE/android_emulator_smoke.log" || true; fi; exit "$test_exit"
 
   ios:
     name: iOS Swift and Xcode build

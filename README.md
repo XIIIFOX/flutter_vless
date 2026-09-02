@@ -51,6 +51,7 @@ license notices required by the license. See [NOTICE](NOTICE) and
 - Android device and emulator runtime binaries delivered through the main Maven runtime AAR.
 - Share-link, subscription, raw JSON, Clash YAML, and sing-box import paths.
 - Proxy-only mode and VPN/tunnel mode.
+- Optional Android Quick Settings tile for VPN toggle via `initializeVless(quickSettingsTile: ...)`; see the [Android platform guide](doc/platform/android.md).
 - Runtime delay checks and status tracking.
 - Typed Xray config helpers for more explicit advanced configuration.
 

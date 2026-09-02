@@ -50,9 +50,9 @@ Parameters:
   extension.
 - `quickSettingsTile`: optional Android Quick Settings tile label and icon.
   Icons must be Android resource names in the host app. The tile reconnects with
-  the last profile saved by `startVless()` after VPN permission has been granted
-  once through `requestPermission()`. Users add the tile manually in system
-  Quick Settings.
+  the last profile saved by `startVless()`. VPN mode still needs consent through
+  `requestPermission()` (the tile can also request it). Proxy-only profiles skip
+  VPN consent. Users add the tile manually in system Quick Settings.
 
 Apple platforms append the Packet Tunnel extension suffix internally. Pass the
 base app bundle id, not the extension bundle id.

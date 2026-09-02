@@ -108,8 +108,9 @@ Setup:
 2. Optionally pass `quickSettingsTile` for a custom label and tile icon
    override (`tileIconResource*`); when omitted, the notification icon is used.
 3. Ask the user to add the tile manually in system Quick Settings.
-4. Call `requestPermission()` and `startVless()` at least once so the tile can
-   reuse the saved profile and VPN consent flow.
+4. Call `startVless()` at least once so the tile can reuse the saved profile.
+   For VPN mode, also call `requestPermission()`. Proxy-only mode does not need
+   VPN consent.
 
 Behavior:
 
@@ -121,7 +122,10 @@ Behavior:
 - Tile state follows VPN broadcasts and updates while Quick Settings is closed
   when the tile has been added (`ACTIVE_TILE`).
 - Without a saved profile, tapping the tile opens the host app.
-- Without VPN permission, the plugin shows a transparent permission activity.
+- VPN-mode taps without consent open a transparent permission activity.
+  Proxy-only profiles skip VPN consent and start the local proxy directly.
+- Connect/disconnect from the tile does not collapse Quick Settings. The shade
+  only closes when the device is locked or the tile has to open an activity.
 - The tile works when the Flutter UI is not running, as long as profile and
   appearance were saved earlier via `initializeVless` / `startVless`.
 

@@ -1,5 +1,6 @@
 package com.github.tfox.flutter_vless
 
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -62,7 +63,13 @@ class VlessTileService : TileService() {
     }
 
     override fun onClick() {
-        unlockAndRun { handleClick() }
+        // unlockAndRun collapses Quick Settings even on an unlocked device.
+        // Keep the shade open for VPN toggle; still unlock when the keyguard is up.
+        if (isLocked) {
+            unlockAndRun { handleClick() }
+        } else {
+            handleClick()
+        }
     }
 
     private fun handleClick() {
@@ -74,16 +81,17 @@ class VlessTileService : TileService() {
             return
         }
 
-        if (QuickSettingsTileStore.loadProfile(this) == null) {
+        val profile = QuickSettingsTileStore.loadProfile(this)
+        if (profile == null) {
             launchHostApp()
             return
         }
 
-        if (VpnService.prepare(this) != null) {
+        if (!profile.proxyOnly && VpnService.prepare(this) != null) {
             val permissionIntent = Intent(this, VpnPermissionActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            startActivityAndCollapse(permissionIntent)
+            startActivityAndCollapseCompat(permissionIntent, REQUEST_CODE_VPN_PERMISSION)
             return
         }
 
@@ -215,7 +223,27 @@ class VlessTileService : TileService() {
     private fun launchHostApp() {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: return
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivityAndCollapse(launchIntent)
+        startActivityAndCollapseCompat(launchIntent, REQUEST_CODE_LAUNCH_APP)
+    }
+
+    /**
+     * Android 14+ throws if [startActivityAndCollapse] is called with a raw
+     * [Intent] when targetSdk is 34+. Use [PendingIntent] on API 34+ and the
+     * deprecated Intent overload on older platforms.
+     */
+    private fun startActivityAndCollapseCompat(intent: Intent, requestCode: Int) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                requestCode,
+                intent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            startActivityAndCollapse(pendingIntent)
+        } else {
+            @Suppress("DEPRECATION")
+            startActivityAndCollapse(intent)
+        }
     }
 
     private fun readStateExtra(intent: Intent): AppConfigs.V2RAY_STATES? {
@@ -235,5 +263,7 @@ class VlessTileService : TileService() {
 
     companion object {
         private const val PENDING_RECONCILE_DELAY_MS = 1500L
+        private const val REQUEST_CODE_VPN_PERMISSION = 1
+        private const val REQUEST_CODE_LAUNCH_APP = 2
     }
 }

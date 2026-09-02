@@ -7,12 +7,19 @@ import android.os.Bundle
 
 /**
  * Transparent activity used by [VlessTileService] to request VPN consent
- * when toggling from Quick Settings or the lock screen.
+ * when toggling a VPN-mode profile from Quick Settings or the lock screen.
+ * Proxy-only profiles skip this activity.
  */
 class VpnPermissionActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val profile = QuickSettingsTileStore.loadProfile(this)
+        if (profile?.proxyOnly == true) {
+            startSavedProfile()
+            finish()
+            return
+        }
         val prepareIntent = VpnService.prepare(this)
         if (prepareIntent != null) {
             startActivityForResult(prepareIntent, REQUEST_VPN)

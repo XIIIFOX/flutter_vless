@@ -75,6 +75,8 @@ def request(host, vpn):
     destination = ("203.0.113.10", 18581) if vpn else ("127.0.0.1", 18580)
     with socket.create_connection(destination, timeout=4) as sock:
         sock.settimeout(4)
+        if vpn:
+            assert sock.getsockname()[0] == "10.0.85.2", "TCP request bypassed the TUN"
         encoded = host.encode()
         if not vpn:
             sock.sendall(b"\x05\x01\x00")
@@ -95,12 +97,14 @@ def request(host, vpn):
         return data.split(b"\r\n\r\n", 1)[1].decode()
 
 
-def external_http(address):
+def external_http(address, vpn=False):
     # Direct baseline and in-tunnel request use the same address and HTTP Host.
     # This detects a freedom outbound looping back into the TUN default route.
     with socket.create_connection((address, 443), timeout=4) as connection, \
             ssl.create_default_context().wrap_socket(connection, server_hostname="api.ipify.org") as sock:
         sock.settimeout(4)
+        if vpn:
+            assert sock.getsockname()[0] == "10.0.85.2", "External HTTPS bypassed the TUN"
         sock.sendall(b"GET / HTTP/1.1\r\nHost: api.ipify.org\r\nConnection: close\r\n\r\n")
         data = sock.recv(4096)
         if not data.startswith(b"HTTP/1.1 200") and not data.startswith(b"HTTP/1.0 200"):
@@ -160,14 +164,20 @@ def main():
             profile.write_text(json.dumps(config(reverse, external_address)))
             with (directory / (label + ".log")).open("w") as log:
                 process = subprocess.Popen([str(probe), "run-vpn" if args.vpn else "run-proxy",
-                                            str(profile), "35"], cwd=directory, stdout=log, stderr=log)
+                                            str(profile), "35" if args.vpn else "12"], cwd=directory, stdout=log, stderr=log)
                 try:
                     if args.vpn:
                         deadline = time.monotonic() + 20
-                        while "TUN interface configured and default route added" not in (directory / (label + ".log")).read_text(errors="replace"):
+                        while "TUN interface configured and capture routes added" not in (directory / (label + ".log")).read_text(errors="replace"):
                             if process.poll() is not None or time.monotonic() >= deadline:
                                 raise RuntimeError("VPN network setup did not become ready")
                             time.sleep(0.25)
+                        routes = subprocess.check_output([
+                            "powershell", "-NoProfile", "-Command",
+                            "Get-NetRoute -InterfaceAlias flutter_vless_tun | Select-Object DestinationPrefix,NextHop,RouteMetric | ConvertTo-Json"], text=True)
+                        (directory / (label + "-routes-during.log")).write_text(routes)
+                        installed = json.loads(routes)
+                        assert {r["DestinationPrefix"] for r in installed} >= {"0.0.0.0/1", "128.0.0.0/1"}
                         time.sleep(1)
                     else:
                         time.sleep(3)
@@ -182,7 +192,7 @@ def main():
                         print(json.dumps(row), flush=True)
                     if args.vpn:
                         try:
-                            actual = external_http(external_address)
+                            actual = external_http(external_address, vpn=True)
                         except Exception as error:
                             actual = type(error).__name__ + ": " + str(error)
                         row = dict(mode=label, check="external direct through VPN", actual=actual,

@@ -183,13 +183,26 @@ void VpnService::RunVpn() {
   // Wait for Tun2Socks to fully create and initialize the TUN interface
   std::this_thread::sleep_for(std::chrono::milliseconds(2000));
   
+  if (!xray_process_->IsRunning() || !tun2socks_process_->IsRunning()) {
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "runtime", "Windows VPN worker exited before network configuration");
+    StopProcesses();
+    is_running_.store(false);
+    return;
+  }
+
   std::cerr << "VPN Service: Configuring TUN interface..." << std::endl;
   
   // Assign IP address to the virtual TUN interface
   // 10.0.85.2 = TUN interface IP, 10.0.85.1 = virtual gateway
   std::string set_ip_cmd = "netsh interface ip set address name=\"flutter_vless_tun\" source=static addr=10.0.85.2 mask=255.255.255.0 gateway=none";
   std::cerr << "VPN Service: Executing: " << set_ip_cmd << std::endl;
-  system(set_ip_cmd.c_str());
+  if (system(set_ip_cmd.c_str()) != 0) {
+    flutter_vless::DiagnosticsLog::Instance().Append("runtime", "Failed to configure Windows TUN address");
+    StopProcesses();
+    is_running_.store(false);
+    return;
+  }
   
   // === CRITICAL: Setup Bypass Routes ===
   // PROBLEM: If we route all traffic through the TUN, including VPN server traffic,
@@ -243,13 +256,21 @@ void VpnService::RunVpn() {
     std::cerr << "VPN Service: WARNING - Could not extract server address from config" << std::endl;
   }
   
-  // === Add Default Route ===
-  // Route ALL traffic (0.0.0.0/0) through the TUN interface
-  // This must come AFTER bypass routes to ensure specific routes take precedence
-  std::string add_route_cmd = "netsh interface ip add route 0.0.0.0/0 \"flutter_vless_tun\" 10.0.85.1 metric=1";
-  std::cerr << "VPN Service: Adding default route: " << add_route_cmd << std::endl;
-  system(add_route_cmd.c_str());
-  
+  // Two /1 routes beat any physical /0 regardless of automatic interface
+  // metrics, while more-specific endpoint/LAN routes remain usable. Keep the
+  // original default route intact and remove only this session's routes.
+  for (const auto* prefix : {"0.0.0.0/1", "128.0.0.0/1"}) {
+    const std::string command = "netsh interface ipv4 add route " + std::string(prefix) +
+        " \"flutter_vless_tun\" 10.0.85.1 metric=1 store=active";
+    if (system(command.c_str()) != 0) {
+      flutter_vless::DiagnosticsLog::Instance().Append("runtime", "Failed to install Windows VPN capture route");
+      StopProcesses();
+      is_running_.store(false);
+      return;
+    }
+    capture_routes_.push_back(prefix);
+  }
+
   // Allow network stack to stabilize
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   
@@ -265,7 +286,7 @@ void VpnService::RunVpn() {
   system(dns_cmd2.c_str());
   std::cerr << "VPN Service: DNS servers configured (8.8.8.8, 1.1.1.1)" << std::endl;
   
-  std::cerr << "VPN Service: TUN interface configured and default route added" << std::endl;
+  std::cerr << "VPN Service: TUN interface configured and capture routes added" << std::endl;
 
   // Start stats thread
   stats_thread_ = std::thread(&VpnService::UpdateTrafficStats, this);
@@ -558,6 +579,14 @@ bool VpnService::StartTun2SocksProcess(uint16_t socks_port) {
 }
 
 void VpnService::StopProcesses() {
+  for (auto route = capture_routes_.rbegin(); route != capture_routes_.rend(); ++route) {
+    const std::string command = "netsh interface ipv4 delete route " + *route +
+        " \"flutter_vless_tun\" store=active";
+    if (system(command.c_str()) != 0) {
+      flutter_vless::DiagnosticsLog::Instance().Append("runtime", "Could not remove Windows VPN capture route");
+    }
+  }
+  capture_routes_.clear();
   if (tun2socks_process_) {
     tun2socks_process_->Close();
     tun2socks_process_.reset();

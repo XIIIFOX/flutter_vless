@@ -14,11 +14,6 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.44.9'
-          channel: stable
-          cache: true
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -37,6 +32,28 @@ jobs:
           & build/windows-runtime/tun2socks.exe -version
       - name: Exercise domain routing through the Windows proxy service
         run: python tool/windows/runtime_smoke.py --directory build/windows-runtime
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-runtime-and-logs
+          path: build/windows-runtime
+          retention-days: 7
+
+  example-build:
+    needs: build-and-proxy
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.9'
+          channel: stable
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-runtime-and-logs
+          path: build/windows-runtime
       - name: Build example Windows application
         working-directory: example
         run: |
@@ -52,12 +69,6 @@ jobs:
           $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' -property installationPath
           $crt = Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
           Copy-Item "$($crt.FullName)/*.dll" $bundle
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: windows-runtime-and-logs
-          path: build/windows-runtime
-          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: windows-example-august-2026

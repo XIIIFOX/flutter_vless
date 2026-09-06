@@ -56,7 +56,7 @@ class VpnService {
    * - Terminates Xray and Tun2Socks processes.
    * - Cleans up temporary configuration files.
    * - Resets traffic statistics.
-   * - (Implicitly) The OS destroys the TUN interface when Tun2Socks exits, removing routes.
+   * - Removes this session's capture routes before stopping Tun2Socks.
    */
   void Stop();
 
@@ -126,15 +126,8 @@ class VpnService {
    * @param config Original user configuration.
    * @return Modified configuration string.
    * 
-   * @details Modifications include:
-   * - **API**: Adds `api` inbound and `StatsService` for traffic monitoring.
-   * - **DNS**: Adds a `dns` block with public servers (8.8.8.8, 1.1.1.1) to ensure resolution works inside the tunnel.
-   * - **Routing**: 
-   *   - Routes `api` traffic internally.
-   *   - Routes the VPN server address to `direct` (bypass) to prevent loops.
-   *   - Routes DNS traffic to `direct` (bypass) to ensure reliable resolution.
-   *   - Routes all other traffic (`proxy`) through the tunnel.
-   * - **Listen**: Forces listening on `127.0.0.1` (IPv4) for compatibility with Tun2Socks.
+   * @details Adds a dedicated API listener and statistics policy while preserving
+   * caller routing rules, DNS settings and outbound transport configuration.
    */
   std::string InjectApiConfig(const std::string& config);
   
@@ -178,6 +171,7 @@ class VpnService {
   fs::path temp_config_path_;
   
   std::string current_config_;
+  std::vector<std::string> capture_routes_;
   
   // Stats synchronization
   std::mutex stats_mutex_;

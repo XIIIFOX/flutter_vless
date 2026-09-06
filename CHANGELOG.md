@@ -58,6 +58,9 @@
 
 ### Windows
 
+* Captured IPv4 with two session-owned `/1` routes so physical interface metrics
+  cannot silently bypass the VPN; removed these routes on stop or setup failure.
+
 * Exposed the VPN Diagnostics button in the Windows example.
 
 * Bound Windows `direct` transports to the pre-tunnel network interface to prevent

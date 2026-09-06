@@ -6,7 +6,7 @@ on:
       xray_runtime_version:
         description: Xray runtime Maven artifact version
         required: true
-        default: "26.7.28"
+        default: "26.7.28-protect1"
       existing_deployment_id:
         description: Existing Central Portal deployment ID to publish instead of uploading a new bundle
         required: false

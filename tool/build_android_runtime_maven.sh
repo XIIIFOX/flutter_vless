@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_DIR="$ROOT_DIR/android_runtime/xray_android"
 GRADLE_WRAPPER="${GRADLE_WRAPPER:-$ROOT_DIR/example/android/gradlew}"
-XRAY_RUNTIME_VERSION="${XRAY_RUNTIME_VERSION:-26.7.28}"
+XRAY_RUNTIME_VERSION="${XRAY_RUNTIME_VERSION:-26.7.28-protect1}"
 XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-26.7.28}"
 
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"

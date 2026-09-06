@@ -46,6 +46,12 @@ FOUNDATION_EXPORT void XRaySetMemoryLimit(void);
 
 FOUNDATION_EXPORT BOOL XRayStart(NSData* _Nullable config, id<XRayLogger> _Nullable logger, NSError* _Nullable* _Nullable error);
 
+/**
+ * StartPrivate is an additive capability symbol. Swift entry points require it
+so an older local framework cannot silently bypass the mobile privacy policy.
+ */
+FOUNDATION_EXPORT BOOL XRayStartPrivate(NSData* _Nullable config, id<XRayLogger> _Nullable logger, NSError* _Nullable* _Nullable error);
+
 FOUNDATION_EXPORT void XRayStop(void);
 
 @class XRayLogger;

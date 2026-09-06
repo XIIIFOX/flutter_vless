@@ -93,4 +93,18 @@ abstract class VlessPlatform extends PlatformInterface {
       'getCoreVersion() has not been implemented.',
     );
   }
+
+  /// Returns a bounded native diagnostic snapshot for the current or most
+  /// recent VPN or proxy-only Xray runtime session.
+  ///
+  /// The exact contents are platform-specific and may include Xray stdout or
+  /// stderr, Packet Tunnel provider diagnostics, and tun2socks output. Apps
+  /// should treat this as human-readable troubleshooting data rather than a
+  /// stable machine-readable format. Stateless delay probes are deliberately
+  /// excluded from this connection snapshot.
+  Future<String> getProviderDebugSnapshot() {
+    throw UnimplementedError(
+      'getProviderDebugSnapshot() has not been implemented.',
+    );
+  }
 }

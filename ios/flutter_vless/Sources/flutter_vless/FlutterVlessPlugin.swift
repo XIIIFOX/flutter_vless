@@ -16,10 +16,25 @@ private let pluginLog = Logger(
 )
 
 private final class PluginXRayLogger: NSObject, XRayLoggerProtocol {
+    private let store = BoundedNativeLogStore()
+
     func logInput(_ s: String?) {
         if let message = s {
-            pluginLog.info("XRay delay probe: \(message, privacy: .public)")
+            store.append(source: "xray", message: message)
+            pluginLog.info("XRay app runtime: \(message, privacy: .public)")
         }
+    }
+
+    func reset() {
+        store.reset()
+    }
+
+    func snapshot() -> String {
+        store.snapshot()
+    }
+
+    func record(source: String, message: String) {
+        store.append(source: source, message: message)
     }
 }
 
@@ -189,18 +204,24 @@ private final class ProxyOnlyRunner {
             stop()
         }
 
-        let preparedConfig = try Self.buildProxyOnlyConfigData(configData: configData)
-        XRaySetMemoryLimit()
-        try configureXrayAssetLocation(geoAssetsDirectory)
-        var startError: NSError?
-        let started = XRayStart(preparedConfig, logger, &startError)
-        guard started else {
-            throw startError ?? NSError(domain: "FlutterVless", code: 10, userInfo: [NSLocalizedDescriptionKey: "Failed to start XRay proxy-only mode"])
-        }
+        logger.reset()
+        do {
+            let preparedConfig = try Self.buildProxyOnlyConfigData(configData: configData)
+            XRaySetMemoryLimit()
+            try configureXrayAssetLocation(geoAssetsDirectory)
+            var startError: NSError?
+            let started = XRayStart(preparedConfig, logger, &startError)
+            guard started else {
+                throw startError ?? NSError(domain: "FlutterVless", code: 10, userInfo: [NSLocalizedDescriptionKey: "Failed to start XRay proxy-only mode"])
+            }
 
-        isRunning = true
-        connectedDate = Date()
-        pluginLog.info("Started XRay proxy-only mode configBytes=\(preparedConfig.count, privacy: .public)")
+            isRunning = true
+            connectedDate = Date()
+            pluginLog.info("Started XRay proxy-only mode configBytes=\(preparedConfig.count, privacy: .public)")
+        } catch {
+            logger.record(source: "runtime", message: "Proxy-only start failed: \(error.localizedDescription)")
+            throw error
+        }
     }
 
     func stop() {
@@ -225,6 +246,14 @@ private final class ProxyOnlyRunner {
             return -1
         }
         return delay
+    }
+
+    func debugSnapshot() -> String {
+        logger.snapshot()
+    }
+
+    func clearDiagnostics() {
+        logger.reset()
     }
 
     private static func buildProxyOnlyConfigData(configData: Data) throws -> Data {
@@ -516,20 +545,27 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     /// the same Xcode session.
     private func getProviderDebugSnapshot(result: @escaping FlutterResult) {
         Task {
+            let proxySnapshot = proxyOnlyRunner.debugSnapshot()
+            if !proxySnapshot.isEmpty {
+                result(boundedNativeDiagnosticsSnapshot(
+                    "--- iOS app-process Xray diagnostics ---\n\(proxySnapshot)"
+                ))
+                return
+            }
             do {
                 guard let response = try await packetTunnelManager?.sendProviderMessage(data: "xray_debug".data(using: .utf8)!) else {
-                    result(packetTunnelManager?.sharedProviderDebugSnapshot() ?? "")
+                    result(boundedNativeDiagnosticsSnapshot(
+                        packetTunnelManager?.sharedProviderDebugSnapshot() ?? ""
+                    ))
                     return
                 }
-                result(String(decoding: response, as: UTF8.self))
+                result(boundedNativeDiagnosticsSnapshot(
+                    String(decoding: response, as: UTF8.self)
+                ))
             } catch {
                 pluginLog.error("Provider debug snapshot request failed: \(error.localizedDescription, privacy: .public)")
                 let persisted = packetTunnelManager?.sharedProviderDebugSnapshot() ?? ""
-                if persisted.isEmpty {
-                    result(FlutterError(code: "PROVIDER_DEBUG_FAILED", message: error.localizedDescription, details: nil))
-                } else {
-                    result(persisted)
-                }
+                result(boundedNativeDiagnosticsSnapshot(persisted))
             }
         }
     }
@@ -580,6 +616,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
 
         proxyOnlyRunner.stop()
+        proxyOnlyRunner.clearDiagnostics()
         packetTunnelManager?.remark = remark
         packetTunnelManager?.xrayConfig = configData
         packetTunnelManager?.bypassSubnets = arguments["bypass_subnets"] as? [String] ?? []

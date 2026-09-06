@@ -1,5 +1,8 @@
 ## 1.1.6 (Unreleased)
 
+* Added the public `getProviderDebugSnapshot()` API on Android, iOS, macOS,
+  and Windows. Native output is bounded, remains available after stop/failure,
+  and includes proxy-only Xray logs on Apple platforms.
 * Added dynamic iOS `geoip.dat` and `geosite.dat` loading from an App Group or
   other extension-readable directory through `geoAssetsDirectory`. The new Go
   bridge configures Xray's asset lookup inside the Go runtime, validates both

@@ -1,4 +1,5 @@
 #include "v2ray_manager.h"
+#include "diagnostics_log.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -83,8 +84,15 @@ bool V2rayManager::Start(const std::string& config, bool proxy_only) {
     Stop();
   }
 
+  flutter_vless::DiagnosticsLog::Instance().Reset();
+  flutter_vless::DiagnosticsLog::Instance().Append(
+      "runtime", proxy_only ? "Starting Windows proxy-only session"
+                            : "Starting Windows VPN session");
+
   if (!ValidateConfig(config)) {
     std::cerr << "Invalid Xray configuration JSON" << std::endl;
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "runtime", "Invalid Xray configuration JSON");
     return false;
   }
 
@@ -166,6 +174,10 @@ std::string V2rayManager::GetCoreVersion() {
     return proxy_service_->GetCoreVersion();
   }
   return "Unknown";
+}
+
+std::string V2rayManager::GetProviderDebugSnapshot() {
+  return flutter_vless::DiagnosticsLog::Instance().Snapshot();
 }
 
 /**

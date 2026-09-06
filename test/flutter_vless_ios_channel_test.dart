@@ -114,6 +114,8 @@ void main() {
           return 45;
         case 'getCoreVersion':
           return 'Xray 26.7.28';
+        case 'getProviderDebugSnapshot':
+          return 'provider diagnostics';
       }
       return null;
     });
@@ -132,12 +134,17 @@ void main() {
       45,
     );
     expect(await plugin.getCoreVersion(), 'Xray 26.7.28');
+    expect(
+      await plugin.getProviderDebugSnapshot(),
+      'provider diagnostics',
+    );
 
     expect(calls.map((call) => call.method), [
       'requestPermission',
       'getServerDelay',
       'getConnectedServerDelay',
       'getCoreVersion',
+      'getProviderDebugSnapshot',
     ]);
     expect(calls[1].arguments, {
       'config': '{"outbounds":[]}',

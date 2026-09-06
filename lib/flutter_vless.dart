@@ -184,6 +184,21 @@ class FlutterVless {
     return await VlessPlatform.instance.getCoreVersion();
   }
 
+  /// Returns bounded native diagnostics for the active or most recent VPN or
+  /// proxy-only runtime.
+  ///
+  /// The snapshot is intended for support screens and failure reports. Its
+  /// contents differ by platform and can include Xray output, Packet Tunnel or
+  /// VPN-service diagnostics, and tun2socks output. The format is deliberately
+  /// human-readable and is not a stable serialization contract.
+  ///
+  /// Returns an empty string when the platform has not recorded diagnostics
+  /// yet, for example before the first connection attempt. Stateless
+  /// [getServerDelay] probes are deliberately excluded from this snapshot.
+  Future<String> getProviderDebugSnapshot() async {
+    return await VlessPlatform.instance.getProviderDebugSnapshot();
+  }
+
   /// Parse a share link, raw Xray JSON config, or subscription payload.
   ///
   /// Supports vmess://, vless://, trojan://, ss://, socks://, hysteria2://,

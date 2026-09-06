@@ -107,6 +107,8 @@ void main() {
           return 42;
         case 'getCoreVersion':
           return 'Xray 26.7.28';
+        case 'getProviderDebugSnapshot':
+          return 'android xray diagnostics';
       }
       return null;
     });
@@ -125,6 +127,10 @@ void main() {
       42,
     );
     expect(await plugin.getCoreVersion(), 'Xray 26.7.28');
+    expect(
+      await plugin.getProviderDebugSnapshot(),
+      'android xray diagnostics',
+    );
     await plugin.stopVless();
 
     expect(calls.map((call) => call.method), [
@@ -132,6 +138,7 @@ void main() {
       'getServerDelay',
       'getConnectedServerDelay',
       'getCoreVersion',
+      'getProviderDebugSnapshot',
       'stopVless',
     ]);
     expect(calls[1].arguments, {

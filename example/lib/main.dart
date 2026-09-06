@@ -114,12 +114,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _showProviderDiagnostics() async {
-    const channel = MethodChannel('flutter_vless');
     try {
-      final snapshot = await channel.invokeMethod<String>(
-            'getProviderDebugSnapshot',
-          ) ??
-          '';
+      final snapshot = await flutterVless.getProviderDebugSnapshot();
       if (!mounted) return;
 
       final content = snapshot.trim().isEmpty

@@ -216,6 +216,9 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                     }
                 }
             }
+            "getProviderDebugSnapshot" -> {
+                result.success(XrayCoreManager.getProviderDebugSnapshot(context))
+            }
             "requestPermission" -> {
                 // Requests VPN permission from the OS
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

@@ -2,6 +2,8 @@
 
 * Updated the Android runtime dependency to `dev.tfox.fluttervless:xray-android:26.7.28`.
 * Rebuilt Android `libxray.so` binaries for `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` against Xray-core `v26.7.28`.
+* Added bounded, cross-process Xray/tun2socks diagnostics through
+  `getProviderDebugSnapshot`.
 
 ## 1.1.5
 

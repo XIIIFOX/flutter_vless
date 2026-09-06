@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
+import com.github.tfox.flutter_vless.xray.core.XrayDiagnosticsStore
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import org.json.JSONObject
@@ -182,9 +183,11 @@ for (pkg in config.BLOCKED_APPS) {
     /**
      * Starts the tun2socks process and initiates the FD transfer.
      */
+    @Synchronized
     private fun runTun2socks(config: XrayConfig) {
         val tun2socksPath = File(applicationInfo.nativeLibraryDir, "libtun2socks.so").absolutePath
         val sockPath = File(filesDir, "sock_path").absolutePath
+        val diagnosticsGeneration = XrayDiagnosticsStore.currentGeneration()
         
         // Command to start tun2socks. 
         // Note: We pass -sock-path to tell it where to listen for the FD.
@@ -202,28 +205,41 @@ for (pkg in config.BLOCKED_APPS) {
             val pb = ProcessBuilder(cmd)
             pb.redirectErrorStream(true)
             pb.directory(filesDir)
-            tun2socksProcess = pb.start()
+            val process = pb.start()
+            tun2socksProcess = process
 
             // Read tun2socks output in a separate thread
             Thread {
                 try {
-                    tun2socksProcess?.inputStream?.bufferedReader()?.use { reader ->
+                    process.inputStream.bufferedReader().use { reader ->
                         reader.forEachLine { line ->
                             Log.d(TAG, "tun2socks: $line")
+                            XrayDiagnosticsStore.append(
+                                filesDir,
+                                "tun2socks",
+                                line,
+                                diagnosticsGeneration
+                            )
                         }
                     }
                     
-                    tun2socksProcess?.waitFor()
-                    if (isRunning) {
-                        // Restart if crashed and still supposed to be running
-                        Log.e(TAG, "tun2socks exited unexpectedly, restarting...")
-                        runTun2socks(config)
-                    }
+                    process.waitFor()
+                    restartTun2socksAfterUnexpectedExit(
+                        config,
+                        process,
+                        diagnosticsGeneration
+                    )
                 } catch (e: java.io.InterruptedIOException) {
                     // Expected when stopping
                 } catch (e: InterruptedException) {
                 } catch (e: Exception) {
                     Log.e(TAG, "Error reading tun2socks output", e)
+                    XrayDiagnosticsStore.append(
+                        filesDir,
+                        "runtime",
+                        "Error reading tun2socks output: ${e.message}",
+                        diagnosticsGeneration
+                    )
                 }
             }.start()
 
@@ -232,8 +248,37 @@ for (pkg in config.BLOCKED_APPS) {
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start tun2socks", e)
+            XrayDiagnosticsStore.append(
+                filesDir,
+                "runtime",
+                "Failed to start tun2socks: ${e.message}",
+                diagnosticsGeneration
+            )
             stopAll()
         }
+    }
+
+    /** Restarts only when this callback still belongs to the active process. */
+    @Synchronized
+    private fun restartTun2socksAfterUnexpectedExit(
+        config: XrayConfig,
+        process: Process,
+        diagnosticsGeneration: Long
+    ) {
+        if (!isRunning ||
+            tun2socksProcess !== process ||
+            XrayDiagnosticsStore.currentGeneration() != diagnosticsGeneration
+        ) {
+            return
+        }
+        Log.e(TAG, "tun2socks exited unexpectedly, restarting...")
+        XrayDiagnosticsStore.append(
+            filesDir,
+            "runtime",
+            "tun2socks exited unexpectedly; restarting",
+            diagnosticsGeneration
+        )
+        runTun2socks(config)
     }
 
     /**
@@ -271,6 +316,7 @@ for (pkg in config.BLOCKED_APPS) {
      * Cleans up resources (tun2socks process, VPN interface) without stopping the service completely.
      * Used when restarting or switching configurations.
      */
+    @Synchronized
     private fun cleanup() {
         isRunning = false
         tun2socksProcess?.destroy()

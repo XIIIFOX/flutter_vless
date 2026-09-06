@@ -1,4 +1,8 @@
-## 1.1.1 (Unreleased)
+## 1.1.2 (Unreleased)
+
+* Added the cross-platform `getProviderDebugSnapshot` diagnostics contract.
+
+## 1.1.1
 
 * Added optional `geoAssetsDirectory` forwarding for Xray session startup and
   standalone server-delay probes.

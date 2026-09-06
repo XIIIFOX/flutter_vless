@@ -1,4 +1,5 @@
 #include "proxy_service.h"
+#include "diagnostics_log.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -132,6 +133,8 @@ bool ProxyService::Start(const std::string& config) {
 
   if (!ValidateConfig(config)) {
     std::cerr << "Invalid Xray configuration JSON" << std::endl;
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "runtime", "Proxy service rejected invalid Xray configuration JSON");
     return false;
   }
 
@@ -139,6 +142,8 @@ bool ProxyService::Start(const std::string& config) {
   
   if (xray_executable_path_.empty()) {
     std::cerr << "Xray executable not found. Please ensure xray.exe is available." << std::endl;
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "runtime", "Xray executable not found for Windows proxy service");
     return false;
   }
   
@@ -186,6 +191,8 @@ void ProxyService::RunV2ray() {
   fs::path config_path;
   if (!WriteConfigToFile(modified_config, config_path)) {
     std::cerr << "Failed to write Xray configuration file" << std::endl;
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "runtime", "Failed to write Windows proxy Xray configuration file");
     is_running_.store(false);
     return;
   }
@@ -194,6 +201,8 @@ void ProxyService::RunV2ray() {
   
   if (!StartXrayProcess(config_path.string())) {
     std::cerr << "Failed to start Xray process" << std::endl;
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "runtime", "Failed to start Windows proxy Xray process");
     is_running_.store(false);
     CleanupTempFiles();
     return;
@@ -254,6 +263,8 @@ void ProxyService::RunV2ray() {
   while (is_running_.load()) {
     if (xray_process_ && !xray_process_->IsRunning()) {
       std::cerr << "Xray process terminated unexpectedly" << std::endl;
+      flutter_vless::DiagnosticsLog::Instance().Append(
+          "runtime", "Windows proxy Xray process terminated unexpectedly");
       is_running_.store(false);
       break;
     }
@@ -263,6 +274,8 @@ void ProxyService::RunV2ray() {
 
 bool ProxyService::StartXrayProcess(const std::string& config_path) {
   if (xray_executable_path_.empty() || !fs::exists(xray_executable_path_)) {
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "runtime", "Windows proxy Xray executable is unavailable");
     return false;
   }
 
@@ -292,12 +305,16 @@ bool ProxyService::StartXrayProcess(const std::string& config_path) {
 
   if (!CreatePipe(&hChildStdOutRead, &hChildStdOutWrite, &saAttr, 0)) {
     std::cerr << "Failed to create stdout pipe" << std::endl;
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "runtime", "Failed to create Windows proxy Xray stdout pipe");
   } else {
     SetHandleInformation(hChildStdOutRead, HANDLE_FLAG_INHERIT, 0);
   }
 
   if (!CreatePipe(&hChildStdErrRead, &hChildStdErrWrite, &saAttr, 0)) {
     std::cerr << "Failed to create stderr pipe" << std::endl;
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "runtime", "Failed to create Windows proxy Xray stderr pipe");
   } else {
     SetHandleInformation(hChildStdErrRead, HANDLE_FLAG_INHERIT, 0);
   }
@@ -339,6 +356,9 @@ bool ProxyService::StartXrayProcess(const std::string& config_path) {
   if (!success) {
     DWORD error = GetLastError();
     std::cerr << "Failed to start Xray process. Error: " << error << std::endl;
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "runtime", "Failed to create Windows proxy Xray process (Win32 error " +
+                       std::to_string(error) + ")");
     if (hChildStdOutRead != INVALID_HANDLE_VALUE) CloseHandle(hChildStdOutRead);
     if (hChildStdOutWrite != INVALID_HANDLE_VALUE) CloseHandle(hChildStdOutWrite);
     if (hChildStdErrRead != INVALID_HANDLE_VALUE) CloseHandle(hChildStdErrRead);
@@ -361,17 +381,41 @@ bool ProxyService::StartXrayProcess(const std::string& config_path) {
   xray_process_->hStdOutRead = reinterpret_cast<std::uintptr_t>(hChildStdOutRead);
   xray_process_->hStdErrRead = reinterpret_cast<std::uintptr_t>(hChildStdErrRead);
 
-  auto reader = [](std::uintptr_t readHandlePtr, const char* label) {
+  const auto diagnostics_generation =
+      flutter_vless::DiagnosticsLog::Instance().CurrentGeneration();
+  auto reader = [diagnostics_generation](std::uintptr_t readHandlePtr,
+                                         const char* label) {
     HANDLE readHandle = reinterpret_cast<HANDLE>(readHandlePtr);
     if (readHandle == INVALID_HANDLE_VALUE || readHandle == nullptr) return;
     const DWORD bufSize = 4096;
-    std::vector<char> buffer(bufSize + 1);
+    std::vector<char> buffer(bufSize);
+    std::string pending;
     DWORD bytesRead = 0;
     while (true) {
       BOOL result = ReadFile(readHandle, buffer.data(), bufSize, &bytesRead, nullptr);
       if (!result || bytesRead == 0) break;
-      buffer[bytesRead] = '\0';
-      std::cerr << "[Xray " << label << "] " << buffer.data();
+      const std::string chunk(buffer.data(), bytesRead);
+      std::cerr << "[Xray " << label << "] " << chunk;
+      pending.append(chunk);
+      std::size_t newline = std::string::npos;
+      while ((newline = pending.find('\n')) != std::string::npos) {
+        flutter_vless::DiagnosticsLog::Instance().Append(
+            diagnostics_generation, std::string("xray-") + label,
+            pending.substr(0, newline));
+        pending.erase(0, newline + 1);
+      }
+      if (pending.size() > 32 * 1024) {
+        std::size_t start = pending.size() - 16 * 1024;
+        while (start < pending.size() &&
+               (static_cast<unsigned char>(pending[start]) & 0xC0) == 0x80) {
+          ++start;
+        }
+        pending.erase(0, start);
+      }
+    }
+    if (!pending.empty()) {
+      flutter_vless::DiagnosticsLog::Instance().Append(
+          diagnostics_generation, std::string("xray-") + label, pending);
     }
     CloseHandle(readHandle);
   };
@@ -387,6 +431,8 @@ bool ProxyService::StartXrayProcess(const std::string& config_path) {
 
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   if (!xray_process_->IsRunning()) {
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "runtime", "Windows proxy Xray process exited during startup");
     xray_process_->Close();
     xray_process_.reset();
     return false;
@@ -425,6 +471,8 @@ bool ProxyService::WriteConfigToFile(const std::string& config, fs::path& config
     return true;
   } catch (const std::exception& e) {
     std::cerr << "Error writing config file: " << e.what() << std::endl;
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "runtime", "Failed to write Windows proxy Xray configuration file");
     return false;
   }
 }

@@ -2,6 +2,8 @@
 
 * Updated the macOS XRay core target to upstream `v26.7.28`.
 * Updated the default macOS SwiftPM/CocoaPods release tag and checksum to `xray-macos-v26.7.28`.
+* Exposed bounded Packet Tunnel and proxy-only Xray diagnostics through the
+  shared Dart API.
 
 ## 1.1.5
 

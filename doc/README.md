@@ -9,13 +9,14 @@ The package page on pub.dev is driven by the root `README.md`. These guides keep
 1. [Getting Started](getting-started.md)
 2. [Platform Guides](platform/README.md)
 3. [API Contract](api.md)
-4. [Examples](examples.md)
-5. [Configuration Guide](configuration.md)
-6. [Compatibility](compatibility.md)
-7. [Security And Runtime Boundaries](security.md)
-8. [Architecture Notes](architecture.md)
-9. [Real-Device VPN Matrix](device_matrix.md)
-10. [Troubleshooting](troubleshooting.md)
+4. [Runtime diagnostics](runtime-diagnostics.md)
+5. [Examples](examples.md)
+6. [Configuration Guide](configuration.md)
+7. [Compatibility](compatibility.md)
+8. [Security And Runtime Boundaries](security.md)
+9. [Architecture Notes](architecture.md)
+10. [Real-Device VPN Matrix](device_matrix.md)
+11. [Troubleshooting](troubleshooting.md)
 
 ## Audience Split
 

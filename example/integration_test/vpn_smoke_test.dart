@@ -1,6 +1,5 @@
 import 'dart:io' show Platform;
 
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_vless/flutter_vless.dart';
 import 'package:integration_test/integration_test.dart';
@@ -85,9 +84,7 @@ void main() {
       expect(delay, greaterThanOrEqualTo(0));
 
       await Future<void>.delayed(const Duration(seconds: 8));
-      const channel = MethodChannel('flutter_vless');
-      final snapshot =
-          await channel.invokeMethod<String>('getProviderDebugSnapshot') ?? '';
+      final snapshot = await vless.getProviderDebugSnapshot();
 
       // ignore: avoid_print
       print('VPN_PROVIDER_DEBUG_BEGIN\n$snapshot\nVPN_PROVIDER_DEBUG_END');

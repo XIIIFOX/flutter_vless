@@ -153,6 +153,35 @@ final version = await flutterVless.getCoreVersion();
 The exact value can differ by platform package, release version, or externally
 supplied Windows `xray.exe`.
 
+## `getProviderDebugSnapshot()`
+
+Returns bounded, human-readable diagnostics for the active or most recent VPN
+or proxy-only runtime session. Standalone `getServerDelay()` probes are
+excluded so they do not overwrite connection diagnostics.
+
+```dart
+final diagnostics = await flutterVless.getProviderDebugSnapshot();
+```
+
+The contents are intentionally platform-specific:
+
+- iOS and macOS include Packet Tunnel provider/HEV diagnostics, or app-process
+  Xray output in proxy-only mode.
+- Android includes Xray and tun2socks process output plus bounded Xray
+  access/error file tails when the configuration enabled them.
+- Windows includes Xray and tun2socks stdout/stderr captured by the native
+  process manager.
+
+The snapshot remains available after a normal stop or startup failure.
+In-process collectors reset when a new session begins; persisted Apple Packet
+Tunnel tails can contain timestamped entries from an earlier extension run. It
+returns an empty string before any diagnostics have been recorded. Treat the
+text as support data, not as a stable machine-readable format; it may contain
+destination addresses from Xray logs.
+Applications should show the snapshot to the user for review before copying or
+sharing it because server addresses, destinations, route details, and local
+filesystem paths can appear in native diagnostics.
+
 ## `parse()`
 
 Parses one supported input into a `FlutterVlessURL`.

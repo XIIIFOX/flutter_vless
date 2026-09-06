@@ -493,6 +493,9 @@ void FlutterVlessPlugin::HandleMethodCall(
     std::string version = V2rayManager::GetInstance().GetCoreVersion();
     LogMessage("getCoreVersion: " + version);
     result->Success(flutter::EncodableValue(version));
+  } else if (method_call.method_name().compare("getProviderDebugSnapshot") == 0) {
+    result->Success(flutter::EncodableValue(
+        V2rayManager::GetInstance().GetProviderDebugSnapshot()));
   } else {
     result->NotImplemented();
   }

@@ -1,6 +1,6 @@
 name: flutter_vless_platform_interface
 description: A common platform interface for the flutter_vless plugin.
-version: 1.1.1
+version: 1.1.2
 homepage: https://tfox.dev
 repository: https://github.com/XIIIFOX/flutter_vless
 issue_tracker: https://github.com/XIIIFOX/flutter_vless/issues

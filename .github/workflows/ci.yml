@@ -36,15 +36,49 @@ jobs:
         run: flutter analyze lib test
       - name: Test root package
         run: flutter test
+      - name: Analyze and test platform interface package
+        working-directory: packages/flutter_vless_platform_interface
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
       - name: Install Android wrapper package dependencies
         working-directory: packages/flutter_vless_android
-        run: flutter pub get
+        run: |
+          cat > pubspec_overrides.yaml <<'YAML'
+          dependency_overrides:
+            flutter_vless_platform_interface:
+              path: ../flutter_vless_platform_interface
+          YAML
+          flutter pub get
       - name: Analyze Android wrapper package
         working-directory: packages/flutter_vless_android
         run: flutter analyze
       - name: Test Android wrapper package
         working-directory: packages/flutter_vless_android
         run: flutter test
+      - name: Analyze and test macOS Dart wrapper package
+        working-directory: packages/flutter_vless_macos
+        run: |
+          cat > pubspec_overrides.yaml <<'YAML'
+          dependency_overrides:
+            flutter_vless_platform_interface:
+              path: ../flutter_vless_platform_interface
+          YAML
+          flutter pub get
+          flutter analyze
+          flutter test
+      - name: Analyze and test Windows Dart wrapper package
+        working-directory: packages/flutter_vless_windows
+        run: |
+          cat > pubspec_overrides.yaml <<'YAML'
+          dependency_overrides:
+            flutter_vless_platform_interface:
+              path: ../flutter_vless_platform_interface
+          YAML
+          flutter pub get
+          flutter analyze
+          flutter test
 
   android-native:
     name: Android native unit tests
@@ -128,9 +162,50 @@ jobs:
         run: flutter pub get
       - name: Test PacketTunnel Swift helper
         run: tool/test_ios_tunnel_support.sh
+      - name: Test bounded Apple Xray diagnostics store
+        run: tool/test_bounded_native_log_store.sh
       - name: Install example dependencies
         working-directory: example
         run: flutter pub get
       - name: Build example iOS app without codesigning
         working-directory: example
         run: flutter build ios --debug --no-codesign
+      - name: Build example macOS app
+        working-directory: example
+        run: flutter build macos --debug
+
+  windows:
+    name: Windows native plugin build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Use local federated package overrides
+        shell: bash
+        run: |
+          cat > pubspec_overrides.yaml <<'YAML'
+          dependency_overrides:
+            flutter_vless_platform_interface:
+              path: packages/flutter_vless_platform_interface
+            flutter_vless_android:
+              path: packages/flutter_vless_android
+            flutter_vless_macos:
+              path: packages/flutter_vless_macos
+            flutter_vless_windows:
+              path: packages/flutter_vless_windows
+          YAML
+      - name: Build Windows diagnostics store unit test
+        shell: cmd
+        run: >-
+          cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX
+          packages\flutter_vless_windows\windows\diagnostics_log.cpp
+          packages\flutter_vless_windows\windows\diagnostics_log_test.cpp
+          /Fe:diagnostics_log_test.exe && diagnostics_log_test.exe
+      - name: Build example Windows app
+        working-directory: example
+        run: |
+          flutter pub get
+          flutter build windows --debug

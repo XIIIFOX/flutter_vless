@@ -58,6 +58,9 @@
 
 ### Windows
 
+* Waited for the TUN IPv4 address to become usable before installing capture
+  routes, including when reconnecting after adapter recreation.
+
 * Captured IPv4 with two session-owned `/1` routes so physical interface metrics
   cannot silently bypass the VPN; removed these routes on stop or setup failure.
 

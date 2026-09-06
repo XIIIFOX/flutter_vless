@@ -41,6 +41,25 @@ std::optional<std::string> DefaultInterfaceName() {
   if (name == "flutter_vless_tun") return std::nullopt;
   return name;
 }
+bool WaitForTunnelAddress(const std::atomic<bool>& running) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+  while (running.load() && std::chrono::steady_clock::now() < deadline) {
+    NET_LUID luid{};
+    if (ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &luid) == NO_ERROR) {
+      MIB_UNICASTIPADDRESS_ROW address{};
+      InitializeUnicastIpAddressEntry(&address);
+      address.InterfaceLuid = luid;
+      address.Address.Ipv4.sin_family = AF_INET;
+      InetPtonA(AF_INET, "10.0.85.2", &address.Address.Ipv4.sin_addr);
+      if (GetUnicastIpAddressEntry(&address) == NO_ERROR) {
+        if (address.DadState == IpDadStatePreferred) return true;
+        if (address.DadState == IpDadStateDuplicate) return false;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  return false;
+}
 }  // namespace
 
 VpnService::VpnService() {
@@ -204,6 +223,16 @@ void VpnService::RunVpn() {
     return;
   }
   
+  // netsh may return while duplicate-address detection is still pending,
+  // especially after recreating a Wintun adapter. Installing capture routes
+  // before the address is preferred causes WSAEHOSTUNREACH on reconnect.
+  if (!WaitForTunnelAddress(is_running_)) {
+    flutter_vless::DiagnosticsLog::Instance().Append("runtime", "Windows TUN IPv4 address did not become ready");
+    StopProcesses();
+    is_running_.store(false);
+    return;
+  }
+
   // === CRITICAL: Setup Bypass Routes ===
   // PROBLEM: If we route all traffic through the TUN, including VPN server traffic,
   // we create a routing loop (VPN server traffic → TUN → Xray → VPN server → TUN → ...)

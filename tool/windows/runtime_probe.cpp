@@ -42,7 +42,9 @@ int main(int argc,char** argv) {
   if(!started)return 3;
   int seconds=argc>3?std::stoi(argv[3]):20;
   bool healthy=true;
+  const std::filesystem::path stop_file = argc > 4 ? argv[4] : "";
   for(int i=0;i<seconds;i++){
+    if (!stop_file.empty() && std::filesystem::exists(stop_file)) break;
     std::this_thread::sleep_for(std::chrono::seconds(1));
     if(i>=3 && !manager.IsRunning()){healthy=false;break;}
     std::cout<<"RUNNING="<<manager.IsRunning()<<" SECOND="<<i+1<<std::endl;

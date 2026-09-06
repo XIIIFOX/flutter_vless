@@ -1,8 +1,8 @@
-"""Exercise real Windows services with synthetic, loopback-only proxy fixtures.
+"""Exercise real Windows services with synthetic local network fixtures.
 
 Full VPN mode is restricted to a disposable GitHub Windows runner. It sends
 ordinary TCP to a documentation IP; HTTP sniffing selects a domain rule and
-Xray delivers to one of two distinguishable local servers. No server secrets.
+Xray delivers to a local underlay HTTP server or a loopback SOCKS server. No server secrets.
 """
 import argparse
 import json
@@ -71,14 +71,14 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-def request(host, vpn):
-    destination = ("203.0.113.10", 18581) if vpn else ("127.0.0.1", 18580)
+def request(host, vpn, loopback=False):
+    destination = ("127.0.0.1", 18581) if loopback else (("203.0.113.10", 18581) if vpn else ("127.0.0.1", 18580))
     with socket.create_connection(destination, timeout=4) as sock:
         sock.settimeout(4)
         if vpn:
-            assert sock.getsockname()[0] == "10.0.85.2", "TCP request bypassed the TUN"
+            assert sock.getsockname()[0] == ("127.0.0.1" if loopback else "10.0.85.2"), "Unexpected client interface"
         encoded = host.encode()
-        if not vpn:
+        if not vpn and not loopback:
             sock.sendall(b"\x05\x01\x00")
             assert exact(sock, 2) == b"\x05\x00"
             sock.sendall(b"\x05\x01\x00\x03" + bytes([len(encoded)]) + encoded +
@@ -94,6 +94,8 @@ def request(host, vpn):
             if not part:
                 break
             data += part
+        if b"\r\n\r\n" not in data:
+            raise RuntimeError("connection ended without an HTTP response")
         return data.split(b"\r\n\r\n", 1)[1].decode()
 
 
@@ -112,10 +114,10 @@ def external_http(address, vpn=False):
         return "HTTP 200"
 
 
-def config(reverse, external_address=None):
+def config(reverse, external_address=None, direct_address="127.0.0.1"):
     profile = {
         "log": {"loglevel": "warning", "access": "none"},
-        "dns": {"hosts": {h: "127.0.0.1" for h in ("2ip.ru", "2ip.io", "myip.com")},
+        "dns": {"hosts": {h: direct_address for h in ("2ip.ru", "2ip.io", "myip.com")},
                 "servers": ["localhost"]},
         "inbounds": [{"port": 18580, "protocol": "socks", "tag": "socks-in",
                       "listen": "127.0.0.1", "settings": {"auth": "noauth", "udp": True},
@@ -143,28 +145,40 @@ def main():
         raise SystemExit("Full VPN tests require a disposable GitHub Windows runner")
     directory = args.directory.resolve()
     probe = directory / "runtime_probe.exe"
-    servers = [ThreadingHTTPServer(("127.0.0.1", 18581), Direct), Server(("127.0.0.1", 18582), Socks)]
-    for server in servers:
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+    servers = []
     results = []
     external_address = None
+    direct_address = "127.0.0.1"
     try:
         if args.vpn:
             external_address = socket.gethostbyname("api.ipify.org")
             baseline = external_http(external_address)
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+                route.connect((external_address, 443))
+                direct_address = route.getsockname()[0]
             results.append(dict(check="external direct baseline", actual=baseline, passed=True))
         if args.vpn:
             driver = subprocess.run([str(probe), "wintun"], cwd=directory,
                                     capture_output=True, text=True, timeout=30)
             (directory / "wintun.log").write_text(driver.stdout + driver.stderr)
             assert driver.returncode == 0, "Wintun adapter creation failed"
+        # A VPN freedom socket is pinned to the underlay; use a local target
+        # on that interface, not a loopback-only target on another interface.
+        servers = [ThreadingHTTPServer((direct_address, 18581), Direct),
+                   Server(("127.0.0.1", 18582), Socks)]
+        if args.vpn:
+            servers.append(ThreadingHTTPServer(("127.0.0.1", 18581), Direct))
+        for server in servers:
+            threading.Thread(target=server.serve_forever, daemon=True).start()
         for reverse in (False, True):
             label = ("vpn" if args.vpn else "proxy") + ("-reverse" if reverse else "")
             profile = directory / (label + ".json")
-            profile.write_text(json.dumps(config(reverse, external_address)))
+            profile.write_text(json.dumps(config(reverse, external_address, direct_address)))
+            stop_file = directory / (label + ".stop")
+            stop_file.unlink(missing_ok=True)
             with (directory / (label + ".log")).open("w") as log:
                 process = subprocess.Popen([str(probe), "run-vpn" if args.vpn else "run-proxy",
-                                            str(profile), "35" if args.vpn else "12"], cwd=directory, stdout=log, stderr=log)
+                                            str(profile), "120", str(stop_file)], cwd=directory, stdout=log, stderr=log)
                 try:
                     if args.vpn:
                         deadline = time.monotonic() + 20
@@ -174,7 +188,7 @@ def main():
                             time.sleep(0.25)
                         routes = subprocess.check_output([
                             "powershell", "-NoProfile", "-Command",
-                            "Get-NetRoute -InterfaceAlias flutter_vless_tun | Select-Object DestinationPrefix,NextHop,RouteMetric | ConvertTo-Json"], text=True)
+                            "Get-NetRoute -InterfaceAlias flutter_vless_tun | Select-Object DestinationPrefix,NextHop,RouteMetric | ConvertTo-Json"], text=True, timeout=25)
                         (directory / (label + "-routes-during.log")).write_text(routes)
                         installed = json.loads(routes)
                         assert {r["DestinationPrefix"] for r in installed} >= {"0.0.0.0/1", "128.0.0.0/1"}
@@ -192,6 +206,12 @@ def main():
                         print(json.dumps(row), flush=True)
                     if args.vpn:
                         try:
+                            actual = request("localhost", True, loopback=True)
+                        except Exception as error:
+                            actual = type(error).__name__ + ": " + str(error)
+                        results.append(dict(mode=label, check="ordinary loopback bypass", actual=actual,
+                                            passed=actual == "DIRECT-FIXTURE"))
+                        try:
                             actual = external_http(external_address, vpn=True)
                         except Exception as error:
                             actual = type(error).__name__ + ": " + str(error)
@@ -199,12 +219,22 @@ def main():
                                    passed=actual == "HTTP 200")
                         results.append(row)
                         print(json.dumps(row), flush=True)
-                    code = process.wait(timeout=35)
+                    stop_file.touch()
+                    code = process.wait(timeout=20)
+                    if args.vpn:
+                        remaining = subprocess.check_output([
+                            "powershell", "-NoProfile", "-Command",
+                            "@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1') }).Count"], text=True, timeout=25)
+                        results.append(dict(mode=label, check="capture routes removed by service", passed=remaining.strip() == "0"))
                     results.append(dict(mode=label, check="clean shutdown", passed=code == 0, exit_code=code))
                 finally:
                     if process.poll() is None:
-                        process.kill()
-                        process.wait()
+                        stop_file.touch()
+                        try:
+                            process.wait(timeout=15)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
             # Stop removes the Wintun adapter; allow the next creation to settle.
             time.sleep(2)
     finally:

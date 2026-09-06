@@ -1,0 +1,100 @@
+name: Windows runtime validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fr/windows-runtime-validation]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-proxy:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.9'
+          channel: stable
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build native regression tests and runtime probe
+        shell: cmd
+        run: tool\windows\build_native_tests.cmd
+      - name: Download and verify August 2026 Windows runtime
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/XTLS/Xray-core/releases/download/v26.7.28/Xray-windows-64.zip'
+          Invoke-WebRequest $url -OutFile build/xray-windows.zip
+          if ((Get-FileHash build/xray-windows.zip -Algorithm SHA256).Hash.ToLower() -ne 'c7172078fca4711bcd92a4774dcd1822544579c58816197575c47533317fd8d1') { throw 'Xray checksum mismatch' }
+          Expand-Archive build/xray-windows.zip build/windows-runtime -Force
+          Copy-Item example/windows/xray/tun2socks.exe,example/windows/xray/wintun.dll build/windows-runtime
+          & build/windows-runtime/xray.exe version
+          & build/windows-runtime/tun2socks.exe -version
+      - name: Exercise domain routing through the Windows proxy service
+        run: python tool/windows/runtime_smoke.py --directory build/windows-runtime
+      - name: Build example Windows application
+        working-directory: example
+        run: |
+          flutter pub get
+          flutter build windows --release
+      - name: Bundle verified runtime with example
+        shell: pwsh
+        run: |
+          $bundle = 'example/build/windows/x64/runner/Release'
+          New-Item -ItemType Directory -Force "$bundle/xray" | Out-Null
+          Copy-Item build/windows-runtime/xray.exe,build/windows-runtime/geoip.dat,build/windows-runtime/geosite.dat,build/windows-runtime/tun2socks.exe,build/windows-runtime/wintun.dll "$bundle/xray"
+          $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' -property installationPath
+          $crt = Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
+          Copy-Item "$($crt.FullName)/*.dll" $bundle
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-runtime-and-logs
+          path: build/windows-runtime
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-example-august-2026
+          path: example/build/windows/x64/runner/Release
+          retention-days: 7
+
+  vpn-routing:
+    needs: build-and-proxy
+    runs-on: windows-2022
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-runtime-and-logs
+          path: build/windows-runtime
+      - name: Record Windows network baseline
+        shell: pwsh
+        run: |
+          Get-NetRoute -AddressFamily IPv4 | Format-Table | Out-File build/windows-runtime/routes-before.log
+          Get-NetIPInterface | Format-Table | Out-File build/windows-runtime/interfaces-before.log
+      - name: Exercise Wintun and domain routing with ordinary TCP
+        run: python tool/windows/runtime_smoke.py --directory build/windows-runtime --vpn
+      - name: Clean up isolated runner network
+        if: always()
+        shell: pwsh
+        run: |
+          Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction Continue
+          Get-Process xray,tun2socks,runtime_probe -ErrorAction SilentlyContinue | Stop-Process -Force
+          Get-NetRoute -AddressFamily IPv4 | Format-Table | Out-File build/windows-runtime/routes-after.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-vpn-results
+          path: |
+            build/windows-runtime/*.log
+            build/windows-runtime/*results.json
+          retention-days: 7

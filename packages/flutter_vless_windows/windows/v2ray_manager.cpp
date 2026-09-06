@@ -136,7 +136,9 @@ void V2rayManager::Stop() {
 }
 
 bool V2rayManager::IsRunning() const {
-  return is_running_.load();
+  return is_running_.load() && (proxy_only_
+      ? (proxy_service_ && proxy_service_->IsRunning())
+      : (vpn_service_ && vpn_service_->IsRunning()));
 }
 
 void V2rayManager::RunV2ray() {

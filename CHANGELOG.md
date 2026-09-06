@@ -58,6 +58,13 @@
 
 ### Windows
 
+* Preserved domain routing, DNS settings, and outbound server ports when preparing
+  Xray configurations. SOCKS listener detection now uses JSON structure and is
+  independent of property order; occupied ports are replaced only on inbounds.
+* Used Xray's dedicated API listener without inserting duplicate routing blocks.
+* Joined failed service workers during stop and reflected service failure in
+  the Windows running status. Removed raw config fragments from endpoint errors.
+
 * Exposed thread-safe, bounded Xray/tun2socks diagnostics through the shared
   Dart API.
 * Fixed the native registration header path for the federated Windows package.

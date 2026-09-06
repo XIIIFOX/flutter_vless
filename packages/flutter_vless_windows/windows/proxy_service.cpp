@@ -1,5 +1,6 @@
 #include "proxy_service.h"
 #include "diagnostics_log.h"
+#include "xray_config.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -127,9 +128,7 @@ ProxyService::~ProxyService() {
 }
 
 bool ProxyService::Start(const std::string& config) {
-  if (is_running_.load()) {
-    Stop();
-  }
+  Stop();
 
   if (!ValidateConfig(config)) {
     std::cerr << "Invalid Xray configuration JSON" << std::endl;
@@ -154,21 +153,13 @@ bool ProxyService::Start(const std::string& config) {
 }
 
 void ProxyService::Stop() {
-  if (!is_running_.load()) {
-    return;
-  }
+  const bool had_session = is_running_.exchange(false) || v2ray_thread_.joinable();
+  // A failed worker still owns a joinable thread.
 
-  is_running_.store(false);
   
-  ClearSystemProxy();
-  
-  if (stats_thread_.joinable()) {
-    stats_thread_.join();
-  }
-  
-  if (v2ray_thread_.joinable()) {
-    v2ray_thread_.join();
-  }
+  if (v2ray_thread_.joinable()) v2ray_thread_.join();
+  if (stats_thread_.joinable()) stats_thread_.join();
+  if (had_session) ClearSystemProxy();
   
   StopXrayProcess();
   CleanupTempFiles();
@@ -222,24 +213,14 @@ void ProxyService::RunV2ray() {
       std::cerr << "Warning: Failed to read actual config file, using original" << std::endl;
     }
 
-    uint16_t socks_port = 10807;
-    
-    std::regex in_proxy_pattern("\"tag\"\\s*:\\s*\"in_proxy\"[\\s\\S]*?\"port\"\\s*:\\s*(\\d+)");
-    std::smatch match;
-    if (std::regex_search(config_str, match, in_proxy_pattern)) {
-      socks_port = static_cast<uint16_t>(std::stoi(match[1].str()));
-    } else {
-      std::regex socks_pattern("\"protocol\"\\s*:\\s*\"socks\"[\\s\\S]*?\"port\"\\s*:\\s*(\\d+)");
-      if (std::regex_search(config_str, match, socks_pattern)) {
-        socks_port = static_cast<uint16_t>(std::stoi(match[1].str()));
-      } else {
-        std::regex port_pattern("\"inbounds\"[\\s\\S]*?\"port\"\\s*:\\s*(\\d+)");
-        if (std::regex_search(config_str, match, port_pattern)) {
-          socks_port = static_cast<uint16_t>(std::stoi(match[1].str()));
-        }
-      }
+    const auto selected_port = flutter_vless::xray_config::SocksPort(config_str);
+    if (!selected_port) {
+      is_running_.store(false);
+      StopXrayProcess();
+      return;
     }
-    
+    const uint16_t socks_port = *selected_port;
+
     if (!SetSystemProxy("localhost", socks_port)) {
       std::cerr << "Warning: Failed to set system proxy. Proxy mode may not work correctly." << std::endl;
     } else {
@@ -280,12 +261,12 @@ bool ProxyService::StartXrayProcess(const std::string& config_path) {
   }
 
   try {
-    ReplacePortsInConfigFile(fs::path(config_path));
+    if (!ReplacePortsInConfigFile(fs::path(config_path))) return false;
     if (auto detected = DetectApiAddressInConfig(fs::path(config_path))) {
       api_address_ = *detected;
       std::cerr << "Detected Xray API address: " << api_address_ << std::endl;
     }
-  } catch (...) {}
+  } catch (...) { return false; }
   
   xray_process_ = std::make_unique<ProcessHandle>();
   
@@ -855,197 +836,17 @@ uint16_t ProxyService::FindFreePort() {
   return port;
 }
 
-/**
- * @brief Modifies the Xray configuration file to ensure ports are free and API is enabled.
- * 
- * @details Port Conflict Resolution:
- * Scans the configuration for "port" and "listen" fields. If a configured port is
- * already in use on the system, it replaces it with a free ephemeral port.
- * 
- * @details API Injection Strategy:
- * The Xray API is required for statistics and control. This function injects the
- * "api" configuration block if it's missing.
- * 
- * CRITICAL: The injection position is vital for valid JSON.
- * 1. It attempts to find the "log" section and insert the "api" block *after* it.
- *    This is the most reliable location in standard Xray configs.
- * 2. It handles comma insertion correctly to ensure the resulting JSON is valid.
- * 3. It uses the "listen" field (e.g., "127.0.0.1:10085") which is the standard
- *    way to configure the API address in recent Xray versions.
- * 
- * @param config_path Path to the configuration file to modify.
- * @return true if modification was successful (or unnecessary), false on error.
- */
 bool ProxyService::ReplacePortsInConfigFile(const fs::path& config_path) {
-  if (!fs::exists(config_path)) return false;
-  std::ifstream ifs(config_path);
-  if (!ifs.is_open()) return false;
-  std::stringstream ss;
-  ss << ifs.rdbuf();
-  std::string content = ss.str();
-  ifs.close();
-
-  bool modified = false;
-  std::regex port_key_pattern("\"port\"\\s*:\\s*(\\d+)");
-  std::smatch match;
-  std::string new_content = content;
-  auto search_start = new_content.cbegin();
-  
-  while (std::regex_search(search_start, new_content.cend(), match, port_key_pattern)) {
-    int port = std::stoi(match[1].str());
-    if (port >= 1 && port <= 65535) {
-      if (!IsPortFree(static_cast<uint16_t>(port))) {
-        uint16_t free_port = FindFreePort();
-        if (free_port != 0) {
-          auto pos = match.position(1) + (search_start - new_content.cbegin());
-          new_content.replace(pos, match[1].length(), std::to_string(free_port));
-          modified = true;
-          search_start = new_content.cbegin() + pos + std::to_string(free_port).length();
-          continue;
-        }
-      }
-    }
-    search_start = match.suffix().first;
-  }
-
-  std::regex listen_ip_pattern("127\\.0\\.0\\.1\\s*:\\s*(\\d+)");
-  search_start = new_content.cbegin();
-  while (std::regex_search(search_start, new_content.cend(), match, listen_ip_pattern)) {
-    int port = std::stoi(match[1].str());
-    if (port >= 1 && port <= 65535) {
-      if (!IsPortFree(static_cast<uint16_t>(port))) {
-        uint16_t free_port = FindFreePort();
-        if (free_port != 0) {
-          auto pos = match.position(1) + (search_start - new_content.cbegin());
-          new_content.replace(pos, match[1].length(), std::to_string(free_port));
-          modified = true;
-          search_start = new_content.cbegin() + pos + std::to_string(free_port).length();
-          continue;
-        }
-      }
-    }
-    search_start = match.suffix().first;
-  }
-
-  if (modified) {
-    std::ofstream ofs(config_path, std::ios::binary | std::ios::trunc);
-    if (!ofs.is_open()) return false;
-    ofs << new_content;
-    ofs.close();
-  }
-
-  if (new_content.find("\"stats\"") == std::string::npos) {
-    size_t first_brace = new_content.find('{');
-    if (first_brace != std::string::npos) {
-      new_content.insert(first_brace + 1, "\n  \"stats\": {},");
-      modified = true;
-    }
-  }
-
-  if (new_content.find("\"policy\"") == std::string::npos) {
-    size_t first_brace = new_content.find('{');
-    if (first_brace != std::string::npos) {
-      std::string policy_block = "\n  \"policy\": {\n    \"system\": {\n      \"statsInboundUplink\": true,\n      \"statsInboundDownlink\": true,\n      \"statsOutboundUplink\": true,\n      \"statsOutboundDownlink\": true\n    }\n  },";
-      new_content.insert(first_brace + 1, policy_block);
-      modified = true;
-    }
-  }
-
-  if (modified) {
-    std::ofstream ofs(config_path, std::ios::binary | std::ios::trunc);
-    if (!ofs.is_open()) return false;
-    ofs << new_content;
-    ofs.close();
-  }
-
-  std::regex api_key_re("\"api\"\\s*:\\s*");
-  if (!std::regex_search(new_content, api_key_re)) {
-    uint16_t api_port = 10085;
-    if (!IsPortFree(api_port)) {
-      uint16_t p = FindFreePort();
-      if (p != 0) api_port = p;
-    }
-
-    // Strategy: Find the position after the "log" section closes.
-    // Then insert the api block with a comma separator between them.
-    size_t insert_pos = std::string::npos;
-    
-    // Look for the pattern: "log" : { ... } (with proper brace matching)
-    std::regex log_start_re("\"log\"\\s*:\\s*\\{");
-    std::smatch m;
-    if (std::regex_search(new_content, m, log_start_re)) {
-      // Found "log" section start. Now find the matching closing brace.
-      size_t brace_start = m.position(0) + m.length(0) - 1;  // position of '{'
-      int depth = 1;
-      size_t pos = brace_start + 1;
-      bool in_string = false;
-      bool escaped = false;
-      
-      while (pos < new_content.length() && depth > 0) {
-        char c = new_content[pos];
-        if (escaped) {
-          escaped = false;
-          pos++;
-          continue;
-        }
-        if (c == '\\') {
-          escaped = true;
-          pos++;
-          continue;
-        }
-        if (c == '"') {
-          in_string = !in_string;
-        }
-        if (!in_string) {
-          if (c == '{') depth++;
-          else if (c == '}') depth--;
-        }
-        pos++;
-      }
-      
-      if (depth == 0) {
-        // pos is now one position after the closing brace of "log"
-        // Consume any whitespace after the closing brace
-        while (pos < new_content.length() && 
-               (new_content[pos] == ' ' || new_content[pos] == '\n' || 
-                new_content[pos] == '\r' || new_content[pos] == '\t')) {
-          pos++;
-        }
-        insert_pos = pos;
-      }
-    }
-    
-    // Fallback: if no "log" section found, insert after root opening brace
-    if (insert_pos == std::string::npos) {
-      auto brace_pos = new_content.find('{');
-      if (brace_pos != std::string::npos) {
-        insert_pos = brace_pos + 1;
-      }
-    }
-
-    if (insert_pos != std::string::npos) {
-      // Create a proper api block with leading comma separator
-      // Use the modern format with "listen" instead of separate "address" and "port"
-      std::ostringstream api_block;
-      api_block << ",\n  \"api\": {\n";
-      api_block << "    \"tag\": \"api\",\n";
-      api_block << "    \"listen\": \"127.0.0.1:" << api_port << "\",\n";
-      api_block << "    \"services\": [\"HandlerService\", \"StatsService\", \"LoggerService\"]\n";
-      api_block << "  }";
-
-      new_content.insert(insert_pos, api_block.str());
-      
-      // Write back
-      std::ofstream ofs2(config_path, std::ios::binary | std::ios::trunc);
-      if (ofs2.is_open()) {
-        ofs2 << new_content;
-        ofs2.close();
-        api_address_ = std::string("127.0.0.1:") + std::to_string(api_port);
-      }
-    }
-  }
-
-  return true;
+  std::ifstream input(config_path);
+  if (!input) return false;
+  std::string content((std::istreambuf_iterator<char>(input)), {});
+  input.close();
+  if (!flutter_vless::xray_config::PrepareProxy(content,
+      [this](uint16_t port) { return IsPortFree(port); },
+      [this]() { return FindFreePort(); })) return false;
+  std::ofstream output(config_path, std::ios::binary | std::ios::trunc);
+  output << content;
+  return output.good();
 }
 
 std::optional<std::string> ProxyService::DetectApiAddressInConfig(const fs::path& config_path) {

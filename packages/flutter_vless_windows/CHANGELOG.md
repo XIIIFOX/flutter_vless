@@ -1,3 +1,11 @@
+## Unreleased
+
+* Preserved Xray domain rules, DNS settings, and server ports during proxy/VPN
+  configuration. Selected SOCKS listeners structurally regardless of key order.
+* Added a dedicated API listener without duplicate routing blocks.
+* Joined failed workers on stop and reflected native service failures in status.
+* Removed config fragments from endpoint extraction diagnostics.
+
 ## 1.1.1
 
 * Added thread-safe, bounded Xray/tun2socks diagnostics through

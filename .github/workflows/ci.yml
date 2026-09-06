@@ -172,6 +172,8 @@ jobs:
         run: flutter build ios --debug --no-codesign
       - name: Build example macOS app
         working-directory: example
+        env:
+          FLUTTER_XCODE_CODE_SIGNING_ALLOWED: "NO"
         run: flutter build macos --debug
 
   windows:

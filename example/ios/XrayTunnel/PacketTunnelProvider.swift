@@ -13,12 +13,12 @@ import flutter_vless_tunnel_support
 import os
 import Darwin
 
-private let tunnelLog = Logger(
+private let tunnelLog = NativePrivacyLogger(
     subsystem: Bundle.main.bundleIdentifier ?? "flutter_vless.XrayTunnel",
     category: "PacketTunnel"
 )
 private let tunnelMTU = 1500
-private let dnsServers = ["1.1.1.1", "8.8.8.8"]
+private let dnsServers = [TunnelDNSPolicy.virtualServer]
 private let hevStartupGraceSeconds: TimeInterval = 0.25
 private let hevShutdownTimeoutSeconds: TimeInterval = 2
 private let watchdogIntervalSeconds: TimeInterval = 60
@@ -45,14 +45,15 @@ private final class TunnelDebugStore {
             fileURL = nil
             return
         }
-        fileURL = containerURL.appendingPathComponent("flutter_vless_tunnel_debug.log")
+        NativeLogPrivacy.removeLegacyProviderLog(in: containerURL)
+        fileURL = containerURL.appendingPathComponent(NativeLogPrivacy.providerLogFilename)
     }
 
-    func append(_ message: String) {
+    func append(_ message: NativeDiagnosticMessage) {
         lock.lock()
         defer { lock.unlock() }
         let timestamp = ISO8601DateFormatter().string(from: Date())
-        let line = "\(timestamp) \(message)"
+        let line = "\(timestamp) \(message.text)"
         lines.append(line)
         if lines.count > maxLines {
             lines.removeFirst(lines.count - maxLines)
@@ -80,34 +81,14 @@ private final class TunnelDebugStore {
     }
 }
 
-private func rememberTunnelLog(_ message: String) {
+private func rememberTunnelLog(_ message: NativeDiagnosticMessage) {
     TunnelDebugStore.shared.append(message)
-}
-
-private final class TerminalFailureGate {
-    private let lock = NSLock()
-    private var reported = false
-
-    func reset() {
-        lock.lock()
-        reported = false
-        lock.unlock()
-    }
-
-    func claim() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !reported else { return false }
-        reported = true
-        return true
-    }
 }
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private let logger = CustomXRayLogger()
     private let hevLifecycle = TunnelProcessLifecycle()
-    private let terminalFailureGate = TerminalFailureGate()
     private let watchdogQueue = DispatchQueue(label: "dev.tfox.flutter-vless.ios-watchdog", qos: .utility)
     private var lastTrafficLogDate: Date = .distantPast
     private var hevLogURL: URL?
@@ -116,128 +97,181 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var watchdogPolicy = TunnelWatchdogFailurePolicy(failureThreshold: 3)
     private var watchdogSuspended = false
     private var watchdogInboundPort: Int?
+    private var recoveryCheck: DispatchWorkItem?
+    private var watchdogGeneration = 0
+    private var watchdogInboundHealthy = false
+    private let runtimeQueue = DispatchQueue(label: "dev.tfox.flutter-vless.ios-runtime")
+    private let forwardingLock = NSLock()
+    private var forwardingReady = false
+    private var runtimeSpec: RuntimeSpec?
+    private var runtimeRecoveryInFlight = false
+    // Accessed only on runtimeQueue.
+    private var hasStartedHEV = false
+    private var hevStopSignal: DispatchGroup?
+
+    private struct RuntimeSpec {
+        let config: Data
+        let port: Int
+        let geoAssetsDirectory: String?
+    }
+
+    private func setForwardingReady(_ ready: Bool) {
+        forwardingLock.lock()
+        forwardingReady = ready
+        forwardingLock.unlock()
+        reasserting = !ready
+    }
+
+    private func isForwardingReady() -> Bool {
+        forwardingLock.lock()
+        defer { forwardingLock.unlock() }
+        return forwardingReady && hevLifecycle.isRunning
+    }
 
     override func startTunnel(options: [String : NSObject]? = nil) async throws {
-        guard
-            let protocolConfiguration = protocolConfiguration as? NETunnelProviderProtocol,
-            let providerConfiguration = protocolConfiguration.providerConfiguration
-        else {
+        guard let configuration = protocolConfiguration as? NETunnelProviderProtocol else {
             throw tunnelError("Missing tunnel provider configuration")
         }
-        TunnelDebugStore.shared.configure(
-            groupIdentifier: providerConfiguration["groupIdentifier"] as? String
-        )
-        terminalFailureGate.reset()
+        let providerConfiguration = configuration.providerConfiguration ?? [:]
+        // An old system profile cannot provide the required OS routing policy.
+        // Restart from the host app to save the current protected configuration.
+        guard configuration.includeAllNetworks && !configuration.excludeLocalNetworks else {
+            throw tunnelError("VPN profile requires traffic protection; reconnect from the app")
+        }
+        if #available(iOS 16.4, *), configuration.excludeAPNs || configuration.excludeCellularServices {
+            throw tunnelError("VPN profile has unsupported service exclusions; reconnect from the app")
+        }
+        let bypassArgument = providerConfiguration["bypassSubnets"]
+        guard bypassArgument == nil || bypassArgument is NSNull || (bypassArgument as? [String])?.isEmpty == true else {
+            throw tunnelError("System route exclusions are unsupported; use Xray direct rules")
+        }
+        TunnelDebugStore.shared.configure(groupIdentifier: providerConfiguration["groupIdentifier"] as? String)
+        setForwardingReady(false)
         rememberTunnelLog("Starting Xray packet tunnel")
-        tunnelLog.info("Starting Xray packet tunnel options=\(String(describing: options), privacy: .public)")
-        tunnelLog.info("Provider configuration keys: \(providerConfiguration.keys.sorted().joined(separator: ","), privacy: .public)")
-        guard let xrayConfig: Data = providerConfiguration["xrayConfig"] as? Data else {
-            throw tunnelError("Missing Xray config")
-        }
-        tunnelLog.info("Received Xray config bytes=\(xrayConfig.count, privacy: .public)")
-        let preparedXrayConfig = prepareXrayConfigForTunnel(xrayConfig) ?? xrayConfig
-        let geoAssetsDirectory = providerConfiguration["geoAssetsDirectory"] as? String
-        let bypassSubnets = providerConfiguration["bypassSubnets"] as? [String] ?? []
-        tunnelLog.info("Bypass subnet count=\(bypassSubnets.count, privacy: .public)")
-        if (providerConfiguration["proxyOnly"] as? Bool) == true {
-            tunnelLog.warning("proxyOnly is not supported by the iOS packet tunnel; starting VPN mode")
-        }
-        guard let parsedConfig = parseConfig(jsonData: preparedXrayConfig) else {
-            throw tunnelError("Unable to find a SOCKS/HTTP inbound port in Xray config")
-        }
-        rememberTunnelLog("Using local Xray inbound port \(parsedConfig.inboundPort), server=\(parsedConfig.serverAddress ?? "nil")")
-        tunnelLog.info("Using local Xray inbound port \(parsedConfig.inboundPort, privacy: .public)")
+        let config = providerConfiguration["xrayConfig"] as? Data ?? Data()
+        // Endpoint bootstrap precedes virtual DNS installation. Reuse the
+        // prepared endpoints when restarting workers within this same tunnel.
+        let prepared = prepareXrayConfigForTunnel(config)
+        let parsed = prepared.flatMap { parseConfig(jsonData: $0.data) }
+        let addresses = prepared?.bootstrapAddresses ?? []
+        let compatible = TunnelDNSPolicy.allowsRouteExclusions(addresses.map { "\($0)/32" })
+        let usable = prepared != nil && parsed != nil && compatible
 
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "254.1.1.1")
         settings.mtu = NSNumber(value: tunnelMTU)
-        settings.ipv4Settings = {
-            let settings = NEIPv4Settings(addresses: ["198.18.0.1"], subnetMasks: ["255.255.0.0"])
-            settings.includedRoutes = [NEIPv4Route.default()]
-            settings.excludedRoutes = buildIPv4ExcludedRoutes(
-                serverAddress: parsedConfig.serverAddress,
-                bypassSubnets: bypassSubnets
-            )
-            tunnelLog.info("IPv4 settings address=198.18.0.1/16 includedRoutes=default excludedRoutes=\(settings.excludedRoutes?.count ?? 0, privacy: .public)")
-            return settings
-        }()
-        // The packet path is currently verified as IPv4-only:
-        // NEPacketTunnel -> HEV tun2socks -> local Xray SOCKS inbound -> VLESS.
-        // Leaving IPv6 enabled made Safari and system services prefer IPv6
-        // destinations that this stack could not prove end-to-end, which looked
-        // like "traffic is moving" while pages stayed stuck. Keep IPv6 disabled
-        // until the provider has a real IPv6 route and health check.
-        settings.ipv6Settings = nil
-        rememberTunnelLog("IPv6 tunnel routing disabled; using IPv4-only packet tunnel")
-        tunnelLog.info("IPv6 tunnel routing disabled; using IPv4-only packet tunnel")
-        settings.dnsSettings = {
-            // DNS is owned by NetworkExtension, not by Xray config. The server
-            // IPs are excluded from the default VPN route below, so DNS lookup
-            // cannot recursively depend on the tunnel before Xray is ready.
-            let settings = NEDNSSettings(servers: dnsServers)
-            settings.matchDomains = [""]
-            return settings
-        }()
-        rememberTunnelLog("DNS through tunnel servers=\(dnsServers.joined(separator: ","))")
-        tunnelLog.info("Applying tunnel network settings")
-        try await self.setTunnelNetworkSettings(settings)
-        tunnelLog.info("Tunnel network settings applied")
-        try self.startXRay(
-            xrayConfig: preparedXrayConfig,
-            geoAssetsDirectory: geoAssetsDirectory
+        let ipv4 = NEIPv4Settings(addresses: ["198.18.0.1"], subnetMasks: ["255.255.0.0"])
+        ipv4.includedRoutes = [NEIPv4Route.default(), NEIPv4Route(destinationAddress: TunnelDNSPolicy.virtualServer, subnetMask: "255.255.255.255")]
+        ipv4.excludedRoutes = buildIPv4ExcludedRoutes(
+            serverAddresses: addresses.filter { isIPv4Literal($0) }
         )
-        do {
-            try self.startSocks5Tunnel(serverPort: parsedConfig.inboundPort)
-        } catch {
-            let shouldWaitForHEV = hevLifecycle.isRunning || hevLifecycle.isStopRequested
-            hevLifecycle.requestStop()
-            Socks5Tunnel.quit()
-            if shouldWaitForHEV,
-               !hevLifecycle.waitForExit(timeout: hevShutdownTimeoutSeconds) {
-                rememberTunnelLog("Timed out waiting for HEV after startup failure")
-            }
-            stopXRay()
-            throw error
-        }
-        startTunnelWatchdog(port: parsedConfig.inboundPort)
+        settings.ipv4Settings = ipv4
+        settings.ipv6Settings = TunnelIPv6Policy.networkSettings(proxyAddresses: addresses)
+        let dns = NEDNSSettings(servers: dnsServers)
+        dns.matchDomains = [""]
+        settings.dnsSettings = dns
+        try await setTunnelNetworkSettings(settings)
+        rememberTunnelLog("Protected tunnel routes and virtual DNS installed")
 
+        if usable, let prepared, let parsed {
+            runtimeSpec = RuntimeSpec(config: prepared.data, port: parsed.inboundPort,
+                geoAssetsDirectory: providerConfiguration["geoAssetsDirectory"] as? String)
+        } else {
+            runtimeSpec = nil
+            rememberTunnelLog("Tunnel configuration rejected; protected traffic remains blocked")
+        }
+        startTunnelWatchdog(port: runtimeSpec?.port)
+        // NE connected only means the routes are installed. The plugin
+        // queries forwarding readiness before publishing CONNECTED.
+        watchdogQueue.async { self.scheduleNativeRecovery(after: 0) }
     }
+
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         rememberTunnelLog("Stopping Xray packet tunnel, reason=\(reason.rawValue)")
-        tunnelLog.info("Stopping Xray packet tunnel, reason: \(reason.rawValue, privacy: .public)")
-        logTrafficStats(context: "stop")
-        if let hevTail = readHevLogTail(), !hevTail.isEmpty {
-            rememberTunnelLog("--- HEV log tail before stop bytes=\(hevLogSizeBytes()) ---\n\(hevTail)")
-        }
+        setForwardingReady(false)
         stopTunnelWatchdog()
-        hevLifecycle.requestStop()
-        Socks5Tunnel.quit()
-        DispatchQueue.global(qos: .utility).async {
-            if !self.hevLifecycle.waitForExit(timeout: hevShutdownTimeoutSeconds) {
-                rememberTunnelLog("Timed out waiting for HEV to stop")
-                tunnelLog.warning("Timed out waiting for HEV to stop")
-            } else {
-                rememberTunnelLog("HEV stopped before tunnel teardown")
-            }
-            self.stopXRay()
+        runtimeQueue.async {
+            _ = self.stopNativeRuntime()
             completionHandler()
+        }
+    }
+
+    private func startNativeRuntime(_ spec: RuntimeSpec) throws {
+        try startXRay(xrayConfig: spec.config, geoAssetsDirectory: spec.geoAssetsDirectory)
+        try startSocks5Tunnel(serverPort: spec.port)
+    }
+
+    /// Runs on runtimeQueue. A blocked native quit must not stall NE teardown.
+    private func stopNativeRuntime() -> Bool {
+        var stopped = true
+        if hasStartedHEV {
+            requestHEVStop()
+            stopped = hevLifecycle.waitForExit(timeout: hevShutdownTimeoutSeconds)
+            if let signal = hevStopSignal,
+               signal.wait(timeout: .now() + hevShutdownTimeoutSeconds) != .success {
+                stopped = false
+            }
+        }
+        stopXRay()
+        if !stopped { rememberTunnelLog("Native shutdown pending; protected traffic remains blocked") }
+        return stopped
+    }
+
+    /// Runs on watchdogQueue. Keep the NE routes/DNS installed during recovery.
+    private func scheduleNativeRecovery(after delay: TimeInterval) {
+        guard !watchdogSuspended, !runtimeRecoveryInFlight,
+              let spec = runtimeSpec else { return }
+        runtimeRecoveryInFlight = true
+        setForwardingReady(false)
+        let generation = watchdogGeneration
+        runtimeQueue.asyncAfter(deadline: .now() + delay) {
+            guard self.watchdogQueue.sync(execute: {
+                guard self.watchdogGeneration == generation else { return false }
+                if self.watchdogSuspended {
+                    self.runtimeRecoveryInFlight = false
+                    return false
+                }
+                return true
+            }) else { return }
+            var started = false
+            if self.stopNativeRuntime() {
+                do {
+                    try self.startNativeRuntime(spec)
+                    started = true
+                } catch {
+                    rememberTunnelLog("Native restart failed; protected traffic remains blocked")
+                    _ = self.stopNativeRuntime()
+                }
+            }
+            let runtimeStarted = started
+            self.watchdogQueue.async {
+                guard self.watchdogGeneration == generation else { return }
+                self.runtimeRecoveryInFlight = false
+                guard !self.watchdogSuspended else { return }
+                self.watchdogPolicy.reset()
+                if runtimeStarted {
+                    self.performTunnelHealthCheck(trigger: "native-restart")
+                } else {
+                    self.scheduleNativeRecovery(after: 3)
+                }
+            }
         }
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         if let message = String(data: messageData, encoding: .utf8) {
-            if (message == "xray_traffic"){
+            if message == "xray_runtime_state" {
+                completionHandler?(Data((isForwardingReady() ? "ready" : "recovering").utf8))
+            } else if (message == "xray_traffic"){
                 logTrafficStats(context: "poll")
                 let stats = Socks5Tunnel.stats
                 completionHandler?("\(stats.up.bytes),\(stats.down.bytes)".data(using: .utf8))
-            } else if (message == "xray_debug") {
+            } else if (message == "xray_debug" || message == NativeLogPrivacy.snapshotCommand) {
                 // This bridge is intentionally part of the runtime API used by
                 // smoke tests and manual Xcode runs. It is the fastest way to
                 // compare TCP/Reality and XHTTP behavior without attaching LLDB
                 // to the extension process separately.
                 var snapshot = TunnelDebugStore.shared.snapshot()
-                if let hevTail = readHevLogTail(), !hevTail.isEmpty {
-                    snapshot += "\n--- HEV log tail bytes=\(hevLogSizeBytes()) ---\n\(hevTail)"
-                }
+                snapshot += "\nHEV diagnostic file bytes=\(hevLogSizeBytes()); raw contents omitted"
                 completionHandler?(snapshot.data(using: .utf8))
             }else if (message.hasPrefix("xray_delay")){
                 var error: NSError?
@@ -283,6 +317,23 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    private func requestHEVStop() {
+        let shouldSignal = hevLifecycle.requestStop()
+        // HEV 2.15 quit waits for its event descriptor. After run has returned
+        // that descriptor is gone, so signalling an exited worker would hang.
+        if shouldSignal {
+            // The native worker may also exit between the state check and the
+            // signal. Never let HEV's blocking quit stall NE's teardown callback.
+            let signal = DispatchGroup()
+            signal.enter()
+            hevStopSignal = signal
+            DispatchQueue.global(qos: .utility).async {
+                defer { signal.leave() }
+                if !self.hevLifecycle.waitForExit(timeout: 0) { Socks5Tunnel.quit() }
+            }
+        }
+    }
+
     private func startSocks5Tunnel(serverPort port: Int) throws {
         // HEV is the tun2socks bridge: it reads IP packets from NetworkExtension
         // and forwards them into the local SOCKS inbound opened by Xray.
@@ -319,10 +370,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         """
         rememberTunnelLog("Starting HEV socks5 tunnel on 127.0.0.1:\(port), log=\(logURL.path)")
         tunnelLog.info("Starting HEV socks5 tunnel on 127.0.0.1:\(port, privacy: .public), mtu \(tunnelMTU, privacy: .public)")
+        hasStartedHEV = true
         hevLifecycle.beginStart()
         DispatchQueue.global(qos: .userInitiated).async {
             tunnelLog.info("HEV socks5 tunnel thread entered")
             self.hevLifecycle.markThreadEntered()
+            guard !self.hevLifecycle.isStopRequested else {
+                self.hevLifecycle.markExited(code: 0)
+                return
+            }
             let exitCode = Socks5Tunnel.run(withConfig: .string(content: config))
             let exitedUnexpectedly = self.hevLifecycle.markExited(code: exitCode)
             rememberTunnelLog("HEV socks5 tunnel exited with code \(exitCode)")
@@ -342,8 +398,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         case .exited(let code):
             throw tunnelError("HEV exited during startup with code \(code)")
         case .timedOut:
-            hevLifecycle.requestStop()
-            Socks5Tunnel.quit()
+            requestHEVStop()
             throw tunnelError("Timed out waiting for HEV startup")
         }
     }
@@ -362,10 +417,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             throw tunnelError("Xray geo asset directory must not be empty")
         }
         guard XRaySetAssetLocation(geoAssetsDirectory ?? "", &error) else {
-            let message = error?.localizedDescription
-                ?? "Failed to configure Xray geo asset directory"
-            rememberTunnelLog(message)
-            throw error ?? tunnelError(message)
+            rememberTunnelLog("Xray asset configuration failed")
+            throw NativeLogPrivacy.operationError(error ?? tunnelError("Xray asset configuration failed"))
         }
         if let geoAssetsDirectory {
             rememberTunnelLog("Using Xray geo assets from \(geoAssetsDirectory)")
@@ -376,7 +429,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         // Start XRay with the config data
         tunnelLog.info("Starting XRay version=\(XRayGetVersion(), privacy: .public) configBytes=\(xrayConfig.count, privacy: .public)")
-        let started = XRayStart(xrayConfig, logger, &error)
+        let started = XRayStartPrivate(xrayConfig, logger, &error)
 
         if started {
             rememberTunnelLog("XRay started successfully")
@@ -384,7 +437,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         } else if let error = error {
             rememberTunnelLog("Failed to start XRay: \(error.localizedDescription)")
             tunnelLog.error("Failed to start XRay: \(error.localizedDescription, privacy: .public)")
-            throw error
+            throw NativeLogPrivacy.operationError(error)
         } else {
             rememberTunnelLog("Failed to start XRay with unknown error")
             throw tunnelError("Failed to start XRay with unknown error")
@@ -420,7 +473,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     /// extension, but iOS has tighter rules: file logs may be denied inside the
     /// extension sandbox, DNS must line up with `NEDNSSettings`, and the remote
     /// proxy server must not be reached through the tunnel that depends on it.
-    private func prepareXrayConfigForTunnel(_ jsonData: Data) -> Data? {
+    private func prepareXrayConfigForTunnel(_ jsonData: Data) -> TunnelPreparedConfig? {
         guard let prepared = TunnelXrayConfigPreparer.prepare(
             jsonData: jsonData,
             resolveIPv4: { resolveIPv4Addresses(for: $0).first }
@@ -428,44 +481,24 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             tunnelLog.warning("Could not prepare Xray config for iOS tunnel")
             return nil
         }
-        for message in prepared.logMessages {
-            rememberTunnelLog(message)
-            tunnelLog.info("\(message, privacy: .public)")
-        }
-        return prepared.data
+        rememberTunnelLog("Xray configuration prepared, steps=\(prepared.logMessages.count)")
+        return prepared
     }
 
-    private func buildIPv4ExcludedRoutes(serverAddress: String?, bypassSubnets: [String]) -> [NEIPv4Route] {
-        var routes = bypassSubnets.compactMap { ipv4Route(fromCIDR: $0) }
-        // DNS server exclusions keep the resolver reachable while the packet
-        // tunnel is starting. The user-visible symptom without this is usually
-        // a connected VPN with tiny upload counters and no downloaded page data.
-        routes.append(contentsOf: dnsServers.map {
+    private func buildIPv4ExcludedRoutes(serverAddresses: [String]) -> [NEIPv4Route] {
+        let routes = serverAddresses.map {
             NEIPv4Route(destinationAddress: $0, subnetMask: "255.255.255.255")
-        })
-        rememberTunnelLog("Excluded DNS route(s): \(dnsServers.joined(separator: ","))")
-        tunnelLog.info("Excluded \(dnsServers.count, privacy: .public) DNS route(s) from VPN: \(dnsServers.joined(separator: ","), privacy: .public)")
-        if let serverAddress {
-            let serverAddresses = resolveIPv4Addresses(for: serverAddress)
-            let serverRoutes = serverAddresses.map {
-                NEIPv4Route(destinationAddress: $0, subnetMask: "255.255.255.255")
-            }
-            routes.append(contentsOf: serverRoutes)
-            if serverRoutes.isEmpty {
-                rememberTunnelLog("No IPv4 address resolved for outbound server \(serverAddress)")
-                tunnelLog.warning("No IPv4 address resolved for outbound server \(serverAddress, privacy: .public)")
-            } else {
-                rememberTunnelLog("Excluded IPv4 server route(s): \(serverAddresses.joined(separator: ","))")
-                tunnelLog.info("Excluded \(serverRoutes.count, privacy: .public) IPv4 server route(s) from VPN: \(serverAddresses.joined(separator: ","), privacy: .public)")
-            }
         }
         return routes
     }
 
-    private func startTunnelWatchdog(port: Int) {
+    private func startTunnelWatchdog(port: Int?) {
         watchdogQueue.sync {
+            watchdogGeneration += 1
+            runtimeRecoveryInFlight = false
             watchdogInboundPort = port
             watchdogPolicy.reset()
+            watchdogInboundHealthy = false
             watchdogSuspended = false
 
             watchdogTimer?.cancel()
@@ -498,6 +531,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func stopTunnelWatchdog() {
         watchdogQueue.sync {
+            watchdogGeneration += 1
+            recoveryCheck?.cancel()
+            recoveryCheck = nil
             watchdogSuspended = true
             watchdogPolicy.reset()
             watchdogTimer?.cancel()
@@ -510,23 +546,42 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     /// Must be called while already executing on `watchdogQueue`.
     private func scheduleTunnelHealthCheck(trigger: String, after delay: TimeInterval) {
+        let generation = watchdogGeneration
         watchdogQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard self?.watchdogGeneration == generation else { return }
             self?.performTunnelHealthCheck(trigger: trigger)
         }
     }
 
+    private func scheduleRecoveryCheck() {
+        guard recoveryCheck == nil else { return }
+        let check = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.recoveryCheck = nil
+            self.performTunnelHealthCheck(trigger: "recovery")
+        }
+        recoveryCheck = check
+        watchdogQueue.asyncAfter(deadline: .now() + 3, execute: check)
+    }
+
     /// Checks both the HEV worker state and the Xray SOCKS-to-Internet path.
-    /// Three consecutive failures terminate the system VPN state instead of
-    /// leaving a false "connected" session with no packet consumer.
-    private func performTunnelHealthCheck(trigger: String) {
+    /// Recovery keeps protected sessions scoped to the tunnel. A dead local
+    /// runtime is restarted by the saved on-demand policy.
+    @discardableResult
+    private func performTunnelHealthCheck(trigger: String) -> Bool {
         guard !watchdogSuspended,
-              !hevLifecycle.isStopRequested,
-              hevLifecycle.isRunning,
+              !runtimeRecoveryInFlight,
               let port = watchdogInboundPort else {
-            return
+            return false
+        }
+        guard !hevLifecycle.isStopRequested, hevLifecycle.isRunning else {
+            setForwardingReady(false)
+            scheduleNativeRecovery(after: 3)
+            return false
         }
 
         let inboundResult = socksInboundHealthCheck(port: port)
+        watchdogInboundHealthy = inboundResult.hasPrefix("ok")
         let connectResult = socksConnectHealthCheck(port: port)
         let httpResult = socksHTTPHealthCheck(port: port)
         if let hevLogURL {
@@ -539,10 +594,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         rememberTunnelLog(
             "Watchdog \(trigger): success=\(success) inbound=[\(inboundResult)] connect=[\(connectResult)] http=[\(httpResult)]"
         )
+        setForwardingReady(success)
         if success {
             tunnelLog.info("Tunnel watchdog \(trigger, privacy: .public) passed")
+            reasserting = false
+            recoveryCheck?.cancel()
+            recoveryCheck = nil
+            rememberTunnelLog("Protected tunnel forwarding restored")
         } else {
             tunnelLog.warning("Tunnel watchdog \(trigger, privacy: .public) failed")
+            reasserting = true
+            scheduleRecoveryCheck()
         }
 
         if watchdogPolicy.record(success: success) {
@@ -551,26 +613,25 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 code: 2
             )
         }
+        return success
     }
 
-    private func reportTerminalFailure(_ message: String, code: Int) {
-        guard !hevLifecycle.isStopRequested else {
-            return
+    private func reportTerminalFailure(_ message: NativeDiagnosticMessage, code: Int) {
+        watchdogQueue.async {
+            self.handleRuntimeFailure(message, code: code)
         }
-        guard terminalFailureGate.claim() else {
-            return
-        }
+    }
 
-        rememberTunnelLog("Terminal tunnel failure: \(message)")
-        tunnelLog.fault("Terminal tunnel failure: \(message, privacy: .public)")
-        hevLifecycle.requestStop()
-        Socks5Tunnel.quit()
-        let error = NSError(
-            domain: "flutter_vless.packet_tunnel",
-            code: code,
-            userInfo: [NSLocalizedDescriptionKey: message]
-        )
-        cancelTunnelWithError(error)
+    /// Runs on the watchdog queue; native recovery retains the tunnel routes.
+    private func handleRuntimeFailure(_ message: NativeDiagnosticMessage, code: Int) {
+        guard !watchdogSuspended else { return }
+        setForwardingReady(false)
+        if hevLifecycle.isRunning && watchdogInboundHealthy {
+            rememberTunnelLog("Protected tunnel waiting for transport recovery")
+            return
+        }
+        rememberTunnelLog("Restarting native workers inside the protected tunnel")
+        scheduleNativeRecovery(after: 0)
     }
 
     private func socksInboundHealthCheck(port: Int) -> String {
@@ -835,23 +896,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         bytes.map { String(format: "%02x", $0) }.joined(separator: " ")
     }
 
-    private func readHevLogTail() -> String? {
-        guard let hevLogURL else {
-            return nil
-        }
-        try? TunnelFileLog.trimIfNeeded(hevLogURL)
-        guard
-              let content = try? TunnelFileLog.tail(
-                of: hevLogURL,
-                maxBytes: 64 * 1024,
-                maxLines: 80
-              ),
-              !content.isEmpty else {
-            return nil
-        }
-        return content
-    }
-
     private func hevLogSizeBytes() -> UInt64 {
         guard let hevLogURL,
               let attributes = try? FileManager.default.attributesOfItem(atPath: hevLogURL.path),
@@ -859,49 +903,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return 0
         }
         return size.uint64Value
-    }
-
-    /// Kept for the future dual-stack path. It is intentionally unused while
-    /// `settings.ipv6Settings` is nil, because enabling IPv6 without an HTTP
-    /// health check recreated the "connected but browser does not load" state.
-    private func buildIPv6ExcludedRoutes(serverAddress: String?) -> [NEIPv6Route] {
-        guard let serverAddress else { return [] }
-        let serverAddresses = resolveIPv6Addresses(for: serverAddress)
-        let routes = serverAddresses.map {
-            NEIPv6Route(destinationAddress: $0, networkPrefixLength: 128)
-        }
-        if !routes.isEmpty {
-            tunnelLog.info("Excluded \(routes.count, privacy: .public) IPv6 server route(s) from VPN: \(serverAddresses.joined(separator: ","), privacy: .public)")
-        }
-        return routes
-    }
-
-    private func ipv4Route(fromCIDR cidr: String) -> NEIPv4Route? {
-        let parts = cidr.split(separator: "/")
-        guard parts.count == 2,
-              let prefix = Int(parts[1]),
-              (0...32).contains(prefix),
-              let subnetMask = subnetMask(prefixLength: prefix) else {
-            tunnelLog.warning("Ignoring invalid IPv4 bypass subnet: \(cidr, privacy: .public)")
-            return nil
-        }
-        let address = String(parts[0])
-        guard isIPv4Literal(address) else {
-            tunnelLog.warning("Ignoring non-IPv4 bypass subnet: \(cidr, privacy: .public)")
-            return nil
-        }
-        return NEIPv4Route(destinationAddress: address, subnetMask: subnetMask)
-    }
-
-    private func subnetMask(prefixLength: Int) -> String? {
-        guard (0...32).contains(prefixLength) else { return nil }
-        let mask = prefixLength == 0 ? UInt32(0) : UInt32.max << UInt32(32 - prefixLength)
-        return [
-            (mask >> 24) & 0xff,
-            (mask >> 16) & 0xff,
-            (mask >> 8) & 0xff,
-            mask & 0xff
-        ].map(String.init).joined(separator: ".")
     }
 
     private func resolveIPv4Addresses(for host: String) -> [String] {
@@ -968,10 +969,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return address.withCString { inet_pton(AF_INET6, $0, &addr) } == 1
     }
 
-    private func tunnelError(_ message: String) -> NSError {
-        tunnelLog.error("\(message, privacy: .public)")
+    private func tunnelError(_ message: NativeDiagnosticMessage) -> NSError {
+        tunnelLog.error(message)
         return NSError(domain: "flutter_vless.packet_tunnel", code: 1, userInfo: [
-            NSLocalizedDescriptionKey: message
+            NSLocalizedDescriptionKey: message.text
         ])
     }
 
@@ -990,8 +991,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 class CustomXRayLogger: NSObject, XRayLoggerProtocol {
     func logInput(_ s: String?) {
         if let logMessage = s {
-            TunnelDebugStore.shared.append("XRay: \(logMessage)")
-            tunnelLog.info("XRay: \(logMessage, privacy: .public)")
+            let event = NativeLogPrivacy.runtimeEvent(logMessage)
+            TunnelDebugStore.shared.append(event)
+            tunnelLog.info(event)
         }
     }
 }

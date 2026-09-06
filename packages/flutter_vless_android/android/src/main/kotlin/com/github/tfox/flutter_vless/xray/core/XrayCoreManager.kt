@@ -16,6 +16,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.service.XrayVPNService
+import com.github.tfox.flutter_vless.xray.service.XraySocketProtector
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import com.github.tfox.flutter_vless.xray.utils.Utilities
 import org.json.JSONObject
@@ -277,7 +278,7 @@ object XrayCoreManager {
      * @return true if started successfully, false otherwise.
      */
     @Synchronized
-    fun startCore(context: Service, config: XrayConfig): Boolean {
+    fun startCore(context: Service, config: XrayConfig, protector: XraySocketProtector? = null): Boolean {
         if (!destroyCurrentXrayProcess()) {
             XrayDiagnosticsStore.append(
                 context.filesDir,
@@ -301,6 +302,7 @@ object XrayCoreManager {
         
         try {
             val configJson = buildRuntimeConfigJson(config, configFilesDir)
+            if (protector != null) requireProtectedSocketSupport(configJson)
             val configFile = File(context.filesDir, "config.json")
             configFile.writeText(configJson.toString())
         } catch (e: Exception) {
@@ -345,9 +347,20 @@ object XrayCoreManager {
             // Set environment variables (XRAY_LOCATION_ASSET is crucial for finding geoip/geosite)
             val env = pb.environment()
             env["XRAY_LOCATION_ASSET"] = Utilities.getUserAssetsPath(context)
+            if (protector != null) {
+                env["FLUTTER_VLESS_PROTECT_SOCKET"] = protector.socketName
+            } else {
+                env.remove("FLUTTER_VLESS_PROTECT_SOCKET")
+            }
 
             val process = pb.start()
             xrayProcess = process
+            if (protector != null && !protector.awaitVerified()) {
+                destroyCurrentXrayProcess()
+                AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
+                XrayDiagnosticsStore.append(configFilesDir, "runtime", "Runtime socket protection was not verified; VPN startup refused", diagnosticsGeneration)
+                return false
+            }
             Thread.sleep(300)
             if (!process.isAlive) {
                 val output = process.inputStream.bufferedReader().readText()
@@ -431,6 +444,23 @@ object XrayCoreManager {
                 diagnosticsGeneration
             )
             return false
+        }
+    }
+
+    /** These upstream paths open sockets outside Xray's controller interfaces. */
+    internal fun requireProtectedSocketSupport(value: Any?) {
+        when (value) {
+            is JSONObject -> value.keys().forEach { key ->
+                val child = value.opt(key)
+                require(!(key.equals("type", ignoreCase = true) && child is String && child.equals("xicmp", ignoreCase = true))) {
+                    "xicmp is unavailable in protected VPN mode"
+                }
+                requireProtectedSocketSupport(child)
+            }
+            is JSONArray -> for (index in 0 until value.length()) requireProtectedSocketSupport(value.opt(index))
+            is String -> require(!value.startsWith("quic+local://", ignoreCase = true)) {
+                "quic+local DNS is unavailable in protected VPN mode; use https+local or tcp+local"
+            }
         }
     }
 

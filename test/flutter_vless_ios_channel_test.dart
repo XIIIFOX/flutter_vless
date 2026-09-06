@@ -80,6 +80,25 @@ void main() {
     });
   });
 
+  test('iOS surfaces native rejection of incompatible VPN routes', () async {
+    installHandlers(respond: (call) {
+      throw PlatformException(code: 'INCOMPATIBLE_ROUTING');
+    });
+    final plugin = FlutterVlessIOS();
+    await expectLater(
+      plugin.startVless(
+        remark: 'Unsupported system bypass',
+        config: '{"outbounds":[]}',
+        bypassSubnets: ['10.0.0.0/8'],
+        notificationDisconnectButtonName: 'STOP',
+      ),
+      throwsA(isA<PlatformException>()
+          .having((error) => error.code, 'code', 'INCOMPATIBLE_ROUTING')),
+    );
+    expect(
+        calls.single.arguments.containsKey('ios_traffic_protection'), isFalse);
+  });
+
   test('P0 initializeVless sends iOS provider and app group identifiers',
       () async {
     final plugin = FlutterVlessIOS();

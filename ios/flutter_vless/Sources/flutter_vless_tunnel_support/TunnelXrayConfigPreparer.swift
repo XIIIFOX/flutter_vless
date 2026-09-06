@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+@_exported import flutter_vless_privacy
 
 public struct TunnelParsedConfig: Equatable {
     public let inboundPort: Int
@@ -15,11 +16,13 @@ public struct TunnelPreparedConfig {
     public let data: Data
     public let logMessages: [String]
     public let proxyUsesXhttp: Bool
+    public let bootstrapAddresses: [String]
 
-    public init(data: Data, logMessages: [String], proxyUsesXhttp: Bool) {
+    public init(data: Data, logMessages: [String], proxyUsesXhttp: Bool, bootstrapAddresses: [String] = []) {
         self.data = data
         self.logMessages = logMessages
         self.proxyUsesXhttp = proxyUsesXhttp
+        self.bootstrapAddresses = bootstrapAddresses
     }
 }
 
@@ -50,30 +53,14 @@ public enum TunnelXrayConfigPreparer {
         resolveIPv4: (String) -> String? = { _ in nil }
     ) -> TunnelPreparedConfig? {
         do {
-            guard var configJSON = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any] else {
+            guard let input = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
+                  var configJSON = TunnelConfigKeys.normalize(input) else {
                 return nil
             }
             var messages: [String] = []
 
-            if var log = configJSON["log"] as? [String: Any] {
-                log["access"] = ""
-                log["error"] = ""
-                log["loglevel"] = "warning"
-                log["dnsLog"] = false
-                configJSON["log"] = log
-            } else {
-                configJSON["log"] = [
-                    "access": "",
-                    "error": "",
-                    "loglevel": "warning",
-                    "dnsLog": false
-                ]
-            }
-            messages.append("Disabled XRay file log outputs for packet tunnel")
-
-            if configJSON.removeValue(forKey: "dns") != nil {
-                messages.append("Removed Xray DNS config; iOS tunnel DNS settings will handle system DNS")
-            }
+            guard XrayPrivacyConfig.apply(to: &configJSON) else { return nil }
+            messages.append("Applied private Xray logging policy")
 
             if var routing = configJSON["routing"] as? [String: Any] {
                 routing["domainStrategy"] = "AsIs"
@@ -108,23 +95,8 @@ public enum TunnelXrayConfigPreparer {
                     var streamSettings = outbounds[index]["streamSettings"] as? [String: Any] ?? [:]
                     normalizeStreamSettingsAliases(streamSettings: &streamSettings, messages: &messages)
                     let network = (streamSettings["network"] as? String ?? "?").lowercased()
-                    let security = streamSettings["security"] as? String ?? "?"
                     proxyUsesXhttp = network == "xhttp"
 
-                    if network == "xhttp" && security.lowercased() == "none" {
-                        messages.append("Keeping XHTTP/none proxy domain in Xray config")
-                    } else if replaceProxyServerDomainWithIPv4(outbound: &outbounds[index], resolveIPv4: resolveIPv4) {
-                        messages.append("Resolved proxy server domain to IPv4 in Xray config")
-                    }
-
-                    if var sockopt = streamSettings["sockopt"] as? [String: Any],
-                       sockopt.removeValue(forKey: "domainStrategy") != nil {
-                        if sockopt.isEmpty {
-                            streamSettings.removeValue(forKey: "sockopt")
-                        } else {
-                            streamSettings["sockopt"] = sockopt
-                        }
-                    }
                     outbounds[index]["streamSettings"] = streamSettings
                     break
                 }
@@ -138,8 +110,15 @@ public enum TunnelXrayConfigPreparer {
                 }
             }
 
+            guard let bootstrapAddresses = TunnelDNSPolicy.apply(to: &configJSON, resolveIPv4: resolveIPv4) else {
+                return nil
+            }
+            messages.append("Configured system DNS over TCP through the selected proxy")
+            guard TunnelIPv6Policy.apply(to: &configJSON) else { return nil }
+            messages.append("Captured IPv6 is blocked; IPv4 remains available")
             let data = try JSONSerialization.data(withJSONObject: configJSON, options: [])
-            return TunnelPreparedConfig(data: data, logMessages: messages, proxyUsesXhttp: proxyUsesXhttp)
+            return TunnelPreparedConfig(data: data, logMessages: messages, proxyUsesXhttp: proxyUsesXhttp,
+                                        bootstrapAddresses: bootstrapAddresses)
         } catch {
             return nil
         }
@@ -223,47 +202,6 @@ public enum TunnelXrayConfigPreparer {
         return true
     }
 
-    private static func replaceProxyServerDomainWithIPv4(
-        outbound: inout [String: Any],
-        resolveIPv4: (String) -> String?
-    ) -> Bool {
-        guard var settings = outbound["settings"] as? [String: Any] else {
-            return false
-        }
-
-        if var vnext = settings["vnext"] as? [[String: Any]],
-           !vnext.isEmpty,
-           let address = vnext[0]["address"] as? String,
-           shouldResolve(address),
-           let ip = resolveIPv4(address) {
-            vnext[0]["address"] = ip
-            settings["vnext"] = vnext
-            outbound["settings"] = settings
-            return true
-        }
-
-        if var servers = settings["servers"] as? [[String: Any]],
-           !servers.isEmpty,
-           let address = servers[0]["address"] as? String,
-           shouldResolve(address),
-           let ip = resolveIPv4(address) {
-            servers[0]["address"] = ip
-            settings["servers"] = servers
-            outbound["settings"] = settings
-            return true
-        }
-
-        if let address = settings["address"] as? String,
-           shouldResolve(address),
-           let ip = resolveIPv4(address) {
-            settings["address"] = ip
-            outbound["settings"] = settings
-            return true
-        }
-
-        return false
-    }
-
     private static func normalizeStreamSettingsAliases(
         streamSettings: inout [String: Any],
         messages: inout [String]
@@ -303,17 +241,4 @@ public enum TunnelXrayConfigPreparer {
         }
     }
 
-    private static func shouldResolve(_ address: String) -> Bool {
-        !address.isEmpty && !isIPv4Literal(address) && !isIPv6Literal(address)
-    }
-
-    private static func isIPv4Literal(_ value: String) -> Bool {
-        var address = in_addr()
-        return value.withCString { inet_pton(AF_INET, $0, &address) } == 1
-    }
-
-    private static func isIPv6Literal(_ value: String) -> Bool {
-        var address = in6_addr()
-        return value.withCString { inet_pton(AF_INET6, $0, &address) } == 1
-    }
 }

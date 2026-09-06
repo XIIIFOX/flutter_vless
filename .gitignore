@@ -10,6 +10,10 @@
 .svn/
 migrate_working_dir/
 artifacts/
+/doc/security-backlog/
+/doc/security-validation-*/
+/doc/*security-remediation-*.md
+/doc/ios-device-validation-*.md
 
 # IntelliJ related
 *.iml

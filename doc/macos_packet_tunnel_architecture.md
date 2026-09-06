@@ -310,8 +310,8 @@ Why these matter:
 Good HEV evidence:
 
 ```text
-socks5 client tcp -> [140.82.114.26]:443
-socks5 client tcp -> [172.64.148.197]:443
+socks5 client tcp -> [203.0.113.10]:443
+socks5 client tcp -> [192.168.1.1]:443
 socks5 session tcp splice
 ```
 
@@ -340,7 +340,7 @@ prove Packet Tunnel routing, DNS, HEV, or extension sandbox behavior.
 Example:
 
 ```text
-Server TCP route health check: ok 45.135.203.150:443 delay=74ms
+Server TCP route health check: ok 203.0.113.10:443 delay=74ms
 ```
 
 This proves the resolved proxy server IP is reachable from the extension after
@@ -446,7 +446,7 @@ The delayed snapshot after `status=3` is the important one:
 route-default -> interface utun19, mtu 1280
 route-dns-1.1.1.1 -> gateway 10.0.0.1, interface en0
 route-dns-8.8.8.8 -> gateway 10.0.0.1, interface en0
-45.135.203.150 -> 10.0.0.1, interface en0
+203.0.113.10 -> 192.168.1.1, interface en0
 ```
 
 `netstat` may show duplicate host entries, for example both:

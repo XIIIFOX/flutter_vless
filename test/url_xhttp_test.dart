@@ -5,18 +5,17 @@ import 'package:flutter_vless/url/vless.dart';
 import 'xray_config_test_utils.dart';
 
 const xhttpNoneLink =
-    'vless://b94da146-a56e-49d7-af4c-a68c9065cbfd@:2043?type=xhttp&host=s3.storage.selcloud.ru&path=/my-bucket&mode=stream-up&security=none';
+    'vless://22222222-2222-4222-8222-222222222222@:2043?type=xhttp&host=storage.example.com&path=/my-bucket&mode=stream-up&security=none';
 
 const tcpRealityLink =
-    'vless://b94da146-a56e-49d7-af4c-a68c9065cbfd@:443?type=tcp&headerType=none&security=reality&fp=chrome&sni=vpnforppl.top&pbk=gOummriWvIYMJpd5oifBLqxsf_jcWHVsxVI7wnM0rRo&sid=117bee239f0f9c0b&flow=xtls-rprx-vision#%D0%A4%D0%B8%D0%BD%D0%BB%D1%8F%D0%BD%D0%B4%D0%B8%D1%8F%20%E2%9A%A1%EF%B8%8F';
+    'vless://22222222-2222-4222-8222-222222222222@:443?type=tcp&headerType=none&security=reality&fp=chrome&sni=reality.example.com&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=0123456789abcdef&flow=xtls-rprx-vision#%D0%A4%D0%B8%D0%BD%D0%BB%D1%8F%D0%BD%D0%B4%D0%B8%D1%8F%20%E2%9A%A1%EF%B8%8F';
 
 const visionSeedEncryption =
-    'mlkem768x25519plus.native.1rtt.100-500-2000.75-0-100.80-0-5000.gtmOXB2AN_r905czmOIr6dKq_YDdEJB8RWGqfsXurns';
+    'mlkem768x25519plus.native.1rtt.100-500-2000.75-0-100.80-0-5000.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
 
 void main() {
   group('P0 VLESS XHTTP/none', () {
-    test('generates the same transport shape as the provided working Happ link',
-        () {
+    test('generates the expected XHTTP transport shape', () {
       final parsed = FlutterVless.parseFromURL(xhttpNoneLink);
       final config = decodedConfig(parsed);
       final inbound =
@@ -48,7 +47,7 @@ void main() {
         '',
       );
       expect(server['port'], 2043);
-      expect(user['id'], 'b94da146-a56e-49d7-af4c-a68c9065cbfd');
+      expect(user['id'], '22222222-2222-4222-8222-222222222222');
       expect(user['encryption'], 'none');
       expect(user['security'], 'auto');
       expect(user['level'], 8);
@@ -58,7 +57,7 @@ void main() {
       expect(stream.containsKey('tlsSettings'), isFalse);
       expect(stream.containsKey('realitySettings'), isFalse);
       expect(xhttp, {
-        'host': 's3.storage.selcloud.ru',
+        'host': 'storage.example.com',
         'mode': 'stream-up',
         'path': '/my-bucket',
       });
@@ -106,7 +105,7 @@ void main() {
   });
 
   group('P0 VLESS TCP/Reality', () {
-    test('keeps the known working Reality transport stable', () {
+    test('preserves the Reality transport fields', () {
       final config = decodedConfig(VlessURL(url: tcpRealityLink));
       final user = firstVnextUser(config);
       final stream = streamSettings(config);
@@ -115,22 +114,21 @@ void main() {
 
       expect(firstVnextServer(config)['address'], '');
       expect(firstVnextServer(config)['port'], 443);
-      expect(user['id'], 'b94da146-a56e-49d7-af4c-a68c9065cbfd');
+      expect(user['id'], '22222222-2222-4222-8222-222222222222');
       expect(user['flow'], 'xtls-rprx-vision');
       expect(user['encryption'], 'none');
       expect(stream['network'], 'tcp');
       expect(stream['security'], 'reality');
       expect(tcp['header'], {'type': 'none'});
-      expect(reality['serverName'], 'vpnforppl.top');
+      expect(reality['serverName'], 'reality.example.com');
       expect(reality['fingerprint'], 'chrome');
       expect(
-          reality['publicKey'], 'gOummriWvIYMJpd5oifBLqxsf_jcWHVsxVI7wnM0rRo');
-      expect(reality['shortId'], '117bee239f0f9c0b');
+          reality['publicKey'], 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8');
+      expect(reality['shortId'], '0123456789abcdef');
       expect(reality['spiderX'], '');
     });
 
-    test('imports the known working Reality link through the universal parser',
-        () {
+    test('imports the Reality fixture through the universal parser', () {
       final parsed = FlutterVless.parse(tcpRealityLink);
       final config = decodedConfig(parsed);
 

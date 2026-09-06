@@ -1,21 +1,66 @@
 ## 1.1.6 (Unreleased)
 
-* Added the public `getProviderDebugSnapshot()` API on Android, iOS, macOS,
-  and Windows. Native output is bounded, remains available after stop/failure,
-  and includes proxy-only Xray logs on Apple platforms.
-* Added dynamic iOS `geoip.dat` and `geosite.dat` loading from an App Group or
-  other extension-readable directory through `geoAssetsDirectory`. The new Go
-  bridge configures Xray's asset lookup inside the Go runtime, validates both
-  files before startup, and supports restoring the default bundled lookup.
-* Prepared the non-overwriting iOS runtime revision `xray-ios-v26.7.28-r2`
-  with the new gomobile symbol and updated SwiftPM/CocoaPods checksums.
-* Updated bundled and packaged Xray runtimes to upstream Xray-core `v26.7.28` for Android, iOS, and macOS.
-* Rebuilt the Android runtime AAR as `dev.tfox.fluttervless:xray-android:26.7.28` for device and emulator ABIs.
-* Updated the default hosted Apple runtime release tags and checksums to `xray-ios-v26.7.28` and `xray-macos-v26.7.28`.
-* Fixed an iOS Network Extension memory-pressure failure during concurrent XHTTP uploads. The iOS Xray framework build now caps Go's HTTP/2 per-stream upload scratch buffer at 128 KiB, preventing the previous 512 KiB-per-stream allocation pattern from exhausting the extension's 50 MB memory limit.
-* The iOS framework build now requires Go 1.27 or newer and patches an isolated copy of `GOROOT`, never the installed Go toolchain. Maintainers can tune the cap with `H2BUF_CAP_KB` (16–512 KiB); the build stops if the expected Go stdlib source layout changes.
-* Documented the iOS Xray framework memory safeguard, toolchain requirements, and release-validation steps in the platform and release guides.
-* Includes [Myo Thura](https://github.com/myothura)'s XHTTP upload-buffer fix in [PR #24](https://github.com/XIIIFOX/flutter_vless/pull/24), resolving [#23](https://github.com/XIIIFOX/flutter_vless/issues/23).
+### General
+
+* Added `getProviderDebugSnapshot()` across Android, iOS, macOS, and Windows,
+  with bounded native diagnostics available after stop or failure.
+
+### iOS
+
+* Made iOS VPN traffic protection mandatory using the saved Network
+  Extension routing and on-demand policy. Tunnels retain their routes and virtual
+  DNS while retrying transports or restarting HEV/Xray workers; rejected runtime
+  configurations keep forwarding blocked. On-demand requests a restart after
+  termination of the entire provider. Recovery
+  reports `CONNECTING`; iOS can defer restart after a process crash.
+* Serialized start, stop, and permission operations. Explicit stop disables
+  automatic recovery before stopping the tunnel; proxy-only startup waits for
+  tunnel shutdown before reusing its ports. Provider replies have a deadline.
+* Avoided signalling HEV again after its worker exits, which could otherwise hang
+  shutdown, and required provider readiness before publishing `CONNECTED`.
+* Domain rules with Xray `direct` remain supported. Non-empty system
+  `bypassSubnets` are rejected before changing the current session. Starting from
+  the app updates legacy VPN profiles; the provider rejects unprotected profiles.
+* Routed tunnel DNS through the selected proxy without a physical DNS fallback,
+  and captured IPv6 traffic for blocking when IPv6 forwarding is unavailable.
+* Replaced raw native Xray diagnostics with bounded, structured messages that
+  omit config credentials and imported log destinations. Kept HEV error logging
+  bounded while preserving open append handles during rotation.
+* Added dynamic `geoip.dat` and `geosite.dat` loading through
+  `geoAssetsDirectory`. The Go bridge validates the files and supports restoring
+  the default asset lookup; VPN mode uses an extension-readable App Group path.
+* Published runtime revision `xray-ios-v26.7.28-r3` with Xray-core `v26.7.28`,
+  the asset and private logging bridges, and updated SwiftPM/CocoaPods checksums.
+* Capped Go HTTP/2 upload scratch buffers at 128 KiB per stream to reduce memory
+  pressure during concurrent XHTTP uploads. Builds require Go 1.27 or newer,
+  patch an isolated `GOROOT`, and accept `H2BUF_CAP_KB` values from 16 to 512 KiB.
+  The build fails if the expected standard-library patch anchor changes.
+* Includes [Myo Thura](https://github.com/myothura)'s XHTTP upload-buffer fix in
+  [PR #24](https://github.com/XIIIFOX/flutter_vless/pull/24), resolving
+  [#23](https://github.com/XIIIFOX/flutter_vless/issues/23).
+
+### Android
+
+* Kept the host application's traffic inside the VPN instead of excluding its
+  entire UID. Only runtime transport and bootstrap sockets bypass the VPN through
+  the native socket protection bridge; configured blocked applications still bypass it.
+* Made required socket protection failures reject runtime startup or socket use.
+* Published `dev.tfox.fluttervless:xray-android:26.7.28-protect1` with Xray-core
+  `v26.7.28` for `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`.
+* Added bounded cross-process Xray/tun2socks diagnostics.
+
+### macOS
+
+* Updated Xray-core to `v26.7.28` and the SwiftPM/CocoaPods runtime tag and
+  checksum to `xray-macos-v26.7.28`.
+* Exposed bounded Packet Tunnel and proxy-only Xray diagnostics through the
+  shared Dart API.
+
+### Windows
+
+* Exposed thread-safe, bounded Xray/tun2socks diagnostics through the shared
+  Dart API.
+* Fixed the native registration header path for the federated Windows package.
 
 ## 1.1.5
 

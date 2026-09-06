@@ -46,6 +46,7 @@ android {
     defaultConfig {
         minSdkVersion 23
         targetSdkVersion 35
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         
         // 16KB page size support for Android 15+
         ndk {
@@ -62,6 +63,8 @@ android {
         testImplementation 'junit:junit:4.13.2'
         testImplementation 'org.mockito:mockito-core:5.0.0'
         testImplementation 'org.json:json:20240303'
+        androidTestImplementation 'androidx.test:runner:1.6.2'
+        androidTestImplementation 'androidx.test.ext:junit:1.2.1'
     }
 
     testOptions {
@@ -91,5 +94,5 @@ dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.code.gson:gson:2.10.1'
-    implementation "dev.tfox.fluttervless:xray-android:${findProperty('flutterVlessXrayRuntimeVersion') ?: '26.7.28'}"
+    implementation "dev.tfox.fluttervless:xray-android:${findProperty('flutterVlessXrayRuntimeVersion') ?: '26.7.28-protect1'}"
 }

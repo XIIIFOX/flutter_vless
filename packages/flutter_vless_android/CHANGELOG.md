@@ -1,9 +1,14 @@
-## 1.1.6
+## 1.1.6 (Unreleased)
 
-* Updated the Android runtime dependency to `dev.tfox.fluttervless:xray-android:26.7.28`.
+* Updated the Android runtime dependency to `dev.tfox.fluttervless:xray-android:26.7.28-protect1`.
 * Rebuilt Android `libxray.so` binaries for `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` against Xray-core `v26.7.28`.
 * Added bounded, cross-process Xray/tun2socks diagnostics through
   `getProviderDebugSnapshot`.
+
+* Kept host-application traffic inside the VPN and protected only runtime
+  transport/bootstrap sockets through the native descriptor bridge. Explicitly
+  blocked applications retain their bypass behavior.
+* Required socket protection failures reject runtime startup or socket use.
 
 ## 1.1.5
 

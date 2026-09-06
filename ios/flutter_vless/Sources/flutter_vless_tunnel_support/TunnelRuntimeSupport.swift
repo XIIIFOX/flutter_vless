@@ -55,8 +55,16 @@ public final class TunnelProcessLifecycle: @unchecked Sendable {
         return unexpected
     }
 
-    public func requestStop() {
+    /// Returns true only for the first stop request for a running worker.
+    @discardableResult
+    public func requestStop() -> Bool {
         condition.lock()
+        let shouldSignal: Bool
+        if case .running = state {
+            shouldSignal = !stopRequested
+        } else {
+            shouldSignal = false
+        }
         stopRequested = true
         if case .exited = state {
             // Preserve the exit code for callers waiting on it.
@@ -65,6 +73,7 @@ public final class TunnelProcessLifecycle: @unchecked Sendable {
         }
         condition.broadcast()
         condition.unlock()
+        return shouldSignal
     }
 
     /// Waits for the worker to enter its blocking run loop and remain there for

@@ -50,8 +50,20 @@ The plugin appends `.XrayTunnel` internally for the tunnel extension.
 
 - real-device testing is strongly preferred
 - `proxyOnly: true` avoids the tunnel path
-- `bypassSubnets` is the route-level knob to understand first
+- VPN sessions require traffic protection; recovery reports
+  `CONNECTING` until the provider's forwarding health checks pass
+- use Xray `direct` domain rules for split routing, including `domain:ru`
+  or `domain:io`; the provider still routes these connections directly
+- non-empty system `bypassSubnets` are rejected before the current session changes;
+  there is no option to disable VPN traffic protection
 - app-level blocking is not the same thing as tunnel routing
+
+Use the current example provider when updating an existing integration. The
+manager policy and provider recovery behavior work together. Reconnect from the
+app to update older saved profiles; the current provider rejects profiles without
+the required system protection. See
+[iOS traffic protection](../security.md#ios-traffic-protection) for lifecycle
+behavior and operating-system exceptions.
 
 ## Updating `geoip.dat` And `geosite.dat`
 

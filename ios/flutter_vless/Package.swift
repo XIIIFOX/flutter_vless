@@ -3,8 +3,8 @@
 import PackageDescription
 import Foundation
 
-let xrayReleaseTag = "xray-ios-v26.7.28-r2"
-let xrayChecksum = "2998d736ad253def6d24e0c09010e5364f3405545a4cfad795ad1fc3ed443517"
+let xrayReleaseTag = "xray-ios-v26.7.28-r3"
+let xrayChecksum = "3792dc3ae6ffa42922c4604827812e48e29307d381d5db40a2c3932e0b779a60"
 let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let xrayPackageLocalPath = "XRay.xcframework"
 let xrayRepoLocalPath = "../XRay.xcframework"
@@ -41,6 +41,7 @@ let package = Package(
             name: "flutter_vless",
             dependencies: [
                 .product(name: "FlutterFramework", package: "FlutterFramework"),
+                "flutter_vless_privacy",
                 "XRay"
             ],
             linkerSettings: [
@@ -48,8 +49,12 @@ let package = Package(
             ]
         ),
         .target(
+            name: "flutter_vless_privacy"
+        ),
+        .target(
             name: "flutter_vless_tunnel_support",
             dependencies: [
+                "flutter_vless_privacy",
                 "XRay",
                 .product(name: "Tun2SocksKit", package: "Tun2SocksKit"),
                 .product(name: "Tun2SocksKitC", package: "Tun2SocksKit")

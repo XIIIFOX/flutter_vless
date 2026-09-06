@@ -90,7 +90,10 @@ Required parameters:
 Optional parameters:
 
 - `blockedApps`: Android package names excluded from the VPN route.
-- `bypassSubnets`: CIDR routes excluded from the tunnel where supported.
+- `bypassSubnets`: CIDR routes excluded from the tunnel where supported. iOS VPN
+  sessions reject non-empty values with `INCOMPATIBLE_ROUTING` before changing
+  the current session. Use Xray `direct` routing rules on iOS; traffic protection
+  is mandatory for VPN sessions.
 - `proxyOnly`: starts local proxy behavior without installing a VPN route.
 - `geoAssetsDirectory`: iOS-only absolute path to a directory containing
   non-empty `geoip.dat` and `geosite.dat`. Use an App Group directory for VPN
@@ -107,6 +110,10 @@ invalid `inbounds` section, or does not contain at least one valid outbound.
 ## `stopVless()`
 
 Stops the active proxy or VPN/tunnel session.
+
+On iOS, this disables automatic recovery before stopping the tunnel. If saving
+that change fails, the call reports `VPN_STOP_ERROR` and retains protection;
+the app can retry the explicit stop.
 
 ```dart
 await flutterVless.stopVless();

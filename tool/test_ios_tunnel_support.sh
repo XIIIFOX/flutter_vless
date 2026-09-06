@@ -6,9 +6,12 @@ WORK_DIR="$ROOT_DIR/build/ios_tunnel_support_swiftpm"
 
 rm -rf "$WORK_DIR"
 mkdir -p \
+  "$WORK_DIR/Sources/flutter_vless_privacy" \
   "$WORK_DIR/Sources/flutter_vless_tunnel_support" \
   "$WORK_DIR/Tests/flutter_vless_tunnel_supportTests"
 
+cp "$ROOT_DIR"/ios/flutter_vless/Sources/flutter_vless_privacy/*.swift \
+  "$WORK_DIR/Sources/flutter_vless_privacy/"
 cp "$ROOT_DIR"/ios/flutter_vless/Sources/flutter_vless_tunnel_support/*.swift \
   "$WORK_DIR/Sources/flutter_vless_tunnel_support/"
 cp "$ROOT_DIR"/ios/flutter_vless/Tests/flutter_vless_tunnel_supportTests/*.swift \
@@ -31,7 +34,8 @@ let package = Package(
         )
     ],
     targets: [
-        .target(name: "flutter_vless_tunnel_support"),
+        .target(name: "flutter_vless_privacy"),
+        .target(name: "flutter_vless_tunnel_support", dependencies: ["flutter_vless_privacy"]),
         .testTarget(
             name: "flutter_vless_tunnel_supportTests",
             dependencies: ["flutter_vless_tunnel_support"]

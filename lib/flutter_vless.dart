@@ -103,6 +103,9 @@ class FlutterVless {
   /// [bypassSubnets] contains CIDR routes that should be excluded from the
   /// tunnel on platforms that support route exclusions. Use it for local LAN,
   /// DNS, server-host, or app-specific bypass behavior.
+  /// iOS VPN sessions reject non-empty system route exclusions. Use Xray
+  /// `direct` routing rules to bypass selected destinations while retaining
+  /// mandatory traffic protection during connection and recovery.
   ///
   /// Set [proxyOnly] to `true` when the app should start local Xray proxy
   /// behavior without installing a system VPN or Packet Tunnel route.

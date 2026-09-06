@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 XRAY_VERSION="${XRAY_VERSION:-v26.7.28}"
-RELEASE_TAG="${RELEASE_TAG:-xray-ios-$XRAY_VERSION-r2}"
+RELEASE_TAG="${RELEASE_TAG:-xray-ios-$XRAY_VERSION-r3}"
 XCFRAMEWORK_PATH="${XCFRAMEWORK_PATH:-$REPO_ROOT/ios/XRay.xcframework}"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/build/xray-ios-release}"
 NOTES_FILE="${NOTES_FILE:-$REPO_ROOT/doc/release/$RELEASE_TAG.md}"

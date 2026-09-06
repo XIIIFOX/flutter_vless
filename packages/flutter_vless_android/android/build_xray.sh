@@ -1,10 +1,18 @@
 #!/bin/bash
 set -euo pipefail
 
-# Configuration
-XRAY_REPO="https://github.com/XTLS/Xray-core"
+# Build the pinned source plus the reviewed Android FD-protection overlay.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+CORE_MODULE_VERSION="v1.260327.1-0.20260728075948-5ca6f4b7d4dc"
 XRAY_VERSION="${XRAY_VERSION:-v26.7.28}"
 TARGET_DIR="${TARGET_DIR:-../../../android_runtime/xray_android/src/main/jniLibs}"
+mkdir -p "$TARGET_DIR"
+TARGET_DIR="$(cd "$TARGET_DIR" && pwd)"
+if [ "$XRAY_VERSION" != "v26.7.28" ]; then
+    echo "The protection overlay requires Xray v26.7.28; review before changing core versions." >&2
+    exit 1
+fi
 NDK_PATH="${ANDROID_NDK_HOME:-$HOME/Library/Android/sdk/ndk/28.2.13676358}"
 
 # Check NDK
@@ -28,19 +36,15 @@ if [ ! -d "$TOOLCHAIN" ]; then
     exit 1
 fi
 
-# Clone Xray if not exists
-if [ ! -d "Xray-core" ]; then
-    echo "Cloning Xray-core..."
-    git clone "$XRAY_REPO"
-else
-    echo "Xray-core directory exists, pulling latest..."
-    cd Xray-core && git fetch --tags && cd ..
-fi
-
-cd Xray-core
-git fetch --tags
-git checkout "$XRAY_VERSION"
-cd ..
+# Never patch a developer checkout or the shared Go module cache.
+SOURCE_DIR="$SCRIPT_DIR/../../../build/security-android-xray/Xray-core"
+MODULE_JSON="$(go mod download -json "github.com/xtls/xray-core@$CORE_MODULE_VERSION")"
+MODULE_DIR="$(printf '%s' "$MODULE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["Dir"])')"
+rm -rf "$SOURCE_DIR"
+mkdir -p "$(dirname "$SOURCE_DIR")"
+cp -R "$MODULE_DIR" "$SOURCE_DIR"
+chmod -R u+w "$SOURCE_DIR"
+python3 "$SCRIPT_DIR/xray-protect/apply.py" "$SOURCE_DIR"
 
 # Build Function
 build_xray() {
@@ -73,21 +77,21 @@ build_xray() {
         return 1
     fi
 
-    cd Xray-core
+    cd "$SOURCE_DIR"
     
     # Build with 16KB page alignment
     if go build -v -trimpath -buildvcs=false \
         -gcflags "all=-l=4" \
         -ldflags "-X github.com/xtls/xray-core/core.build=${XRAY_VERSION} -s -w -buildid= -checklinkname=0 -linkmode=external -extldflags=${LDFLAGS}" \
         -buildmode=pie \
-        -o "../${OUTPUT_DIR}/libxray.so" ./main; then
+        -o "${OUTPUT_DIR}/libxray.so" ./main; then
         echo "Success: ${OUTPUT_DIR}/libxray.so created."
     else
         echo "Failed to build for ${ARCH_NAME}"
         return 1
     fi
     
-    cd ..
+    cd "$SCRIPT_DIR"
 }
 
 # Build for Architectures

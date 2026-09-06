@@ -9,7 +9,19 @@ Xray's asset directory from inside the Go runtime.
 
 Current target Xray-core version: `v26.7.28`.
 Release commit used by the script: `5ca6f4b7d4dc20a881d4330e498892697627ec0c`.
-Current wrapper artifact tag: `xray-ios-v26.7.28-r2`.
+Current wrapper artifact tag: `xray-ios-v26.7.28-r3`.
+The privacy revision adds `XRayStartPrivate`; all iOS entry points require this
+symbol so an older cached framework fails to link instead of bypassing policy.
+It disables raw access/error output, sanitizes startup/runtime callbacks, and
+turns off REALITY debug prints and TLS key files, including XHTTP downloads and
+Realm finalmask TLS. Xray-core remains 26.7.28; the H2BUF cap remains 128 KiB.
+
+The release archive is available at
+`https://github.com/XIIIFOX/flutter_vless/releases/download/xray-ios-v26.7.28-r3/XRay.xcframework.zip`
+with SHA-256 `3792dc3ae6ffa42922c4604827812e48e29307d381d5db40a2c3932e0b779a60`.
+SwiftPM and CocoaPods verify this checksum when downloading the framework.
+A rebuild may produce a different archive checksum; use a new revision and
+coordinate both manifests with the exact artifact.
 
 Requirements:
 

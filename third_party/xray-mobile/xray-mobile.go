@@ -10,6 +10,7 @@ import (
 
 	_ "github.com/xtls/xray-core/main/distro/all"
 
+	xlog "github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/platform"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/stats"
@@ -94,28 +95,38 @@ func SetMemoryLimit() {
 }
 
 func Start(config []byte, logger Logger) error {
-	conf, err := serial.DecodeJSONConfig(bytes.NewReader(config))
+	// Cover decode/build warnings before core.New installs its configured logger.
+	xlog.RegisterHandler(privateLogHandler{})
+	prepared, level, enabled, err := privateConfig(config)
 	if err != nil {
-		logger.LogInput("Config load error: " + err.Error())
-		return err
+		return startupFailure(logger, "privacy configuration")
+	}
+	xlog.RegisterHandler(privateLogHandler{logger: logger, level: level, enabled: enabled, phase: "configuration"})
+	conf, err := serial.DecodeJSONConfig(bytes.NewReader(prepared))
+	if err != nil {
+		return startupFailure(logger, "decode configuration")
 	}
 	pbConfig, err := conf.Build()
 	if err != nil {
-		return err
+		return startupFailure(logger, "build configuration")
 	}
 	instance, err := core.New(pbConfig)
 	if err != nil {
-		logger.LogInput("Create XRay error: " + err.Error())
-		return err
+		return startupFailure(logger, "create core")
 	}
+	xlog.RegisterHandler(privateLogHandler{logger: logger, level: level, enabled: enabled, phase: "runtime"})
 	err = instance.Start()
 	if err != nil {
-		logger.LogInput("Start XRay error: " + err.Error())
-		return err
+		instance.Close()
+		return startupFailure(logger, "start core")
 	}
 	coreInstance = instance
 	return nil
 }
+
+// StartPrivate is an additive capability symbol. Swift entry points require it
+// so an older local framework cannot silently bypass the mobile privacy policy.
+func StartPrivate(config []byte, logger Logger) error { return Start(config, logger) }
 
 func Stop() {
 	if coreInstance != nil {

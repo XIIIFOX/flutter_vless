@@ -58,6 +58,9 @@
 
 ### Windows
 
+* Resolved the outbound gateway through the Windows API instead of parsing
+  English `ipconfig` output.
+
 * Waited for the TUN IPv4 address to become usable before installing capture
   routes, including when reconnecting after adapter recreation.
 

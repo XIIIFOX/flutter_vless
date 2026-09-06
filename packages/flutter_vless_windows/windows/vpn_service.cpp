@@ -1,6 +1,7 @@
 #include "vpn_service.h"
 #include "diagnostics_log.h"
 #include "xray_config.h"
+#include "windows_network.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -954,24 +955,5 @@ std::string VpnService::ResolveToIP(const std::string& address) {
 
 // Get default gateway IP
 std::string VpnService::GetDefaultGateway() {
-  // Use ipconfig to get default gateway
-  FILE* pipe = _popen("ipconfig", "r");
-  if (!pipe) return "";
-  
-  char buffer[256];
-  std::string result;
-  while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-    result += buffer;
-  }
-  _pclose(pipe);
-  
-  // Look for "Default Gateway" line
-  std::regex gateway_pattern("Default Gateway[^:]*:[\\s]+(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})");
-  std::smatch match;
-  
-  if (std::regex_search(result, match, gateway_pattern)) {
-    return match[1].str();
-  }
-  
-  return "";
+  return flutter_vless::DefaultIpv4Gateway();
 }

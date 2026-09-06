@@ -16,9 +16,15 @@
 #include "v2ray_manager.h"
 #include "diagnostics_log.h"
 #include <windows.h>
+#include "windows_network.h"
 int main(int argc,char** argv) {
   if(argc<2)return 2;
   std::string action=argv[1];
+  if(action=="gateway") {
+    const auto gateway = flutter_vless::DefaultIpv4Gateway();
+    std::cout << gateway << std::endl;
+    return gateway.empty() ? 5 : 0;
+  }
   if(action=="wintun") {
     HMODULE dll=LoadLibraryW(L"wintun.dll");
     if(!dll){std::cout<<"WINTUN_LOAD_ERROR="<<GetLastError()<<std::endl;return 10;}

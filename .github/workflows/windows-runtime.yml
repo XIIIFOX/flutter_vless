@@ -20,6 +20,13 @@ jobs:
       - name: Build native regression tests and runtime probe
         shell: cmd
         run: tool\windows\build_native_tests.cmd
+      - name: Verify native gateway selection
+        shell: pwsh
+        run: |
+          $gateway = & build/windows-runtime/runtime_probe.exe gateway
+          if ($LASTEXITCODE -ne 0) { throw 'Native gateway lookup failed' }
+          $expected = (Find-NetRoute -RemoteIPAddress 8.8.8.8 | Where-Object { $_.DestinationPrefix }).NextHop
+          if ($gateway.Trim() -notin $expected) { throw 'Native gateway differs from Windows routing API' }
       - name: Download and verify August 2026 Windows runtime
         shell: pwsh
         run: |

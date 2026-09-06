@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import socket
 import socketserver
+import ssl
 import subprocess
 import threading
 import time
@@ -94,8 +95,21 @@ def request(host, vpn):
         return data.split(b"\r\n\r\n", 1)[1].decode()
 
 
-def config(reverse):
-    return {
+def external_http(address):
+    # Direct baseline and in-tunnel request use the same address and HTTP Host.
+    # This detects a freedom outbound looping back into the TUN default route.
+    with socket.create_connection((address, 443), timeout=4) as connection, \
+            ssl.create_default_context().wrap_socket(connection, server_hostname="api.ipify.org") as sock:
+        sock.settimeout(4)
+        sock.sendall(b"GET / HTTP/1.1\r\nHost: api.ipify.org\r\nConnection: close\r\n\r\n")
+        data = sock.recv(4096)
+        if not data.startswith(b"HTTP/1.1 200") and not data.startswith(b"HTTP/1.0 200"):
+            raise RuntimeError("public HTTP control did not return 200")
+        return "HTTP 200"
+
+
+def config(reverse, external_address=None):
+    profile = {
         "log": {"loglevel": "warning"},
         "dns": {"hosts": {h: "127.0.0.1" for h in ("2ip.ru", "2ip.io", "myip.com")},
                 "servers": ["localhost"]},
@@ -109,6 +123,11 @@ def config(reverse):
         "routing": {"domainStrategy": "AsIs", "rules": [
             {"type": "field", "domain": ["domain:myip.com"] if reverse else ["domain:ru", "domain:io"],
              "outboundTag": "direct"}]}}
+    if external_address:
+        profile["dns"]["hosts"]["api.ipify.org"] = external_address
+        profile["routing"]["rules"].append(
+            {"type": "field", "domain": ["full:api.ipify.org"], "outboundTag": "direct"})
+    return profile
 
 
 def main():
@@ -124,7 +143,12 @@ def main():
     for server in servers:
         threading.Thread(target=server.serve_forever, daemon=True).start()
     results = []
+    external_address = None
     try:
+        if args.vpn:
+            external_address = socket.gethostbyname("api.ipify.org")
+            baseline = external_http(external_address)
+            results.append(dict(check="external direct baseline", actual=baseline, passed=True))
         if args.vpn:
             driver = subprocess.run([str(probe), "wintun"], cwd=directory,
                                     capture_output=True, text=True, timeout=30)
@@ -133,7 +157,7 @@ def main():
         for reverse in (False, True):
             label = ("vpn" if args.vpn else "proxy") + ("-reverse" if reverse else "")
             profile = directory / (label + ".json")
-            profile.write_text(json.dumps(config(reverse)))
+            profile.write_text(json.dumps(config(reverse, external_address)))
             with (directory / (label + ".log")).open("w") as log:
                 process = subprocess.Popen([str(probe), "run-vpn" if args.vpn else "run-proxy",
                                             str(profile), "22"], cwd=directory, stdout=log, stderr=log)
@@ -146,6 +170,15 @@ def main():
                         except Exception as error:
                             actual = type(error).__name__ + ": " + str(error)
                         row = dict(mode=label, host=host, expected=expected, actual=actual, passed=actual == expected)
+                        results.append(row)
+                        print(json.dumps(row), flush=True)
+                    if args.vpn:
+                        try:
+                            actual = external_http(external_address)
+                        except Exception as error:
+                            actual = type(error).__name__ + ": " + str(error)
+                        row = dict(mode=label, check="external direct through VPN", actual=actual,
+                                   passed=actual == "HTTP 200")
                         results.append(row)
                         print(json.dumps(row), flush=True)
                     code = process.wait(timeout=35)

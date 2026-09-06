@@ -199,11 +199,9 @@ jobs:
           YAML
       - name: Build Windows diagnostics store unit test
         shell: cmd
-        run: >-
-          cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX
-          packages\flutter_vless_windows\windows\diagnostics_log.cpp
-          packages\flutter_vless_windows\windows\diagnostics_log_test.cpp
-          /Fe:diagnostics_log_test.exe && diagnostics_log_test.exe
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX packages\flutter_vless_windows\windows\diagnostics_log.cpp packages\flutter_vless_windows\windows\diagnostics_log_test.cpp /Fe:diagnostics_log_test.exe && diagnostics_log_test.exe
       - name: Build example Windows app
         working-directory: example
         run: |

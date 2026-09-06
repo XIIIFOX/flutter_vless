@@ -41,6 +41,7 @@ jobs:
         working-directory: example
         run: |
           flutter pub get
+          flutter test test/widget_test.dart
           flutter build windows --release
       - name: Bundle verified runtime with example
         shell: pwsh

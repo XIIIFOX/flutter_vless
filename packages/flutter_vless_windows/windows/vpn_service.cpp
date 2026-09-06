@@ -9,6 +9,8 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <iphlpapi.h>
+#include <netioapi.h>
 #include <wininet.h>
 #include <process.h>
 #include <shlwapi.h>
@@ -20,6 +22,26 @@
 #pragma comment(lib, "Ws2_32.lib")
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "version.lib")
+
+#pragma comment(lib, "iphlpapi.lib")
+
+namespace {
+std::optional<std::string> DefaultInterfaceName() {
+  MIB_IF_ROW2 row{};
+  // Select the current outbound route before the plugin installs its TUN route.
+  if (GetBestInterface(0x08080808, &row.InterfaceIndex) != NO_ERROR ||
+      GetIfEntry2(&row) != NO_ERROR) return std::nullopt;
+  const int size = WideCharToMultiByte(CP_UTF8, 0, row.Alias, -1, nullptr, 0, nullptr, nullptr);
+  if (size <= 1) return std::nullopt;
+  std::string name(static_cast<size_t>(size), '\0');
+  if (!WideCharToMultiByte(CP_UTF8, 0, row.Alias, -1, name.data(), size, nullptr, nullptr)) {
+    return std::nullopt;
+  }
+  name.resize(static_cast<size_t>(size - 1));
+  if (name == "flutter_vless_tun") return std::nullopt;
+  return name;
+}
+}  // namespace
 
 VpnService::VpnService() {
   xray_executable_path_ = FindXrayExecutable().value_or(fs::path());
@@ -105,9 +127,11 @@ void VpnService::RunVpn() {
   // === PHASE 1: Prepare and start Xray ===
   // Inject API, DNS, and routing configuration required for VPN mode
   std::string config_with_api = InjectApiConfig(current_config_);
-  if (config_with_api.empty()) {
+  const auto outbound_interface = DefaultInterfaceName();
+  if (config_with_api.empty() || !outbound_interface ||
+      !flutter_vless::xray_config::BindDirectOutbounds(config_with_api, *outbound_interface)) {
     flutter_vless::DiagnosticsLog::Instance().Append(
-        "runtime", "Invalid Windows VPN configuration");
+        "runtime", "Could not prepare Windows VPN configuration and direct interface");
     is_running_.store(false);
     return;
   }

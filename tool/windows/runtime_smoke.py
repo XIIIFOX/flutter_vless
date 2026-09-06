@@ -110,7 +110,7 @@ def external_http(address):
 
 def config(reverse, external_address=None):
     profile = {
-        "log": {"loglevel": "warning"},
+        "log": {"loglevel": "warning", "access": "none"},
         "dns": {"hosts": {h: "127.0.0.1" for h in ("2ip.ru", "2ip.io", "myip.com")},
                 "servers": ["localhost"]},
         "inbounds": [{"port": 18580, "protocol": "socks", "tag": "socks-in",
@@ -160,9 +160,17 @@ def main():
             profile.write_text(json.dumps(config(reverse, external_address)))
             with (directory / (label + ".log")).open("w") as log:
                 process = subprocess.Popen([str(probe), "run-vpn" if args.vpn else "run-proxy",
-                                            str(profile), "22"], cwd=directory, stdout=log, stderr=log)
+                                            str(profile), "35"], cwd=directory, stdout=log, stderr=log)
                 try:
-                    time.sleep(7 if args.vpn else 3)
+                    if args.vpn:
+                        deadline = time.monotonic() + 20
+                        while "TUN interface configured and default route added" not in (directory / (label + ".log")).read_text(errors="replace"):
+                            if process.poll() is not None or time.monotonic() >= deadline:
+                                raise RuntimeError("VPN network setup did not become ready")
+                            time.sleep(0.25)
+                        time.sleep(1)
+                    else:
+                        time.sleep(3)
                     for host in ("2ip.ru", "2ip.io", "myip.com"):
                         expected = "DIRECT-FIXTURE" if ((host == "myip.com") == reverse) else "PROXY-FIXTURE"
                         try:

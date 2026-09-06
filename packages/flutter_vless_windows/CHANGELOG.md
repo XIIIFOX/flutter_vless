@@ -1,5 +1,10 @@
 ## Unreleased
 
+* Exposed the VPN Diagnostics button in the Windows example.
+
+* Bound Windows `direct` transports to the pre-tunnel network interface to prevent
+  domain bypass connections from looping back into the VPN.
+
 * Preserved Xray domain rules, DNS settings, and server ports during proxy/VPN
   configuration. Selected SOCKS listeners structurally regardless of key order.
 * Added a dedicated API listener without duplicate routing blocks.

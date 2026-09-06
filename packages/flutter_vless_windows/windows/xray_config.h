@@ -84,6 +84,31 @@ inline bool PrepareProxy(std::string& text,
   return SocksPort(text).has_value();
 }
 
+// Freedom sockets must use the interface selected before installing the TUN
+// default route; otherwise a direct domain recursively re-enters tun2socks.
+inline bool BindDirectOutbounds(std::string& text, const std::string& interface_name) {
+  auto config = Parse(text);
+  if (interface_name.empty() || !config.is_object() ||
+      !config.contains("outbounds") || !config["outbounds"].is_array()) return false;
+  for (auto& outbound : config["outbounds"]) {
+    if (!outbound.is_object() || !outbound.contains("protocol") ||
+        outbound["protocol"] != "freedom") continue;
+    if (!outbound.contains("streamSettings") || outbound["streamSettings"].is_null()) {
+      outbound["streamSettings"] = Json::object();
+    }
+    if (!outbound["streamSettings"].is_object()) return false;
+    auto& stream = outbound["streamSettings"];
+    if (!stream.contains("sockopt") || stream["sockopt"].is_null()) stream["sockopt"] = Json::object();
+    if (!stream["sockopt"].is_object()) return false;
+    auto& options = stream["sockopt"];
+    if (!options.contains("interface") || options["interface"].is_null() ||
+        options["interface"] == "") options["interface"] = interface_name;
+    if (!options["interface"].is_string()) return false;
+  }
+  text = config.dump();
+  return true;
+}
+
 inline std::optional<std::string> PrepareVpn(const std::string& text) {
   auto config = Parse(text);
   if (!SocksPort(text) || !AddApi(config, 10086)) return std::nullopt;

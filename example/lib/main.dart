@@ -472,7 +472,7 @@ class _HomePageState extends State<HomePage> {
               icon: const Icon(Icons.timer),
               label: const Text('Delay'),
             ),
-            if (Platform.isIOS || Platform.isMacOS)
+            if (Platform.isIOS || Platform.isMacOS || Platform.isWindows)
               ElevatedButton.icon(
                 onPressed: _showProviderDiagnostics,
                 icon: const Icon(Icons.bug_report_outlined),

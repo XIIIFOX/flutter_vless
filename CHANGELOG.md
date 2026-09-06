@@ -58,6 +58,11 @@
 
 ### Windows
 
+* Exposed the VPN Diagnostics button in the Windows example.
+
+* Bound Windows `direct` transports to the pre-tunnel network interface to prevent
+  domain bypass connections from looping back into the VPN.
+
 * Preserved domain routing, DNS settings, and outbound server ports when preparing
   Xray configurations. SOCKS listener detection now uses JSON structure and is
   independent of property order; occupied ports are replaced only on inbounds.

@@ -38,6 +38,15 @@ int main() {
   Check(after["outbounds"] == before["outbounds"], "VPN outbounds preserved");
   Check(after["api"]["listen"] == "127.0.0.1:10086", "VPN API listener");
   Check(PrepareVpn(*vpn) == vpn, "VPN preparation is idempotent");
+  std::string bound = *vpn;
+  Check(BindDirectOutbounds(bound, "Ethernet"), "bind direct transport");
+  after = Parse(bound);
+  Check(after["outbounds"][1]["streamSettings"]["sockopt"]["interface"] == "Ethernet", "direct uses underlay");
+  Check(after["outbounds"][0] == before["outbounds"][0], "proxy transport preserved");
+  Check(after["routing"] == before["routing"], "binding preserves domain rules");
+  Check(BindDirectOutbounds(bound, "Wi-Fi"), "preserve explicit interface");
+  Check(Parse(bound)["outbounds"][1]["streamSettings"]["sockopt"]["interface"] == "Ethernet", "explicit binding respected");
+  Check(!BindDirectOutbounds(bound, ""), "missing underlay rejected");
   Check(!SocksPort(R"({"outbounds":[{"protocol":"socks","port":443}]})"), "missing inbound");
   Check(!PrepareVpn("{bad json}"), "invalid JSON rejected");
   Check(!PrepareVpn(R"({"inbounds":[{"protocol":"socks","port":65536}]})"), "invalid port rejected");

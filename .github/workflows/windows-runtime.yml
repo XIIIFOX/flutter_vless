@@ -54,12 +54,15 @@ jobs:
         with:
           name: windows-runtime-and-logs
           path: build/windows-runtime
+      - name: Install example dependencies
+        working-directory: example
+        run: flutter pub get
+      - name: Test Windows example diagnostics button
+        working-directory: example
+        run: flutter test test/widget_test.dart
       - name: Build example Windows application
         working-directory: example
-        run: |
-          flutter pub get
-          flutter test test/widget_test.dart
-          flutter build windows --release
+        run: flutter build windows --release
       - name: Bundle verified runtime with example
         shell: pwsh
         run: |

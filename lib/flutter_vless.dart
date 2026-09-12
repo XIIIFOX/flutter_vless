@@ -113,9 +113,16 @@ class FlutterVless {
   /// [bypassSubnets] contains CIDR routes that should be excluded from the
   /// tunnel on platforms that support route exclusions. Use it for local LAN,
   /// DNS, server-host, or app-specific bypass behavior.
+  /// iOS VPN sessions reject non-empty system route exclusions. Use Xray
+  /// `direct` routing rules to bypass selected destinations while retaining
+  /// mandatory traffic protection during connection and recovery.
   ///
   /// Set [proxyOnly] to `true` when the app should start local Xray proxy
   /// behavior without installing a system VPN or Packet Tunnel route.
+  ///
+  /// On iOS, [geoAssetsDirectory] can select an absolute App Group directory
+  /// containing non-empty `geoip.dat` and `geosite.dat` files for this session.
+  /// Omit it to use Xray's bundled/default asset lookup.
   ///
   /// [notificationDisconnectButtonName] controls the Android foreground
   /// notification disconnect action label.
@@ -125,6 +132,7 @@ class FlutterVless {
     List<String>? blockedApps,
     List<String>? bypassSubnets,
     bool proxyOnly = false,
+    String? geoAssetsDirectory,
     String notificationDisconnectButtonName = "DISCONNECT",
   }) async {
     final normalizedConfig = _normalizeConfigString(config);
@@ -135,6 +143,7 @@ class FlutterVless {
       blockedApps: blockedApps,
       proxyOnly: proxyOnly,
       bypassSubnets: bypassSubnets,
+      geoAssetsDirectory: geoAssetsDirectory,
       notificationDisconnectButtonName: notificationDisconnectButtonName,
     );
   }
@@ -155,12 +164,19 @@ class FlutterVless {
   ///
   /// Returns delay in milliseconds, or the platform-specific failure value when
   /// the native backend cannot complete the probe.
+  ///
+  /// On iOS, [geoAssetsDirectory] has the same behavior and validation as the
+  /// parameter on [startVless].
   Future<int> getServerDelay(
       {required String config,
-      String url = 'https://google.com/generate_204'}) async {
+      String url = 'https://google.com/generate_204',
+      String? geoAssetsDirectory}) async {
     final normalizedConfig = _normalizeConfigString(config);
-    return await VlessPlatform.instance
-        .getServerDelay(config: normalizedConfig, url: url);
+    return await VlessPlatform.instance.getServerDelay(
+      config: normalizedConfig,
+      url: url,
+      geoAssetsDirectory: geoAssetsDirectory,
+    );
   }
 
   /// Measures delay through the currently connected runtime.
@@ -179,6 +195,21 @@ class FlutterVless {
   /// `xray.exe`.
   Future<String> getCoreVersion() async {
     return await VlessPlatform.instance.getCoreVersion();
+  }
+
+  /// Returns bounded native diagnostics for the active or most recent VPN or
+  /// proxy-only runtime.
+  ///
+  /// The snapshot is intended for support screens and failure reports. Its
+  /// contents differ by platform and can include Xray output, Packet Tunnel or
+  /// VPN-service diagnostics, and tun2socks output. The format is deliberately
+  /// human-readable and is not a stable serialization contract.
+  ///
+  /// Returns an empty string when the platform has not recorded diagnostics
+  /// yet, for example before the first connection attempt. Stateless
+  /// [getServerDelay] probes are deliberately excluded from this snapshot.
+  Future<String> getProviderDebugSnapshot() async {
+    return await VlessPlatform.instance.getProviderDebugSnapshot();
   }
 
   /// Parse a share link, raw Xray JSON config, or subscription payload.

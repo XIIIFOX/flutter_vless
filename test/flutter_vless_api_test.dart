@@ -21,6 +21,9 @@ void main() {
       if (call.method == 'getServerDelay') {
         return 77;
       }
+      if (call.method == 'getProviderDebugSnapshot') {
+        return 'native diagnostics';
+      }
       return null;
     });
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -75,6 +78,7 @@ void main() {
       blockedApps: ['com.blocked.app'],
       bypassSubnets: ['172.16.0.0/12'],
       proxyOnly: false,
+      geoAssetsDirectory: '/private/app-group/geodata',
       notificationDisconnectButtonName: 'STOP',
     );
 
@@ -86,6 +90,7 @@ void main() {
       'blocked_apps': ['com.blocked.app'],
       'bypass_subnets': ['172.16.0.0/12'],
       'proxy_only': false,
+      'geo_assets_directory': '/private/app-group/geodata',
       'notificationDisconnectButtonName': 'STOP',
     });
   });
@@ -149,5 +154,15 @@ void main() {
       'config': validConfig,
       'url': 'https://example.com/generate_204',
     });
+  });
+
+  test('P1 getProviderDebugSnapshot forwards to the native log method',
+      () async {
+    final plugin = FlutterVless(onStatusChanged: (_) {});
+
+    expect(await plugin.getProviderDebugSnapshot(), 'native diagnostics');
+    expect(calls, hasLength(1));
+    expect(calls.single.method, 'getProviderDebugSnapshot');
+    expect(calls.single.arguments, isNull);
   });
 }

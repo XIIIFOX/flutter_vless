@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'flutter_vless_macos'
-  s.version          = '1.1.5'
+  s.version          = '1.1.6'
   s.summary          = 'macOS implementation of the flutter_vless plugin.'
   s.description      = <<-DESC
 macOS implementation of the flutter_vless plugin.
@@ -27,9 +27,9 @@ macOS implementation of the flutter_vless plugin.
       exit 0
     fi
 
-    DEFAULT_FRAMEWORK_URL="https://github.com/XIIIFOX/flutter_vless/releases/download/xray-macos-v26.7.11/XRay.xcframework.zip"
+    DEFAULT_FRAMEWORK_URL="https://github.com/XIIIFOX/flutter_vless/releases/download/xray-macos-v26.7.28/XRay.xcframework.zip"
     FRAMEWORK_URL="${FLUTTER_VLESS_MACOS_FRAMEWORK_URL:-$DEFAULT_FRAMEWORK_URL}"
-    FRAMEWORK_SHA256="${FLUTTER_VLESS_MACOS_FRAMEWORK_SHA256:-4cb8f9aa86e34d8432c50bb1abdafde25ed8185f545bd4d43d98400aa79d43c2}"
+    FRAMEWORK_SHA256="${FLUTTER_VLESS_MACOS_FRAMEWORK_SHA256:-be0102278d72659086d6b7235adff20a07bdd4966a003f5cf3eeae5850ceb8ab}"
 
     rm -rf "$FRAMEWORK_DIR" "$FRAMEWORK_ZIP"
 

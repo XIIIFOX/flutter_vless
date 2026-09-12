@@ -31,7 +31,7 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
                                 "port": 2043,
                                 "users": [
                                     [
-                                        "id": "b94da146-a56e-49d7-af4c-a68c9065cbfd",
+                                        "id": "22222222-2222-4222-8222-222222222222",
                                         "encryption": Self.vlessEncryption,
                                         "level": 8,
                                         "security": "auto"
@@ -45,7 +45,7 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
                         "security": "none",
                         "tlsSettings": ["allowInsecure": false],
                         "xHTTPSettings": [
-                            "host": "s3.storage.selcloud.ru",
+                            "host": "storage.example.com",
                             "path": "/my-bucket",
                             "mode": "stream-up"
                         ],
@@ -58,7 +58,7 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
             "routing": ["domainStrategy": "IPIfNonMatch", "rules": []]
         ])
 
-        let result = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: input))
+        let result = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: input, resolveIPv4: { _ in "203.0.113.10" }))
         let output = try decodedObject(result.data)
         let log = try XCTUnwrap(output["log"] as? [String: Any])
         let routing = try XCTUnwrap(output["routing"] as? [String: Any])
@@ -72,11 +72,11 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
         let rules = try XCTUnwrap(routing["rules"] as? [[String: Any]])
 
         XCTAssertTrue(result.proxyUsesXhttp)
-        XCTAssertEqual(log["access"] as? String, "")
-        XCTAssertEqual(log["error"] as? String, "")
+        XCTAssertEqual(log["access"] as? String, "none")
+        XCTAssertEqual(log["error"] as? String, "none")
         XCTAssertEqual(log["loglevel"] as? String, "warning")
         XCTAssertEqual(log["dnsLog"] as? Bool, false)
-        XCTAssertNil(output["dns"])
+        XCTAssertNotNil(output["dns"])
         XCTAssertEqual(routing["domainStrategy"] as? String, "AsIs")
         XCTAssertEqual(users[0]["encryption"] as? String, Self.vlessEncryption)
         XCTAssertEqual(vnext[0]["address"] as? String, "proxy.example.com")
@@ -84,14 +84,14 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
         XCTAssertNil(streamSettings["xHTTPSettings"])
         XCTAssertNotNil(streamSettings["xhttpSettings"])
         XCTAssertNil((streamSettings["tlsSettings"] as? [String: Any])?["allowInsecure"])
-        XCTAssertNil(streamSettings["sockopt"])
-        XCTAssertEqual(rules.first?["network"] as? String, "udp")
-        XCTAssertEqual(String(describing: rules.first?["port"] ?? ""), "443")
-        XCTAssertEqual(rules.first?["outboundTag"] as? String, "block")
+        XCTAssertEqual((streamSettings["sockopt"] as? [String: Any])?["domainStrategy"] as? String, "ForceIP")
+        XCTAssertEqual(rules.first(where: { String(describing: $0["port"] ?? "") == "443" })?["network"] as? String, "udp")
+        XCTAssertEqual(String(describing: rules.first(where: { String(describing: $0["port"] ?? "") == "443" })?["port"] ?? ""), "443")
+        XCTAssertEqual(rules.first(where: { String(describing: $0["port"] ?? "") == "443" })?["outboundTag"] as? String, "block")
 
         let sniffing = try XCTUnwrap(inbounds[0]["sniffing"] as? [String: Any])
         XCTAssertEqual(sniffing["enabled"] as? Bool, true)
-        XCTAssertEqual(sniffing["routeOnly"] as? Bool, false)
+        XCTAssertEqual(sniffing["routeOnly"] as? Bool, true)
         XCTAssertEqual(sniffing["destOverride"] as? [String], ["http", "tls", "quic"])
     }
 
@@ -107,7 +107,7 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
                             [
                                 "address": "reality.example.com",
                                 "port": 443,
-                                "users": [["id": "b94da146-a56e-49d7-af4c-a68c9065cbfd", "encryption": "none"]]
+                                "users": [["id": "22222222-2222-4222-8222-222222222222", "encryption": "none"]]
                             ]
                         ]
                     ],
@@ -125,8 +125,9 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
         let vnext = try XCTUnwrap(settings["vnext"] as? [[String: Any]])
 
         XCTAssertFalse(result.proxyUsesXhttp)
-        XCTAssertEqual(vnext[0]["address"] as? String, "203.0.113.10")
-        XCTAssertTrue(result.logMessages.contains("Resolved proxy server domain to IPv4 in Xray config"))
+        XCTAssertEqual(vnext[0]["address"] as? String, "reality.example.com")
+        XCTAssertEqual(result.bootstrapAddresses, ["203.0.113.10"])
+        XCTAssertTrue(result.logMessages.contains("Configured system DNS over TCP through the selected proxy"))
     }
 
     func testParsesInboundPortAndProxyServerAcrossProtocols() throws {
@@ -165,7 +166,7 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
                             [
                                 "address": "proxy.example.com",
                                 "port": 2043,
-                                "users": [["id": "b94da146-a56e-49d7-af4c-a68c9065cbfd", "encryption": "none"]]
+                                "users": [["id": "22222222-2222-4222-8222-222222222222", "encryption": "none"]]
                             ]
                         ]
                     ],
@@ -185,17 +186,17 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
             ]
         ])
 
-        let result = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: input))
+        let result = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: input, resolveIPv4: { _ in "203.0.113.10" }))
         let output = try decodedObject(result.data)
         let routing = try XCTUnwrap(output["routing"] as? [String: Any])
         let rules = try XCTUnwrap(routing["rules"] as? [[String: Any]])
 
-        XCTAssertEqual(rules.count, 1)
+        XCTAssertEqual(rules.count, 4)
         XCTAssertFalse(result.logMessages.contains("Added XHTTP UDP/443 block rule to force browser TCP fallback"))
     }
 
     private static let vlessEncryption =
-        "mlkem768x25519plus.native.1rtt.100-500-2000.75-0-100.80-0-5000.gtmOXB2AN_r905czmOIr6dKq_YDdEJB8RWGqfsXurns"
+        "mlkem768x25519plus.native.1rtt.100-500-2000.75-0-100.80-0-5000.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 
     private func jsonData(_ object: Any) throws -> Data {
         try JSONSerialization.data(withJSONObject: object, options: [])

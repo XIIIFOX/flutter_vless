@@ -6,14 +6,14 @@ import 'package:flutter_vless/flutter_vless.dart';
 import 'xray_config_test_utils.dart';
 
 const visionSeedEncryption =
-    'mlkem768x25519plus.native.1rtt.100-500-2000.75-0-100.80-0-5000.gtmOXB2AN_r905czmOIr6dKq_YDdEJB8RWGqfsXurns';
+    'mlkem768x25519plus.native.1rtt.100-500-2000.75-0-100.80-0-5000.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
 
 void main() {
   group('P0 subscription imports', () {
     test('imports base64 share-link lists without dropping VLESS Encryption',
         () {
       final subscription = base64Encode(utf8.encode([
-        'vless://b94da146-a56e-49d7-af4c-a68c9065cbfd@example.com:2043?type=xhttp&host=s3.storage.selcloud.ru&path=/my-bucket&mode=stream-up&security=none&encryption=$visionSeedEncryption#XHTTP',
+        'vless://22222222-2222-4222-8222-222222222222@example.com:2043?type=xhttp&host=storage.example.com&path=/my-bucket&mode=stream-up&security=none&encryption=$visionSeedEncryption#XHTTP',
         'ss://YWVzLTEyOC1nY206cGFzcw@example.org:8388#SS',
       ].join('\n')));
 
@@ -34,12 +34,12 @@ proxies:
     type: vless
     server: clash.example.com
     port: 2043
-    uuid: b94da146-a56e-49d7-af4c-a68c9065cbfd
+    uuid: 22222222-2222-4222-8222-222222222222
     network: xhttp
     security: none
     encryption: $visionSeedEncryption
     xhttp-opts:
-      host: s3.storage.selcloud.ru
+      host: storage.example.com
       path: /my-bucket
       mode: stream-up
   - name: Unsupported TUIC
@@ -52,7 +52,7 @@ proxies:
           streamSettings(config)['xhttpSettings'] as Map<String, dynamic>;
 
       expect(firstVnextUser(config)['encryption'], visionSeedEncryption);
-      expect(xhttp['host'], 's3.storage.selcloud.ru');
+      expect(xhttp['host'], 'storage.example.com');
       expect(xhttp['path'], '/my-bucket');
       expect(xhttp['mode'], 'stream-up');
     });
@@ -70,11 +70,11 @@ proxies:
             'tag': 'xhttp',
             'server': 'sing-box.example.com',
             'server_port': 2043,
-            'uuid': 'b94da146-a56e-49d7-af4c-a68c9065cbfd',
+            'uuid': '22222222-2222-4222-8222-222222222222',
             'encryption': visionSeedEncryption,
             'transport': {
               'type': 'xhttp',
-              'host': 's3.storage.selcloud.ru',
+              'host': 'storage.example.com',
               'path': '/my-bucket',
               'mode': 'stream-up',
             },
@@ -126,7 +126,7 @@ proxies:
             'tag': 'httpupgrade',
             'server': 'upgrade.example.com',
             'server_port': 443,
-            'uuid': 'b94da146-a56e-49d7-af4c-a68c9065cbfd',
+            'uuid': '22222222-2222-4222-8222-222222222222',
             'transport': {
               'type': 'httpupgrade',
               'host': 'edge.example.com',

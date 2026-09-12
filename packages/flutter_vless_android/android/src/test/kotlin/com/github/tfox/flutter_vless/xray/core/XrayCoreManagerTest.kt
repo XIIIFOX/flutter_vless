@@ -12,6 +12,23 @@ import org.junit.Test
 
 class XrayCoreManagerTest {
     @Test
+    fun protectedVpnRejectsUncontrolledIcmpSocketsButKeepsNormalTransports() {
+        XrayCoreManager.requireProtectedSocketSupport(JSONObject("""{"streamSettings":{"network":"tcp"}}"""))
+        for (address in listOf("quic+local://dns.example", "QUIC+LOCAL://dns.example")) {
+            try {
+                XrayCoreManager.requireProtectedSocketSupport(JSONObject().put("DNS", JSONObject().put("Servers", JSONArray().put(address))))
+                org.junit.Assert.fail("Uncontrolled QUIC DNS sockets must be rejected")
+            } catch (_: IllegalArgumentException) { }
+        }
+        for (key in listOf("type", "Type")) {
+            val value = JSONObject().put("finalmask", JSONObject().put("udp", JSONArray().put(JSONObject().put(key, "XICMP"))))
+            try {
+                XrayCoreManager.requireProtectedSocketSupport(value)
+                org.junit.Assert.fail("Uncontrolled ICMP sockets must be rejected")
+            } catch (_: IllegalArgumentException) { }
+        }
+    }
+    @Test
     fun buildRuntimeConfigJson_normalizesFlatVlessAndKeepsEncryption() {
         val filesDir = File("build/test-files/android-normalize")
         val config = XrayConfig(
@@ -29,7 +46,7 @@ class XrayCoreManagerTest {
                       "settings": {
                         "address": "xhttp.example.com",
                         "port": 2043,
-                        "id": "b94da146-a56e-49d7-af4c-a68c9065cbfd",
+                        "id": "22222222-2222-4222-8222-222222222222",
                         "encryption": "$vlessEncryption",
                         "flow": "xtls-rprx-vision",
                         "level": 8
@@ -174,7 +191,7 @@ class XrayCoreManagerTest {
                             "port": 443,
                             "users": [
                               {
-                                "id": "b94da146-a56e-49d7-af4c-a68c9065cbfd",
+                                "id": "22222222-2222-4222-8222-222222222222",
                                 "encryption": "none",
                                 "flow": "xtls-rprx-vision"
                               }
@@ -304,6 +321,6 @@ class XrayCoreManagerTest {
 
     private companion object {
         const val vlessEncryption =
-            "mlkem768x25519plus.native.1rtt.100-500-2000.75-0-100.80-0-5000.gtmOXB2AN_r905czmOIr6dKq_YDdEJB8RWGqfsXurns"
+            "mlkem768x25519plus.native.1rtt.100-500-2000.75-0-100.80-0-5000.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
     }
 }

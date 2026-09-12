@@ -80,7 +80,7 @@ If your app already uses Flutter's generated values, check what
 The Android runtime is delivered as a Maven Central AAR:
 
 ```text
-dev.tfox.fluttervless:xray-android:26.7.11
+dev.tfox.fluttervless:xray-android:26.7.28
 ```
 
 The AAR contains `libxray.so` and `libtun2socks.so` for `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`, plus `geoip.dat` and `geosite.dat`. Keeping the runtime in Maven Central avoids Pub.dev archive limits while preserving the same files in the final Android app.

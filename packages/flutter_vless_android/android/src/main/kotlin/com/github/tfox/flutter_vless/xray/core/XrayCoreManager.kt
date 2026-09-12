@@ -16,6 +16,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.service.XrayVPNService
+import com.github.tfox.flutter_vless.xray.service.XraySocketProtector
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import com.github.tfox.flutter_vless.xray.utils.Utilities
 import org.json.JSONObject
@@ -37,6 +38,7 @@ object XrayCoreManager {
 
     private const val NOTIFICATION_ID = 1
     private const val TAG = "XrayCoreManager"
+    @Volatile
     private var xrayProcess: Process? = null
     private var countDownTimer: CountDownTimer? = null
     private var seconds = 0
@@ -275,19 +277,42 @@ object XrayCoreManager {
      * @param config The configuration object containing the user's settings.
      * @return true if started successfully, false otherwise.
      */
-    fun startCore(context: Service, config: XrayConfig): Boolean {
+    @Synchronized
+    fun startCore(context: Service, config: XrayConfig, protector: XraySocketProtector? = null): Boolean {
+        if (!destroyCurrentXrayProcess()) {
+            XrayDiagnosticsStore.append(
+                context.filesDir,
+                "runtime",
+                "Refused to start a new Android Xray session because the previous process did not stop"
+            )
+            return false
+        }
         AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_CONNECTING
         AppConfigs.V2RAY_CONFIG = config
 
         // 1. Prepare the configuration file
         val configFilesDir = context.filesDir
+        val diagnosticsGeneration = XrayDiagnosticsStore.reset(configFilesDir)
+        XrayDiagnosticsStore.append(
+            configFilesDir,
+            "runtime",
+            "Starting Android Xray session",
+            diagnosticsGeneration
+        )
         
         try {
             val configJson = buildRuntimeConfigJson(config, configFilesDir)
+            if (protector != null) requireProtectedSocketSupport(configJson)
             val configFile = File(context.filesDir, "config.json")
             configFile.writeText(configJson.toString())
         } catch (e: Exception) {
             Log.e(TAG, "Failed to write config file", e)
+            XrayDiagnosticsStore.append(
+                configFilesDir,
+                "runtime",
+                "Failed to write config file: ${e.message}",
+                diagnosticsGeneration
+            )
             return abortStart(context)
         }
 
@@ -296,6 +321,12 @@ object XrayCoreManager {
         val xrayExecutable = File(nativeLibraryDir, "libxray.so")
         if (!xrayExecutable.exists()) {
             Log.e(TAG, "Xray executable not found at ${xrayExecutable.absolutePath}")
+            XrayDiagnosticsStore.append(
+                configFilesDir,
+                "runtime",
+                "Xray executable not found at ${xrayExecutable.absolutePath}",
+                diagnosticsGeneration
+            )
             // Fallback or error
             return abortStart(context)
         }
@@ -316,13 +347,43 @@ object XrayCoreManager {
             // Set environment variables (XRAY_LOCATION_ASSET is crucial for finding geoip/geosite)
             val env = pb.environment()
             env["XRAY_LOCATION_ASSET"] = Utilities.getUserAssetsPath(context)
+            if (protector != null) {
+                env["FLUTTER_VLESS_PROTECT_SOCKET"] = protector.socketName
+            } else {
+                env.remove("FLUTTER_VLESS_PROTECT_SOCKET")
+            }
 
-            xrayProcess = pb.start()
+            val process = pb.start()
+            xrayProcess = process
+            if (protector != null && !protector.awaitVerified()) {
+                destroyCurrentXrayProcess()
+                XrayDiagnosticsStore.append(
+                    configFilesDir,
+                    "runtime",
+                    "Runtime socket protection was not verified; VPN startup refused",
+                    diagnosticsGeneration
+                )
+                return abortStart(context)
+            }
             Thread.sleep(300)
-            if (xrayProcess?.isAlive != true) {
-                val output = xrayProcess?.inputStream?.bufferedReader()?.readText().orEmpty()
+            if (!process.isAlive) {
+                val output = process.inputStream.bufferedReader().readText()
                 Log.e(TAG, "Xray process exited during startup. Output: $output")
-                xrayProcess = null
+                XrayDiagnosticsStore.append(
+                    configFilesDir,
+                    "xray",
+                    output,
+                    diagnosticsGeneration
+                )
+                XrayDiagnosticsStore.append(
+                    configFilesDir,
+                    "runtime",
+                    "Xray process exited during startup",
+                    diagnosticsGeneration
+                )
+                if (xrayProcess === process) {
+                    xrayProcess = null
+                }
                 return abortStart(context)
             }
             
@@ -336,24 +397,43 @@ object XrayCoreManager {
             // Monitor process in a separate thread to detect crash
             Thread {
                 try {
-                    xrayProcess?.inputStream?.bufferedReader()?.use { reader ->
+                    process.inputStream.bufferedReader().use { reader ->
                         reader.forEachLine { line ->
                             Log.d(TAG, "xray: $line")
+                            XrayDiagnosticsStore.append(
+                                configFilesDir,
+                                "xray",
+                                line,
+                                diagnosticsGeneration
+                            )
                         }
                     }
                     
-                    val exitCode = xrayProcess?.waitFor()
+                    val exitCode = process.waitFor()
                     Log.e(TAG, "Xray process exited with code $exitCode")
-                    if (AppConfigs.V2RAY_STATE == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED) {
-                        // Unexpected exit
-                        stopCore(context)
-                    }
+                    XrayDiagnosticsStore.append(
+                        configFilesDir,
+                        "runtime",
+                        "Xray process exited with code $exitCode",
+                        diagnosticsGeneration
+                    )
+                    stopCoreAfterUnexpectedExit(
+                        context,
+                        process,
+                        diagnosticsGeneration
+                    )
                 } catch (e: java.io.InterruptedIOException) {
                     // Expected when stopping
                 } catch (e: InterruptedException) {
                     // Expected when stopping
                 } catch (e: Exception) {
                     Log.e(TAG, "Error reading xray output", e)
+                    XrayDiagnosticsStore.append(
+                        configFilesDir,
+                        "runtime",
+                        "Error reading Xray output: ${e.message}",
+                        diagnosticsGeneration
+                    )
                 }
             }.start()
 
@@ -361,6 +441,12 @@ object XrayCoreManager {
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start Xray process", e)
+            XrayDiagnosticsStore.append(
+                configFilesDir,
+                "runtime",
+                "Failed to start Xray process: ${e.message}",
+                diagnosticsGeneration
+            )
             return abortStart(context)
         }
     }
@@ -371,16 +457,34 @@ object XrayCoreManager {
         return false
     }
 
+    /** These upstream paths open sockets outside Xray's controller interfaces. */
+    internal fun requireProtectedSocketSupport(value: Any?) {
+        when (value) {
+            is JSONObject -> value.keys().forEach { key ->
+                val child = value.opt(key)
+                require(!(key.equals("type", ignoreCase = true) && child is String && child.equals("xicmp", ignoreCase = true))) {
+                    "xicmp is unavailable in protected VPN mode"
+                }
+                requireProtectedSocketSupport(child)
+            }
+            is JSONArray -> for (index in 0 until value.length()) requireProtectedSocketSupport(value.opt(index))
+            is String -> require(!value.startsWith("quic+local://", ignoreCase = true)) {
+                "quic+local DNS is unavailable in protected VPN mode; use https+local or tcp+local"
+            }
+        }
+    }
+
+    /** Reads bounded diagnostics written by the dedicated VPN service process. */
+    fun getProviderDebugSnapshot(context: Context): String {
+        return XrayDiagnosticsStore.snapshot(context.filesDir)
+    }
+
     /**
      * Stops the Xray Core process and cleans up notifications.
      */
+    @Synchronized
     fun stopCore(context: Service) {
-        try {
-            xrayProcess?.destroy()
-            xrayProcess = null
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to destroy Xray process", e)
-        }
+        destroyCurrentXrayProcess()
 
         AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
         stopTimer()
@@ -389,6 +493,53 @@ object XrayCoreManager {
         notificationManager.cancel(NOTIFICATION_ID)
         
         sendDisconnectedBroadcast(context)
+    }
+
+    /** Applies an old monitor callback only while it still owns this session. */
+    @Synchronized
+    private fun stopCoreAfterUnexpectedExit(
+        context: Service,
+        process: Process,
+        diagnosticsGeneration: Long
+    ) {
+        if (xrayProcess !== process ||
+            XrayDiagnosticsStore.currentGeneration() != diagnosticsGeneration ||
+            AppConfigs.V2RAY_STATE != AppConfigs.V2RAY_STATES.V2RAY_CONNECTED
+        ) {
+            return
+        }
+        stopCore(context)
+    }
+
+    /** Stops the tracked child before its files can be reset for another session. */
+    private fun destroyCurrentXrayProcess(): Boolean {
+        val process = xrayProcess ?: return true
+        xrayProcess = null
+        return try {
+            process.destroy()
+            repeat(40) {
+                if (!process.isAlive) return true
+                Thread.sleep(25)
+            }
+            Log.e(TAG, "Xray process did not stop within one second")
+            if (xrayProcess == null) {
+                xrayProcess = process
+            }
+            false
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            Log.e(TAG, "Interrupted while waiting for Xray process to stop", e)
+            if (xrayProcess == null) {
+                xrayProcess = process
+            }
+            false
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to destroy Xray process", e)
+            if (xrayProcess == null) {
+                xrayProcess = process
+            }
+            false
+        }
     }
 
     fun isXrayRunning(): Boolean {

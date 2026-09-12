@@ -173,13 +173,13 @@ void main() {
   group('P1 compatibility URL forms', () {
     test('reads legacy full-base64 Shadowsocks links', () {
       final encoded =
-          base64UrlNoPadding('chacha20-ietf-poly1305:secret@1.2.3.4:9000');
+          base64UrlNoPadding('chacha20-ietf-poly1305:secret@192.0.2.10:9000');
       final parsed = FlutterVless.parseFromURL('ss://$encoded#Legacy%20SS');
       final config = decodedConfig(parsed);
       final server = firstOutboundServer(config);
 
       expect(parsed.remark, 'Legacy SS');
-      expect(server['address'], '1.2.3.4');
+      expect(server['address'], '192.0.2.10');
       expect(server['port'], 9000);
       expect(server['method'], 'chacha20-ietf-poly1305');
       expect(server['password'], 'secret');

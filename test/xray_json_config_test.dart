@@ -7,7 +7,7 @@ import 'package:flutter_vless/url/xray_config.dart';
 import 'xray_config_test_utils.dart';
 
 const visionSeedEncryption =
-    'mlkem768x25519plus.native.1rtt.100-500-2000.75-0-100.80-0-5000.gtmOXB2AN_r905czmOIr6dKq_YDdEJB8RWGqfsXurns';
+    'mlkem768x25519plus.native.1rtt.100-500-2000.75-0-100.80-0-5000.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
 
 void main() {
   group('P0 raw Xray JSON import', () {
@@ -33,7 +33,7 @@ void main() {
                   'port': 2043,
                   'users': [
                     {
-                      'id': 'b94da146-a56e-49d7-af4c-a68c9065cbfd',
+                      'id': '22222222-2222-4222-8222-222222222222',
                       'encryption': visionSeedEncryption,
                       'level': 8,
                       'security': 'auto',
@@ -51,7 +51,7 @@ void main() {
                 'alpn': ['h3'],
               },
               'xHTTPSettings': {
-                'host': 's3.storage.selcloud.ru',
+                'host': 'storage.example.com',
                 'mode': 'stream-up',
                 'path': '/my-bucket',
               },
@@ -71,7 +71,7 @@ void main() {
       expect(streamSettings(config)['security'], 'tls');
       expect(streamSettings(config).containsKey('xHTTPSettings'), isFalse);
       expect(streamSettings(config)['xhttpSettings'], {
-        'host': 's3.storage.selcloud.ru',
+        'host': 'storage.example.com',
         'mode': 'stream-up',
         'path': '/my-bucket',
       });

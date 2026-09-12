@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
+import com.github.tfox.flutter_vless.xray.core.XrayDiagnosticsStore
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import org.json.JSONObject
@@ -38,6 +39,7 @@ class XrayVPNService : VpnService() {
     private var tun2socksProcess: Process? = null
     private var isRunning = false
     private var vpnStateRequestReceiver: BroadcastReceiver? = null
+    private var socketProtector: XraySocketProtector? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -117,8 +119,16 @@ class XrayVPNService : VpnService() {
                 // Check if we should run in Proxy Only mode (no VPN interface)
                 val proxyOnly = intent.getBooleanExtra("PROXY_ONLY", false)
                 
-                // Start the Xray Core (SOCKS/HTTP proxy)
-                if (XrayCoreManager.startCore(this, config)) {
+                // Verify the packaged runtime protects real transport FDs before
+                // placing the host UID inside the VPN.
+                try {
+                    socketProtector = if (proxyOnly) null else XraySocketProtector(this)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Cannot start socket protection broker", e)
+                    stopAll()
+                    return START_NOT_STICKY
+                }
+                if (XrayCoreManager.startCore(this, config, socketProtector)) {
                     if (!proxyOnly) {
                         // If not proxy-only, establish the VPN interface and start tun2socks
                         setupVpn(config)
@@ -128,7 +138,7 @@ class XrayVPNService : VpnService() {
                         Log.d(TAG, "Starting in PROXY_ONLY mode")
                     }
                 } else {
-                    stopSelf()
+                    stopAll()
                 }
             }
         } else {
@@ -157,38 +167,16 @@ class XrayVPNService : VpnService() {
                 builder.setMetered(false)
             }
             
-          try {
-    builder.addDisallowedApplication(packageName)
-} catch (e: Exception) {
-    Log.e(TAG, "Failed to exclude app from VPN", e)
-}
-
-for (pkg in config.BLOCKED_APPS) {
-    try {
-        builder.addDisallowedApplication(pkg)
-        Log.d(TAG, "Excluded from VPN: $pkg")
-    } catch (e: Exception) {
-        Log.e(TAG, "Failed to exclude $pkg from VPN", e)
-    }
-}
-
-            // Add routes to exclude the server IP (to prevent routing loop)
-            val serverIp = config.CONNECTED_V2RAY_SERVER_ADDRESS
-            if (serverIp.isIpv4Literal()) {
+            // Only explicit user exclusions bypass the tunnel. Core transport
+            // sockets are protected individually through the broker.
+            for (pkg in config.BLOCKED_APPS) {
                 try {
-                    Log.d(TAG, "Excluding server IP: $serverIp")
-                    val excludedRoutes = excludeIp(serverIp)
-                    for (route in excludedRoutes) {
-                        val parts = route.split("/")
-                        builder.addRoute(parts[0], parts[1].toInt())
-                    }
+                    builder.addDisallowedApplication(pkg)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to exclude server IP, falling back to 0.0.0.0/0", e)
-                    builder.addRoute("0.0.0.0", 0)
+                    Log.e(TAG, "Failed to apply explicit app exclusion", e)
                 }
-            } else {
-                builder.addRoute("0.0.0.0", 0)
             }
+            builder.addRoute("0.0.0.0", 0)
 
             // Add DNS servers
             try {
@@ -199,7 +187,7 @@ for (pkg in config.BLOCKED_APPS) {
             }
 
             // Establish the VPN interface
-            mInterface = builder.establish()
+            mInterface = builder.establish() ?: error("VPN interface establishment denied")
             isRunning = true
             
             // Start tun2socks to handle the traffic
@@ -214,9 +202,11 @@ for (pkg in config.BLOCKED_APPS) {
     /**
      * Starts the tun2socks process and initiates the FD transfer.
      */
+    @Synchronized
     private fun runTun2socks(config: XrayConfig) {
         val tun2socksPath = File(applicationInfo.nativeLibraryDir, "libtun2socks.so").absolutePath
         val sockPath = File(filesDir, "sock_path").absolutePath
+        val diagnosticsGeneration = XrayDiagnosticsStore.currentGeneration()
         
         // Command to start tun2socks. 
         // Note: We pass -sock-path to tell it where to listen for the FD.
@@ -234,28 +224,41 @@ for (pkg in config.BLOCKED_APPS) {
             val pb = ProcessBuilder(cmd)
             pb.redirectErrorStream(true)
             pb.directory(filesDir)
-            tun2socksProcess = pb.start()
+            val process = pb.start()
+            tun2socksProcess = process
 
             // Read tun2socks output in a separate thread
             Thread {
                 try {
-                    tun2socksProcess?.inputStream?.bufferedReader()?.use { reader ->
+                    process.inputStream.bufferedReader().use { reader ->
                         reader.forEachLine { line ->
                             Log.d(TAG, "tun2socks: $line")
+                            XrayDiagnosticsStore.append(
+                                filesDir,
+                                "tun2socks",
+                                line,
+                                diagnosticsGeneration
+                            )
                         }
                     }
                     
-                    tun2socksProcess?.waitFor()
-                    if (isRunning) {
-                        // Restart if crashed and still supposed to be running
-                        Log.e(TAG, "tun2socks exited unexpectedly, restarting...")
-                        runTun2socks(config)
-                    }
+                    process.waitFor()
+                    restartTun2socksAfterUnexpectedExit(
+                        config,
+                        process,
+                        diagnosticsGeneration
+                    )
                 } catch (e: java.io.InterruptedIOException) {
                     // Expected when stopping
                 } catch (e: InterruptedException) {
                 } catch (e: Exception) {
                     Log.e(TAG, "Error reading tun2socks output", e)
+                    XrayDiagnosticsStore.append(
+                        filesDir,
+                        "runtime",
+                        "Error reading tun2socks output: ${e.message}",
+                        diagnosticsGeneration
+                    )
                 }
             }.start()
 
@@ -264,8 +267,37 @@ for (pkg in config.BLOCKED_APPS) {
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start tun2socks", e)
+            XrayDiagnosticsStore.append(
+                filesDir,
+                "runtime",
+                "Failed to start tun2socks: ${e.message}",
+                diagnosticsGeneration
+            )
             stopAll()
         }
+    }
+
+    /** Restarts only when this callback still belongs to the active process. */
+    @Synchronized
+    private fun restartTun2socksAfterUnexpectedExit(
+        config: XrayConfig,
+        process: Process,
+        diagnosticsGeneration: Long
+    ) {
+        if (!isRunning ||
+            tun2socksProcess !== process ||
+            XrayDiagnosticsStore.currentGeneration() != diagnosticsGeneration
+        ) {
+            return
+        }
+        Log.e(TAG, "tun2socks exited unexpectedly, restarting...")
+        XrayDiagnosticsStore.append(
+            filesDir,
+            "runtime",
+            "tun2socks exited unexpectedly; restarting",
+            diagnosticsGeneration
+        )
+        runTun2socks(config)
     }
 
     /**
@@ -303,8 +335,11 @@ for (pkg in config.BLOCKED_APPS) {
      * Cleans up resources (tun2socks process, VPN interface) without stopping the service completely.
      * Used when restarting or switching configurations.
      */
+    @Synchronized
     private fun cleanup() {
         isRunning = false
+        socketProtector?.close()
+        socketProtector = null
         tun2socksProcess?.destroy()
         tun2socksProcess = null
         try {
@@ -329,56 +364,6 @@ for (pkg in config.BLOCKED_APPS) {
         XrayCoreManager.stopCore(this)
         stopForeground(true)
         super.onDestroy()
-    }
-
-    /**
-     * Calculates routes to exclude a specific IP address from the VPN.
-     * This is done by splitting the 0.0.0.0/0 route into smaller subnets that cover everything EXCEPT the target IP.
-     */
-    private fun excludeIp(ip: String): List<String> {
-        val parts = ip.split(".").map { it.toInt() }
-        val ipLong = (parts[0].toLong() shl 24) + (parts[1].toLong() shl 16) + (parts[2].toLong() shl 8) + parts[3].toLong()
-        
-        val routes = ArrayList<String>()
-        var start = 0L
-        var end = 4294967295L // 255.255.255.255
-        
-        fun addRoutesExcluding(target: Long, current: Long, prefix: Int) {
-            if (prefix >= 32) return
-            
-            val size = 1L shl (32 - prefix)
-            val nextPrefix = prefix + 1
-            val left = current
-            val right = current + (1L shl (32 - nextPrefix))
-            
-            // Check if target is in left half
-            if (target >= left && target < left + (1L shl (32 - nextPrefix))) {
-                // Target is in left half, so add right half fully
-                routes.add(longToIp(right) + "/$nextPrefix")
-                addRoutesExcluding(target, left, nextPrefix)
-            } else {
-                // Target is in right half, so add left half fully
-                routes.add(longToIp(left) + "/$nextPrefix")
-                addRoutesExcluding(target, right, nextPrefix)
-            }
-        }
-        
-        addRoutesExcluding(ipLong, 0L, 0)
-        return routes
-    }
-
-    private fun longToIp(ip: Long): String {
-        return "${(ip shr 24) and 0xFF}.${(ip shr 16) and 0xFF}.${(ip shr 8) and 0xFF}.${ip and 0xFF}"
-    }
-
-    private fun String.isIpv4Literal(): Boolean {
-        val parts = split(".")
-        if (parts.size != 4) return false
-        return parts.all { part ->
-            part.isNotEmpty() &&
-                part.all { it.isDigit() } &&
-                part.toIntOrNull()?.let { it in 0..255 } == true
-        }
     }
 
     private fun createNotificationChannel() {

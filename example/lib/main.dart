@@ -121,12 +121,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _showProviderDiagnostics() async {
-    const channel = MethodChannel('flutter_vless');
     try {
-      final snapshot = await channel.invokeMethod<String>(
-            'getProviderDebugSnapshot',
-          ) ??
-          '';
+      final snapshot = await flutterVless.getProviderDebugSnapshot();
       if (!mounted) return;
 
       final content = snapshot.trim().isEmpty
@@ -483,7 +479,7 @@ class _HomePageState extends State<HomePage> {
               icon: const Icon(Icons.timer),
               label: const Text('Delay'),
             ),
-            if (Platform.isIOS || Platform.isMacOS)
+            if (Platform.isIOS || Platform.isMacOS || Platform.isWindows)
               ElevatedButton.icon(
                 onPressed: _showProviderDiagnostics,
                 icon: const Icon(Icons.bug_report_outlined),

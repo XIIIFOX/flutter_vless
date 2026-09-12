@@ -672,10 +672,25 @@ private func normalizeXrayRuntimeConfig(_ value: Any) -> Any {
 /// loggers separate makes it clear whether a message came from the app process
 /// or the extension process.
 private final class PluginXRayLogger: NSObject, XRayLoggerProtocol {
+    private let store = BoundedNativeLogStore()
+
     func logInput(_ s: String?) {
         if let message = s {
-            pluginLog.info("XRay delay probe: \(message, privacy: .public)")
+            store.append(source: "xray", message: message)
+            pluginLog.info("XRay app runtime: \(message, privacy: .public)")
         }
+    }
+
+    func reset() {
+        store.reset()
+    }
+
+    func snapshot() -> String {
+        store.snapshot()
+    }
+
+    func record(source: String, message: String) {
+        store.append(source: source, message: message)
     }
 }
 
@@ -873,24 +888,30 @@ private final class ProxyOnlyRunner {
             stop()
         }
 
-        let preparedConfig = try Self.buildProxyOnlyConfigData(configData: configData)
-        XRaySetMemoryLimit()
-        var startError: NSError?
-        let started = XRayStart(preparedConfig, logger, &startError)
-        guard started else {
-            throw startError ?? NSError(domain: "FlutterVless", code: 10, userInfo: [NSLocalizedDescriptionKey: "Failed to start XRay proxy-only mode"])
+        logger.reset()
+        do {
+            let preparedConfig = try Self.buildProxyOnlyConfigData(configData: configData)
+            XRaySetMemoryLimit()
+            var startError: NSError?
+            let started = XRayStart(preparedConfig, logger, &startError)
+            guard started else {
+                throw startError ?? NSError(domain: "FlutterVless", code: 10, userInfo: [NSLocalizedDescriptionKey: "Failed to start XRay proxy-only mode"])
+            }
+
+            // IMPORTANT: pass preparedConfig (not original configString) so setSystemProxy
+            // can see the HTTP inbound that buildProxyOnlyConfigData added.
+            let preparedConfigString = String(data: preparedConfig, encoding: .utf8) ?? configString
+            SystemProxyHelper.setSystemProxy(config: preparedConfigString)
+
+            isRunning = true
+            connectedDate = Date()
+            totalUpload = 0
+            totalDownload = 0
+            pluginLog.info("Started XRay proxy-only mode configBytes=\(preparedConfig.count, privacy: .public)")
+        } catch {
+            logger.record(source: "runtime", message: "Proxy-only start failed: \(error.localizedDescription)")
+            throw error
         }
-
-        // IMPORTANT: pass preparedConfig (not original configString) so setSystemProxy
-        // can see the HTTP inbound that buildProxyOnlyConfigData added.
-        let preparedConfigString = String(data: preparedConfig, encoding: .utf8) ?? configString
-        SystemProxyHelper.setSystemProxy(config: preparedConfigString)
-
-        isRunning = true
-        connectedDate = Date()
-        totalUpload = 0
-        totalDownload = 0
-        pluginLog.info("Started XRay proxy-only mode configBytes=\(preparedConfig.count, privacy: .public)")
     }
 
     func stop() {
@@ -934,6 +955,14 @@ private final class ProxyOnlyRunner {
             return -1
         }
         return delay
+    }
+
+    func debugSnapshot() -> String {
+        logger.snapshot()
+    }
+
+    func clearDiagnostics() {
+        logger.reset()
     }
 
     /// Queries real traffic stats via XRay stats gRPC API.
@@ -1452,15 +1481,28 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
     private func getProviderDebugSnapshot(result: @escaping FlutterResult) {
         Task {
+            let proxySnapshot = proxyOnlyRunner.debugSnapshot()
+            if !proxySnapshot.isEmpty {
+                result(boundedNativeDiagnosticsSnapshot(
+                    "--- macOS app-process Xray diagnostics ---\n\(proxySnapshot)"
+                ))
+                return
+            }
             do {
                 guard let response = try await packetTunnelManager?.sendProviderMessage(data: "xray_debug".data(using: .utf8)!) else {
-                    result(packetTunnelManager?.readSharedDebugLog() ?? "")
+                    result(boundedNativeDiagnosticsSnapshot(
+                        packetTunnelManager?.readSharedDebugLog() ?? ""
+                    ))
                     return
                 }
-                result(String(decoding: response, as: UTF8.self))
+                result(boundedNativeDiagnosticsSnapshot(
+                    String(decoding: response, as: UTF8.self)
+                ))
             } catch {
                 pluginLog.error("Provider debug snapshot request failed: \(error.localizedDescription, privacy: .public)")
-                result(packetTunnelManager?.readSharedDebugLog() ?? "")
+                result(boundedNativeDiagnosticsSnapshot(
+                    packetTunnelManager?.readSharedDebugLog() ?? ""
+                ))
             }
         }
     }
@@ -1510,6 +1552,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
 
         proxyOnlyRunner.stop()
+        proxyOnlyRunner.clearDiagnostics()
         packetTunnelManager?.remark = remark
         let bypassSubnets = arguments["bypass_subnets"] as? [String] ?? []
         pluginDebug("startVless VPN remark=\(remark) configBytes=\(configData.count) currentProxyOnly=\(self.packetTunnelManager?.proxyOnly ?? false) bypassCount=\(self.packetTunnelManager?.bypassSubnets.count ?? 0) hasEventSink=\(eventSink != nil)")

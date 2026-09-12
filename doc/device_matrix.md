@@ -18,7 +18,7 @@ system proxy.
 
 ```sh
 cd path/to/flutter_vless
-export DEVICE_ID="physical-device-id-from-flutter-devices"
+export DEVICE_ID="YOUR_DEVICE_ID"
 export VPN_MATRIX_TCP_REALITY_URL="vless://..."
 export VPN_MATRIX_XHTTP_REALITY_URL="vless://..."
 export VPN_MATRIX_XHTTP_NONE_JSON='{"remarks":"xhttp none","outbounds":[...]}'

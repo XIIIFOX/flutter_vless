@@ -4,7 +4,7 @@ The macOS implementation of the [`flutter_vless`](https://pub.dev/packages/flutt
 
 This package is intended to be used through the main `flutter_vless` package. It provides the macOS platform backend for Xray/V2Ray proxy-only and VPN/tunnel flows.
 
-The validated Packet Tunnel path for `1.1.5` uses:
+The validated Packet Tunnel path for `1.1.6` uses:
 
 - `127.0.0.1` as the Network Extension remote label
 - `198.18.0.1/24` as the local TUN address

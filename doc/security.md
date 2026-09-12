@@ -75,7 +75,12 @@ Recommended app behavior:
 
 ## Logging
 
-Debug logs can contain server addresses, transport details, route decisions,
+The iOS runtime uses structured, bounded diagnostics instead of forwarding raw
+Xray logs. Imported log destinations, credentials, endpoint values, and arbitrary
+native error text are omitted from the provider snapshot. HEV retains bounded
+error-level file logging. This policy also covers iOS proxy-only and delay probes.
+
+On other backends, debug logs can contain server addresses, transport details, route decisions,
 and runtime errors. Avoid uploading logs automatically unless the user has
 reviewed them.
 
@@ -86,6 +91,46 @@ For support flows, prefer redacting:
 - private keys
 - subscription URLs
 - server hostnames or IPs when the user asks for privacy
+
+## iOS Traffic Protection
+
+With the current example Packet Tunnel provider, traffic protection is mandatory
+for VPN sessions. The saved profile enables `includeAllNetworks`
+and on-demand recovery. The provider keeps its routes and virtual DNS while
+retrying a failed transport or restarting its HEV/Xray workers. A rejected runtime
+configuration also keeps installed routes in place and blocks forwarding. To
+replace it, explicitly stop the session and start with a corrected configuration.
+On-demand rules request a restart after termination of the entire provider. iOS
+controls when that restart occurs and can defer it after a process crash. Traffic
+remains blocked in that state; `startVless()` can retry the connection, and
+`stopVless()` explicitly releases protection. The Dart status remains
+`CONNECTING` until the provider confirms forwarding readiness; the system VPN
+icon alone does not establish this. Health checks cover the local SOCKS and test forwarding
+paths; they do not establish the health of every outbound in a custom config.
+
+Xray `direct` rules intentionally send matching destinations through the physical
+network from inside the provider. They remain compatible with this policy.
+System route exclusions in `bypassSubnets` are incompatible with this policy.
+Non-empty values are rejected before changing the current session; they never
+automatically disable protection. Reconnect from the app to update an older saved
+VPN profile. The current provider rejects profiles without `includeAllNetworks`
+before endpoint bootstrap or runtime startup.
+
+An explicit `stopVless()` or switch to proxy-only mode disables on-demand
+recovery and releases the VPN policy. Requesting VPN permission alone does not
+enable recovery. Validation rejected before profile activation, or an operating
+system failure to install the tunnel network settings, does not establish the
+provider's routing and DNS protection. Apps should handle startup errors and
+offer an explicit stop action.
+
+This is a Network Extension policy, not an unconditional device-wide guarantee.
+Apple reserves traffic needed to establish network connectivity and certain
+system services; device/companion communication retains its system exception.
+The plugin disables the configurable local-network, APNs, and cellular-service
+exclusions where the iOS version supports them. Removing or disabling the profile
+in system settings also releases its policy. See Apple's
+[VPN routing documentation](https://developer.apple.com/documentation/networkextension/routing-your-vpn-network-traffic)
+and [`includeAllNetworks`](https://developer.apple.com/documentation/networkextension/nevpnprotocol/includeallnetworks).
 
 ## Recommended Production Checklist
 

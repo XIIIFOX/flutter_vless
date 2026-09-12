@@ -1,5 +1,5 @@
 PODS:
-  - flutter_vless_macos (1.1.5):
+  - flutter_vless_macos (1.1.6):
     - FlutterMacOS
   - FlutterMacOS (1.0.0)
 
@@ -14,7 +14,7 @@ EXTERNAL SOURCES:
     :path: Flutter/ephemeral
 
 SPEC CHECKSUMS:
-  flutter_vless_macos: bdd9eabf121762799b0921d6c35ed2aca9699882
+  flutter_vless_macos: 193f590b74049636a7c902f4952e0dd6449bcf12
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
 
 PODFILE CHECKSUM: 72a145d68bd940d5270f2b51d39e5183b43f0d31

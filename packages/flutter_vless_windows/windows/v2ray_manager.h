@@ -37,6 +37,9 @@ class V2rayManager {
   // Version
   std::string GetCoreVersion();
 
+  // Bounded stdout/stderr from the current or most recent native session.
+  std::string GetProviderDebugSnapshot();
+
  private:
   V2rayManager();
   ~V2rayManager();

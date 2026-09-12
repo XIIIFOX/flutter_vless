@@ -1,3 +1,88 @@
+## 1.1.6 (Unreleased)
+
+### General
+
+* Added `getProviderDebugSnapshot()` across Android, iOS, macOS, and Windows,
+  with bounded native diagnostics available after stop or failure.
+
+### iOS
+
+* Made iOS VPN traffic protection mandatory using the saved Network
+  Extension routing and on-demand policy. Tunnels retain their routes and virtual
+  DNS while retrying transports or restarting HEV/Xray workers; rejected runtime
+  configurations keep forwarding blocked. On-demand requests a restart after
+  termination of the entire provider. Recovery
+  reports `CONNECTING`; iOS can defer restart after a process crash.
+* Serialized start, stop, and permission operations. Explicit stop disables
+  automatic recovery before stopping the tunnel; proxy-only startup waits for
+  tunnel shutdown before reusing its ports. Provider replies have a deadline.
+* Avoided signalling HEV again after its worker exits, which could otherwise hang
+  shutdown, and required provider readiness before publishing `CONNECTED`.
+* Domain rules with Xray `direct` remain supported. Non-empty system
+  `bypassSubnets` are rejected before changing the current session. Starting from
+  the app updates legacy VPN profiles; the provider rejects unprotected profiles.
+* Routed tunnel DNS through the selected proxy without a physical DNS fallback,
+  and captured IPv6 traffic for blocking when IPv6 forwarding is unavailable.
+* Replaced raw native Xray diagnostics with bounded, structured messages that
+  omit config credentials and imported log destinations. Kept HEV error logging
+  bounded while preserving open append handles during rotation.
+* Added dynamic `geoip.dat` and `geosite.dat` loading through
+  `geoAssetsDirectory`. The Go bridge validates the files and supports restoring
+  the default asset lookup; VPN mode uses an extension-readable App Group path.
+* Published runtime revision `xray-ios-v26.7.28-r3` with Xray-core `v26.7.28`,
+  the asset and private logging bridges, and updated SwiftPM/CocoaPods checksums.
+* Capped Go HTTP/2 upload scratch buffers at 128 KiB per stream to reduce memory
+  pressure during concurrent XHTTP uploads. Builds require Go 1.27 or newer,
+  patch an isolated `GOROOT`, and accept `H2BUF_CAP_KB` values from 16 to 512 KiB.
+  The build fails if the expected standard-library patch anchor changes.
+* Includes [Myo Thura](https://github.com/myothura)'s XHTTP upload-buffer fix in
+  [PR #24](https://github.com/XIIIFOX/flutter_vless/pull/24), resolving
+  [#23](https://github.com/XIIIFOX/flutter_vless/issues/23).
+
+### Android
+
+* Kept the host application's traffic inside the VPN instead of excluding its
+  entire UID. Only runtime transport and bootstrap sockets bypass the VPN through
+  the native socket protection bridge; configured blocked applications still bypass it.
+* Made required socket protection failures reject runtime startup or socket use.
+* Published `dev.tfox.fluttervless:xray-android:26.7.28-protect1` with Xray-core
+  `v26.7.28` for `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`.
+* Added bounded cross-process Xray/tun2socks diagnostics.
+
+### macOS
+
+* Updated Xray-core to `v26.7.28` and the SwiftPM/CocoaPods runtime tag and
+  checksum to `xray-macos-v26.7.28`.
+* Exposed bounded Packet Tunnel and proxy-only Xray diagnostics through the
+  shared Dart API.
+
+### Windows
+
+* Resolved the outbound gateway through the Windows API instead of parsing
+  English `ipconfig` output.
+
+* Waited for the TUN IPv4 address to become usable before installing capture
+  routes, including when reconnecting after adapter recreation.
+
+* Captured IPv4 with two session-owned `/1` routes so physical interface metrics
+  cannot silently bypass the VPN; removed these routes on stop or setup failure.
+
+* Exposed the VPN Diagnostics button in the Windows example.
+
+* Bound Windows `direct` transports to the pre-tunnel network interface to prevent
+  domain bypass connections from looping back into the VPN.
+
+* Preserved domain routing, DNS settings, and outbound server ports when preparing
+  Xray configurations. SOCKS listener detection now uses JSON structure and is
+  independent of property order; occupied ports are replaced only on inbounds.
+* Used Xray's dedicated API listener without inserting duplicate routing blocks.
+* Joined failed service workers during stop and reflected service failure in
+  the Windows running status. Removed raw config fragments from endpoint errors.
+
+* Exposed thread-safe, bounded Xray/tun2socks diagnostics through the shared
+  Dart API.
+* Fixed the native registration header path for the federated Windows package.
+
 ## 1.1.5
 
 * Updated bundled and packaged Xray runtimes to upstream Xray-core `v26.7.11` for Android, iOS, and macOS.

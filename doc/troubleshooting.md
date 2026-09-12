@@ -71,7 +71,7 @@ Check:
 - confirm the Packet Tunnel target is signed
 - confirm the App Group is shared between the app and the extension
 - for macOS, read the packet tunnel architecture note before changing routing or DNS
-- for macOS `1.1.5`, keep explicit Packet Tunnel DNS enabled and DNS host-route
+- for macOS `1.1.6`, keep explicit Packet Tunnel DNS enabled and DNS host-route
   exclusions disabled unless a real smoke test proves another route model
 
 ## macOS Build Fails During Xcode Or SwiftPM Resolution

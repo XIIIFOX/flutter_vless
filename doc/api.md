@@ -82,6 +82,7 @@ await flutterVless.startVless(
   remark: parsed.remark,
   config: parsed.getFullConfiguration(),
   proxyOnly: false,
+  geoAssetsDirectory: appGroupGeoDirectory,
 );
 ```
 
@@ -94,8 +95,15 @@ Required parameters:
 Optional parameters:
 
 - `blockedApps`: Android package names excluded from the VPN route.
-- `bypassSubnets`: CIDR routes excluded from the tunnel where supported.
+- `bypassSubnets`: CIDR routes excluded from the tunnel where supported. iOS VPN
+  sessions reject non-empty values with `INCOMPATIBLE_ROUTING` before changing
+  the current session. Use Xray `direct` routing rules on iOS; traffic protection
+  is mandatory for VPN sessions.
 - `proxyOnly`: starts local proxy behavior without installing a VPN route.
+- `geoAssetsDirectory`: iOS-only absolute path to a directory containing
+  non-empty `geoip.dat` and `geosite.dat`. Use an App Group directory for VPN
+  mode so both the app and Packet Tunnel extension can read it. Omit this
+  parameter to keep Xray's default/bundled asset lookup.
 - `notificationDisconnectButtonName`: Android notification action label.
 
 Validation:
@@ -107,6 +115,10 @@ invalid `inbounds` section, or does not contain at least one valid outbound.
 ## `stopVless()`
 
 Stops the active proxy or VPN/tunnel session.
+
+On iOS, this disables automatic recovery before stopping the tunnel. If saving
+that change fails, the call reports `VPN_STOP_ERROR` and retains protection;
+the app can retry the explicit stop.
 
 ```dart
 await flutterVless.stopVless();
@@ -123,10 +135,13 @@ Measures delay for a provided Xray config without relying on an active session.
 final delayMs = await flutterVless.getServerDelay(
   config: parsed.getFullConfiguration(),
   url: 'https://google.com/generate_204',
+  geoAssetsDirectory: appGroupGeoDirectory,
 );
 ```
 
 The config is validated with the same validator used by `startVless()`.
+On iOS, `geoAssetsDirectory` has the same validation and lookup behavior as
+the parameter on `startVless()`.
 
 ## `getConnectedServerDelay()`
 
@@ -149,6 +164,35 @@ final version = await flutterVless.getCoreVersion();
 
 The exact value can differ by platform package, release version, or externally
 supplied Windows `xray.exe`.
+
+## `getProviderDebugSnapshot()`
+
+Returns bounded, human-readable diagnostics for the active or most recent VPN
+or proxy-only runtime session. Standalone `getServerDelay()` probes are
+excluded so they do not overwrite connection diagnostics.
+
+```dart
+final diagnostics = await flutterVless.getProviderDebugSnapshot();
+```
+
+The contents are intentionally platform-specific:
+
+- iOS and macOS include Packet Tunnel provider/HEV diagnostics, or app-process
+  Xray output in proxy-only mode.
+- Android includes Xray and tun2socks process output plus bounded Xray
+  access/error file tails when the configuration enabled them.
+- Windows includes Xray and tun2socks stdout/stderr captured by the native
+  process manager.
+
+The snapshot remains available after a normal stop or startup failure.
+In-process collectors reset when a new session begins; persisted Apple Packet
+Tunnel tails can contain timestamped entries from an earlier extension run. It
+returns an empty string before any diagnostics have been recorded. Treat the
+text as support data, not as a stable machine-readable format; it may contain
+destination addresses from Xray logs.
+Applications should show the snapshot to the user for review before copying or
+sharing it because server addresses, destinations, route details, and local
+filesystem paths can appear in native diagnostics.
 
 ## `parse()`
 

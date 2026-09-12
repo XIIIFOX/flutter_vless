@@ -29,6 +29,7 @@ set(PLUGIN_NAME "flutter_vless_windows")
 
 # Define the plugin library. Its name must match `plugin.platforms[].name`.
 add_library(${PLUGIN_NAME}_plugin SHARED
+  "diagnostics_log.cpp"
   "flutter_vless_plugin.cpp"
   "v2ray_manager.cpp"
   "proxy_service.cpp"
@@ -70,4 +71,3 @@ set(flutter_vless_bundled_libraries
 
 # Ensure the plugin target is available to parent CMakeLists.txt for linking
 set(${PLUGIN_NAME}_plugin ${PLUGIN_NAME}_plugin PARENT_SCOPE)
-

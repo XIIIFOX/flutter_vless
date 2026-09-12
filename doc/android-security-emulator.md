@@ -40,10 +40,11 @@ handover test covers both emulator transports.
 
 Emulator versions that accept an absolute capture path write directly into the
 run's artifact directory. If the console explicitly requires a bare filename,
-the harness queries the selected emulator's AVD content directory, captures to a
-unique filename there, and transfers only that file into the artifacts after
-capture stops. Existing files are never replaced, and an absent or invalid
-capture remains a failure.
+the harness queries the selected emulator's AVD content directory and captures
+to a unique filename in its `console_out` subdirectory. It requires the console
+to confirm that exact output path, and transfers only that file into the
+artifacts after capture stops. Existing files are never replaced, and an absent
+or invalid capture remains a failure.
 
 DNS traffic assertions begin after the new session emits `CONNECTED` and a real
 request reaches the fixture through the TUN. Acceptance of a start command, or

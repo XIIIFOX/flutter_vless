@@ -103,7 +103,7 @@ PY
 
 start_capture() {
   # Older emulators accept an absolute path. Emulator 37 restricts this command
-  # to a bare filename within the selected AVD's content directory. Fall back
+  # to a bare filename within the selected AVD's console_out directory. Fall back
   # only for that explicit rejection; other capture failures remain failures.
   bounded 20 "$OUT_DIR/capture-start.log" "$ADB" -s "$SERIAL" emu network capture start "$CAPTURE_SOURCE_PATH" || return "$?"
   local capture_status=0
@@ -127,7 +127,10 @@ if len(lines) != 2 or lines[1] != 'OK' or not pathlib.Path(lines[0]).is_absolute
 directory = pathlib.Path(lines[0]).resolve(strict=True)
 if not directory.is_dir() or not re.fullmatch(r'flutter-vless-dns-[A-Za-z0-9]+\.pcap', sys.argv[2]):
     raise SystemExit('Invalid selected AVD directory or unique capture filename.')
-source = directory / sys.argv[2]
+capture_directory = directory / 'console_out'
+if capture_directory.is_symlink() or (capture_directory.exists() and not capture_directory.is_dir()):
+    raise SystemExit('Refusing a redirected or invalid AVD capture directory.')
+source = capture_directory / sys.argv[2]
 if source.exists() or source.is_symlink():
     raise SystemExit('Refusing to overwrite an existing AVD capture file.')
 print(source)
@@ -139,6 +142,13 @@ import pathlib, re, sys
 text = pathlib.Path(sys.argv[1]).read_text()
 if re.search(r'^KO\b', text, re.M) or not re.search(r'^OK\s*$', text, re.M):
     raise SystemExit('Emulator failed to start AVD network capture: ' + text)
+PY
+    CAPTURE_STARTED=1
+    python3 - "$OUT_DIR/capture-start-avd.log" "$CAPTURE_SOURCE_PATH" <<'PY' || return "$?"
+import pathlib, sys
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+if lines != ['OK: capturing to ' + sys.argv[2], 'OK']:
+    raise SystemExit('Emulator did not confirm the expected unique AVD capture path.')
 PY
   elif [ "$capture_status" -ne 0 ]; then
     return "$capture_status"

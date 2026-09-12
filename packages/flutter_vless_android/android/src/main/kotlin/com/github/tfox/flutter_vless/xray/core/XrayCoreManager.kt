@@ -14,6 +14,9 @@ import android.os.CountDownTimer
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
+import com.github.tfox.flutter_vless.QuickSettingsTileStore
+import com.github.tfox.flutter_vless.QuickSettingsTileUpdater
+import com.github.tfox.flutter_vless.VpnStateExtras
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.service.XrayVPNService
 import com.github.tfox.flutter_vless.xray.service.XraySocketProtector
@@ -44,6 +47,7 @@ object XrayCoreManager {
     private var seconds = 0
     private var lastProxyUplink = 0L
     private var lastProxyDownlink = 0L
+    private var lastPublishedTileState: AppConfigs.V2RAY_STATES? = null
 
     private fun nextFreePort(preferredPort: Int, usedPorts: Set<Int>): Int {
         var port = preferredPort
@@ -591,20 +595,42 @@ object XrayCoreManager {
     }
 
     private fun deliverConnectionBroadcast(context: Context, intent: Intent) {
-        val state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent.getSerializableExtra("STATE", AppConfigs.V2RAY_STATES::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent.getSerializableExtra("STATE") as? AppConfigs.V2RAY_STATES
+        val state = VpnStateExtras.read(intent)
+        if (state != null && !intent.hasExtra(VpnStateExtras.EXTRA_STATE_NAME)) {
+            VpnStateExtras.put(intent, state)
         }
-        if (state != null && !intent.hasExtra("STATE_NAME")) {
-            intent.putExtra("STATE_NAME", state.name)
-        }
+        persistTileState(context, state)
         intent.setPackage(context.packageName)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY)
         }
         context.sendBroadcast(intent)
+    }
+
+    /**
+     * Publishes CONNECTED/DISCONNECTED so the QS tile can follow the core
+     * without the Flutter engine or an open Quick Settings shade.
+     *
+     * Traffic ticks reuse this path but are ignored after the first write.
+     * The high-frequency [V2RAY_CONNECTION_INFO] broadcast stays
+     * FLAG_RECEIVER_REGISTERED_ONLY; tile wake-up uses [ACTION_TILE_STATE].
+     */
+    private fun persistTileState(context: Context, state: AppConfigs.V2RAY_STATES?) {
+        if (state != AppConfigs.V2RAY_STATES.V2RAY_CONNECTED &&
+            state != AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
+        ) {
+            return
+        }
+        if (state == lastPublishedTileState) {
+            return
+        }
+        lastPublishedTileState = state
+        QuickSettingsTileStore.saveVpnState(context, state)
+        val tileIntent = Intent(AppConfigs.ACTION_TILE_STATE)
+        VpnStateExtras.put(tileIntent, state)
+        tileIntent.setPackage(context.packageName)
+        context.sendBroadcast(tileIntent)
+        QuickSettingsTileUpdater.requestTileRefresh(context)
     }
 
     /**

@@ -48,5 +48,12 @@
                 android:name="android.service.quicksettings.ACTIVE_TILE"
                 android:value="true" />
         </service>
+        <receiver
+            android:name=".VlessTileStateReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.github.tfox.flutter_vless.TILE_STATE" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

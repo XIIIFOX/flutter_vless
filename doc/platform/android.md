@@ -117,10 +117,12 @@ Behavior:
 - Tile toggle uses the last profile persisted by `startVless`.
 - Tile label stays constant (no `On`/`Off` suffix); VPN state is shown by tile
   highlight (`ACTIVE` / `INACTIVE`).
-- While connecting, the tile is unavailable (gray icon) and ignores taps until
-  `CONNECTED` or `DISCONNECTED`.
-- Tile state follows VPN broadcasts and updates while Quick Settings is closed
-  when the tile has been added (`ACTIVE_TILE`).
+- The tile follows core `CONNECTED` / `DISCONNECTED`. Android Xray does not
+  emit `CONNECTING` on the status channel, so the tile stays inactive until
+  the core reports connected rather than showing a gray connecting state.
+- Tile state is persisted and refreshed from the VPN process, so it still
+  updates when Quick Settings is closed and the Flutter engine is gone
+  (`ACTIVE_TILE`).
 - Without a saved profile, tapping the tile opens the host app.
 - VPN-mode taps without consent open a transparent permission activity.
   Proxy-only profiles skip VPN consent and start the local proxy directly.

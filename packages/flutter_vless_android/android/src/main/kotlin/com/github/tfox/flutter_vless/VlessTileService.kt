@@ -25,24 +25,8 @@ class VlessTileService : TileService() {
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent == null) return
-            val state = readStateExtra(intent) ?: run {
-                reconcileVpnState()
-                updateTile()
-                return
-            }
-            if (state == vpnState && !isPendingConnect) return
-            vpnState = state
-            when (state) {
-                AppConfigs.V2RAY_STATES.V2RAY_CONNECTED,
-                AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED,
-                -> {
-                    isPendingConnect = false
-                    cancelPendingReconcile()
-                    context?.let { QuickSettingsTileStore.saveVpnState(it, state) }
-                }
-                else -> Unit
-            }
-            updateTile()
+            val state = VpnStateExtras.read(intent) ?: return
+            applyCoreState(state)
         }
     }
 
@@ -50,9 +34,8 @@ class VlessTileService : TileService() {
         super.onStartListening()
         QuickSettingsTileStore.loadNotificationIconIntoAppConfigs(this)
         registerStateReceiver()
-        vpnState = QuickSettingsTileStore.loadVpnState(this)
-        reconcileVpnState()
-        updateTile()
+        // Prefs are only a hint until the VPN process answers.
+        applyCoreState(QuickSettingsTileStore.loadVpnState(this), fromCore = false)
         requestVpnState()
     }
 
@@ -73,13 +56,11 @@ class VlessTileService : TileService() {
     }
 
     private fun handleClick() {
-        if (isConnectingState()) return
-
-        val running = vpnState == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED
-        if (running) {
+        if (vpnState == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED) {
             VpnLaunchHelper.stopService(this)
             return
         }
+        if (isConnectingState()) return
 
         val profile = QuickSettingsTileStore.loadProfile(this)
         if (profile == null) {
@@ -104,11 +85,26 @@ class VlessTileService : TileService() {
         updateTile()
     }
 
+    private fun applyCoreState(state: AppConfigs.V2RAY_STATES, fromCore: Boolean = true) {
+        if (state == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED ||
+            state == AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
+        ) {
+            isPendingConnect = false
+            cancelPendingReconcile()
+            if (fromCore) {
+                QuickSettingsTileStore.saveVpnState(this, state)
+            }
+        }
+        vpnState = state
+        updateTile()
+    }
+
     private fun updateTile() {
         val tile = qsTile ?: return
-        reconcileVpnState()
         val customLabel = QuickSettingsTileStore.getTileLabel(this)
-        val connecting = isConnectingState()
+        // Appearance follows the core. Local pending-connect only blocks
+        // double-taps; it must not freeze the tile as UNAVAILABLE.
+        val connecting = vpnState == AppConfigs.V2RAY_STATES.V2RAY_CONNECTING
 
         tile.label = when {
             customLabel != null -> customLabel
@@ -136,32 +132,16 @@ class VlessTileService : TileService() {
     }
 
     private fun isConnectingState(): Boolean {
-        if (vpnState == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED) {
-            return false
-        }
         return vpnState == AppConfigs.V2RAY_STATES.V2RAY_CONNECTING ||
             isPendingConnect
-    }
-
-    private fun reconcileVpnState() {
-        val persisted = QuickSettingsTileStore.loadVpnState(this)
-        if (persisted == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED) {
-            vpnState = persisted
-            isPendingConnect = false
-            cancelPendingReconcile()
-            return
-        }
-        if (!isPendingConnect && persisted != vpnState) {
-            vpnState = persisted
-        }
     }
 
     private fun schedulePendingReconcile() {
         cancelPendingReconcile()
         pendingReconcileRunnable = Runnable {
-            reconcileVpnState()
-            updateTile()
+            isPendingConnect = false
             requestVpnState()
+            updateTile()
         }
         mainHandler.postDelayed(pendingReconcileRunnable!!, PENDING_RECONCILE_DELAY_MS)
     }
@@ -180,6 +160,7 @@ class VlessTileService : TileService() {
     private fun registerStateReceiver() {
         if (receiverRegistered) return
         val filter = IntentFilter(AppConfigs.V2RAY_CONNECTION_INFO)
+        filter.addAction(AppConfigs.ACTION_TILE_STATE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(stateReceiver, filter, RECEIVER_NOT_EXPORTED)
         } else {
@@ -244,21 +225,6 @@ class VlessTileService : TileService() {
             @Suppress("DEPRECATION")
             startActivityAndCollapse(intent)
         }
-    }
-
-    private fun readStateExtra(intent: Intent): AppConfigs.V2RAY_STATES? {
-        val typed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent.getSerializableExtra("STATE", AppConfigs.V2RAY_STATES::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent.getSerializableExtra("STATE") as? AppConfigs.V2RAY_STATES
-        }
-        if (typed != null) {
-            return typed
-        }
-        val name = intent.getStringExtra("STATE_NAME") ?: return null
-        return runCatching { AppConfigs.V2RAY_STATES.valueOf(name) }
-            .getOrDefault(AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED)
     }
 
     companion object {

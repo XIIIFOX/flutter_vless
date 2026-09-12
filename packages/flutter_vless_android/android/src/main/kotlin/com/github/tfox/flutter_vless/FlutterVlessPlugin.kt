@@ -46,8 +46,6 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
     private var vpnStatusSink: EventChannel.EventSink? = null
     private var activity: Activity? = null
     private var xrayReceiver: BroadcastReceiver? = null
-    private var tileStateReceiver: BroadcastReceiver? = null
-    private var lastTileRefreshState: AppConfigs.V2RAY_STATES? = null
     private var pendingResult: MethodChannel.Result? = null
     private lateinit var context: Context
 
@@ -64,7 +62,6 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
         vpnStatusEvent = EventChannel(binding.binaryMessenger, "flutter_vless/status")
 
         vpnControlMethod.setMethodCallHandler(this)
-        registerTileStateReceiver()
         vpnStatusEvent.setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
                 vpnStatusSink = events
@@ -225,47 +222,6 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
         }
     }
 
-    private fun registerTileStateReceiver() {
-        if (tileStateReceiver != null) return
-        try {
-            tileStateReceiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context?, intent: Intent?) {
-                    if (context == null || intent == null) return
-                    val state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        intent.getSerializableExtra("STATE", AppConfigs.V2RAY_STATES::class.java)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        intent.getSerializableExtra("STATE") as? AppConfigs.V2RAY_STATES
-                    } ?: return
-                    QuickSettingsTileStore.saveVpnState(context, state)
-                    if (state != lastTileRefreshState) {
-                        lastTileRefreshState = state
-                        QuickSettingsTileUpdater.requestTileRefresh(context)
-                    }
-                }
-            }
-            val filter = IntentFilter(AppConfigs.V2RAY_CONNECTION_INFO)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(tileStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                context.registerReceiver(tileStateReceiver, filter)
-            }
-        } catch (e: Exception) {
-            android.util.Log.w("FlutterVlessPlugin", "Failed to register tile state receiver", e)
-            tileStateReceiver = null
-        }
-    }
-
-    private fun unregisterTileStateReceiver() {
-        tileStateReceiver?.let {
-            try {
-                context.unregisterReceiver(it)
-            } catch (_: Exception) {
-            }
-            tileStateReceiver = null
-        }
-    }
-
     /**
      * Registers a BroadcastReceiver to listen for updates from XrayVPNService.
      * This allows us to receive state changes (Connected/Disconnected) and traffic stats.
@@ -326,7 +282,6 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        unregisterTileStateReceiver()
         vpnControlMethod.setMethodCallHandler(null)
         vpnStatusEvent.setStreamHandler(null)
         executor.shutdown()

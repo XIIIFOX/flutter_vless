@@ -92,7 +92,7 @@ object QuickSettingsTileStore {
     fun saveVpnState(context: Context, state: AppConfigs.V2RAY_STATES) {
         prefs(context).edit()
             .putString(KEY_LAST_VPN_STATE, state.name)
-            .apply()
+            .commit()
     }
 
     fun loadVpnState(context: Context): AppConfigs.V2RAY_STATES {

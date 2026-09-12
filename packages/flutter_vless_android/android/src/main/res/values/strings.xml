@@ -1,0 +1,4 @@
+<resources>
+    <string name="tile_label_default">VPN</string>
+    <string name="tile_state_connecting">Connecting…</string>
+</resources>

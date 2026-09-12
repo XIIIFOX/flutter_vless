@@ -1,6 +1,7 @@
 // Copyright (c) 2024-2026 13FOX Studio / tfox.dev.
 // SPDX-License-Identifier: MIT
 
+import 'package:flutter_vless_platform_interface/src/quick_settings_tile.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'vless_status.dart';
 import 'method_channel_vless_platform.dart';
@@ -43,6 +44,7 @@ abstract class VlessPlatform extends PlatformInterface {
     required String notificationIconResourceName,
     required String providerBundleIdentifier,
     required String groupIdentifier,
+    QuickSettingsTile? quickSettingsTile,
   }) {
     throw UnimplementedError('initializeVless() has not been implemented.');
   }

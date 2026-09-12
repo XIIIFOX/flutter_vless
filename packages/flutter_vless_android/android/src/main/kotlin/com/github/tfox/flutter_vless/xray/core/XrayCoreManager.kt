@@ -14,6 +14,9 @@ import android.os.CountDownTimer
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
+import com.github.tfox.flutter_vless.QuickSettingsTileStore
+import com.github.tfox.flutter_vless.QuickSettingsTileUpdater
+import com.github.tfox.flutter_vless.VpnStateExtras
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.service.XrayVPNService
 import com.github.tfox.flutter_vless.xray.service.XraySocketProtector
@@ -44,6 +47,7 @@ object XrayCoreManager {
     private var seconds = 0
     private var lastProxyUplink = 0L
     private var lastProxyDownlink = 0L
+    private var lastPublishedTileState: AppConfigs.V2RAY_STATES? = null
 
     private fun nextFreePort(preferredPort: Int, usedPorts: Set<Int>): Int {
         var port = preferredPort
@@ -313,7 +317,7 @@ object XrayCoreManager {
                 "Failed to write config file: ${e.message}",
                 diagnosticsGeneration
             )
-            return false
+            return abortStart(context)
         }
 
         // 2. Find Xray executable (libxray.so)
@@ -328,7 +332,7 @@ object XrayCoreManager {
                 diagnosticsGeneration
             )
             // Fallback or error
-            return false
+            return abortStart(context)
         }
 
         // 3. Prepare assets (geoip, geosite)
@@ -357,9 +361,13 @@ object XrayCoreManager {
             xrayProcess = process
             if (protector != null && !protector.awaitVerified()) {
                 destroyCurrentXrayProcess()
-                AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
-                XrayDiagnosticsStore.append(configFilesDir, "runtime", "Runtime socket protection was not verified; VPN startup refused", diagnosticsGeneration)
-                return false
+                XrayDiagnosticsStore.append(
+                    configFilesDir,
+                    "runtime",
+                    "Runtime socket protection was not verified; VPN startup refused",
+                    diagnosticsGeneration
+                )
+                return abortStart(context)
             }
             Thread.sleep(300)
             if (!process.isAlive) {
@@ -380,13 +388,13 @@ object XrayCoreManager {
                 if (xrayProcess === process) {
                     xrayProcess = null
                 }
-                AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
-                return false
+                return abortStart(context)
             }
             
             AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_CONNECTED
             lastProxyUplink = 0L
             lastProxyDownlink = 0L
+            sendCurrentStateBroadcast(context)
             startTimer(context)
             showNotification(context, config)
             
@@ -443,8 +451,14 @@ object XrayCoreManager {
                 "Failed to start Xray process: ${e.message}",
                 diagnosticsGeneration
             )
-            return false
+            return abortStart(context)
         }
+    }
+
+    private fun abortStart(context: Service): Boolean {
+        AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
+        sendDisconnectedBroadcast(context)
+        return false
     }
 
     /** These upstream paths open sockets outside Xray's controller interfaces. */
@@ -554,11 +568,69 @@ object XrayCoreManager {
                 intent.putExtra("UPLOAD_TRAFFIC", traffic[2])
                 intent.putExtra("DOWNLOAD_TRAFFIC", traffic[3])
                 
-                context.sendBroadcast(intent)
+                deliverConnectionBroadcast(context, intent)
             }
 
             override fun onFinish() {}
         }.start()
+    }
+
+    fun sendCurrentStateBroadcast(context: Context) {
+        val intent = Intent(AppConfigs.V2RAY_CONNECTION_INFO)
+        intent.putExtra("STATE", AppConfigs.V2RAY_STATE)
+        intent.putExtra("DURATION", seconds.toString())
+        if (isXrayRunning()) {
+            val traffic = getV2rayTraffic(context)
+            intent.putExtra("UPLOAD_SPEED", traffic[0])
+            intent.putExtra("DOWNLOAD_SPEED", traffic[1])
+            intent.putExtra("UPLOAD_TRAFFIC", traffic[2])
+            intent.putExtra("DOWNLOAD_TRAFFIC", traffic[3])
+        } else {
+            intent.putExtra("UPLOAD_SPEED", 0L)
+            intent.putExtra("DOWNLOAD_SPEED", 0L)
+            intent.putExtra("UPLOAD_TRAFFIC", 0L)
+            intent.putExtra("DOWNLOAD_TRAFFIC", 0L)
+        }
+        deliverConnectionBroadcast(context, intent)
+    }
+
+    private fun deliverConnectionBroadcast(context: Context, intent: Intent) {
+        val state = VpnStateExtras.read(intent)
+        if (state != null && !intent.hasExtra(VpnStateExtras.EXTRA_STATE_NAME)) {
+            VpnStateExtras.put(intent, state)
+        }
+        persistTileState(context, state)
+        intent.setPackage(context.packageName)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY)
+        }
+        context.sendBroadcast(intent)
+    }
+
+    /**
+     * Publishes CONNECTED/DISCONNECTED so the QS tile can follow the core
+     * without the Flutter engine or an open Quick Settings shade.
+     *
+     * Traffic ticks reuse this path but are ignored after the first write.
+     * The high-frequency [V2RAY_CONNECTION_INFO] broadcast stays
+     * FLAG_RECEIVER_REGISTERED_ONLY; tile wake-up uses [ACTION_TILE_STATE].
+     */
+    private fun persistTileState(context: Context, state: AppConfigs.V2RAY_STATES?) {
+        if (state != AppConfigs.V2RAY_STATES.V2RAY_CONNECTED &&
+            state != AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
+        ) {
+            return
+        }
+        if (state == lastPublishedTileState) {
+            return
+        }
+        lastPublishedTileState = state
+        QuickSettingsTileStore.saveVpnState(context, state)
+        val tileIntent = Intent(AppConfigs.ACTION_TILE_STATE)
+        VpnStateExtras.put(tileIntent, state)
+        tileIntent.setPackage(context.packageName)
+        context.sendBroadcast(tileIntent)
+        QuickSettingsTileUpdater.requestTileRefresh(context)
     }
 
     /**
@@ -641,7 +713,7 @@ object XrayCoreManager {
         intent.putExtra("DOWNLOAD_SPEED", 0L)
         intent.putExtra("UPLOAD_TRAFFIC", 0L)
         intent.putExtra("DOWNLOAD_TRAFFIC", 0L)
-        context.sendBroadcast(intent)
+        deliverConnectionBroadcast(context, intent)
     }
 
     private fun showNotification(context: Service, config: XrayConfig) {

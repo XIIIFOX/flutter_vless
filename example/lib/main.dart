@@ -68,6 +68,13 @@ class _HomePageState extends State<HomePage> {
       notificationIconResourceName: 'ic_launcher',
       providerBundleIdentifier: 'dev.tfox.flutterXrayExample',
       groupIdentifier: 'group.dev.tfox.flutterXray',
+      quickSettingsTile: Platform.isAndroid
+          ? QuickSettingsTile(
+              tileLabel: 'VLESS',
+              tileIconResourceType: 'mipmap',
+              tileIconResourceName: 'ic_launcher',
+            )
+          : null,
     )
         .then((_) async {
       coreVersion = await flutterVless.getCoreVersion();

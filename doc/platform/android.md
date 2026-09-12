@@ -95,6 +95,57 @@ For the strict runtime update and publishing checklist, see `doc/release/android
 - `requestPermission()` is relevant for VPN mode.
 - `proxyOnly: true` starts the local proxy path without installing the VPN route.
 
+## Quick Settings Tile
+
+Android exposes an optional Quick Settings tile through `VlessTileService`. The
+service is merged from the plugin manifest; host apps should not declare it
+again.
+
+Setup:
+
+1. Pass `notificationIconResourceType` / `notificationIconResourceName` to
+   `initializeVless()` — used for notifications and as the default tile icon.
+2. Optionally pass `quickSettingsTile` for a custom label and tile icon
+   override (`tileIconResource*`); when omitted, the notification icon is used.
+3. Ask the user to add the tile manually in system Quick Settings.
+4. Call `startVless()` at least once so the tile can reuse the saved profile.
+   For VPN mode, also call `requestPermission()`. Proxy-only mode does not need
+   VPN consent.
+
+Behavior:
+
+- Tile toggle uses the last profile persisted by `startVless`.
+- Tile label stays constant (no `On`/`Off` suffix); VPN state is shown by tile
+  highlight (`ACTIVE` / `INACTIVE`).
+- The tile follows core `CONNECTED` / `DISCONNECTED`. Android Xray does not
+  emit `CONNECTING` on the status channel, so the tile stays inactive until
+  the core reports connected rather than showing a gray connecting state.
+- Tile state is persisted and refreshed from the VPN process, so it still
+  updates when Quick Settings is closed and the Flutter engine is gone
+  (`ACTIVE_TILE`).
+- Without a saved profile, tapping the tile opens the host app.
+- VPN-mode taps without consent open a transparent permission activity.
+  Proxy-only profiles skip VPN consent and start the local proxy directly.
+- Connect/disconnect from the tile does not collapse Quick Settings. The shade
+  only closes when the device is locked or the tile has to open an activity.
+- The tile works when the Flutter UI is not running, as long as profile and
+  appearance were saved earlier via `initializeVless` / `startVless`.
+
+Example:
+
+```dart
+await flutterVless.initializeVless(
+  onStatusChanged: onStatusChanged,
+  notificationIconResourceType: 'mipmap',
+  notificationIconResourceName: 'ic_launcher',
+  quickSettingsTile: QuickSettingsTile(
+    tileLabel: 'My VPN',
+    tileIconResourceType: 'mipmap',
+    tileIconResourceName: 'ic_launcher', // optional override
+  ),
+);
+```
+
 ## Suggested Setup Flow
 
 1. Run the example on a device or emulator.

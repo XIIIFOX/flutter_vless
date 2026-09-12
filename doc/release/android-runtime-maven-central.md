@@ -146,7 +146,7 @@ Before publishing the Android wrapper to Pub.dev, keep these checks green:
 - The example APK builds without a local Maven override.
 - The example APK contains ARM and emulator runtime files from the Maven AAR.
 - The emulator smoke test prints an Xray version matching the runtime release.
-## Consumer verification (1.2.0)
+## Consumer verification (1.1.6)
 
 The official runtime is `dev.tfox.fluttervless:xray-android:26.7.28-protect1`.
 Copy [verification-metadata.xml](../../example/android/gradle/verification-metadata.xml)

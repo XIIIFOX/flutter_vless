@@ -1,10 +1,8 @@
-## 1.2.0
+## 1.1.6 (Unreleased)
 
 * Authenticate service-owned local SOCKS, avoid an unsolicited HTTP listener, and measure delay in the owning process.
 * Preserve TUN on worker failures; coordinate bounded recovery and encrypted authorized-profile restoration.
 * Add explicit proxy DNS policy, safe diagnostic events and native artifact verification examples.
-
-## 1.1.6 (Unreleased)
 
 * Updated the Android runtime dependency to `dev.tfox.fluttervless:xray-android:26.7.28-protect1`.
 * Rebuilt Android `libxray.so` binaries for `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` against Xray-core `v26.7.28`.

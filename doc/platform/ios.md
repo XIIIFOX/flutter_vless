@@ -167,7 +167,7 @@ the `XrayTunnel` target, not the Flutter `Runner` target.
 - using the extension bundle id instead of the base app bundle id
 - expecting simulator behavior to match a real device
 
-## Keychain profile migration (1.2.0)
+## Keychain profile migration (1.1.6)
 
 Configure the **same** `keychain-access-groups` entitlement on Runner and
 XrayTunnel, for example `$(AppIdentifierPrefix)com.example.myapp.vpn-secrets`.

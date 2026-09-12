@@ -109,7 +109,7 @@ For the strict runtime update and publishing checklist, see `doc/release/android
 - Forgetting the Gradle native-library extraction setting when needed
 - Copying iOS or macOS tunnel steps into an Android project
 
-## Session protection and local proxy access (1.2.0)
+## Session protection and local proxy access (1.1.6)
 
 The VPN service owns its session, native credentials and workers. Internal Xray,
 tun2socks, FD transfer or connectivity failures retain an already established

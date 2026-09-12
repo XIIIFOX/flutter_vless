@@ -146,8 +146,8 @@ and [`includeAllNetworks`](https://developer.apple.com/documentation/networkexte
 
 ## Local access, secret storage and Android recovery
 
-See the platform guides for the 1.2.0 contracts: [iOS](platform/ios.md#keychain-profile-migration-120)
-and [Android](platform/android.md#session-protection-and-local-proxy-access-120).
+See the platform guides for the 1.1.6 contracts: [iOS](platform/ios.md#keychain-profile-migration-116)
+and [Android](platform/android.md#session-protection-and-local-proxy-access-116).
 Runtime listener credentials are native session state; the exported configuration
 remains deterministic and contains no generated session password. Local accounts
 and remote outbound credentials are separate. Explicit proxy-only noauth is an

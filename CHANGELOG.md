@@ -1,20 +1,18 @@
-## 1.2.0
-
-* iOS: keep VPN configuration in a shared Keychain item, migrate legacy profiles transactionally, and retain traffic protection during native recovery. Configure the shared Keychain entitlement in both targets.
-* iOS and Android: authenticate internal local proxies and their clients with native session credentials. VPN mode rejects incompatible extra proxy listeners; explicit proxy-only authentication/noauth remains separate.
-* Android: retain TUN during worker recovery, restore authorized sessions from Keystore-encrypted storage, protect diagnostics, and add optional `AndroidDnsPolicy.proxy` system DNS routing.
-* Add explicit native capability checks for new security options, runtime checksum verification, and regression/runtime tests.
-* **Integration required:** update copied `PacketTunnelProvider.swift` together with the plugin and shared support. Updating the Dart dependency alone does not update an application's extension source.
-* Native Xray/Tun2Socks artifacts retain their existing pinned versions; authentication uses already supported runtime features.
-
 ## 1.1.6 (Unreleased)
 
 ### General
+
+* iOS and Android: authenticate internal local proxies and their clients with native session credentials. VPN mode rejects incompatible extra proxy listeners; explicit proxy-only authentication/noauth remains separate.
+* Add explicit native capability checks for new security options, runtime checksum verification, and regression/runtime tests.
+* Native Xray/Tun2Socks artifacts retain their existing pinned versions; authentication uses already supported runtime features.
 
 * Added `getProviderDebugSnapshot()` across Android, iOS, macOS, and Windows,
   with bounded native diagnostics available after stop or failure.
 
 ### iOS
+
+* iOS: keep VPN configuration in a shared Keychain item, migrate legacy profiles transactionally, and retain traffic protection during native recovery. Configure the shared Keychain entitlement in both targets.
+* **Integration required:** update copied `PacketTunnelProvider.swift` together with the plugin and shared support. Updating the Dart dependency alone does not update an application's extension source.
 
 * Made iOS VPN traffic protection mandatory using the saved Network
   Extension routing and on-demand policy. Tunnels retain their routes and virtual
@@ -49,6 +47,8 @@
   [#23](https://github.com/XIIIFOX/flutter_vless/issues/23).
 
 ### Android
+
+* Android: retain TUN during worker recovery, restore authorized sessions from Keystore-encrypted storage, protect diagnostics, and add optional `AndroidDnsPolicy.proxy` system DNS routing.
 
 * Kept the host application's traffic inside the VPN instead of excluding its
   entire UID. Only runtime transport and bootstrap sockets bypass the VPN through

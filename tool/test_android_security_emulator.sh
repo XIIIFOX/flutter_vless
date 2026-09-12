@@ -68,6 +68,7 @@ TEST_INSTALLED=0
 ADVERSARY_INSTALLED=0
 CAPTURE_STARTED=0
 CAPTURE_WIFI_DISABLED=0
+CAPTURE_SOURCE_PATH="$OUT_DIR/physical-dns.pcap"
 CHECKS="$OUT_DIR/checks.tsv"
 : > "$CHECKS"
 
@@ -100,6 +101,51 @@ raise SystemExit(code if code >= 0 else 128 - code)
 PY
 }
 
+start_capture() {
+  # Older emulators accept an absolute path. Emulator 37 restricts this command
+  # to a bare filename within the selected AVD's content directory. Fall back
+  # only for that explicit rejection; other capture failures remain failures.
+  bounded 20 "$OUT_DIR/capture-start.log" "$ADB" -s "$SERIAL" emu network capture start "$CAPTURE_SOURCE_PATH" || return "$?"
+  local capture_status=0
+  python3 - "$OUT_DIR/capture-start.log" <<'PY' || capture_status=$?
+import pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+if text.strip() == ("KO: <file> must be a bare filename (written under the AVD content directory); "
+                    "path separators and '..' are not allowed"):
+    raise SystemExit(2)
+if re.search(r'^KO\b', text, re.M) or not re.search(r'^OK\s*$', text, re.M):
+    raise SystemExit('Emulator failed to start network capture: ' + text)
+PY
+  if [ "$capture_status" -eq 2 ]; then
+    bounded 20 "$OUT_DIR/capture-avd-path.log" "$ADB" -s "$SERIAL" emu avd path || return "$?"
+    local capture_name="flutter-vless-dns-${OUT_DIR##*.}.pcap"
+    CAPTURE_SOURCE_PATH="$(python3 - "$OUT_DIR/capture-avd-path.log" "$capture_name" <<'PY'
+import pathlib, re, sys
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+if len(lines) != 2 or lines[1] != 'OK' or not pathlib.Path(lines[0]).is_absolute():
+    raise SystemExit('Emulator did not identify its selected AVD content directory.')
+directory = pathlib.Path(lines[0]).resolve(strict=True)
+if not directory.is_dir() or not re.fullmatch(r'flutter-vless-dns-[A-Za-z0-9]+\.pcap', sys.argv[2]):
+    raise SystemExit('Invalid selected AVD directory or unique capture filename.')
+source = directory / sys.argv[2]
+if source.exists() or source.is_symlink():
+    raise SystemExit('Refusing to overwrite an existing AVD capture file.')
+print(source)
+PY
+)" || return "$?"
+    bounded 20 "$OUT_DIR/capture-start-avd.log" "$ADB" -s "$SERIAL" emu network capture start "$capture_name" || return "$?"
+    python3 - "$OUT_DIR/capture-start-avd.log" <<'PY' || return "$?"
+import pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+if re.search(r'^KO\b', text, re.M) or not re.search(r'^OK\s*$', text, re.M):
+    raise SystemExit('Emulator failed to start AVD network capture: ' + text)
+PY
+  elif [ "$capture_status" -ne 0 ]; then
+    return "$capture_status"
+  fi
+  CAPTURE_STARTED=1
+}
+
 stop_capture() {
   bounded 20 "$OUT_DIR/capture-stop.log" "$ADB" -s "$SERIAL" emu network capture stop || return "$?"
   python3 - "$OUT_DIR/capture-stop.log" <<'PY'
@@ -111,6 +157,20 @@ PY
   local capture_result=$?
   [ "$capture_result" -eq 0 ] || return "$capture_result"
   CAPTURE_STARTED=0
+  if [ "$CAPTURE_SOURCE_PATH" != "$OUT_DIR/physical-dns.pcap" ]; then
+    # Copy only this run's unique file from the selected emulator's reported
+    # directory. Exclusive creation and O_NOFOLLOW avoid replacing other files.
+    python3 - "$CAPTURE_SOURCE_PATH" "$OUT_DIR/physical-dns.pcap" <<'PY' || return "$?"
+import os, pathlib, shutil, stat, sys
+source, destination = map(pathlib.Path, sys.argv[1:])
+with os.fdopen(os.open(source, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as capture:
+    if not stat.S_ISREG(os.fstat(capture.fileno()).st_mode):
+        raise SystemExit('Emulator capture is not a regular file.')
+    with destination.open('xb') as output:
+        shutil.copyfileobj(capture, output)
+source.unlink()
+PY
+  fi
 }
 
 cleanup() {
@@ -380,14 +440,7 @@ while time.monotonic() < deadline:
 else:
     raise SystemExit('Emulator Wi-Fi remained active; physical capture would be incomplete.')
 PY
-  bounded 20 "$OUT_DIR/capture-start.log" "$ADB" -s "$SERIAL" emu network capture start "$OUT_DIR/physical-dns.pcap"
-  python3 - "$OUT_DIR/capture-start.log" <<'PY'
-import pathlib, re, sys
-text = pathlib.Path(sys.argv[1]).read_text()
-if re.search(r'^KO\b', text, re.M) or not re.search(r'^OK\s*$', text, re.M):
-    raise SystemExit('Emulator failed to start network capture: ' + text)
-PY
-  CAPTURE_STARTED=1
+  start_capture
 fi
 instrument system-dns "$CLASS_PREFIX.ProtectedSystemDnsTest" 4 0
 if [ "$CAPTURE_DNS" -eq 1 ]; then

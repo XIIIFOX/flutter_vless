@@ -38,6 +38,13 @@ the traffic uses the cellular Ethernet backend covered by the emulator console
 capture. It restores `AndroidWifi` afterward, including on failure. The separate
 handover test covers both emulator transports.
 
+Emulator versions that accept an absolute capture path write directly into the
+run's artifact directory. If the console explicitly requires a bare filename,
+the harness queries the selected emulator's AVD content directory, captures to a
+unique filename there, and transfers only that file into the artifacts after
+capture stops. Existing files are never replaced, and an absent or invalid
+capture remains a failure.
+
 DNS traffic assertions begin after the new session emits `CONNECTED` and a real
 request reaches the fixture through the TUN. Acceptance of a start command, or
 Android announcing a VPN network, does not establish readiness. Local packet

@@ -3,6 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 XRAY_RUNTIME_VERSION="${XRAY_RUNTIME_VERSION:-26.7.28-protect1}"
+if [ "$XRAY_RUNTIME_VERSION" != "26.7.28-protect1" ] || [ -n "${FLUTTER_VLESS_ANDROID_RUNTIME_REPO:-}" ] || [ -n "${ORG_GRADLE_PROJECT_flutterVlessAndroidRuntimeRepo:-}" ] ||
+   { [ -n "${ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion:-}" ] && [ "$ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion" != "26.7.28-protect1" ]; }; then
+  echo "Official runtime verification rejects repository/version overrides" >&2
+  exit 1
+fi
 XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-26.7.28}"
 MAVEN_BASE_URL="https://repo1.maven.org/maven2/dev/tfox/fluttervless/xray-android/$XRAY_RUNTIME_VERSION"
 MAVEN_CENTRAL_RETRY_SECONDS="${MAVEN_CENTRAL_RETRY_SECONDS:-600}"
@@ -42,6 +47,7 @@ download_with_retry() {
 
 download_with_retry "$POM_URL" "$TMP_DIR/runtime.pom"
 download_with_retry "$AAR_URL" "$AAR_PATH"
+python3 "$ROOT_DIR/tool/test_android_dependency_verification.py" "$AAR_PATH" "$TMP_DIR/runtime.pom"
 
 for entry in \
   "jni/arm64-v8a/libxray.so" \
@@ -81,11 +87,31 @@ done
 )
 
 DEPENDENCIES_LOG="$TMP_DIR/dependencies.log"
+# Exercise the actual example settings gate, independently of the shell guards.
+assert_rejected_override() {
+  local name="$1" expected="$2"
+  shift 2
+  if (cd "$ROOT_DIR/example/android" && ./gradlew help \
+      -PflutterVlessOfficialRuntimeVerification=true "$@") > "$TMP_DIR/$name.log" 2>&1; then
+    echo "Official runtime unexpectedly accepted $name" >&2
+    return 1
+  fi
+  if ! grep -q "$expected" "$TMP_DIR/$name.log"; then
+    cat "$TMP_DIR/$name.log" >&2
+    echo "The negative check failed for an unrelated reason: $name" >&2
+    return 1
+  fi
+  echo "PASS official settings rejection: $name"
+}
+assert_rejected_override repository 'rejects repository overrides' -PflutterVlessAndroidRuntimeRepo="$TMP_DIR/repo" --dependency-verification=strict
+assert_rejected_override version 'rejects version overrides' -PflutterVlessXrayRuntimeVersion=unreviewed --dependency-verification=strict
+assert_rejected_override verification-mode 'requires strict dependency verification' --dependency-verification=off
 (
   cd "$ROOT_DIR/example/android"
   ./gradlew :flutter_vless_android:dependencies \
     --configuration debugRuntimeClasspath \
     -PflutterVlessXrayRuntimeVersion="$XRAY_RUNTIME_VERSION" \
+    -PflutterVlessOfficialRuntimeVerification=true --dependency-verification=strict \
     > "$DEPENDENCIES_LOG"
 )
 
@@ -97,7 +123,8 @@ fi
 (
   cd "$ROOT_DIR/example/android"
   ./gradlew :app:assembleDebug \
-    -PflutterVlessXrayRuntimeVersion="$XRAY_RUNTIME_VERSION"
+    -PflutterVlessXrayRuntimeVersion="$XRAY_RUNTIME_VERSION" \
+    -PflutterVlessOfficialRuntimeVerification=true --dependency-verification=strict
 )
 
 APK_SEARCH_DIRS=()

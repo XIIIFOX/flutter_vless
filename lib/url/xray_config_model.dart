@@ -77,14 +77,31 @@ class XrayInbound implements XrayJsonModel {
     String listen = '127.0.0.1',
     int port = 10807,
     int userLevel = 8,
+    String? username,
+    String? password,
   }) {
+    if ((username == null) != (password == null) ||
+        username != null &&
+            (username.isEmpty ||
+                password!.isEmpty ||
+                username.codeUnits.any((c) => c < 0x21 || c > 0x7e) ||
+                password.codeUnits.any((c) => c < 0x21 || c > 0x7e) ||
+                username.length > 255 ||
+                password.length > 255)) {
+      throw ArgumentError('Local SOCKS credentials require printable ASCII '
+          'username and password, each 1–255 bytes.');
+    }
     return XrayInbound(
       tag: tag,
       listen: listen,
       port: port,
       protocol: 'socks',
       settings: {
-        'auth': 'noauth',
+        'auth': username == null ? 'noauth' : 'password',
+        if (username != null)
+          'accounts': [
+            {'user': username, 'pass': password}
+          ],
         'udp': true,
         'userLevel': userLevel,
         'address': null,

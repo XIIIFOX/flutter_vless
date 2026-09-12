@@ -3,6 +3,7 @@
 
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'vless_status.dart';
+import 'android_dns_policy.dart';
 import 'method_channel_vless_platform.dart';
 
 /// Contract implemented by every federated `flutter_vless` platform package.
@@ -43,6 +44,7 @@ abstract class VlessPlatform extends PlatformInterface {
     required String notificationIconResourceName,
     required String providerBundleIdentifier,
     required String groupIdentifier,
+    String? keychainAccessGroup,
   }) {
     throw UnimplementedError('initializeVless() has not been implemented.');
   }
@@ -59,6 +61,8 @@ abstract class VlessPlatform extends PlatformInterface {
     List<String>? bypassSubnets,
     bool proxyOnly = false,
     String? geoAssetsDirectory,
+    AndroidDnsPolicy androidDnsPolicy = AndroidDnsPolicy.config,
+    String? androidDnsProxyOutboundTag,
   }) {
     throw UnimplementedError('startVless() has not been implemented.');
   }

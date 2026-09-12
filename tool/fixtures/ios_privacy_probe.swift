@@ -31,23 +31,26 @@ func runRawRuntimeProbe() {
     fflush(stdout)
 }
 extension ProxyOnlyRunner { static func prepared(_ data: Data) throws -> Data { try buildProxyOnlyConfigData(configData: data) } }
-extension ServerDelayRunner { static func prepared(_ data: Data) throws -> Data { try buildDelayConfigData(config: String(decoding: data, as: UTF8.self), proxyPort: 18095) } }
+extension ServerDelayRunner { static func prepared(_ data: Data) throws -> Data { try buildDelayConfigData(config: String(decoding: data, as: UTF8.self), proxyPort: 18095, credentials: LocalProxyCredentials.generate()) } }
 func runModes() async {
     setbuf(stdout, nil)
     print("MODES_BEGIN")
     runRawRuntimeProbe()
+    do { try await runLocalAuthRuntimeChecks() } catch { print("AUTH_RUNTIME_FAILED"); exit(1) }
+    do { try runDomainRoutingChecks() } catch { print("DOMAIN_ROUTING_FAILED"); exit(1) }
+    do { try runDNSRuntimeChecks() } catch { print("DNS_RUNTIME_FAILED"); exit(1) }
     let markers = ["privacy-canary.invalid", "d2719f44-f51f-4c35-aeae-246230d21f38", "synthetic-password-canary"]
     let logger = ProbeLogger()
     for level in ["debug", "warning", "error", "none"] {
         let raw: [String:Any] = ["log": ["loglevel": level, "access": "", "error": "", "dnsLog": true],
-            "inbounds": [["listen":"127.0.0.1","port":18095,"protocol":"http","tag":"probe"]],
+            "inbounds": [["listen":"127.0.0.1","port":18095,"protocol":"socks","tag":"probe"]],
             "outbounds": [["protocol":"blackhole","tag":"block"],
                           ["protocol":"vless","tag":"proxy","settings":["vnext":[["address":"127.0.0.1","port":9,"users":[["id":markers[1],"encryption":"none"]]]]]]],
             "routing":["rules":[["type":"field","network":"tcp,udp","outboundTag":"block"]]],
             "remarks":markers.joined(separator:" ")]
         do {
             let data = try JSONSerialization.data(withJSONObject: raw)
-            guard let tunnel = TunnelXrayConfigPreparer.prepare(jsonData:data)?.data else { print("TUNNEL_PREPARE_FAILED");exit(1) }
+            guard let tunnel = TunnelXrayConfigPreparer.prepare(jsonData:data, credentials: try LocalProxyCredentials.generate())?.data else { print("TUNNEL_PREPARE_FAILED");exit(1) }
             for (mode, prepared) in [("tunnel",tunnel),("proxy-only",try ProxyOnlyRunner.prepared(data)),("delay",try ServerDelayRunner.prepared(data))] {
                 let decoded = try JSONSerialization.jsonObject(with:prepared) as! [String:Any]
                 let log = decoded["log"] as! [String:Any]
@@ -73,7 +76,7 @@ func runModes() async {
                 precondition(!markers.contains { runner.debugSnapshot().contains($0) })
                 runner.stop()
                 let delay = await ServerDelayRunner().measure(config:String(decoding:data,as:UTF8.self),url:"http://127.0.0.1:9/",geoAssetsDirectory:nil)
-                precondition(delay >= 0)
+                precondition(delay == -1) // blocked destination must not report false readiness
                 print("RUNNER_SNAPSHOT_AND_DELAY_PASS")
             }
         } catch { print("MODE_TEST_FAILED");exit(1) }

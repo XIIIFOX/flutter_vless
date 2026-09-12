@@ -1,3 +1,12 @@
+## 1.2.0
+
+* iOS: keep VPN configuration in a shared Keychain item, migrate legacy profiles transactionally, and retain traffic protection during native recovery. Configure the shared Keychain entitlement in both targets.
+* iOS and Android: authenticate internal local proxies and their clients with native session credentials. VPN mode rejects incompatible extra proxy listeners; explicit proxy-only authentication/noauth remains separate.
+* Android: retain TUN during worker recovery, restore authorized sessions from Keystore-encrypted storage, protect diagnostics, and add optional `AndroidDnsPolicy.proxy` system DNS routing.
+* Add explicit native capability checks for new security options, runtime checksum verification, and regression/runtime tests.
+* **Integration required:** update copied `PacketTunnelProvider.swift` together with the plugin and shared support. Updating the Dart dependency alone does not update an application's extension source.
+* Native Xray/Tun2Socks artifacts retain their existing pinned versions; authentication uses already supported runtime features.
+
 ## 1.1.6 (Unreleased)
 
 ### General

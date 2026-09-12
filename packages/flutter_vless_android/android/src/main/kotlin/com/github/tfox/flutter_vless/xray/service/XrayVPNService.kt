@@ -1,371 +1,370 @@
 package com.github.tfox.flutter_vless.xray.service
 
 import android.content.Intent
+import android.net.ConnectivityManager
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
+import android.os.Bundle
 import android.os.ParcelFileDescriptor
-import android.util.Log
+import android.os.ResultReceiver
+import com.github.tfox.flutter_vless.xray.core.AuthenticatedSocksClient
+import com.github.tfox.flutter_vless.xray.core.AndroidTunnelDnsPolicy
+import com.github.tfox.flutter_vless.xray.core.LocalProxyCredentials
+import com.github.tfox.flutter_vless.xray.core.LocalProxyAccessPolicy
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
 import com.github.tfox.flutter_vless.xray.core.XrayDiagnosticsStore
+import com.github.tfox.flutter_vless.xray.core.XrayDiagnosticsStore.Event
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import org.json.JSONObject
 import java.io.File
-import java.io.FileDescriptor
-import java.util.ArrayList
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
-/**
- * Android VPN Service implementation.
- * 
- * This service is responsible for:
- * 1. Establishing the VPN interface (TUN device) using Android's VpnService API.
- * 2. Managing the `tun2socks` process, which routes traffic from the TUN device to the SOCKS proxy.
- * 3. Handling the lifecycle of the VPN connection (start, stop, cleanup).
- * 4. Supporting "Proxy Only" mode where VPN is skipped.
- * 
- * Key Technical Detail:
- * To support Android 15 (16KB page size) and avoid "bad file descriptor" errors, we use a custom
- * mechanism to pass the TUN file descriptor to `tun2socks`. Instead of passing it via command line
- * (which fails across process boundaries), we send it over a Unix Domain Socket.
- */
+/** Owns the session and TUN. Worker failures never deactivate established protection. */
 class XrayVPNService : VpnService() {
-
-    private var mInterface: ParcelFileDescriptor? = null
-    private var tun2socksProcess: Process? = null
-    private var isRunning = false
-    private var socketProtector: XraySocketProtector? = null
+    private val worker = Executors.newSingleThreadScheduledExecutor()
+    private val recovery = SessionRecoveryPolicy()
+    private val requests = java.util.concurrent.atomic.AtomicLong()
+    private var interfaceSignature: String? = null
+    private var tun: ParcelFileDescriptor? = null
+    private var process: Process? = null
+    private var protector: XraySocketProtector? = null
+    private var config: XrayConfig? = null
+    private var sourceConfig: XrayConfig? = null
+    private var prepared: JSONObject? = null
+    private var dnsServers = listOf("8.8.8.8", "1.1.1.1")
+    private var credentials: LocalProxyCredentials? = null
+    private var tunConfigFile: File? = null
+    private var socketFile: File? = null
+    private var diagnosticsGeneration = 0L
+    private var connectedAt = 0L
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private lateinit var profiles: AuthorizedProfileStore
 
     override fun onCreate() {
         super.onCreate()
+        profiles = AuthorizedProfileStore(this)
+        // Cold start cleanup must also run when authorization cannot be decrypted or is absent.
+        // The helper preserves files referenced by live native workers and all standalone delays.
+        worker.execute { SessionRuntimeFiles.removeAbandoned(noBackupFilesDir) }
+        val manager = getSystemService(ConnectivityManager::class.java)
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = physicalLinkChanged()
+            override fun onLost(network: Network) = physicalLinkChanged()
+            private fun physicalLinkChanged() {
+                worker.execute {
+                    if (recovery.authorized && config != null && AppConfigs.V2RAY_STATE == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED) recover(Event.RECOVERING)
+                }
+            }
+        }
+        networkCallback = callback
+        manager.registerNetworkCallback(NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build(), callback)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent == null) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
-        val command = if (Build.VERSION.SDK_INT >= 33) {
-            intent.getSerializableExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS::class.java)
-        } else {
+        if (intent?.action == ACTION_MEASURE_DELAY) {
             @Suppress("DEPRECATION")
-            intent.getSerializableExtra("COMMAND") as? AppConfigs.V2RAY_SERVICE_COMMANDS
+            val receiver = intent.getParcelableExtra<ResultReceiver>("receiver")
+            val url = intent.getStringExtra("url") ?: PROBE_URL
+            worker.execute {
+                val result = runCatching {
+                    check(recovery.authorized && AppConfigs.V2RAY_STATE == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED)
+                    AuthenticatedSocksClient.measure(requireNotNull(config).LOCAL_SOCKS5_PORT, credentials, url)
+                }.getOrDefault(-1L)
+                receiver?.send(0, Bundle().apply { putLong("delay", result) })
+            }
+            return if (recovery.authorized) START_STICKY else START_NOT_STICKY
         }
-
+        @Suppress("DEPRECATION")
+        val command = intent?.getSerializableExtra("COMMAND") as? AppConfigs.V2RAY_SERVICE_COMMANDS
         if (command == AppConfigs.V2RAY_SERVICE_COMMANDS.STOP_SERVICE) {
-            stopAll()
+            val request = requests.incrementAndGet()
+            profiles.disarm()
+            recovery.disarm() // Invalidate queued callbacks immediately, before slow native I/O finishes.
+            worker.execute {
+                profiles.disarm(); deactivateSession()
+                // A queued STOP releases its old session, but must not destroy a newer START.
+                if (requests.get() == request) stopSelfResult(startId)
+            }
             return START_NOT_STICKY
         }
-
-        // Create notification channel and start foreground immediately to prevent crash.
-        createNotificationChannel()
-        val notification = createNotification("VPN Service Running")
-        try {
-            if (Build.VERSION.SDK_INT >= 34) {
-                startForeground(1, notification, FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-            } else {
-                startForeground(1, notification)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start foreground", e)
-        }
-
-        if (command == AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE) {
-            val config = if (Build.VERSION.SDK_INT >= 33) {
-                intent.getSerializableExtra("V2RAY_CONFIG", XrayConfig::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent.getSerializableExtra("V2RAY_CONFIG") as? XrayConfig
-            }
-
-            if (config != null) {
-                // Ensure clean state before starting
-                cleanup()
-                
-                // Check if we should run in Proxy Only mode (no VPN interface)
-                val proxyOnly = intent.getBooleanExtra("PROXY_ONLY", false)
-                
-                // Verify the packaged runtime protects real transport FDs before
-                // placing the host UID inside the VPN.
-                try {
-                    socketProtector = if (proxyOnly) null else XraySocketProtector(this)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Cannot start socket protection broker", e)
-                    stopAll()
-                    return START_NOT_STICKY
+        val request = requests.incrementAndGet()
+        showForeground("Connecting; traffic protection is being prepared")
+        worker.execute {
+            @Suppress("DEPRECATION")
+            val receiver = intent?.getParcelableExtra<ResultReceiver>("start_receiver")
+            @Suppress("DEPRECATION")
+            val incoming = if (command == AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE)
+                (intent?.getSerializableExtra("V2RAY_CONFIG") as? XrayConfig)?.apply {
+                    PROXY_ONLY = intent.getBooleanExtra("PROXY_ONLY", false)
                 }
-                if (XrayCoreManager.startCore(this, config, socketProtector)) {
-                    if (!proxyOnly) {
-                        // If not proxy-only, establish the VPN interface and start tun2socks
-                        setupVpn(config)
-                    } else {
-                        // Proxy Only Mode: Just mark as running
-                        isRunning = true
-                        Log.d(TAG, "Starting in PROXY_ONLY mode")
-                    }
-                } else {
-                    stopAll()
+            else runCatching { profiles.load() }.getOrNull()
+            if (incoming == null) {
+                event(Event.PROFILE_UNAVAILABLE)
+                receiver?.send(1, Bundle())
+                if (request == requests.get() && tun == null && !recovery.authorized) {
+                    XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED)
+                    stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(startId)
                 }
+                return@execute
             }
-        } else {
-            stopSelf()
+            val accepted = runCatching { acceptSession(incoming, command == AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE, request) }
+                .getOrElse { event(Event.CONFIG_REJECTED); false }
+            receiver?.send(if (accepted) 0 else 1, Bundle())
+            if (!accepted && request == requests.get() && tun == null && !recovery.authorized) {
+                stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(startId)
+            }
         }
-
         return START_STICKY
     }
 
-    /**
-     * Establishes the VPN interface (TUN) and starts tun2socks.
-     */
-    private fun setupVpn(config: XrayConfig) {
+    private fun acceptSession(incoming: XrayConfig, explicit: Boolean, request: Long): Boolean {
+        if (request != requests.get()) return false
+        val candidate = incoming.copy(BLOCKED_APPS = ArrayList(incoming.BLOCKED_APPS), BYPASS_SUBNETS = ArrayList(incoming.BYPASS_SUBNETS))
+        val secret = LocalProxyCredentials.generate()
+        var candidateDnsServers = dnsServers
+        val json = try {
+            XrayCoreManager.validateConfiguration(candidate)
+            val dns = AndroidTunnelDnsPolicy.prepare(candidate.V2RAY_FULL_JSON_CONFIG, candidate.ANDROID_DNS_POLICY,
+                candidate.ANDROID_DNS_PROXY_OUTBOUND_TAG, candidate.BYPASS_SUBNETS) {
+                XraySocketProtector.resolveBootstrapHostname(this, it)
+            }
+            candidate.V2RAY_FULL_JSON_CONFIG = dns.configJson
+            candidateDnsServers = dns.systemDnsServers
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(candidate, noBackupFilesDir, secret)
+            require(XrayCoreManager.validateNative(this, runtime)) { "Native configuration rejected" }
+            runtime
+        } catch (_: Exception) {
+            event(Event.CONFIG_REJECTED)
+            return false
+        }
+        val candidateCredentials = try {
+            if (candidate.PROXY_ONLY) LocalProxyAccessPolicy.credentialsForProxyOnly(json, candidate.LOCAL_SOCKS5_PORT) else secret
+        } catch (_: Exception) { event(Event.CONFIG_REJECTED); return false }
+        if (request != requests.get()) return false
+        // This transaction precedes every mutation of the active workers and their profile.
+        try { if (explicit) { if (candidate.PROXY_ONLY) profiles.disarm() else profiles.save(incoming) } }
+        catch (_: Exception) { event(Event.PROFILE_SAVE_FAILED); return false }
+        // Mode changes intentionally deactivate VPN protection; VPN-to-VPN replacements retain it.
+        if (candidate.PROXY_ONLY && tun != null) { deactivateSession() }
+        val owner = recovery.activate()
+        if (!stopWorkers()) { event(Event.WORKER_START_FAILED); recover(Event.WORKER_START_FAILED); return false }
+        SessionRuntimeFiles.removeAbandoned(noBackupFilesDir)
+        diagnosticsGeneration = XrayDiagnosticsStore.reset(filesDir)
+        // Delete only known legacy config names after the preceding native writers have exited.
+        listOf("config.json", "temp_delay_config.json").forEach { File(filesDir, it).delete() }
+        sourceConfig = incoming.copy()
+        config = candidate; credentials = candidateCredentials
+        prepared = json; dnsServers = candidateDnsServers
+        event(Event.SESSION_START)
+        worker.execute { restartWorkers(owner) }
+        return true
+    }
+
+    private fun restartWorkers(owner: Long) {
+        if (!recovery.owns(owner)) return
+        XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_CONNECTING)
+        showForeground(if (tun != null) "Recovering; VPN traffic remains captured" else "Connecting")
+        if (!stopWorkers()) { recover(Event.WORKER_START_FAILED); return }
+        val current = config ?: return
         try {
-            if (mInterface != null) {
-                mInterface?.close()
-                mInterface = null
+            if (current.ANDROID_DNS_POLICY == "proxy" && recovery.failures > 0) {
+                val source = requireNotNull(sourceConfig)
+                val dns = AndroidTunnelDnsPolicy.prepare(source.V2RAY_FULL_JSON_CONFIG, source.ANDROID_DNS_POLICY,
+                    source.ANDROID_DNS_PROXY_OUTBOUND_TAG, source.BYPASS_SUBNETS) {
+                    XraySocketProtector.resolveBootstrapHostname(this, it)
+                }
+                current.V2RAY_FULL_JSON_CONFIG = dns.configJson
+                prepared = XrayCoreManager.buildRuntimeConfigJson(current, noBackupFilesDir, credentials)
+                dnsServers = dns.systemDnsServers
             }
-
-            val builder = Builder()
-            builder.setSession(config.REMARK)
-            builder.setMtu(1500)
-            builder.addAddress("26.26.26.1", 30)
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                builder.setMetered(false)
+            protector = if (current.PROXY_ONLY) null else XraySocketProtector(this).also {
+                it.allowPhysicalDnsForEndpointNames(if (current.ANDROID_DNS_POLICY == "proxy") emptySet() else null)
             }
-            
-            // Only explicit user exclusions bypass the tunnel. Core transport
-            // sockets are protected individually through the broker.
-            for (pkg in config.BLOCKED_APPS) {
-                try {
-                    builder.addDisallowedApplication(pkg)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to apply explicit app exclusion", e)
+            val started = XrayCoreManager.startCore(this, current, requireNotNull(prepared), protector, owner) { generation, code ->
+                worker.execute { if (recovery.owns(generation)) { event(Event.WORKER_EXIT, code.toLong()); recover(Event.WORKER_EXIT) } }
+            }
+            if (!started) { recover(Event.PROTECT_FAILED); return }
+            if (!recovery.owns(owner)) { stopWorkers(); return }
+            if (!current.PROXY_ONLY) {
+                // The broker was positively verified before TUN installation, including cold start.
+                if (tun == null || interfaceSignature != interfaceSignature(current)) setupVpn(current)
+                startTun2socks(current, requireNotNull(credentials), owner)
+                if (!sendFd(owner)) { recover(Event.FD_FAILED); return }
+                event(Event.FD_SENT)
+            }
+            if (!current.PROXY_ONLY) {
+                try { AuthenticatedSocksClient.measure(current.LOCAL_SOCKS5_PORT, requireNotNull(credentials), PROBE_URL) }
+                catch (_: Exception) { recover(Event.AUTH_PROBE_FAILED); return }
+                // A real host-UID request traverses the captured TUN and authenticated tun2socks.
+                // Explicit user app exclusions mean this cannot prove that path; do not claim it.
+                if (!current.BLOCKED_APPS.contains(packageName)) {
+                    try { probeCapturedPath() } catch (_: Exception) { recover(Event.PATH_PROBE_FAILED); return }
                 }
             }
-            builder.addRoute("0.0.0.0", 0)
-
-            // Add DNS servers
-            try {
-                builder.addDnsServer("8.8.8.8")
-                builder.addDnsServer("1.1.1.1")
-            } catch (e: Exception) {
-                // ignore
-            }
-
-            // Establish the VPN interface
-            mInterface = builder.establish() ?: error("VPN interface establishment denied")
-            isRunning = true
-            
-            // Start tun2socks to handle the traffic
-            runTun2socks(config)
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to setup VPN", e)
-            stopAll()
-        }
+            if (!recovery.owns(owner)) return
+            recovery.recovered()
+            connectedAt = System.nanoTime()
+            event(Event.CONNECTED)
+            XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_CONNECTED)
+            showForeground("Connected")
+            tick(owner, 0)
+        } catch (_: Exception) { if (recovery.owns(owner)) recover(if (tun == null) Event.TUN_FAILED else Event.WORKER_START_FAILED) }
     }
 
-    /**
-     * Starts the tun2socks process and initiates the FD transfer.
-     */
-    @Synchronized
-    private fun runTun2socks(config: XrayConfig) {
-        val tun2socksPath = File(applicationInfo.nativeLibraryDir, "libtun2socks.so").absolutePath
-        val sockPath = File(filesDir, "sock_path").absolutePath
-        val diagnosticsGeneration = XrayDiagnosticsStore.currentGeneration()
-        
-        // Command to start tun2socks. 
-        // Note: We pass -sock-path to tell it where to listen for the FD.
-        val cmd = arrayListOf(
-            tun2socksPath,
-            "-sock-path", sockPath,
-            "-proxy", "socks5://127.0.0.1:${config.LOCAL_SOCKS5_PORT}",
-            "-mtu", "1500",
-            "-loglevel", "debug"
-        )
+    private fun setupVpn(current: XrayConfig) {
+        val builder = Builder().setSession(current.REMARK).setMtu(1500).addAddress("26.26.26.1", 30).addRoute("0.0.0.0", 0)
+        // No IPv6 address/route enables Android's default IPv6 blocking, never allowFamily bypass.
+        if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false)
+        current.BLOCKED_APPS.forEach {
+            try { builder.addDisallowedApplication(it) }
+            catch (_: android.content.pm.PackageManager.NameNotFoundException) { /* An uninstalled exclusion has no UID to bypass. */ }
+        }
+        dnsServers.forEach { builder.addDnsServer(it) }
+        val previous = tun
+        tun = builder.establish() ?: error("TUN establishment denied")
+        previous?.close()
+        interfaceSignature = interfaceSignature(current)
+        event(Event.TUN_ESTABLISHED)
+    }
 
-        Log.d(TAG, "tun2socks command: ${cmd.joinToString(" ")}")
+    private fun interfaceSignature(current: XrayConfig) = current.BLOCKED_APPS.sorted().joinToString("|") + ":" + current.ANDROID_DNS_POLICY
 
-        try {
-            val pb = ProcessBuilder(cmd)
-            pb.redirectErrorStream(true)
-            pb.directory(filesDir)
-            val process = pb.start()
-            tun2socksProcess = process
+    private fun startTun2socks(current: XrayConfig, secret: LocalProxyCredentials, owner: Long) {
+        val unique = UUID.randomUUID().toString()
+        val file = File(noBackupFilesDir, "tun-$unique.yaml")
+        // All values are generated native tokens or numeric fields. No secret appears in argv.
+        file.writeText("proxy: 'socks5://${secret.username}:${secret.password}@127.0.0.1:${current.LOCAL_SOCKS5_PORT}'\nmtu: 1500\nloglevel: error\n")
+        tunConfigFile = file
+        val socket = File(noBackupFilesDir, "fd-${unique.take(12)}")
+        socketFile = socket
+        val child = ProcessBuilder(File(applicationInfo.nativeLibraryDir, "libtun2socks.so").absolutePath,
+            "-sock-path", socket.absolutePath, "-config", file.absolutePath).directory(noBackupFilesDir).redirectErrorStream(true).start()
+        process = child
+        event(Event.WORKERS_START)
+        Thread({
+            runCatching { child.inputStream.use { val bytes = ByteArray(4096); while (it.read(bytes) >= 0) { } } }
+            val code = runCatching { child.waitFor() }.getOrDefault(-1)
+            worker.execute { if (recovery.owns(owner) && process === child) { event(Event.WORKER_EXIT, code.toLong()); recover(Event.WORKER_EXIT) } }
+        }, "tun2socks-monitor").apply { isDaemon = true; start() }
+    }
 
-            // Read tun2socks output in a separate thread
-            Thread {
-                try {
-                    process.inputStream.bufferedReader().use { reader ->
-                        reader.forEachLine { line ->
-                            Log.d(TAG, "tun2socks: $line")
-                            XrayDiagnosticsStore.append(
-                                filesDir,
-                                "tun2socks",
-                                line,
-                                diagnosticsGeneration
-                            )
-                        }
-                    }
-                    
-                    process.waitFor()
-                    restartTun2socksAfterUnexpectedExit(
-                        config,
-                        process,
-                        diagnosticsGeneration
-                    )
-                } catch (e: java.io.InterruptedIOException) {
-                    // Expected when stopping
-                } catch (e: InterruptedException) {
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error reading tun2socks output", e)
-                    XrayDiagnosticsStore.append(
-                        filesDir,
-                        "runtime",
-                        "Error reading tun2socks output: ${e.message}",
-                        diagnosticsGeneration
-                    )
+    private fun sendFd(owner: Long): Boolean {
+        return FileDescriptorTransfer.send({ recovery.owns(owner) }, { process?.isAlive == true }, {
+                LocalSocket().use { socket ->
+                    socket.connect(LocalSocketAddress(requireNotNull(socketFile).absolutePath, LocalSocketAddress.Namespace.FILESYSTEM))
+                    socket.soTimeout = 1000
+                    socket.setFileDescriptorsForSend(arrayOf(requireNotNull(tun).fileDescriptor))
+                    socket.outputStream.write(32)
+                    socket.setFileDescriptorsForSend(null)
+                    socket.shutdownOutput()
                 }
-            }.start()
-
-            // Send the TUN file descriptor to tun2socks via socket
-            sendFd()
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start tun2socks", e)
-            XrayDiagnosticsStore.append(
-                filesDir,
-                "runtime",
-                "Failed to start tun2socks: ${e.message}",
-                diagnosticsGeneration
-            )
-            stopAll()
-        }
+        })
     }
 
-    /** Restarts only when this callback still belongs to the active process. */
-    @Synchronized
-    private fun restartTun2socksAfterUnexpectedExit(
-        config: XrayConfig,
-        process: Process,
-        diagnosticsGeneration: Long
-    ) {
-        if (!isRunning ||
-            tun2socksProcess !== process ||
-            XrayDiagnosticsStore.currentGeneration() != diagnosticsGeneration
-        ) {
-            return
-        }
-        Log.e(TAG, "tun2socks exited unexpectedly, restarting...")
-        XrayDiagnosticsStore.append(
-            filesDir,
-            "runtime",
-            "tun2socks exited unexpectedly; restarting",
-            diagnosticsGeneration
-        )
-        runTun2socks(config)
+    private fun recover(reason: Event) {
+        if (!recovery.authorized) return
+        val next = recovery.restart() // Late callbacks from both workers lose ownership together.
+        event(reason)
+        stopWorkers() // TUN remains installed throughout backoff, including persistent failure.
+        XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_CONNECTING)
+        val delay = recovery.nextDelayMillis()
+        event(Event.RECOVERING, recovery.failures.toLong())
+        showForeground(if (tun != null) "Recovering; VPN traffic remains captured" else "Waiting to establish VPN protection")
+        worker.schedule({ restartWorkers(next) }, delay, TimeUnit.MILLISECONDS)
     }
 
-    /**
-     * Sends the TUN interface file descriptor to the running tun2socks process.
-     * This uses a Unix Domain Socket to pass the FD, which is required because
-     * ProcessBuilder cannot inherit FDs on Android.
-     */
-    private fun sendFd() {
-        val fd = mInterface?.fileDescriptor ?: return
-        val sockFile = File(filesDir, "sock_path").absolutePath
-
-        Thread {
-            var tries = 0
-            while (tries < 10) {
-                try {
-                    Thread.sleep(500)
-                    val localSocket = LocalSocket()
-                    localSocket.connect(LocalSocketAddress(sockFile, LocalSocketAddress.Namespace.FILESYSTEM))
-                    val out = localSocket.outputStream
-                    // This magic call attaches the FD to the socket message
-                    localSocket.setFileDescriptorsForSend(arrayOf(fd))
-                    out.write(32) // Send a dummy byte to trigger the transfer
-                    localSocket.setFileDescriptorsForSend(null)
-                    localSocket.shutdownOutput()
-                    localSocket.close()
-                    break
-                } catch (e: Exception) {
-                    tries++
-                }
+    private fun tick(owner: Long, count: Int) {
+        worker.schedule({
+            if (!recovery.owns(owner)) return@schedule
+            if (count > 0 && count % 30 == 0 && config?.PROXY_ONLY == false) {
+                try { AuthenticatedSocksClient.measure(requireNotNull(config).LOCAL_SOCKS5_PORT, requireNotNull(credentials), PROBE_URL) }
+                catch (_: Exception) { recover(Event.AUTH_PROBE_FAILED); return@schedule }
             }
-        }.start()
+            XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_CONNECTED, (System.nanoTime() - connectedAt) / 1_000_000_000)
+            tick(owner, count + 1)
+        }, 1, TimeUnit.SECONDS)
     }
 
-    /**
-     * Cleans up resources (tun2socks process, VPN interface) without stopping the service completely.
-     * Used when restarting or switching configurations.
-     */
-    @Synchronized
-    private fun cleanup() {
-        isRunning = false
-        socketProtector?.close()
-        socketProtector = null
-        tun2socksProcess?.destroy()
-        tun2socksProcess = null
+    private fun probeCapturedPath() {
+        val connection = URL(PROBE_URL).openConnection() as HttpURLConnection
         try {
-            mInterface?.close()
-            mInterface = null
-        } catch (e: Exception) {}
+            connection.connectTimeout = 5000; connection.readTimeout = 5000
+            connection.instanceFollowRedirects = false; connection.requestMethod = "HEAD"
+            require(connection.responseCode in 200..499) { "Captured path unavailable" }
+        } finally { connection.disconnect() }
     }
 
-    /**
-     * Stops everything: tun2socks, VPN interface, and Xray Core.
-     */
-    private fun stopAll() {
-        cleanup()
-        XrayCoreManager.stopCore(this)
-        stopForeground(true)
-        stopSelf()
+    private fun stopWorkers(): Boolean {
+        val child = process; process = null
+        if (child != null) {
+            child.destroy()
+            if (!child.waitFor(1, TimeUnit.SECONDS)) child.destroyForcibly()
+            if (!child.waitFor(1, TimeUnit.SECONDS)) { process = child; return false }
+        }
+        if (!XrayCoreManager.stopWorkers()) return false
+        protector?.close(); protector = null
+        tunConfigFile?.delete(); tunConfigFile = null
+        socketFile?.delete(); socketFile = null
+        return true
     }
 
+    private fun deactivateSession() {
+        recovery.disarm()
+        stopWorkers()
+        runCatching { tun?.close() }; tun = null
+        config = null; sourceConfig = null; prepared = null; credentials = null
+        event(Event.SESSION_STOP)
+        XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+    }
+
+    override fun onRevoke() {
+        requests.incrementAndGet()
+        profiles.disarm()
+        recovery.disarm()
+        worker.execute { deactivateSession(); stopSelf() }
+        super.onRevoke()
+    }
     override fun onDestroy() {
-        stopAll()
+        requests.incrementAndGet()
+        recovery.disarm()
+        networkCallback?.let { runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) } }
+        worker.execute { deactivateSession() }
+        worker.shutdown()
         super.onDestroy()
     }
 
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channelId = "vpn_service_channel"
-            val channelName = "VPN Service"
-            val channel = android.app.NotificationChannel(
-                channelId,
-                channelName,
-                android.app.NotificationManager.IMPORTANCE_LOW
-            )
-            val manager = getSystemService(android.app.NotificationManager::class.java)
-            manager?.createNotificationChannel(channel)
-        }
-    }
+    private fun event(value: Event, number: Long? = null) = XrayDiagnosticsStore.event(filesDir, value,
+        diagnosticsGeneration.takeIf { it > 0 }, number)
 
-    private fun createNotification(content: String): android.app.Notification {
-        val channelId = "vpn_service_channel"
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            android.app.Notification.Builder(this, channelId)
-        } else {
-            @Suppress("DEPRECATION")
-            android.app.Notification.Builder(this)
-        }
-        
-        // Use a default icon if not set
-        var icon = android.R.drawable.ic_dialog_info
-        
-        return builder
-            .setContentTitle("VPN Service")
-            .setContentText(content)
-            .setSmallIcon(icon)
-            .build()
+    private fun showForeground(content: String) {
+        val id = "vpn_service_channel"
+        if (Build.VERSION.SDK_INT >= 26) getSystemService(android.app.NotificationManager::class.java)
+            .createNotificationChannel(android.app.NotificationChannel(id, "VPN Service", android.app.NotificationManager.IMPORTANCE_LOW))
+        val builder = if (Build.VERSION.SDK_INT >= 26) android.app.Notification.Builder(this, id) else android.app.Notification.Builder(this)
+        val current = config
+        val stop = android.app.PendingIntent.getService(this, 0,
+            Intent(this, XrayVPNService::class.java).putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.STOP_SERVICE),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
+        val notification = builder.setContentTitle(current?.REMARK?.takeIf { it.isNotBlank() } ?: "VPN Service").setContentText(content)
+            .setSmallIcon(current?.APPLICATION_ICON?.takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info)
+            .addAction(android.app.Notification.Action.Builder(null, current?.NOTIFICATION_DISCONNECT_BUTTON_NAME ?: "Disconnect", stop).build())
+            .setOngoing(true).build()
+        if (Build.VERSION.SDK_INT >= 34) startForeground(1, notification, 0x40000000) else startForeground(1, notification)
     }
-
     companion object {
-        private const val TAG = "XrayVPNService"
-        private const val FOREGROUND_SERVICE_TYPE_SPECIAL_USE = 0x40000000
+        const val ACTION_MEASURE_DELAY = "com.github.tfox.flutter_vless.MEASURE_DELAY"
+        private const val PROBE_URL = "https://www.gstatic.com/generate_204"
     }
 }

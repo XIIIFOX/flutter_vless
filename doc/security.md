@@ -80,7 +80,8 @@ Xray logs. Imported log destinations, credentials, endpoint values, and arbitrar
 native error text are omitted from the provider snapshot. HEV retains bounded
 error-level file logging. This policy also covers iOS proxy-only and delay probes.
 
-On other backends, debug logs can contain server addresses, transport details, route decisions,
+Android also uses safe fixed events, native output draining, private no-backup
+config files and versioned diagnostic migration. On macOS and Windows, debug logs can contain server addresses, transport details, route decisions,
 and runtime errors. Avoid uploading logs automatically unless the user has
 reviewed them.
 
@@ -101,8 +102,9 @@ retrying a failed transport or restarting its HEV/Xray workers. A rejected runti
 configuration also keeps installed routes in place and blocks forwarding. To
 replace it, explicitly stop the session and start with a corrected configuration.
 On-demand rules request a restart after termination of the entire provider. iOS
-controls when that restart occurs and can defer it after a process crash. Traffic
-remains blocked in that state; `startVless()` can retry the connection, and
+controls when that restart occurs and can defer it after a process crash. The plugin cannot guarantee scheduling or continuous capture after the entire
+extension is terminated; system behavior must be checked on the device.
+`startVless()` can retry the connection, and
 `stopVless()` explicitly releases protection. The Dart status remains
 `CONNECTING` until the provider confirms forwarding readiness; the system VPN
 icon alone does not establish this. Health checks cover the local SOCKS and test forwarding
@@ -141,3 +143,21 @@ and [`includeAllNetworks`](https://developer.apple.com/documentation/networkexte
 - Provide a user-visible disconnect action.
 - Avoid silently importing unsupported protocols.
 - Document what traffic the app routes and when the local runtime is active.
+
+## Local access, secret storage and Android recovery
+
+See the platform guides for the 1.2.0 contracts: [iOS](platform/ios.md#keychain-profile-migration-120)
+and [Android](platform/android.md#session-protection-and-local-proxy-access-120).
+Runtime listener credentials are native session state; the exported configuration
+remains deterministic and contains no generated session password. Local accounts
+and remote outbound credentials are separate. Explicit proxy-only noauth is an
+intentional shared-proxy mode, outside VPN listener isolation.
+
+The Android service retains TUN across internal worker recovery, but OS lockdown
+is needed for blocking across whole-service death. System DNS protection on
+Android is opt-in; on iOS it is part of the current provider contract. Neither
+policy forbids intentional application `direct` rules or encrypts plaintext proxy
+transports. No application-specific audit item is closed by publishing this library.
+
+Evidence and remaining physical-device checks are recorded in
+[the audit work-item ledger](audit-closure-2026-09-12.md).

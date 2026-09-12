@@ -113,6 +113,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let config: Data
         let port: Int
         let geoAssetsDirectory: String?
+        let credentials: LocalProxyCredentials
     }
 
     private func setForwardingReady(_ ready: Bool) {
@@ -145,13 +146,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         guard bypassArgument == nil || bypassArgument is NSNull || (bypassArgument as? [String])?.isEmpty == true else {
             throw tunnelError("System route exclusions are unsupported; use Xray direct rules")
         }
+        // Cold-start failures occur before route installation and cannot claim
+        // an established protective tunnel. Legacy plaintext never becomes a
+        // fallback; opening the app performs its transactional migration.
+        let config = try TunnelSecretProfile.load(providerConfiguration,
+            providerBundleIdentifier: configuration.providerBundleIdentifier ?? "")
         TunnelDebugStore.shared.configure(groupIdentifier: providerConfiguration["groupIdentifier"] as? String)
         setForwardingReady(false)
         rememberTunnelLog("Starting Xray packet tunnel")
-        let config = providerConfiguration["xrayConfig"] as? Data ?? Data()
         // Endpoint bootstrap precedes virtual DNS installation. Reuse the
         // prepared endpoints when restarting workers within this same tunnel.
-        let prepared = prepareXrayConfigForTunnel(config)
+        let credentials = try LocalProxyCredentials.generate()
+        let prepared = prepareXrayConfigForTunnel(config, credentials: credentials)
         let parsed = prepared.flatMap { parseConfig(jsonData: $0.data) }
         let addresses = prepared?.bootstrapAddresses ?? []
         let compatible = TunnelDNSPolicy.allowsRouteExclusions(addresses.map { "\($0)/32" })
@@ -174,7 +180,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         if usable, let prepared, let parsed {
             runtimeSpec = RuntimeSpec(config: prepared.data, port: parsed.inboundPort,
-                geoAssetsDirectory: providerConfiguration["geoAssetsDirectory"] as? String)
+                geoAssetsDirectory: providerConfiguration["geoAssetsDirectory"] as? String, credentials: credentials)
         } else {
             runtimeSpec = nil
             rememberTunnelLog("Tunnel configuration rejected; protected traffic remains blocked")
@@ -197,7 +203,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func startNativeRuntime(_ spec: RuntimeSpec) throws {
         try startXRay(xrayConfig: spec.config, geoAssetsDirectory: spec.geoAssetsDirectory)
-        try startSocks5Tunnel(serverPort: spec.port)
+        try startSocks5Tunnel(serverPort: spec.port, credentials: spec.credentials)
     }
 
     /// Runs on runtimeQueue. A blocked native quit must not stall NE teardown.
@@ -274,17 +280,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 snapshot += "\nHEV diagnostic file bytes=\(hevLogSizeBytes()); raw contents omitted"
                 completionHandler?(snapshot.data(using: .utf8))
             }else if (message.hasPrefix("xray_delay")){
-                var error: NSError?
-                var delay: Int64 = -1
-                let url = String(message[message.index(message.startIndex, offsetBy: 10)...])
-                tunnelLog.info("Measuring connected delay url=\(url, privacy: .public)")
-                XRayMeasureDelay(url, &delay, &error)
-                if let error {
-                    tunnelLog.error("Connected delay error: \(error.localizedDescription, privacy: .public)")
-                } else {
-                    tunnelLog.info("Connected delay result=\(delay, privacy: .public)")
+                let rawURL = String(message.dropFirst(10))
+                watchdogQueue.async {
+                    guard self.isForwardingReady(), let spec = self.runtimeSpec,
+                          let url = URL(string: rawURL) else {
+                        completionHandler?(Data("-1".utf8))
+                        return
+                    }
+                    LocalProxyDelayClient.measure(url: url, port: spec.port, credentials: spec.credentials) { delay in
+                        completionHandler?(Data("\(delay)".utf8))
+                    }
                 }
-                completionHandler?("\(delay)".data(using: .utf8))
             }
             else{
                 tunnelLog.info("Echoing unknown provider message: \(message, privacy: .public)")
@@ -334,14 +340,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    private func startSocks5Tunnel(serverPort port: Int) throws {
+    private func startSocks5Tunnel(serverPort port: Int, credentials: LocalProxyCredentials) throws {
         // HEV is the tun2socks bridge: it reads IP packets from NetworkExtension
         // and forwards them into the local SOCKS inbound opened by Xray.
         // Xray alone can start successfully while user traffic still cannot
         // leave the device; HEV logs close that gap during real-device tests.
         let logDirectory = TunnelDebugStore.shared.logDirectoryURL()
             ?? FileManager.default.temporaryDirectory
-        let logURL = logDirectory.appendingPathComponent("hev-socks5-tunnel.log")
+        try TunnelHEVLogPolicy.removeLegacyLogs(
+            appGroupDirectory: TunnelDebugStore.shared.logDirectoryURL(),
+            temporaryDirectory: FileManager.default.temporaryDirectory,
+            workerStopped: !hasStartedHEV || hevLifecycle.waitForExit(timeout: 0)
+        )
+        let logURL = logDirectory.appendingPathComponent(TunnelHEVLogPolicy.filename)
         hevLogURL = logURL
         try? TunnelFileLog.trimIfNeeded(logURL)
         try? TunnelFileLog.append(
@@ -350,24 +361,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             maxFileBytes: 512 * 1024,
             retainedBytes: 256 * 1024
         )
-        let config = """
-        tunnel:
-          mtu: \(tunnelMTU)
-        socks5:
-          port: \(port)
-          address: 127.0.0.1
-          udp: 'udp'
-        misc:
-          task-stack-size: 86016
-          tcp-buffer-size: 65536
-          max-session-count: 512
-          connect-timeout: 5000
-          tcp-read-write-timeout: 300000
-          udp-read-write-timeout: 60000
-          log-file: \(logURL.path)
-          log-level: error
-          limit-nofile: 65535
-        """
+        let config = TunnelHEVConfiguration.make(port: port, credentials: credentials, mtu: tunnelMTU, logURL: logURL)
         rememberTunnelLog("Starting HEV socks5 tunnel on 127.0.0.1:\(port), log=\(logURL.path)")
         tunnelLog.info("Starting HEV socks5 tunnel on 127.0.0.1:\(port, privacy: .public), mtu \(tunnelMTU, privacy: .public)")
         hasStartedHEV = true
@@ -473,9 +467,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     /// extension, but iOS has tighter rules: file logs may be denied inside the
     /// extension sandbox, DNS must line up with `NEDNSSettings`, and the remote
     /// proxy server must not be reached through the tunnel that depends on it.
-    private func prepareXrayConfigForTunnel(_ jsonData: Data) -> TunnelPreparedConfig? {
+    private func prepareXrayConfigForTunnel(_ jsonData: Data, credentials: LocalProxyCredentials) -> TunnelPreparedConfig? {
         guard let prepared = TunnelXrayConfigPreparer.prepare(
             jsonData: jsonData,
+            credentials: credentials,
             resolveIPv4: { resolveIPv4Addresses(for: $0).first }
         ) else {
             tunnelLog.warning("Could not prepare Xray config for iOS tunnel")
@@ -571,7 +566,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func performTunnelHealthCheck(trigger: String) -> Bool {
         guard !watchdogSuspended,
               !runtimeRecoveryInFlight,
-              let port = watchdogInboundPort else {
+              let port = watchdogInboundPort,
+              let credentials = runtimeSpec?.credentials else {
             return false
         }
         guard !hevLifecycle.isStopRequested, hevLifecycle.isRunning else {
@@ -580,10 +576,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return false
         }
 
-        let inboundResult = socksInboundHealthCheck(port: port)
+        let inboundResult = socksInboundHealthCheck(port: port, credentials: credentials)
         watchdogInboundHealthy = inboundResult.hasPrefix("ok")
-        let connectResult = socksConnectHealthCheck(port: port)
-        let httpResult = socksHTTPHealthCheck(port: port)
+        let connectResult = socksConnectHealthCheck(port: port, credentials: credentials)
+        let httpResult = socksHTTPHealthCheck(port: port, credentials: credentials)
         if let hevLogURL {
             try? TunnelFileLog.trimIfNeeded(hevLogURL)
         }
@@ -634,7 +630,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         scheduleNativeRecovery(after: 0)
     }
 
-    private func socksInboundHealthCheck(port: Int) -> String {
+    private func socksInboundHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String {
         let fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
         guard fd >= 0 else {
             return "socket failed errno=\(errno)"
@@ -662,223 +658,31 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return "connect 127.0.0.1:\(port) failed errno=\(errno)"
         }
 
-        let greeting: [UInt8] = [0x05, 0x01, 0x00]
-        let sent = greeting.withUnsafeBytes {
-            send(fd, $0.baseAddress, greeting.count, 0)
-        }
-        guard sent == greeting.count else {
-            return "send greeting failed sent=\(sent) errno=\(errno)"
-        }
-
-        var response = [UInt8](repeating: 0, count: 2)
-        let responseCount = response.count
-        let received = response.withUnsafeMutableBytes {
-            recv(fd, $0.baseAddress, responseCount, 0)
-        }
-        guard received == 2 else {
-            return "recv greeting failed received=\(received) errno=\(errno)"
-        }
-
-        return "ok response=\(response.map { String(format: "%02x", $0) }.joined(separator: " "))"
+        return LocalSOCKS5Client.authenticate(fd: fd, credentials: credentials) ? "ok authenticated" : "authentication failed"
     }
 
-    private func socksConnectHealthCheck(port: Int) -> String {
-        let fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
-        guard fd >= 0 else {
-            return "socket failed errno=\(errno)"
-        }
-        defer { close(fd) }
-
-        var timeout = timeval(tv_sec: 5, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = UInt16(port).bigEndian
-        guard inet_pton(AF_INET, "127.0.0.1", &address.sin_addr) == 1 else {
-            return "inet_pton failed"
-        }
-
-        let connectResult = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard connectResult == 0 else {
-            return "connect 127.0.0.1:\(port) failed errno=\(errno)"
-        }
-
-        let greeting: [UInt8] = [0x05, 0x01, 0x00]
-        guard sendAll(fd: fd, bytes: greeting) else {
-            return "send greeting failed errno=\(errno)"
-        }
-        guard let greetingResponse = recvExact(fd: fd, count: 2) else {
-            return "recv greeting failed errno=\(errno)"
-        }
-        guard greetingResponse == [0x05, 0x00] else {
-            return "unexpected greeting=\(hex(greetingResponse))"
-        }
-
-        let request: [UInt8] = [
-            0x05, 0x01, 0x00, 0x01,
-            0x01, 0x01, 0x01, 0x01,
-            0x00, 0x50
-        ]
-        guard sendAll(fd: fd, bytes: request) else {
-            return "send connect failed errno=\(errno)"
-        }
-        guard let header = recvExact(fd: fd, count: 4) else {
-            return "recv connect header failed errno=\(errno)"
-        }
-        guard header.count == 4 else {
-            return "short connect header=\(hex(header))"
-        }
-        let atyp = header[3]
-        let remaining: Int
-        switch atyp {
-        case 0x01:
-            remaining = 6
-        case 0x03:
-            guard let lengthBytes = recvExact(fd: fd, count: 1), let length = lengthBytes.first else {
-                return "recv domain length failed errno=\(errno)"
-            }
-            remaining = Int(length) + 2
-        case 0x04:
-            remaining = 18
-        default:
-            return "unexpected connect atyp=\(String(format: "%02x", atyp)) header=\(hex(header))"
-        }
-        let tail = recvExact(fd: fd, count: remaining) ?? []
-        let status = header[1] == 0x00 ? "ok" : "failed"
-        return "\(status) response=\(hex(header + tail))"
+    private func socksConnectHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String {
+        do {
+            let fd = try LocalSOCKS5Client.openConnection(proxyPort: port, credentials: credentials,
+                                                        host: "1.1.1.1", port: 80, timeout: 5)
+            close(fd)
+            return "ok authenticated connect"
+        } catch { return "authenticated connect failed" }
     }
 
-    /// Performs an HTTP request through the same local SOCKS inbound used by HEV.
-    ///
-    /// This is the decisive regression signal for the current investigation:
-    /// TCP/Reality returned `HTTP/1.1 204 No Content` on device, while failing
-    /// XHTTP links reached earlier stages but did not return usable page bytes.
-    private func socksHTTPHealthCheck(port: Int) -> String {
-        let host = "www.gstatic.com"
-        let path = "/generate_204"
-        let hostBytes = Array(host.utf8)
-        guard hostBytes.count <= 255 else {
-            return "host too long"
-        }
-
-        let fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
-        guard fd >= 0 else {
-            return "socket failed errno=\(errno)"
-        }
-        defer { close(fd) }
-
-        var timeout = timeval(tv_sec: 8, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = UInt16(port).bigEndian
-        guard inet_pton(AF_INET, "127.0.0.1", &address.sin_addr) == 1 else {
-            return "inet_pton failed"
-        }
-
-        let connectResult = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard connectResult == 0 else {
-            return "connect 127.0.0.1:\(port) failed errno=\(errno)"
-        }
-
-        guard sendAll(fd: fd, bytes: [0x05, 0x01, 0x00]),
-              let greetingResponse = recvExact(fd: fd, count: 2),
-              greetingResponse == [0x05, 0x00] else {
-            return "socks greeting failed errno=\(errno)"
-        }
-
-        var request: [UInt8] = [0x05, 0x01, 0x00, 0x03, UInt8(hostBytes.count)]
-        request.append(contentsOf: hostBytes)
-        request.append(0x00)
-        request.append(0x50)
-        guard sendAll(fd: fd, bytes: request) else {
-            return "send connect failed errno=\(errno)"
-        }
-        guard let header = recvExact(fd: fd, count: 4) else {
-            return "recv connect header failed errno=\(errno)"
-        }
-        guard header.count == 4, header[1] == 0x00 else {
-            return "connect failed response=\(hex(header)) errno=\(errno)"
-        }
-        let atyp = header[3]
-        let remaining: Int
-        switch atyp {
-        case 0x01:
-            remaining = 6
-        case 0x03:
-            guard let lengthBytes = recvExact(fd: fd, count: 1), let length = lengthBytes.first else {
-                return "recv domain length failed errno=\(errno)"
-            }
-            remaining = Int(length) + 2
-        case 0x04:
-            remaining = 18
-        default:
-            return "unexpected connect atyp=\(String(format: "%02x", atyp))"
-        }
-        _ = recvExact(fd: fd, count: remaining)
-
-        let httpRequest = """
-        GET \(path) HTTP/1.1\r
-        Host: \(host)\r
-        User-Agent: flutter-vless-healthcheck\r
-        Connection: close\r
-        \r
-
-        """
-        guard sendAll(fd: fd, bytes: Array(httpRequest.utf8)) else {
-            return "send http failed errno=\(errno)"
-        }
-        guard let response = recvSome(fd: fd, maxCount: 512), !response.isEmpty else {
-            return "recv http failed errno=\(errno)"
-        }
-        let text = String(decoding: response, as: UTF8.self)
-        let firstLine = text.components(separatedBy: "\r\n").first ?? text
-        return "ok \(host)\(path) \(firstLine)"
-    }
-
-    private func sendAll(fd: Int32, bytes: [UInt8]) -> Bool {
-        var sentTotal = 0
-        while sentTotal < bytes.count {
-            let sent = bytes.withUnsafeBytes {
-                send(fd, $0.baseAddress!.advanced(by: sentTotal), bytes.count - sentTotal, 0)
-            }
-            guard sent > 0 else {
-                return false
-            }
-            sentTotal += sent
-        }
-        return true
-    }
-
-    private func recvExact(fd: Int32, count: Int) -> [UInt8]? {
-        var result: [UInt8] = []
-        result.reserveCapacity(count)
-        while result.count < count {
-            var buffer = [UInt8](repeating: 0, count: count - result.count)
-            let bufferCount = buffer.count
-            let received = buffer.withUnsafeMutableBytes {
-                recv(fd, $0.baseAddress, bufferCount, 0)
-            }
-            guard received > 0 else {
-                return nil
-            }
-            result.append(contentsOf: buffer.prefix(received))
-        }
-        return result
+    /// Requires authenticated CONNECT and a successful HTTP response from the proxy path.
+    private func socksHTTPHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String {
+        do {
+            let fd = try LocalSOCKS5Client.openConnection(proxyPort: port, credentials: credentials,
+                                                        host: "www.gstatic.com", port: 80)
+            defer { close(fd) }
+            let request = "GET /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\nConnection: close\r\n\r\n"
+            guard LocalSOCKS5Client.sendAll(fd: fd, bytes: Array(request.utf8)),
+                  let response = recvSome(fd: fd, maxCount: 512),
+                  let status = String(bytes: response, encoding: .utf8)?.split(separator: " ").dropFirst().first,
+                  let code = Int(status), (200...399).contains(code) else { return "HTTP response failed" }
+            return "ok authenticated HTTP"
+        } catch { return "authenticated HTTP connection failed" }
     }
 
     private func recvSome(fd: Int32, maxCount: Int) -> [UInt8]? {

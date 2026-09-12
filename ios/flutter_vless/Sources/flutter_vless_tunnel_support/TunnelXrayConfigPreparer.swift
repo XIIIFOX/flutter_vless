@@ -50,6 +50,7 @@ public enum TunnelXrayConfigPreparer {
 
     public static func prepare(
         jsonData: Data,
+        credentials: LocalProxyCredentials,
         resolveIPv4: (String) -> String? = { _ in nil }
     ) -> TunnelPreparedConfig? {
         do {
@@ -58,6 +59,9 @@ public enum TunnelXrayConfigPreparer {
                 return nil
             }
             var messages: [String] = []
+
+            try LocalProxyAccessPolicy.applyVPN(to: &configJSON, credentials: credentials)
+            messages.append("Applied session authentication to the managed loopback SOCKS inbound")
 
             guard XrayPrivacyConfig.apply(to: &configJSON) else { return nil }
             messages.append("Applied private Xray logging policy")

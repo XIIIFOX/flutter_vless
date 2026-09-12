@@ -48,8 +48,18 @@ buffer.
 
 ## Privacy
 
-Native logs may contain server addresses, requested destinations, route
-details, App Group or filesystem paths, and Xray error context. Applications
+iOS and Android use fixed safe events instead of copying raw Xray/tun2socks
+stdout, stderr, commands or exception strings. Android disables Xray file logs;
+tun2socks runs at `error`, but even error text is drained rather than forwarded.
+Snapshots contain lifecycle stages, retry counts, exit codes and numerical stats.
+Only the owning session can rotate its versioned diagnostic file. Known legacy
+Android logs and iOS `hev-socks5-tunnel.log` files are deleted without reading
+or republishing their contents; other application files are untouched.
+
+iOS HEV keeps a bounded error-only `hev-socks5-tunnel-error-v2.log`; snapshots
+report only its size. A worker must be stopped before legacy HEV cleanup.
+macOS and Windows diagnostics retain their existing separate contracts and may
+contain server addresses, destinations, routes, paths and Xray context. Applications
 should let users review the snapshot before copying, uploading, or attaching it
 to a support request. Credentials and full configuration JSON must never be
 added by the diagnostic collectors.

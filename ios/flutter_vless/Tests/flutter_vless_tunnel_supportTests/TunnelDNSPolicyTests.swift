@@ -2,6 +2,7 @@ import XCTest
 @testable import flutter_vless_tunnel_support
 
 final class TunnelDNSPolicyTests: XCTestCase {
+    private static let credentials = try! LocalProxyCredentials(username: "test-session", password: "test-session-password")
     func testHTTPAndSocksDNSUseTCPProxyAndKeepApplicationRules() throws {
         for proto in ["http", "socks"] {
             let applicationRule: [String: Any] = ["inboundTag": ["socks-direct"], "outboundTag": "direct"]
@@ -14,7 +15,7 @@ final class TunnelDNSPolicyTests: XCTestCase {
                 "routing": ["rules": [applicationRule]]
             ]
             let data = try JSONSerialization.data(withJSONObject: input)
-            let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: data, resolveIPv4: { _ in "203.0.113.7" }))
+            let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: data, credentials: Self.credentials, resolveIPv4: { _ in "203.0.113.7" }))
             let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
             let dns = try XCTUnwrap(output["dns"] as? [String: Any])
             XCTAssertEqual(dns["servers"] as? [String], ["tcp://1.1.1.1"])

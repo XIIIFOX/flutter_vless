@@ -80,7 +80,7 @@ If your app already uses Flutter's generated values, check what
 The Android runtime is delivered as a Maven Central AAR:
 
 ```text
-dev.tfox.fluttervless:xray-android:26.7.28
+dev.tfox.fluttervless:xray-android:26.7.28-protect1
 ```
 
 The AAR contains `libxray.so` and `libtun2socks.so` for `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`, plus `geoip.dat` and `geosite.dat`. Keeping the runtime in Maven Central avoids Pub.dev archive limits while preserving the same files in the final Android app.
@@ -108,3 +108,71 @@ For the strict runtime update and publishing checklist, see `doc/release/android
 - Using too low a `minSdkVersion`
 - Forgetting the Gradle native-library extraction setting when needed
 - Copying iOS or macOS tunnel steps into an Android project
+
+## Session protection and local proxy access (1.1.6)
+
+The VPN service owns its session, native credentials and workers. Internal Xray,
+tun2socks, FD transfer or connectivity failures retain an already established
+TUN and report `CONNECTING`; retries use capped backoff. A replacement config is
+validated before switching workers. Late callbacks from earlier workers cannot
+own the current session. `CONNECTED` requires an authenticated data request and
+the captured packet path; process existence and upload counters are insufficient.
+
+Explicit stop disarms library restoration and frees the session. A system start
+with no app command restores only the authorized profile encrypted with an
+Android Keystore key in the app's no-backup directory. Missing data or lost keys
+produce a safe diagnostic failure. Killing the entire service loses its old FD:
+continuous blocking across process death requires Android's **Always-on VPN**
+with **Block connections without VPN**. The library cannot disable administrator
+or user OS policy. Permission revocation terminates the session.
+
+VPN sessions authenticate the managed loopback SOCKS with fresh native
+credentials and do not insert an HTTP listener. StatsService remains on loopback.
+Additional incompatible SOCKS/HTTP listeners are rejected before session mutation.
+Connected delay executes in the owning service process; no global Java
+Authenticator or shared plaintext password is used. Xray and tun2socks configs
+are private no-backup session files; argv contains only config paths.
+
+Proxy-only mode retains its separately configured authentication/noauth behavior
+and has no system VPN isolation promise. The plugin does not exclude its own UID
+from the VPN. User-requested `blockedApps` and Xray `direct` rules remain supported.
+
+## Explicit DNS policy
+
+Default `AndroidDnsPolicy.config` preserves the supplied config's semantics and
+does not promise protected DNS. Choose proxy DNS explicitly:
+
+```dart
+await flutterVless.startVless(
+  remark: parsed.remark,
+  config: parsed.getFullConfiguration(),
+  androidDnsPolicy: AndroidDnsPolicy.proxy,
+  // Optional when several proxy outbounds are present:
+  androidDnsProxyOutboundTag: 'proxy',
+);
+```
+
+The protected mode advertises `198.18.0.2` as system DNS and forwards its queries
+over TCP through the selected proxy. A suitable `proxy` tag or a unique supported
+outbound is selected; ambiguity and reserved-tag/virtual-address conflicts fail
+before changing a working session. Service DNS rules precede user `UDP -> direct`
+rules while other direct routing is preserved. Physical-network bootstrap resolves
+only the remote transport endpoints; it is not a fallback for user queries.
+
+This policy protects the virtual system resolver. It does not override intentional
+direct rules to other DNS/DoH destinations or encrypt a plaintext remote proxy
+transport. Unsupported/older native backends reject the explicit option.
+
+Use root Gradle dependency verification as described in
+[the runtime release guide](../release/android-runtime-maven-central.md).
+Published library metadata alone does not enable verification in consuming apps.
+
+### Cold-start readiness
+
+Completion of `startVless` confirms acceptance of the request. Wait for
+`CONNECTED`, which follows SOCKS authorization, TUN descriptor transfer, and a
+real forwarding check through the TUN. A VPN network appearing in
+ConnectivityManager does not establish readiness: initial traffic may still use
+the previous physical route during startup. Blocking before the VPN starts and
+after the entire service dies requires Android's always-on/lockdown policy.
+An established TUN is retained during internal worker recovery.

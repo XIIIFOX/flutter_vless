@@ -1,6 +1,9 @@
 # build artifacts
 build/
 **/build/
+output/
+**/.build/
+**/__pycache__/
 
 # IDE / OS
 .idea/

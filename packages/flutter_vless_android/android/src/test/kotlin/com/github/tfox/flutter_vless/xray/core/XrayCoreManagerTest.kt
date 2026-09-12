@@ -62,7 +62,7 @@ class XrayCoreManagerTest {
             """.trimIndent()
         )
 
-        val output = XrayCoreManager.buildRuntimeConfigJson(config, filesDir)
+        val output = XrayCoreManager.buildRuntimeConfigJson(config, filesDir, credentials)
         val user = output
             .getJSONArray("outbounds")
             .getJSONObject(0)
@@ -75,8 +75,8 @@ class XrayCoreManagerTest {
 
         assertEquals(vlessEncryption, user.getString("encryption"))
         assertEquals("xtls-rprx-vision", user.getString("flow"))
-        assertEquals(File(filesDir, "access.log").absolutePath, log.getString("access"))
-        assertEquals(File(filesDir, "error.log").absolutePath, log.getString("error"))
+        assertEquals("none", log.getString("access"))
+        assertEquals("none", log.getString("error"))
         assertTrue(output.has("api"))
         assertTrue(output.has("stats"))
         assertTrue(output.getJSONObject("policy").getJSONObject("system").getBoolean("statsOutboundDownlink"))
@@ -115,23 +115,20 @@ class XrayCoreManagerTest {
             """.trimIndent()
         )
 
-        val output = XrayCoreManager.buildRuntimeConfigJson(config, File("build/test-files/android-conflicts"))
+        val output = XrayCoreManager.buildRuntimeConfigJson(config, File("build/test-files/android-conflicts"), credentials)
         val inbounds = output.getJSONArray("inbounds")
         val socks = findInbound(inbounds, "socks_1")
-        val http = findInbound(inbounds, "http_1")
         val api = findInbound(inbounds, "api_1")
         val routingRules = output.getJSONObject("routing").getJSONArray("rules")
-        val apiRule = routingRules.getJSONObject(routingRules.length() - 1)
+        val apiRule = routingRules.getJSONObject(0)
 
         assertEquals(10810, config.LOCAL_SOCKS5_PORT)
-        assertEquals(10811, config.LOCAL_HTTP_PORT)
-        assertEquals(10812, config.LOCAL_API_PORT)
+        assertEquals(10811, config.LOCAL_API_PORT)
         assertEquals("socks", socks.getString("protocol"))
         assertEquals(10810, socks.getInt("port"))
-        assertEquals("http", http.getString("protocol"))
-        assertEquals(10811, http.getInt("port"))
+        assertEquals(0, countInboundsByProtocol(inbounds, "http"))
         assertEquals("dokodemo-door", api.getString("protocol"))
-        assertEquals(10812, api.getInt("port"))
+        assertEquals(10811, api.getInt("port"))
         assertEquals("api", apiRule.getString("outboundTag"))
         assertEquals("api_1", apiRule.getJSONArray("inboundTag").getString(0))
     }
@@ -144,8 +141,8 @@ class XrayCoreManagerTest {
             V2RAY_FULL_JSON_CONFIG = """
                 {
                   "inbounds": [
-                    { "tag": "socks", "protocol": "socks", "port": 10807 },
-                    { "tag": "http", "protocol": "http", "port": 10808 }
+                    { "tag": "socks", "protocol": "socks", "listen": "127.0.0.1", "port": 10807 },
+                    { "tag": "http", "protocol": "http", "listen": "127.0.0.1", "port": 10808 }
                   ],
                   "outbounds": [
                     {
@@ -157,7 +154,7 @@ class XrayCoreManagerTest {
             """.trimIndent()
         )
 
-        val output = XrayCoreManager.buildRuntimeConfigJson(config, File("build/test-files/android-existing"))
+        val output = XrayCoreManager.buildRuntimeConfigJson(config, File("build/test-files/android-existing"), credentials)
         val inbounds = output.getJSONArray("inbounds")
 
         assertEquals(3, inbounds.length())
@@ -208,7 +205,8 @@ class XrayCoreManagerTest {
                 }
             """.trimIndent(),
             proxyPort = 19080,
-            filesDir = File("build/test-files/android-delay")
+            filesDir = File("build/test-files/android-delay"),
+            credentials = credentials
         )
         val inbounds = output.getJSONArray("inbounds")
         val delaySocks = findInbound(inbounds, "socks")
@@ -225,7 +223,7 @@ class XrayCoreManagerTest {
         assertEquals(19080, delaySocks.getInt("port"))
         assertEquals("none", user.getString("encryption"))
         assertEquals("xtls-rprx-vision", user.getString("flow"))
-        assertTrue(output.getJSONObject("log").getString("access").endsWith("access.log"))
+        assertEquals("none", output.getJSONObject("log").getString("access"))
         assertTrue(output.has("api"))
     }
 
@@ -281,7 +279,7 @@ class XrayCoreManagerTest {
             """.trimIndent()
         )
 
-        val runtime = XrayCoreManager.buildRuntimeConfigJson(config, filesDir)
+        val runtime = XrayCoreManager.buildRuntimeConfigJson(config, filesDir, credentials)
         val stream = runtime
             .getJSONArray("outbounds")
             .getJSONObject(0)
@@ -295,8 +293,8 @@ class XrayCoreManagerTest {
         assertFalse(stream.has("httpUpgradeSettings"))
         assertFalse(stream.has("splitHTTPSettings"))
         assertFalse(stream.getJSONObject("tlsSettings").has("allowInsecure"))
-        assertEquals(File(filesDir, "access.log").absolutePath, runtime.getJSONObject("log").getString("access"))
-        assertEquals(File(filesDir, "error.log").absolutePath, runtime.getJSONObject("log").getString("error"))
+        assertEquals("none", runtime.getJSONObject("log").getString("access"))
+        assertEquals("none", runtime.getJSONObject("log").getString("error"))
     }
 
     private fun findInbound(inbounds: JSONArray, tag: String): JSONObject {
@@ -320,6 +318,7 @@ class XrayCoreManagerTest {
     }
 
     private companion object {
+        val credentials = LocalProxyCredentials("sessionuser", "sessionsecret")
         const val vlessEncryption =
             "mlkem768x25519plus.native.1rtt.100-500-2000.75-0-100.80-0-5000.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
     }

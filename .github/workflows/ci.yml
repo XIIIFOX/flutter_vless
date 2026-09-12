@@ -102,13 +102,14 @@ jobs:
         working-directory: example
         run: flutter pub get
       - name: Run plugin Kotlin unit tests
-        working-directory: example/android
-        run: ./gradlew :flutter_vless_android:testDebugUnitTest --stacktrace -PflutterVlessAndroidRuntimeRepo="$GITHUB_WORKSPACE/android_runtime/xray_android/build/repo"
+        run: python3 tool/with_android_local_runtime.py :flutter_vless_android:testDebugUnitTest --stacktrace
+      - name: Test physical DNS capture verification
+        run: python3 tool/test_verify_android_dns_capture.py
       - name: Verify Maven Central Android runtime resolution
         run: tool/test_android_maven_runtime.sh
 
   android-emulator:
-    name: Android emulator Xray runtime smoke
+    name: Android emulator security and runtime
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -135,6 +136,17 @@ jobs:
           disable-linux-hw-accel: false
           script: |
             (cd example && flutter pub get && flutter test integration_test/android_xray_runtime_smoke_test.dart -d emulator-5554)
+            ANDROID_SERIAL=emulator-5554 tool/test_android_security_emulator.sh
+            python3 tool/test_android_separate_uid.py --serial emulator-5554 --output build/android-separate-uid-results.json
+      - name: Preserve Android security test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-security-emulator
+          path: |
+            build/android-security-emulator.*/
+            build/android-separate-uid-results.json
+          if-no-files-found: ignore
 
   ios:
     name: iOS Swift and Xcode build
@@ -162,6 +174,24 @@ jobs:
         run: flutter pub get
       - name: Test PacketTunnel Swift helper
         run: tool/test_ios_tunnel_support.sh
+      - name: Test iOS profile transactions and operation ordering
+        run: |
+          tool/test_ios_manager_policy.sh
+          tool/test_ios_operation_queue.sh
+      - name: Test strict local proxy transport and TLS rejection
+        run: tool/test_ios_local_proxy_transport.sh
+      - name: Resolve pinned HEV and verify its authentication configuration
+        run: |
+          swift package --package-path ios/flutter_vless resolve
+          tool/test_ios_hev_auth.sh
+      - name: Test real iOS Xray authentication and DNS in simulator
+        run: |
+          SIMULATOR_UDID="$(xcrun simctl create 'Flutter Vless Security' com.apple.CoreSimulator.SimDeviceType.iPhone-16)"
+          export SIMULATOR_UDID
+          trap 'xcrun simctl shutdown "$SIMULATOR_UDID"; xcrun simctl delete "$SIMULATOR_UDID"' EXIT
+          xcrun simctl boot "$SIMULATOR_UDID"
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+          tool/test_ios_privacy_runtime.sh
       - name: Test bounded Apple Xray diagnostics store
         run: tool/test_bounded_native_log_store.sh
       - name: Install example dependencies
@@ -170,6 +200,12 @@ jobs:
       - name: Build example iOS app without codesigning
         working-directory: example
         run: flutter build ios --debug --no-codesign
+      - name: Build standalone iOS SwiftPM plugin product
+        run: |
+          FLUTTER_SDK="$(dirname "$(dirname "$(command -v flutter)")")"
+          xcodebuild -workspace example/ios/Runner.xcworkspace -scheme flutter-vless \
+            -configuration Debug -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO \
+            "FRAMEWORK_SEARCH_PATHS=\$(inherited) $FLUTTER_SDK/bin/cache/artifacts/engine/ios/Flutter.xcframework/ios-arm64" build
       - name: Build example macOS app
         working-directory: example
         env:

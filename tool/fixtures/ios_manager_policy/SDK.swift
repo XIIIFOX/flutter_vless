@@ -51,6 +51,7 @@ enum SDK {
     static var failAllLoads = false
     static var failAfterNextSave = false
     static var failNextRefresh = false
+    static var failNextSave = false
     static var saves = 0
     static var stopCalls = 0
     static var delayedStop = false
@@ -71,6 +72,7 @@ class NETunnelProviderManager {
         if SDK.failNextRefresh { SDK.failNextRefresh = false; throw SDKError.unavailable }
     }
     func saveToPreferences() async throws {
+        if SDK.failNextSave { SDK.failNextSave = false; throw SDKError.unavailable }
         SDK.saves += 1; SDK.profile = self
         if SDK.failAfterNextSave { SDK.failAfterNextSave = false; SDK.failNextRefresh = true }
     }

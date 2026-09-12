@@ -48,6 +48,11 @@ Parameters:
 - `providerBundleIdentifier`: base app bundle id on iOS/macOS.
 - `groupIdentifier`: Apple App Group shared by the app and Packet Tunnel
   extension.
+- `keychainAccessGroup`: iOS shared Keychain group. The parameter can be omitted
+  when `FlutterVlessKeychainAccessGroup` is set in Runner's Info.plist. VPN mode
+  requires a group accessible to both targets: reuse their registered App Group
+  or configure an optional dedicated Keychain group. `groupIdentifier` is not an
+  automatic fallback. See [iOS setup](platform/ios.md#keychain-profile-migration-116).
 
 Apple platforms append the Packet Tunnel extension suffix internally. Pass the
 base app bundle id, not the extension bundle id.
@@ -100,6 +105,11 @@ Optional parameters:
   mode so both the app and Packet Tunnel extension can read it. Omit this
   parameter to keep Xray's default/bundled asset lookup.
 - `notificationDisconnectButtonName`: Android notification action label.
+- `androidDnsPolicy`: `AndroidDnsPolicy.config` (default) preserves raw DNS
+  semantics; `AndroidDnsPolicy.proxy` protects the virtual system resolver.
+- `androidDnsProxyOutboundTag`: optional selected proxy tag, only with proxy DNS.
+  Unsupported native backends reject explicitly requested new guarantees before
+  starting or reconfiguring a session.
 
 Validation:
 

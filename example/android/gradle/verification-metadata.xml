@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<verification-metadata xmlns="https://schema.gradle.org/dependency-verification"
+                       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                       xsi:schemaLocation="https://schema.gradle.org/dependency-verification https://schema.gradle.org/dependency-verification/verification-metadata-1.3.xsd">
+  <configuration>
+    <verify-metadata>true</verify-metadata>
+    <verify-signatures>false</verify-signatures>
+    <trusted-artifacts>
+      <!-- This policy audits the native runtime only. Other dependencies retain
+           the consumer's existing trust policy; no runtime-group wildcard. -->
+      <trust group="^(?!dev\.tfox\.fluttervless$).*" regex="true" reason="Outside the native runtime verification scope"/>
+    </trusted-artifacts>
+  </configuration>
+  <components>
+    <component group="dev.tfox.fluttervless" name="xray-android" version="26.7.28-protect1">
+      <artifact name="xray-android-26.7.28-protect1.aar">
+        <sha256 value="54785c3c5437473d8f9c8071a6138ae781ed2038e57beb47b6a46de3545c3ad8" origin="GitHub release asset 547535638, release xray-android-v26.7.28-protect1; independently matched Maven Central"/>
+      </artifact>
+      <artifact name="xray-android-26.7.28-protect1.pom">
+        <sha256 value="7ce7fc19a20d33dfed9579c057a2218f8bb95ad34eb482b8584fc87d12624957" origin="Maven Central POM reviewed against committed release publication: same coordinates, no dependencies or repositories"/>
+      </artifact>
+    </component>
+  </components>
+</verification-metadata>

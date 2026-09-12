@@ -2,114 +2,41 @@ package com.github.tfox.flutter_vless.xray.core
 
 import java.io.File
 import java.nio.file.Files
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
+import org.junit.Assert.*
 import org.junit.Test
 
 class XrayDiagnosticsStoreTest {
-    @Test
-    fun snapshot_combinesCrossProcessOutputAndXrayFileLogs() {
-        withTempDirectory { directory ->
-            XrayDiagnosticsStore.reset(directory)
-            XrayDiagnosticsStore.append(directory, "xray", "core started\ntransport ready")
-            XrayDiagnosticsStore.append(directory, "tun2socks", "TUN fd received")
-            File(directory, "access.log").writeText("accepted tcp:example.com:443")
-            File(directory, "error.log").writeText("warning: retrying")
-
-            val snapshot = XrayDiagnosticsStore.snapshot(directory)
-
-            assertTrue(snapshot.contains("[xray] core started"))
-            assertTrue(snapshot.contains("[tun2socks] TUN fd received"))
-            assertTrue(snapshot.contains("accepted tcp:example.com:443"))
-            assertTrue(snapshot.contains("warning: retrying"))
-        }
+    @Test fun untrustedNativeOutputNeverEntersSnapshotOrFileAndLegacyFilesAreRemoved() = withDirectory { directory ->
+        val secret = "password=canary-secret socks5://user:password@198.51.100.3 secret.example https://subscription.example/token\u001b\r\n"
+        listOf("flutter_vless_xray_debug.log", "access.log", "error.log").forEach { File(directory, it).writeText(secret) }
+        val other = File(directory, "user-document.txt").apply { writeText(secret) }
+        assertEquals("", XrayDiagnosticsStore.snapshot(directory))
+        val generation = XrayDiagnosticsStore.reset(directory)
+        XrayDiagnosticsStore.append(directory, secret, secret, generation)
+        XrayDiagnosticsStore.event(directory, XrayDiagnosticsStore.Event.RECOVERING, generation, 3)
+        val snapshot = XrayDiagnosticsStore.snapshot(directory)
+        assertEquals("OUTPUT_DISCARDED\nRECOVERING value=3", snapshot)
+        assertTrue(other.exists())
+        for (file in directory.listFiles()!!.filter { it != other }) assertFalse(file.readText().contains("canary-secret"))
+        assertFalse(File(directory, "flutter_vless_xray_debug.log").exists())
     }
-
-    @Test
-    fun append_rotatesDiagnosticsAndKeepsNewestMessages() {
-        withTempDirectory { directory ->
-            XrayDiagnosticsStore.reset(directory)
-            repeat(80) { index ->
-                XrayDiagnosticsStore.append(
-                    directory,
-                    "xray",
-                    "message-$index ${"x".repeat(4096)}"
-                )
-            }
-            File(directory, "access.log").writeText(
-                List(2000) { index -> "access-$index ${"a".repeat(40)}" }.joinToString("\n")
-            )
-            File(directory, "error.log").writeText(
-                List(2000) { index -> "error-$index ${"e".repeat(40)}" }.joinToString("\n")
-            )
-
-            val snapshot = XrayDiagnosticsStore.snapshot(directory)
-
-            assertTrue(snapshot.contains("message-79"))
-            assertFalse(snapshot.contains("message-0 "))
-            assertTrue(snapshot.contains("access-1999"))
-            assertTrue(snapshot.contains("error-1999"))
-            assertTrue(snapshot.toByteArray().size < 64 * 1024)
-        }
+    @Test fun boundedEventsRejectStaleWritersAndRetainUsefulFailureNumbers() = withDirectory { directory ->
+        val old = XrayDiagnosticsStore.reset(directory)
+        val current = XrayDiagnosticsStore.reset(directory)
+        XrayDiagnosticsStore.event(directory, XrayDiagnosticsStore.Event.SESSION_START, old)
+        repeat(12000) { XrayDiagnosticsStore.event(directory, XrayDiagnosticsStore.Event.RECOVERING, current, it.toLong()) }
+        val snapshot = XrayDiagnosticsStore.snapshot(directory)
+        assertFalse(snapshot.contains("SESSION_START"))
+        assertTrue(snapshot.endsWith("RECOVERING value=11999"))
+        assertTrue(snapshot.toByteArray().size < 40 * 1024)
+        assertTrue(File(directory, "flutter_vless_events_v2.log").length() <= 128 * 1024)
     }
-
-    @Test
-    fun readTail_discardsPartialFirstLineAndBoundsLineCount() {
-        withTempDirectory { directory ->
-            val file = File(directory, "tail.log")
-            file.writeText("first-line\nsecond-line\nthird-line\n")
-
-            val tail = XrayDiagnosticsStore.readTail(
-                file,
-                maxBytes = 25,
-                maxLines = 1
-            )
-
-            assertTrue(tail == "third-line")
-        }
+    @Test fun readTailDiscardsPartialFirstLineAndBoundsLineCount() = withDirectory { directory ->
+        val file = File(directory, "tail.log").apply { writeText("first-line\nsecond-line\nthird-line\n") }
+        assertEquals("third-line", XrayDiagnosticsStore.readTail(file, 25, 1))
     }
-
-    @Test
-    fun append_rejectsStaleGenerationAfterFastRestart() {
-        withTempDirectory { directory ->
-            val firstGeneration = XrayDiagnosticsStore.reset(directory)
-            XrayDiagnosticsStore.append(directory, "xray", "first session", firstGeneration)
-            val secondGeneration = XrayDiagnosticsStore.reset(directory)
-            XrayDiagnosticsStore.append(directory, "xray", "second session", secondGeneration)
-            XrayDiagnosticsStore.append(directory, "xray", "stale output", firstGeneration)
-
-            val snapshot = XrayDiagnosticsStore.snapshot(directory)
-
-            assertTrue(snapshot.contains("second session"))
-            assertFalse(snapshot.contains("first session"))
-            assertFalse(snapshot.contains("stale output"))
-        }
-    }
-
-    @Test
-    fun append_boundsLongUnicodeWithoutReplacementCharacters() {
-        withTempDirectory { directory ->
-            val generation = XrayDiagnosticsStore.reset(directory)
-            XrayDiagnosticsStore.append(
-                directory,
-                "xray",
-                "🛰️".repeat(40_000),
-                generation
-            )
-
-            val snapshot = XrayDiagnosticsStore.snapshot(directory)
-
-            assertTrue(snapshot.toByteArray().size < 64 * 1024)
-            assertFalse(snapshot.contains("�"))
-        }
-    }
-
-    private fun withTempDirectory(block: (File) -> Unit) {
-        val directory = Files.createTempDirectory("flutter-vless-logs-").toFile()
-        try {
-            block(directory)
-        } finally {
-            directory.deleteRecursively()
-        }
+    private fun withDirectory(block: (File) -> Unit) {
+        val directory = Files.createTempDirectory("flutter-vless-events").toFile()
+        try { block(directory) } finally { directory.deleteRecursively() }
     }
 }

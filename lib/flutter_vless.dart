@@ -69,6 +69,11 @@ class FlutterVless {
   ///
   /// [groupIdentifier] is the Apple App Group shared by the app and Packet
   /// Tunnel extension, for example `group.com.example.myapp`.
+  /// [keychainAccessGroup] selects the shared iOS Keychain group. Reuse the
+  /// registered App Group or configure an optional dedicated Keychain group.
+  /// Omit this parameter to use `FlutterVlessKeychainAccessGroup` in Info.plist;
+  /// [groupIdentifier] is not an automatic fallback. Shared Keychain access is
+  /// required for iOS VPN mode, but not proxy-only mode.
   ///
   /// Call this once during app startup, before [startVless],
   /// [getConnectedServerDelay], or [getCoreVersion].
@@ -77,6 +82,7 @@ class FlutterVless {
     String notificationIconResourceName = "ic_launcher",
     String providerBundleIdentifier = "",
     String groupIdentifier = "",
+    String? keychainAccessGroup,
   }) async {
     await VlessPlatform.instance.initializeVless(
       onStatusChanged: onStatusChanged,
@@ -84,6 +90,7 @@ class FlutterVless {
       notificationIconResourceName: notificationIconResourceName,
       providerBundleIdentifier: providerBundleIdentifier,
       groupIdentifier: groupIdentifier,
+      keychainAccessGroup: keychainAccessGroup,
     );
   }
 
@@ -116,6 +123,9 @@ class FlutterVless {
   ///
   /// [notificationDisconnectButtonName] controls the Android foreground
   /// notification disconnect action label.
+  /// [androidDnsPolicy] defaults to preserving the supplied config. The `proxy`
+  /// policy protects virtual system DNS through [androidDnsProxyOutboundTag]
+  /// or the unambiguous proxy outbound; unsupported backends reject it.
   Future<void> startVless({
     required String remark,
     required String config,
@@ -123,6 +133,8 @@ class FlutterVless {
     List<String>? bypassSubnets,
     bool proxyOnly = false,
     String? geoAssetsDirectory,
+    AndroidDnsPolicy androidDnsPolicy = AndroidDnsPolicy.config,
+    String? androidDnsProxyOutboundTag,
     String notificationDisconnectButtonName = "DISCONNECT",
   }) async {
     final normalizedConfig = _normalizeConfigString(config);
@@ -134,6 +146,8 @@ class FlutterVless {
       proxyOnly: proxyOnly,
       bypassSubnets: bypassSubnets,
       geoAssetsDirectory: geoAssetsDirectory,
+      androidDnsPolicy: androidDnsPolicy,
+      androidDnsProxyOutboundTag: androidDnsProxyOutboundTag,
       notificationDisconnectButtonName: notificationDisconnectButtonName,
     );
   }

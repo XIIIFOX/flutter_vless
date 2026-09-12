@@ -1,11 +1,17 @@
 import Foundation
+import Security
 
 @main struct Probe {
     static func main() async throws {
-        let manager = PacketTunnelManager(providerBundleIdentifier: "fixture.XrayTunnel", groupIdentifier: "fixture")
+        let keychain = FixtureKeychain()
+        let manager = PacketTunnelManager(providerBundleIdentifier: "fixture.XrayTunnel", groupIdentifier: "fixture",
+                                          keychainAccessGroup: "TEAM.fixture.shared", keychainClient: keychain)
+        manager.xrayConfig = Data("{\"secret\":\"control-password\"}".utf8)
         while manager.isProcessing { await Task.yield() }
         let permissionGranted = await manager.testSaveAndLoadProfile()
         precondition(permissionGranted)
+        precondition(keychain.records.isEmpty, "Permission must not write any secret")
+        precondition((SDK.profile?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["xrayConfig"] == nil)
         precondition(SDK.profile?.isEnabled == false && SDK.profile?.isOnDemandEnabled == false)
         try await manager.start()
         precondition(manager.isRecoveryEnabled)
@@ -76,6 +82,7 @@ import Foundation
             precondition(entry.reachedQueue)
         }
         let provider = ProviderEntryProbe()
+        provider.keychain = keychain
         let oldProfile = NETunnelProviderProtocol()
         oldProfile.providerConfiguration = ["protectTraffic": true]
         provider.protocolConfiguration = oldProfile
@@ -104,9 +111,82 @@ import Foundation
         oldProfile.excludeLocalNetworks = false
         oldProfile.excludeAPNs = false
         oldProfile.excludeCellularServices = false
-        oldProfile.providerConfiguration = ["protectTraffic": false, "bypassSubnets": [String]()]
+        oldProfile.providerConfiguration = ["protectTraffic": false, "bypassSubnets": [String](), "xrayConfig": Data("legacy-password".utf8)]
+        do { try await provider.startTunnel(options: nil); preconditionFailure("Legacy plaintext must require app migration") }
+        catch TunnelSecretError.migrationRequired {}
+        precondition(!provider.reachedBootstrap)
+        oldProfile.providerBundleIdentifier = "fixture.XrayTunnel"
+        let providerStore = try TunnelSecretStore(accessGroup: "TEAM.fixture.shared", providerBundleIdentifier: "fixture.XrayTunnel", client: keychain)
+        let providerReference = try providerStore.insert(Data("working-config".utf8))
+        oldProfile.providerConfiguration = ["protectTraffic": false, "bypassSubnets": [String](),
+            "configSchemaVersion": 2, "xrayConfigReference": providerReference, "keychainAccessGroup": "TEAM.fixture.shared"]
+        keychain.failure = errSecInteractionNotAllowed
+        do { try await provider.startTunnel(options: nil); preconditionFailure("Locked Keychain cannot reach DNS bootstrap or install routes") } catch {}
+        precondition(!provider.reachedBootstrap)
+        keychain.failure = nil
         try await provider.startTunnel(options: nil)
         precondition(provider.reachedBootstrap, "Obsolete metadata cannot disable the required OS protection")
-        print("PASS: preference-load errors; post-save failure; strict bypass rejection; mandatory policy, legacy migration and proxy-switch teardown")
+        try await verifySecretTransactions()
+        print("PASS: preference-load errors; transactional Keychain rollback/migration/cleanup; permission privacy; cold-start secret denial; traffic protection and proxy-switch teardown")
     }
+}
+
+func verifySecretTransactions() async throws {
+    SDK.profile = nil
+    SDK.delayedStop = false
+    let keychain = FixtureKeychain()
+    let manager = PacketTunnelManager(providerBundleIdentifier: "transaction.XrayTunnel", groupIdentifier: "fixture",
+        keychainAccessGroup: "TEAM.fixture.shared", keychainClient: keychain)
+    while manager.isProcessing { await Task.yield() }
+    manager.xrayConfig = Data("{\"remote-password\":\"old-secret\"}".utf8)
+    try await manager.start()
+    let firstMetadata = (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+    let first = try TunnelSecretProfile.reference(in: firstMetadata)
+    precondition(firstMetadata["xrayConfig"] == nil)
+    SDK.profile!.connection.status = .connected
+    SDK.providerResponse = Data("ready".utf8)
+    await manager.refreshForwardingState()
+    let stops = SDK.stopCalls
+    let saves = SDK.saves
+    keychain.failure = errSecMissingEntitlement
+    manager.xrayConfig = Data("new-secret".utf8)
+    do { try await manager.start(); preconditionFailure("Wrong access group must reject the new profile") } catch {}
+    precondition(SDK.saves == saves && SDK.stopCalls == stops && manager.forwardingReady && manager.isRecoveryEnabled)
+    keychain.failure = nil
+    SDK.failNextSave = true
+    do { try await manager.start(); preconditionFailure("Profile save failure must rollback") } catch {}
+    precondition((try? TunnelSecretProfile.reference(in: (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!)) == first)
+    precondition(keychain.records[first] != nil && manager.isRecoveryEnabled)
+    keychain.failReadNumber = keychain.readCount + 2
+    do { try await manager.start(); preconditionFailure("Post-save Keychain read failure must rollback") } catch {}
+    keychain.failReadNumber = nil
+    precondition((try? TunnelSecretProfile.reference(in: (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!)) == first)
+    precondition(keychain.records[first] != nil && SDK.stopCalls == stops && manager.isRecoveryEnabled)
+    // Successful replacement still retains every possibly active old revision.
+    try await manager.start()
+    let second = try TunnelSecretProfile.reference(in: (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!)
+    precondition(second != first && keychain.records[first] != nil)
+    keychain.deleteFailure = errSecInteractionNotAllowed
+    try await manager.stop(waitForDisconnect: true)
+    precondition(keychain.records[first] != nil, "A deletion failure is retried from persistent inventory")
+    keychain.deleteFailure = nil
+    await manager.reload()
+    precondition(keychain.records.count == 1 && keychain.records[second] != nil, "Stop keeps the profile secret; reload retires old revisions")
+    // Migration on app load is idempotent and never saves plaintext on success.
+    let legacy = SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol
+    legacy.providerConfiguration = ["xrayConfig": Data("legacy-secret".utf8), "groupIdentifier": "fixture", "accidentalPassword": "must-drop"]
+    SDK.failNextSave = true
+    await manager.reload()
+    precondition((SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration?["xrayConfig"] as? Data == Data("legacy-secret".utf8),
+                 "Interrupted migration keeps the original profile until a successful retry")
+    await manager.reload()
+    let migrated = (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+    precondition(migrated["xrayConfig"] == nil && migrated["accidentalPassword"] == nil)
+    let count = keychain.records.count
+    await manager.reload()
+    precondition(keychain.records.count == count)
+    SDK.profile!.connection.status = .connected
+    SDK.delayedStop = true
+    try await manager.removeFromPreferences()
+    precondition(SDK.profile == nil && keychain.records.isEmpty && manager.status == nil)
 }

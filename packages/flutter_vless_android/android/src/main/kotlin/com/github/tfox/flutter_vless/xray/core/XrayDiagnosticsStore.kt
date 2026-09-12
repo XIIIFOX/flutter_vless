@@ -1,163 +1,71 @@
 package com.github.tfox.flutter_vless.xray.core
 
+import android.util.Log
 import java.io.File
 import java.io.RandomAccessFile
-import java.nio.charset.StandardCharsets
 
-/**
- * Cross-process, bounded diagnostics for the most recent Android Xray session.
- *
- * [XrayVPNService] runs in a dedicated Android process, while MethodChannel
- * calls are handled in the application process. An internal file is therefore
- * used instead of an in-memory singleton. There is one writer per session; a
- * concurrent reader may briefly observe an in-progress rotation and can retry;
- * diagnostics deliberately avoid blocking the VPN service with cross-process
- * coordination.
- */
+/** The same allowlisted, content-free events feed logcat and the cross-process snapshot. */
 internal object XrayDiagnosticsStore {
-    private const val DIAGNOSTICS_FILE = "flutter_vless_xray_debug.log"
-    private const val ACCESS_LOG_FILE = "access.log"
-    private const val ERROR_LOG_FILE = "error.log"
-    private const val MAX_DIAGNOSTICS_BYTES = 128 * 1024
-    private const val MAX_DIAGNOSTICS_SNAPSHOT_BYTES = 40 * 1024
-    private const val MAX_XRAY_FILE_SNAPSHOT_BYTES = 10 * 1024
-    private const val MAX_SNAPSHOT_LINES = 300
-    private const val MAX_MESSAGE_BYTES = 16 * 1024
+    internal enum class Event {
+        SESSION_START, SESSION_STOP, CONFIG_REJECTED, PROFILE_UNAVAILABLE, PROFILE_SAVE_FAILED,
+        WORKERS_START, WORKERS_STOP, WORKER_EXIT, WORKER_START_FAILED, PROTECT_FAILED,
+        TUN_ESTABLISHED, TUN_FAILED, FD_SENT, FD_FAILED, AUTH_PROBE_FAILED, PATH_PROBE_FAILED,
+        CONNECTED, RECOVERING, OUTPUT_DISCARDED, IO_FAILED, NATIVE_VALIDATION_FAILED
+    }
+    private const val FILE_NAME = "flutter_vless_events_v2.log"
+    private const val MAX_BYTES = 128 * 1024
     private var activeGeneration = 0L
 
-    @Synchronized
-    fun reset(filesDir: File): Long {
+    /** Called by the service owner after all preceding native writers are stopped. */
+    @Synchronized fun reset(filesDir: File): Long {
         activeGeneration++
+        migrateLegacy(filesDir)
         filesDir.mkdirs()
-        listOf(DIAGNOSTICS_FILE, ACCESS_LOG_FILE, ERROR_LOG_FILE).forEach { name ->
-            runCatching { File(filesDir, name).writeText("") }
-        }
+        File(filesDir, FILE_NAME).writeText("")
         return activeGeneration
     }
+    @Synchronized fun migrateLegacy(filesDir: File) {
+        listOf("flutter_vless_xray_debug.log", "access.log", "error.log").forEach {
+            runCatching { File(filesDir, it).delete() }
+        }
+    }
+    @Synchronized fun currentGeneration() = activeGeneration
 
-    @Synchronized
-    fun currentGeneration(): Long = activeGeneration
-
-    @Synchronized
-    fun append(
-        filesDir: File,
-        source: String,
-        message: String,
-        generation: Long? = null
-    ) {
+    @Synchronized fun event(filesDir: File, event: Event, generation: Long? = null, value: Long? = null) {
         if (generation != null && generation != activeGeneration) return
-        val normalizedSource = source.replace(Regex("[\\r\\n]+"), " ").trim()
-        val normalizedMessage = boundedUtf8Tail(
-            message
-            .replace("\r\n", "\n")
-            .replace('\r', '\n'),
-            MAX_MESSAGE_BYTES
-        )
-        if (normalizedMessage.isBlank()) return
-
-        val target = File(filesDir, DIAGNOSTICS_FILE)
-        target.parentFile?.mkdirs()
-        val payload = normalizedMessage
-            .lineSequence()
-            .filter { it.isNotEmpty() }
-            .joinToString(separator = "\n", postfix = "\n") { line ->
-                "[$normalizedSource] $line"
-            }
+        val line = event.name + (value?.let { " value=$it" } ?: "")
+        Log.i("FlutterVlessRuntime", line)
         runCatching {
-            target.appendText(payload, StandardCharsets.UTF_8)
-            if (target.length() > MAX_DIAGNOSTICS_BYTES) {
-                val tail = readTail(
-                    target,
-                    maxBytes = MAX_DIAGNOSTICS_BYTES / 2,
-                    maxLines = Int.MAX_VALUE
-                )
-                target.writeText(tail, StandardCharsets.UTF_8)
-                if (tail.isNotEmpty() && !tail.endsWith('\n')) {
-                    target.appendText("\n", StandardCharsets.UTF_8)
-                }
-            }
+            filesDir.mkdirs()
+            val file = File(filesDir, FILE_NAME)
+            file.appendText("$line\n")
+            if (file.length() > MAX_BYTES) file.writeText(readTail(file, MAX_BYTES / 2, Int.MAX_VALUE) + "\n")
         }
     }
 
-    fun snapshot(filesDir: File): String {
-        val sections = mutableListOf<String>()
-        addSection(
-            sections,
-            "Android Xray/tun2socks output",
-            File(filesDir, DIAGNOSTICS_FILE),
-            MAX_DIAGNOSTICS_SNAPSHOT_BYTES,
-            MAX_SNAPSHOT_LINES
-        )
-        addSection(
-            sections,
-            "Xray access log",
-            File(filesDir, ACCESS_LOG_FILE),
-            MAX_XRAY_FILE_SNAPSHOT_BYTES,
-            120
-        )
-        addSection(
-            sections,
-            "Xray error log",
-            File(filesDir, ERROR_LOG_FILE),
-            MAX_XRAY_FILE_SNAPSHOT_BYTES,
-            120
-        )
-        return sections.joinToString("\n")
+    /** Legacy callers cannot smuggle native data through the old append entry point. */
+    @Suppress("UNUSED_PARAMETER")
+    fun append(filesDir: File, source: String, message: String, generation: Long? = null) {
+        event(filesDir, Event.OUTPUT_DISCARDED, generation)
     }
+
+    fun snapshot(filesDir: File): String = readTail(File(filesDir, FILE_NAME), 40 * 1024, 300)
+        .lineSequence().filter { line ->
+            line.matches(Regex("(?:${Event.values().joinToString("|") { it.name }})(?: value=-?[0-9]+)?"))
+        }.joinToString("\n")
 
     internal fun readTail(file: File, maxBytes: Int, maxLines: Int): String {
         if (!file.isFile || maxBytes <= 0 || maxLines <= 0) return ""
         return runCatching {
             RandomAccessFile(file, "r").use { input ->
-                val length = input.length()
-                if (length <= 0) return@use ""
-                val start = (length - maxBytes).coerceAtLeast(0)
+                val start = (input.length() - maxBytes).coerceAtLeast(0)
                 input.seek(start)
-                val bytes = ByteArray((length - start).toInt())
+                val bytes = ByteArray((input.length() - start).toInt())
                 input.readFully(bytes)
-
-                var firstByte = 0
-                if (start > 0) {
-                    val newline = bytes.indexOf('\n'.code.toByte())
-                    if (newline < 0) return@use ""
-                    firstByte = newline + 1
-                }
-                val decoded = String(
-                    bytes,
-                    firstByte,
-                    bytes.size - firstByte,
-                    StandardCharsets.UTF_8
-                )
-                decoded
-                    .lineSequence()
-                    .filter { it.isNotEmpty() }
-                    .toList()
-                    .takeLast(maxLines)
-                    .joinToString("\n")
+                val text = bytes.toString(Charsets.UTF_8)
+                (if (start > 0) text.substringAfter('\n', "") else text)
+                    .lineSequence().filter(String::isNotBlank).toList().takeLast(maxLines).joinToString("\n")
             }
         }.getOrDefault("")
-    }
-
-    private fun boundedUtf8Tail(value: String, maxBytes: Int): String {
-        val bytes = value.toByteArray(StandardCharsets.UTF_8)
-        if (bytes.size <= maxBytes) return value
-        var start = bytes.size - maxBytes
-        while (start < bytes.size && bytes[start].toInt() and 0xc0 == 0x80) {
-            start++
-        }
-        return String(bytes, start, bytes.size - start, StandardCharsets.UTF_8)
-    }
-
-    private fun addSection(
-        sections: MutableList<String>,
-        title: String,
-        file: File,
-        maxBytes: Int,
-        maxLines: Int
-    ) {
-        val tail = readTail(file, maxBytes, maxLines)
-        if (tail.isNotEmpty()) {
-            sections += "--- $title bytes=${file.length()} ---\n$tail"
-        }
     }
 }

@@ -1,5 +1,8 @@
 ## 1.1.2 (Unreleased)
 
+* Add optional `keychainAccessGroup`, `AndroidDnsPolicy` and DNS outbound selection.
+* Check native capabilities before requesting new security guarantees; older/unsupported native backends fail explicitly.
+
 * Added the cross-platform `getProviderDebugSnapshot` diagnostics contract.
 
 ## 1.1.1

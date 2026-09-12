@@ -20,7 +20,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
-  flutter_vless: 7e495115e745edcb959aa888ef33b47e25819d95
+  flutter_vless: 08759995aaa196da1f748d45d280f9f4b9114a68
   integration_test: 4a889634ef21a45d28d50d622cf412dc6d9f586e
 
 PODFILE CHECKSUM: 5f99dc5e3f7d0323d390d7ec5d528be7fb8aa8e5

@@ -31,6 +31,8 @@ flutter run -d <your-iphone-id>
 - iOS 15.0 or newer as the deployment target
 - a Packet Tunnel extension target
 - App Groups enabled on both the app and the tunnel target
+- shared Keychain access between both targets (the existing App Group can be
+  used; a dedicated Keychain access group is optional)
 - the same base app bundle id passed from Dart
 
 ## Bundle Id Convention
@@ -41,6 +43,7 @@ Pass the base app bundle id to `initializeVless()`:
 await flutterVless.initializeVless(
   providerBundleIdentifier: 'com.example.myapp',
   groupIdentifier: 'group.com.example.myapp',
+  keychainAccessGroup: 'group.com.example.myapp',
 );
 ```
 
@@ -132,9 +135,12 @@ overrides, and rationale, see [Build XRay.xcframework](../../ios/XRAY_BUILD.md).
 1. Run the bundled example on a real iPhone.
 2. Add the package to your own app.
 3. Create a Packet Tunnel extension named `XrayTunnel`.
-4. Enable App Groups and Network Extensions on both targets.
+4. Enable App Groups and Network Extensions on both targets. Configure
+   [shared Keychain access](#keychain-profile-migration-116) using the App Group
+   or an optional dedicated Keychain group.
 5. Set `Runner`, `XrayTunnel`, and generated SwiftPM integration to iOS 15.0+.
-6. Pass the base bundle id and App Group from Dart.
+6. Pass the base bundle id and App Group from Dart, and set the chosen Keychain
+   group through `keychainAccessGroup` or Runner's Info.plist.
 7. Test on a real device.
 
 When you add the SwiftPM product for the tunnel target, use the package path
@@ -165,3 +171,74 @@ the `XrayTunnel` target, not the Flutter `Runner` target.
 - signing the app but not the extension
 - using the extension bundle id instead of the base app bundle id
 - expecting simulator behavior to match a real device
+
+## Keychain profile migration (1.1.6)
+
+VPN mode requires Runner and XrayTunnel to share access to the profile's Keychain
+item. A **dedicated Keychain access group is optional**. Choose either:
+
+- Reuse the registered App Group enabled on both targets, such as
+  `group.com.example.myapp`. No additional `keychain-access-groups` entitlement
+  is needed for this option, and the App Group name has no Team ID prefix.
+- Use a dedicated group, such as
+  `$(AppIdentifierPrefix)com.example.myapp.vpn-secrets`, in the
+  `keychain-access-groups` entitlement on both targets. The bundled example
+  demonstrates this option.
+
+Pass the chosen group to `initializeVless(keychainAccessGroup: ...)` or set
+Runner's `FlutterVlessKeychainAccessGroup` Info.plist string. For a dedicated
+group, Dart must receive its fully expanded value; the example uses Xcode's
+build-expanded Info.plist value. The plugin does not automatically reuse
+`groupIdentifier` when the Keychain setting is omitted. Proxy-only mode does not
+require shared Keychain access.
+
+Apple documents App Group reuse in
+[Sharing access to keychain items among a collection of apps](https://developer.apple.com/documentation/security/sharing-access-to-keychain-items-among-a-collection-of-apps).
+
+The containing app migrates old profiles when loading/activating them. The VPN
+profile stores schema version 2 and an opaque persistent Keychain reference;
+the full config is stored with `AfterFirstUnlockThisDeviceOnly` and no iCloud
+synchronization. Missing entitlements/items and a device that has not been
+unlocked after reboot fail with `VPN_KEYCHAIN_ERROR`, without plaintext fallback.
+A new provider rejects an unmigrated legacy profile and asks the user to open
+the containing app. No protection is claimed before network settings succeed.
+
+Updates retain the old item while an active provider could use it. Interrupted
+updates and failed deletions are reconciled after disconnect and disarming
+on-demand. Stop preserves the profile secret; profile removal waits for teardown
+and deletes owned items. Changing the shared group requires removing the existing
+profile first. Large values are stored whole or rejected; no temporary plaintext
+file or truncation is used.
+
+Update **both** the Swift support package and the copied
+`PacketTunnelProvider.swift`. Updating only the Dart package cannot replace
+source in another application's extension target. Both CocoaPods plugin builds
+and the SwiftPM plugin/tunnel-support products include the shared security module.
+
+## Local proxy access and DNS
+
+VPN mode requires one loopback SOCKS inbound. Native runtime credentials are
+random per provider session, remain consistent across internal worker restarts,
+and are passed to Xray, HEV and every readiness/delay client. Extra SOCKS/HTTP
+listeners and incompatible managed listeners are rejected before changing the
+profile. The SOCKS port's embedded HTTP handler also requires authentication.
+Credentials are not inserted into exported subscription/config snapshots.
+
+`proxyOnly: true` preserves the explicitly configured local proxy access policy.
+An intentional `auth: noauth` proxy can be used by other local applications;
+VPN listener-isolation guarantees do not apply. Explicit local accounts are
+supported by the configuration model. Standalone delay returns -1 while an
+app-process proxy-only runtime is active, so a probe cannot replace it.
+
+The current provider installs virtual system DNS `198.18.0.2`. Its requests pass
+through authenticated local SOCKS and a TCP DNS outbound chained to the selected
+remote proxy, including HTTP/SOCKS servers without UDP support. Service DNS rules
+precede application `UDP -> direct` rules. Proxy endpoint names are resolved
+before routes are installed; user DNS never falls back to the system resolver
+when proxy DNS fails. No public resolver is excluded from VPN routes.
+
+DNS through a plain HTTP/SOCKS server does not encrypt that transport. `CONNECTED`
+means the maintained forwarding path passed an authenticated data check, not that
+every outbound in arbitrary raw JSON is reachable. Delay probes validate HTTPS
+certificates and hostnames; the iOS 15-compatible socket TLS probe supports TLS 1.2
+and returns -1 for a TLS-1.3-only destination rather than bypassing the proxy.

@@ -39,6 +39,7 @@ build/
 example/**/xcshareddata/swiftpm/Package.resolved
 ios/flutter_vless/XRay.xcframework
 packages/flutter_vless_macos/macos/flutter_vless_macos/XRay.xcframework
+output/
 
 ### macOS ###
 # General

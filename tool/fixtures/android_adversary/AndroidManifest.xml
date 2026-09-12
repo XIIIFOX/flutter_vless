@@ -1,6 +1,0 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.github.tfox.flutter_vless.adversary">
-    <uses-permission android:name="android.permission.INTERNET" />
-    <application android:label="VLESS separate UID test" android:debuggable="true" />
-    <instrumentation android:name="com.github.tfox.flutter_vless.adversary.Probe"
-        android:targetPackage="com.github.tfox.flutter_vless.adversary" />
-</manifest>

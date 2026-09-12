@@ -12,10 +12,6 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.os.ResultReceiver
 import androidx.core.app.ActivityCompat
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
@@ -83,14 +79,10 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
-            "getSecurityCapabilities" -> result.success(mapOf("androidProxyDns" to true, "iosKeychainReference" to false))
             "startVless" -> {
                 // 1. Parse configuration from Flutter
                 val config = XrayConfig()
                 config.REMARK = call.argument("remark") ?: ""
-                config.ANDROID_DNS_POLICY = call.argument("android_dns_policy") ?: "config"
-                config.ANDROID_DNS_PROXY_OUTBOUND_TAG = call.argument("android_dns_proxy_outbound_tag")
-                config.PROXY_ONLY = call.argument<Boolean>("proxy_only") == true
                 config.V2RAY_FULL_JSON_CONFIG = call.argument("config") ?: ""
                 config.BLOCKED_APPS = call.argument<ArrayList<String>>("blocked_apps") ?: ArrayList()
                 config.BYPASS_SUBNETS = call.argument<ArrayList<String>>("bypass_subnets") ?: ArrayList()
@@ -136,30 +128,19 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                     // Ignore parsing errors, fallback to not excluding IP
                 }
 
-                try { XrayCoreManager.validateConfiguration(config) }
-                catch (_: Exception) {
-                    result.error("INVALID_CONFIG", "VPN configuration or local inbound policy is incompatible", null)
-                    return
-                }
-
                 // 5. Start the XrayVPNService
                 // We pass the config and PROXY_ONLY flag via Intent extras
                 val intent = Intent(context, XrayVPNService::class.java)
                 intent.putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE)
                 intent.putExtra("V2RAY_CONFIG", config)
-                intent.putExtra("PROXY_ONLY", config.PROXY_ONLY)
-                intent.putExtra("start_receiver", object : ResultReceiver(Handler(Looper.getMainLooper())) {
-                    override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                        if (resultCode == 0) result.success(null)
-                        else result.error("INVALID_CONFIG", "VPN configuration was rejected; the active session was preserved", null)
-                    }
-                })
+                intent.putExtra("PROXY_ONLY", call.argument<Boolean>("proxy_only") ?: false)
                 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)
                 } else {
                     context.startService(intent)
                 }
+                result.success(null)
             }
             "stopVless" -> {
                 val intent = Intent(context, XrayVPNService::class.java)
@@ -209,21 +190,12 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                     result.error("NO_ACTIVITY", "Activity is null", null)
                     return
                 }
-                val handler = Handler(Looper.getMainLooper())
-                var completed = false
-                val timeout = Runnable { if (!completed) { completed = true; result.success(-1L) } }
-                handler.postDelayed(timeout, 15000)
-                val intent = Intent(context, XrayVPNService::class.java).setAction(XrayVPNService.ACTION_MEASURE_DELAY)
-                intent.putExtra("url", url)
-                intent.putExtra("receiver", object : ResultReceiver(handler) {
-                    override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                        if (!completed) {
-                            completed = true; handler.removeCallbacks(timeout)
-                            result.success(resultData?.getLong("delay", -1L) ?: -1L)
-                        }
+                executor.execute {
+                    val delay = XrayCoreManager.getConnectedV2rayServerDelay(currentActivity, url)
+                    currentActivity.runOnUiThread {
+                        result.success(delay)
                     }
-                })
-                context.startService(intent)
+                }
             }
             "getCoreVersion" -> {
                 // Returns the version of the underlying libxray.so
@@ -240,7 +212,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                             result.success("Xray not found")
                         }
                     } catch (e: Exception) {
-                        result.success("Version unavailable")
+                        result.success("Error: ${e.message}")
                     }
                 }
             }
@@ -303,7 +275,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
         }
         val filter = IntentFilter(AppConfigs.V2RAY_CONNECTION_INFO)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            activity?.registerReceiver(xrayReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            activity?.registerReceiver(xrayReceiver, filter, Context.RECEIVER_EXPORTED)
         } else {
             activity?.registerReceiver(xrayReceiver, filter)
         }

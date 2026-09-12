@@ -91,8 +91,7 @@ class ProtectedHostTrafficTest {
     @Test fun explicitHostExclusionAndProxyOnlyRemainExplicit() {
         val excluded = config().apply { BLOCKED_APPS = ArrayList(listOf(context.packageName)) }
         start(excluded)
-        Thread.sleep(2000)
-        assertThrows(Exception::class.java) { request(useSocks = true) }
+        assertTrue(awaitRequest(useSocks = true).contains(marker))
         assertFalse(runCatching { request() }.getOrDefault("").contains(marker))
         stop()
         start(config(), proxyOnly = true)
@@ -119,7 +118,7 @@ class ProtectedHostTrafficTest {
                 if (physical(android.net.NetworkCapabilities.TRANSPORT_WIFI)) Thread.sleep(200)
             }
             assertFalse(physical(android.net.NetworkCapabilities.TRANSPORT_WIFI))
-            org.junit.Assume.assumeTrue("Cellular network unavailable", physical(android.net.NetworkCapabilities.TRANSPORT_CELLULAR))
+            assertTrue("Cellular network unavailable", physical(android.net.NetworkCapabilities.TRANSPORT_CELLULAR))
             assertTrue(awaitRequest().contains(marker))
         } finally {
             for (command in listOf("svc wifi enable", "cmd wifi connect-network AndroidWifi open")) {

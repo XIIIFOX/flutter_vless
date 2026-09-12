@@ -49,8 +49,7 @@ let package = Package(
             ]
         ),
         .target(
-            name: "flutter_vless_privacy",
-            linkerSettings: [.linkedFramework("Security")]
+            name: "flutter_vless_privacy"
         ),
         .target(
             name: "flutter_vless_tunnel_support",

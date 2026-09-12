@@ -26,36 +26,4 @@ class XrayPhysicalDnsTest {
     fun malformedQuestionFailsClosed() {
         XrayPhysicalDns.addressQuery(query(1).copyOf(15)) { emptyList() }
     }
-
-    @Test fun proxyModeDeniesEveryPhysicalQueryAfterEndpointPinning() {
-        assertFalse(XrayPhysicalDns.isQueryAllowed(query(1), emptySet()))
-        assertFalse(XrayPhysicalDns.isQueryAllowed(query(28), emptySet()))
-        assertTrue(XrayPhysicalDns.isQueryAllowed(query(1), null))
-        assertTrue(XrayPhysicalDns.isQueryAllowed(query(16), null))
-    }
-
-    @Test fun scopedBrokerAllowsOnlyExplicitEndpointAddressQueries() {
-        for (type in listOf(1, 28)) {
-            assertTrue(XrayPhysicalDns.isQueryAllowed(query(type), setOf("A.TEST.")))
-            assertFalse(XrayPhysicalDns.isQueryAllowed(query(type), setOf("proxy.test")))
-            assertFalse(XrayPhysicalDns.isQueryAllowed(query(type), setOf("test")))
-            assertFalse(XrayPhysicalDns.isQueryAllowed(query(type), setOf("control.a.test")))
-        }
-        assertFalse(XrayPhysicalDns.isQueryAllowed(query(16), setOf("a.test")))
-        assertFalse(XrayPhysicalDns.isQueryAllowed(query(33), setOf("a.test")))
-        // A user-controlled second question/additional record cannot ride an endpoint query.
-        assertFalse(XrayPhysicalDns.isQueryAllowed(query(1).also { it[5] = 2 }, setOf("a.test")))
-        assertFalse(XrayPhysicalDns.isQueryAllowed(query(1) + query(1), setOf("a.test")))
-        assertFalse(XrayPhysicalDns.isQueryAllowed(query(1).also { it[2] = 0x81.toByte() }, setOf("a.test")))
-        assertFalse(XrayPhysicalDns.isQueryAllowed(query(1).also { it[12] = 0xc0.toByte() }, setOf("a.test")))
-        assertFalse(XrayPhysicalDns.isQueryAllowed(query(1).also { it[it.lastIndex] = 3 }, setOf("a.test")))
-        assertFalse(XrayPhysicalDns.isQueryAllowed(query(1).copyOf(15), setOf("a.test")))
-    }
-
-    @Test fun scopedBrokerAcceptsEmptyEdnsOptButRejectsAdditionalPayload() {
-        val edns = query(1).also { it[11] = 1 } + byteArrayOf(0, 0, 41, 4, 0, 0, 0, 0, 0, 0, 0)
-        assertTrue(XrayPhysicalDns.isQueryAllowed(edns, setOf("a.test")))
-        assertFalse(XrayPhysicalDns.isQueryAllowed(edns + 1.toByte(), setOf("a.test")))
-        assertFalse(XrayPhysicalDns.isQueryAllowed(edns.also { it[it.lastIndex] = 1 }, setOf("a.test")))
-    }
 }

@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 
 import 'vless_platform.dart';
 import 'vless_status.dart';
-import 'android_dns_policy.dart';
 
 class VlessMethodChannelAdapter extends VlessPlatform {
   VlessMethodChannelAdapter({
@@ -28,14 +27,7 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     required String notificationIconResourceName,
     required String providerBundleIdentifier,
     required String groupIdentifier,
-    String? keychainAccessGroup,
   }) async {
-    if (keychainAccessGroup != null) {
-      if (keychainAccessGroup.trim().isEmpty) {
-        throw ArgumentError.value(keychainAccessGroup, 'keychainAccessGroup');
-      }
-      await _requireSecurityCapability('iosKeychainReference');
-    }
     await _statusSubscription?.cancel();
     _statusSubscription = eventChannel
         .receiveBroadcastStream()
@@ -58,8 +50,6 @@ class VlessMethodChannelAdapter extends VlessPlatform {
         'notificationIconResourceName': notificationIconResourceName,
         'providerBundleIdentifier': providerBundleIdentifier,
         'groupIdentifier': groupIdentifier,
-        if (keychainAccessGroup != null)
-          'keychainAccessGroup': keychainAccessGroup,
       },
     );
   }
@@ -73,21 +63,7 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     List<String>? bypassSubnets,
     bool proxyOnly = false,
     String? geoAssetsDirectory,
-    AndroidDnsPolicy androidDnsPolicy = AndroidDnsPolicy.config,
-    String? androidDnsProxyOutboundTag,
   }) async {
-    if (androidDnsProxyOutboundTag != null &&
-        (androidDnsPolicy != AndroidDnsPolicy.proxy ||
-            androidDnsProxyOutboundTag.trim().isEmpty)) {
-      throw ArgumentError('A non-empty DNS outbound tag requires proxy DNS.');
-    }
-    if (androidDnsPolicy == AndroidDnsPolicy.proxy) {
-      if (proxyOnly) {
-        throw ArgumentError(
-            'System DNS policy requires an Android VPN session.');
-      }
-      await _requireSecurityCapability('androidProxyDns');
-    }
     final arguments = <String, Object?>{
       'remark': remark,
       'config': config,
@@ -95,26 +71,11 @@ class VlessMethodChannelAdapter extends VlessPlatform {
       'bypass_subnets': bypassSubnets,
       'proxy_only': proxyOnly,
       'notificationDisconnectButtonName': notificationDisconnectButtonName,
-      if (androidDnsPolicy != AndroidDnsPolicy.config)
-        'android_dns_policy': androidDnsPolicy.name,
-      if (androidDnsProxyOutboundTag != null)
-        'android_dns_proxy_outbound_tag': androidDnsProxyOutboundTag,
     };
     if (geoAssetsDirectory != null) {
       arguments['geo_assets_directory'] = geoAssetsDirectory;
     }
     await methodChannel.invokeMethod('startVless', arguments);
-  }
-
-  Future<void> _requireSecurityCapability(String capability) async {
-    try {
-      final capabilities = await methodChannel
-          .invokeMapMethod<String, dynamic>('getSecurityCapabilities');
-      if (capabilities?[capability] == true) return;
-    } on MissingPluginException {
-      // Older native implementations must not silently ignore an opt-in.
-    }
-    throw UnsupportedError('Native backend does not support $capability.');
   }
 
   @override

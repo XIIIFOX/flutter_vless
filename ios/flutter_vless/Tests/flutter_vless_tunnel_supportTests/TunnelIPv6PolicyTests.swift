@@ -2,7 +2,6 @@ import XCTest
 @testable import flutter_vless_tunnel_support
 
 final class TunnelIPv6PolicyTests: XCTestCase {
-    private static let credentials = try! LocalProxyCredentials(username: "test-session", password: "test-session-password")
     func testIPv6IsCapturedWithOnlyLiteralProxyHostExceptions() throws {
         let settings = TunnelIPv6Policy.networkSettings(proxyAddresses: ["203.0.113.7", "2001:db8::7", "proxy.example"])
         XCTAssertEqual(settings.addresses, ["fd00:198:18::1"])
@@ -49,7 +48,7 @@ final class TunnelIPv6PolicyTests: XCTestCase {
             "Routing": ["Rules": [["network": "tcp,udp", "outboundTag": "direct"]]]
         ]
         let data = try JSONSerialization.data(withJSONObject: config)
-        let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: data, credentials: Self.credentials))
+        let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: data))
         let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
         XCTAssertNil(output["Routing"])
         XCTAssertNil(output["Inbounds"])
@@ -61,6 +60,6 @@ final class TunnelIPv6PolicyTests: XCTestCase {
             try prepared.data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("aliases.json"))
         }
         config["routing"] = ["rules": []]
-        XCTAssertNil(TunnelXrayConfigPreparer.prepare(jsonData: try JSONSerialization.data(withJSONObject: config), credentials: Self.credentials))
+        XCTAssertNil(TunnelXrayConfigPreparer.prepare(jsonData: try JSONSerialization.data(withJSONObject: config)))
     }
 }

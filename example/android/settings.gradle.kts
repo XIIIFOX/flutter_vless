@@ -24,18 +24,3 @@ plugins {
 }
 
 include(":app")
-
-// Explicit production verification must never resolve a development override.
-if (providers.gradleProperty("flutterVlessOfficialRuntimeVerification").orNull == "true") {
-    check(providers.gradleProperty("flutterVlessAndroidRuntimeRepo").orNull.isNullOrBlank() &&
-        providers.environmentVariable("FLUTTER_VLESS_ANDROID_RUNTIME_REPO").orNull.isNullOrBlank()) {
-        "Official runtime verification rejects repository overrides"
-    }
-    val version = providers.gradleProperty("flutterVlessXrayRuntimeVersion").orNull
-    check(version == null || version == "26.7.28-protect1") {
-        "Official runtime verification rejects version overrides"
-    }
-    check(gradle.startParameter.dependencyVerificationMode == org.gradle.api.artifacts.verification.DependencyVerificationMode.STRICT) {
-        "Official runtime verification requires strict dependency verification"
-    }
-}

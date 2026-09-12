@@ -2,7 +2,6 @@ import XCTest
 @testable import flutter_vless_tunnel_support
 
 final class TunnelXrayConfigPreparerTests: XCTestCase {
-    private static let credentials = try! LocalProxyCredentials(username: "test-session", password: "test-session-password")
     func testPreparesXhttpNoneWithoutDroppingVlessEncryption() throws {
         let input = try jsonData([
             "dns": ["queryStrategy": "UseIPv4"],
@@ -59,7 +58,7 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
             "routing": ["domainStrategy": "IPIfNonMatch", "rules": []]
         ])
 
-        let result = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: input, credentials: Self.credentials, resolveIPv4: { _ in "203.0.113.10" }))
+        let result = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: input, resolveIPv4: { _ in "203.0.113.10" }))
         let output = try decodedObject(result.data)
         let log = try XCTUnwrap(output["log"] as? [String: Any])
         let routing = try XCTUnwrap(output["routing"] as? [String: Any])
@@ -117,7 +116,7 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
             ]
         ])
 
-        let result = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: input, credentials: Self.credentials) { host in
+        let result = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: input) { host in
             host == "reality.example.com" ? "203.0.113.10" : nil
         })
         let output = try decodedObject(result.data)
@@ -187,7 +186,7 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
             ]
         ])
 
-        let result = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: input, credentials: Self.credentials, resolveIPv4: { _ in "203.0.113.10" }))
+        let result = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: input, resolveIPv4: { _ in "203.0.113.10" }))
         let output = try decodedObject(result.data)
         let routing = try XCTUnwrap(output["routing"] as? [String: Any])
         let rules = try XCTUnwrap(routing["rules"] as? [[String: Any]])

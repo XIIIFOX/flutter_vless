@@ -18,7 +18,6 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.SynchronousQueue
-import java.util.Locale
 
 /** Receives actual SCM_RIGHTS descriptors, never process-local FD numbers. */
 class XraySocketProtector(
@@ -29,7 +28,6 @@ class XraySocketProtector(
     private val server = LocalServerSocket(socketName)
     private val verified = CountDownLatch(1)
     @Volatile private var closed = false
-    @Volatile private var allowedPhysicalDnsNames: Set<String>? = null
     private val clients = Collections.synchronizedSet(mutableSetOf<LocalSocket>())
     private val requests = ThreadPoolExecutor(0, 8, 10, TimeUnit.SECONDS, SynchronousQueue(),
         { task -> Thread(task, "xray-protection-request").apply { isDaemon = true } })
@@ -39,11 +37,6 @@ class XraySocketProtector(
     }
 
     fun awaitVerified(): Boolean = verified.await(3, TimeUnit.SECONDS) && !closed
-
-    /** Set before launching Xray: null for config mode, emptySet() for pinned proxy DNS. */
-    fun allowPhysicalDnsForEndpointNames(names: Set<String>?) {
-        allowedPhysicalDnsNames = names?.map { it.removeSuffix(".").lowercase(Locale.ROOT) }?.toSet()
-    }
 
     private fun serve() {
         while (!closed) {
@@ -81,10 +74,8 @@ class XraySocketProtector(
                             val size = input.readUnsignedShort()
                             require(size in 12..4096)
                             val query = ByteArray(size).also { input.readFully(it) }
-                            val permittedNames = allowedPhysicalDnsNames
-                            if (!XrayPhysicalDns.isQueryAllowed(query, permittedNames)) return@use
                             val network = physicalNetwork() ?: return@use
-                            val answer = XrayPhysicalDns.query(network, query, permittedNames)
+                            val answer = XrayPhysicalDns.query(network, query)
                             if (closed) return@use
                             DataOutputStream(socket.outputStream).apply {
                                 writeShort(answer.size)
@@ -104,27 +95,17 @@ class XraySocketProtector(
     }
 
     /** Query current physical link properties on every resolver connection. */
-    private fun physicalNetwork(): Network? = physicalNetwork(service)
-
-    companion object {
-        /** Bootstrap only: never use a process/global resolver that could re-enter the VPN. */
-        fun resolveBootstrapHostname(service: VpnService, hostname: String): List<String> {
-            val network = physicalNetwork(service) ?: throw IllegalStateException("No physical network for proxy endpoint bootstrap")
-            return network.getAllByName(hostname).mapNotNull { it.hostAddress }
+    private fun physicalNetwork(): Network? {
+        val manager = service.getSystemService(ConnectivityManager::class.java)
+        val candidates = (listOfNotNull(manager.activeNetwork) + manager.allNetworks).distinct()
+        val physical = candidates.filter {
+            val caps = manager.getNetworkCapabilities(it)
+            caps != null && !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
         }
-
-        private fun physicalNetwork(service: VpnService): Network? {
-            val manager = service.getSystemService(ConnectivityManager::class.java)
-            val candidates = (listOfNotNull(manager.activeNetwork) + manager.allNetworks).distinct()
-            val physical = candidates.filter {
-                val caps = manager.getNetworkCapabilities(it)
-                caps != null && !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
-                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            }
-            return physical.firstOrNull {
-                manager.getNetworkCapabilities(it)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
-            } ?: physical.firstOrNull()
-        }
+        return physical.firstOrNull {
+            manager.getNetworkCapabilities(it)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        } ?: physical.firstOrNull()
     }
 
     override fun close() {

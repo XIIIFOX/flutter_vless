@@ -1,25 +1,50 @@
 package com.github.tfox.flutter_vless.xray.core
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Color
+import android.os.Build
+import android.os.CountDownTimer
+import android.util.Log
+import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
+import com.github.tfox.flutter_vless.xray.service.XrayVPNService
 import com.github.tfox.flutter_vless.xray.service.XraySocketProtector
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import com.github.tfox.flutter_vless.xray.utils.Utilities
-import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.File
-import java.net.ServerSocket
-import java.util.UUID
-import java.util.concurrent.TimeUnit
+import java.io.FileOutputStream
 
-/** Process owner delegates all session transitions to XrayVPNService. */
+/**
+ * Manages the Xray Core process (libxray.so).
+ * 
+ * This singleton object is responsible for:
+ * 1. Generating the final Xray configuration file (config.json).
+ * 2. Injecting necessary inbounds (SOCKS, HTTP, API) into the user-provided config.
+ * 3. Starting and monitoring the Xray process.
+ * 4. Collecting traffic statistics via the Xray API.
+ * 5. Showing the persistent foreground notification.
+ */
 object XrayCoreManager {
-    @Volatile private var xrayProcess: Process? = null
-    private var runtimeFile: File? = null
+
+    private const val NOTIFICATION_ID = 1
+    private const val TAG = "XrayCoreManager"
+    @Volatile
+    private var xrayProcess: Process? = null
+    private var countDownTimer: CountDownTimer? = null
+    private var seconds = 0
     private var lastProxyUplink = 0L
     private var lastProxyDownlink = 0L
+
     private fun nextFreePort(preferredPort: Int, usedPorts: Set<Int>): Int {
         var port = preferredPort
         while (usedPorts.contains(port)) {
@@ -97,7 +122,7 @@ object XrayCoreManager {
             val port = settings.optInt("port", 0)
             if (address.isEmpty() || id.isEmpty() || port <= 0) continue
 
-            val user = JSONObject(settings.toString()).apply { remove("address"); remove("port") }
+            val user = JSONObject()
             user.put("id", id)
             user.put("encryption", settings.optString("encryption", "none"))
             user.put("flow", settings.optString("flow", ""))
@@ -108,9 +133,317 @@ object XrayCoreManager {
             server.put("port", port)
             server.put("users", JSONArray().put(user))
 
-            val normalizedSettings = JSONObject(settings.toString())
+            val normalizedSettings = JSONObject()
             normalizedSettings.put("vnext", JSONArray().put(server))
             outbound.put("settings", normalizedSettings)
+            Log.d(TAG, "Normalized flat VLESS outbound settings for $address:$port")
+        }
+    }
+
+    private fun sanitizeLogPaths(configJson: JSONObject, filesDir: File) {
+        val log = configJson.optJSONObject("log") ?: return
+        val accessPath = log.optString("access")
+        val errorPath = log.optString("error")
+
+        if (accessPath.isNotEmpty()) {
+            log.put("access", File(filesDir, "access.log").absolutePath)
+        }
+        if (errorPath.isNotEmpty()) {
+            log.put("error", File(filesDir, "error.log").absolutePath)
+        }
+    }
+
+    internal fun buildRuntimeConfigJson(config: XrayConfig, filesDir: File): JSONObject {
+        val configJson = normalizeRuntimeConfig(
+            JSONObject(config.V2RAY_FULL_JSON_CONFIG)
+        ) as JSONObject
+        normalizeVlessOutbounds(configJson)
+        sanitizeLogPaths(configJson, filesDir)
+
+        // Android needs local control surfaces that may not exist in imported
+        // Xray JSON. Keep this pure so unit tests can verify the exact config
+        // handed to libxray without launching VPN services or native binaries.
+        val apiObj = JSONObject()
+        apiObj.put("tag", "api")
+        apiObj.put("services", JSONArray().put("StatsService"))
+        configJson.put("api", apiObj)
+
+        configJson.put("stats", JSONObject())
+
+        val policyObj = JSONObject()
+        val levelsObj = JSONObject()
+        val level8Obj = JSONObject()
+        level8Obj.put("statsUserUplink", true)
+        level8Obj.put("statsUserDownlink", true)
+        levelsObj.put("8", level8Obj)
+
+        val systemObj = JSONObject()
+        systemObj.put("statsInboundUplink", true)
+        systemObj.put("statsInboundDownlink", true)
+        systemObj.put("statsOutboundUplink", true)
+        systemObj.put("statsOutboundDownlink", true)
+
+        policyObj.put("levels", levelsObj)
+        policyObj.put("system", systemObj)
+        configJson.put("policy", policyObj)
+
+        val inbounds = configJson.optJSONArray("inbounds") ?: JSONArray()
+        val usedPorts = mutableSetOf<Int>()
+        var hasSocksOnLocalPort = false
+        var hasHttpOnLocalPort = false
+        for (i in 0 until inbounds.length()) {
+            val inbound = inbounds.getJSONObject(i)
+            val protocol = inbound.optString("protocol")
+            val port = inbound.optInt("port", -1)
+            if (port > 0) usedPorts.add(port)
+            if (protocol == "socks" && port == config.LOCAL_SOCKS5_PORT) hasSocksOnLocalPort = true
+            if (protocol == "http" && port == config.LOCAL_HTTP_PORT) hasHttpOnLocalPort = true
+        }
+
+        if (!hasSocksOnLocalPort) {
+            if (usedPorts.contains(config.LOCAL_SOCKS5_PORT)) {
+                config.LOCAL_SOCKS5_PORT = nextFreePort(config.LOCAL_SOCKS5_PORT, usedPorts)
+            }
+            val socksInbound = JSONObject()
+            socksInbound.put("tag", uniqueInboundTag(inbounds, "socks"))
+            socksInbound.put("port", config.LOCAL_SOCKS5_PORT)
+            socksInbound.put("listen", "127.0.0.1")
+            socksInbound.put("protocol", "socks")
+            socksInbound.put("settings", JSONObject().put("auth", "noauth").put("udp", true))
+            socksInbound.put(
+                "sniffing",
+                JSONObject().put("enabled", true).put("destOverride", JSONArray().put("http").put("tls"))
+            )
+            inbounds.put(socksInbound)
+            usedPorts.add(config.LOCAL_SOCKS5_PORT)
+            Log.d(TAG, "Injected SOCKS inbound on port ${config.LOCAL_SOCKS5_PORT}")
+        }
+
+        if (!hasHttpOnLocalPort) {
+            if (usedPorts.contains(config.LOCAL_HTTP_PORT)) {
+                config.LOCAL_HTTP_PORT = nextFreePort(config.LOCAL_HTTP_PORT, usedPorts)
+            }
+            val httpInbound = JSONObject()
+            httpInbound.put("tag", uniqueInboundTag(inbounds, "http"))
+            httpInbound.put("port", config.LOCAL_HTTP_PORT)
+            httpInbound.put("listen", "127.0.0.1")
+            httpInbound.put("protocol", "http")
+            inbounds.put(httpInbound)
+            usedPorts.add(config.LOCAL_HTTP_PORT)
+            Log.d(TAG, "Injected HTTP inbound on port ${config.LOCAL_HTTP_PORT}")
+        }
+
+        if (usedPorts.contains(config.LOCAL_API_PORT)) {
+            config.LOCAL_API_PORT = nextFreePort(config.LOCAL_API_PORT, usedPorts)
+        }
+        val apiInboundTag = uniqueInboundTag(inbounds, "api")
+        val apiInbound = JSONObject()
+        apiInbound.put("tag", apiInboundTag)
+        apiInbound.put("port", config.LOCAL_API_PORT)
+        apiInbound.put("listen", "127.0.0.1")
+        apiInbound.put("protocol", "dokodemo-door")
+        apiInbound.put("settings", JSONObject().put("address", "127.0.0.1"))
+        inbounds.put(apiInbound)
+        configJson.put("inbounds", inbounds)
+
+        val routing = configJson.optJSONObject("routing") ?: JSONObject()
+        val rules = routing.optJSONArray("rules") ?: JSONArray()
+        val apiRule = JSONObject()
+        apiRule.put("type", "field")
+        apiRule.put("inboundTag", JSONArray().put(apiInboundTag))
+        apiRule.put("outboundTag", "api")
+        rules.put(apiRule)
+        routing.put("rules", rules)
+        configJson.put("routing", routing)
+
+        return configJson
+    }
+
+    internal fun buildDelayConfigJson(configJson: String, proxyPort: Int, filesDir: File): Pair<JSONObject, Int> {
+        val delayConfig = XrayConfig(
+            V2RAY_FULL_JSON_CONFIG = configJson,
+            LOCAL_SOCKS5_PORT = proxyPort,
+            LOCAL_HTTP_PORT = proxyPort + 1,
+            LOCAL_API_PORT = proxyPort + 2
+        )
+        val runtimeJson = buildRuntimeConfigJson(delayConfig, filesDir)
+        return Pair(runtimeJson, delayConfig.LOCAL_SOCKS5_PORT)
+    }
+
+    /**
+     * Starts the Xray Core process.
+     * 
+     * @param context The service context (needed for file access and notifications).
+     * @param config The configuration object containing the user's settings.
+     * @return true if started successfully, false otherwise.
+     */
+    @Synchronized
+    fun startCore(context: Service, config: XrayConfig, protector: XraySocketProtector? = null): Boolean {
+        if (!destroyCurrentXrayProcess()) {
+            XrayDiagnosticsStore.append(
+                context.filesDir,
+                "runtime",
+                "Refused to start a new Android Xray session because the previous process did not stop"
+            )
+            return false
+        }
+        AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_CONNECTING
+        AppConfigs.V2RAY_CONFIG = config
+
+        // 1. Prepare the configuration file
+        val configFilesDir = context.filesDir
+        val diagnosticsGeneration = XrayDiagnosticsStore.reset(configFilesDir)
+        XrayDiagnosticsStore.append(
+            configFilesDir,
+            "runtime",
+            "Starting Android Xray session",
+            diagnosticsGeneration
+        )
+        
+        try {
+            val configJson = buildRuntimeConfigJson(config, configFilesDir)
+            if (protector != null) requireProtectedSocketSupport(configJson)
+            val configFile = File(context.filesDir, "config.json")
+            configFile.writeText(configJson.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to write config file", e)
+            XrayDiagnosticsStore.append(
+                configFilesDir,
+                "runtime",
+                "Failed to write config file: ${e.message}",
+                diagnosticsGeneration
+            )
+            return false
+        }
+
+        // 2. Find Xray executable (libxray.so)
+        val nativeLibraryDir = context.applicationInfo.nativeLibraryDir
+        val xrayExecutable = File(nativeLibraryDir, "libxray.so")
+        if (!xrayExecutable.exists()) {
+            Log.e(TAG, "Xray executable not found at ${xrayExecutable.absolutePath}")
+            XrayDiagnosticsStore.append(
+                configFilesDir,
+                "runtime",
+                "Xray executable not found at ${xrayExecutable.absolutePath}",
+                diagnosticsGeneration
+            )
+            // Fallback or error
+            return false
+        }
+
+        // 3. Prepare assets (geoip, geosite)
+        Utilities.copyAssets(context)
+
+        // 4. Run Xray
+        try {
+            val cmd = listOf(
+                xrayExecutable.absolutePath,
+                "-config", File(configFilesDir, "config.json").absolutePath
+            )
+            val pb = ProcessBuilder(cmd)
+            pb.directory(configFilesDir)
+            pb.redirectErrorStream(true)
+            
+            // Set environment variables (XRAY_LOCATION_ASSET is crucial for finding geoip/geosite)
+            val env = pb.environment()
+            env["XRAY_LOCATION_ASSET"] = Utilities.getUserAssetsPath(context)
+            if (protector != null) {
+                env["FLUTTER_VLESS_PROTECT_SOCKET"] = protector.socketName
+            } else {
+                env.remove("FLUTTER_VLESS_PROTECT_SOCKET")
+            }
+
+            val process = pb.start()
+            xrayProcess = process
+            if (protector != null && !protector.awaitVerified()) {
+                destroyCurrentXrayProcess()
+                AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
+                XrayDiagnosticsStore.append(configFilesDir, "runtime", "Runtime socket protection was not verified; VPN startup refused", diagnosticsGeneration)
+                return false
+            }
+            Thread.sleep(300)
+            if (!process.isAlive) {
+                val output = process.inputStream.bufferedReader().readText()
+                Log.e(TAG, "Xray process exited during startup. Output: $output")
+                XrayDiagnosticsStore.append(
+                    configFilesDir,
+                    "xray",
+                    output,
+                    diagnosticsGeneration
+                )
+                XrayDiagnosticsStore.append(
+                    configFilesDir,
+                    "runtime",
+                    "Xray process exited during startup",
+                    diagnosticsGeneration
+                )
+                if (xrayProcess === process) {
+                    xrayProcess = null
+                }
+                AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
+                return false
+            }
+            
+            AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_CONNECTED
+            lastProxyUplink = 0L
+            lastProxyDownlink = 0L
+            startTimer(context)
+            showNotification(context, config)
+            
+            // Monitor process in a separate thread to detect crash
+            Thread {
+                try {
+                    process.inputStream.bufferedReader().use { reader ->
+                        reader.forEachLine { line ->
+                            Log.d(TAG, "xray: $line")
+                            XrayDiagnosticsStore.append(
+                                configFilesDir,
+                                "xray",
+                                line,
+                                diagnosticsGeneration
+                            )
+                        }
+                    }
+                    
+                    val exitCode = process.waitFor()
+                    Log.e(TAG, "Xray process exited with code $exitCode")
+                    XrayDiagnosticsStore.append(
+                        configFilesDir,
+                        "runtime",
+                        "Xray process exited with code $exitCode",
+                        diagnosticsGeneration
+                    )
+                    stopCoreAfterUnexpectedExit(
+                        context,
+                        process,
+                        diagnosticsGeneration
+                    )
+                } catch (e: java.io.InterruptedIOException) {
+                    // Expected when stopping
+                } catch (e: InterruptedException) {
+                    // Expected when stopping
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error reading xray output", e)
+                    XrayDiagnosticsStore.append(
+                        configFilesDir,
+                        "runtime",
+                        "Error reading Xray output: ${e.message}",
+                        diagnosticsGeneration
+                    )
+                }
+            }.start()
+
+            return true
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start Xray process", e)
+            XrayDiagnosticsStore.append(
+                configFilesDir,
+                "runtime",
+                "Failed to start Xray process: ${e.message}",
+                diagnosticsGeneration
+            )
+            return false
         }
     }
 
@@ -131,202 +464,338 @@ object XrayCoreManager {
         }
     }
 
-    internal fun buildRuntimeConfigJson(config: XrayConfig, filesDir: File,
-        credentials: LocalProxyCredentials? = null): JSONObject {
-        val json = normalizeRuntimeConfig(JSONObject(config.V2RAY_FULL_JSON_CONFIG)) as JSONObject
-        LocalProxyAccessPolicy.normalizeConfigInputs(json)
-        normalizeVlessOutbounds(json)
-        require(json.optJSONArray("outbounds")?.length()?.let { it > 0 } == true) { "At least one outbound is required" }
-        // Raw native logs can contain addresses and secrets even at error level.
-        json.put("log", JSONObject().put("loglevel", "none").put("access", "none").put("error", "none"))
-        val inbounds = json.optJSONArray("inbounds") ?: JSONArray()
-        val used = mutableSetOf<Int>()
-        var hasSocks = false
-        for (i in 0 until inbounds.length()) {
-            val inbound = inbounds.getJSONObject(i)
-            val port = inbound.optInt("port", -1)
-            if (port > 0) used.add(port)
-            if (inbound.optString("protocol") == "socks" && port == config.LOCAL_SOCKS5_PORT) hasSocks = true
-        }
-        if (!hasSocks) {
-            config.LOCAL_SOCKS5_PORT = nextFreePort(config.LOCAL_SOCKS5_PORT, used)
-            inbounds.put(JSONObject().put("tag", uniqueInboundTag(inbounds, "socks"))
-                .put("listen", "127.0.0.1").put("port", config.LOCAL_SOCKS5_PORT).put("protocol", "socks")
-                .put("settings", JSONObject().put("auth", "noauth").put("udp", true))
-                .put("sniffing", JSONObject().put("enabled", true).put("routeOnly", true)
-                    .put("destOverride", JSONArray().put("http").put("tls"))))
-            used.add(config.LOCAL_SOCKS5_PORT)
-        }
-        if (!config.PROXY_ONLY) {
-            LocalProxyAccessPolicy.apply(inbounds, requireNotNull(credentials) { "Native local credentials are required" }, config.LOCAL_SOCKS5_PORT)
-            requireProtectedSocketSupport(json)
-        } else {
-            LocalProxyAccessPolicy.credentialsForProxyOnly(JSONObject().put("inbounds", inbounds), config.LOCAL_SOCKS5_PORT)
-        }
-        // Keep StatsService, but do not create an unsolicited HTTP proxy.
-        require((json.optJSONArray("outbounds") ?: JSONArray()).let { array ->
-            (0 until array.length()).none { array.getJSONObject(it).optString("tag") == "api" }
-        }) { "Reserved API outbound tag collision" }
-        json.put("api", JSONObject().put("tag", "api").put("services", JSONArray().put("StatsService")))
-        json.put("stats", JSONObject())
-        val policy = json.optJSONObject("policy") ?: JSONObject()
-        val system = policy.optJSONObject("system") ?: JSONObject()
-        system.put("statsOutboundUplink", true).put("statsOutboundDownlink", true)
-        policy.put("system", system)
-        json.put("policy", policy)
-        config.LOCAL_API_PORT = nextFreePort(config.LOCAL_API_PORT, used)
-        val apiTag = uniqueInboundTag(inbounds, "api")
-        inbounds.put(JSONObject().put("tag", apiTag).put("port", config.LOCAL_API_PORT).put("listen", "127.0.0.1")
-            .put("protocol", "dokodemo-door").put("settings", JSONObject().put("address", "127.0.0.1")))
-        json.put("inbounds", inbounds)
-        val routing = json.optJSONObject("routing") ?: JSONObject()
-        val rules = JSONArray().put(JSONObject().put("type", "field").put("inboundTag", JSONArray().put(apiTag)).put("outboundTag", "api"))
-        routing.optJSONArray("rules")?.let { for (i in 0 until it.length()) rules.put(it.get(i)) }
-        routing.put("rules", rules)
-        json.put("routing", routing)
-        return json
+    /** Reads bounded diagnostics written by the dedicated VPN service process. */
+    fun getProviderDebugSnapshot(context: Context): String {
+        return XrayDiagnosticsStore.snapshot(context.filesDir)
     }
 
-    /** Pure preliminary validation in the application process; service repeats before mutation. */
-    fun validateConfiguration(config: XrayConfig) {
-        require(config.ANDROID_DNS_POLICY in setOf("config", "proxy")) { "Unsupported Android DNS policy" }
-        require(!(config.PROXY_ONLY && config.ANDROID_DNS_POLICY == "proxy")) { "Proxy DNS requires VPN mode" }
-        AndroidTunnelDnsPolicy.validate(config.V2RAY_FULL_JSON_CONFIG, config.ANDROID_DNS_POLICY,
-            config.ANDROID_DNS_PROXY_OUTBOUND_TAG, config.BYPASS_SUBNETS)
-        buildRuntimeConfigJson(config.copy(), File("."), LocalProxyCredentials.generate())
+    /**
+     * Stops the Xray Core process and cleans up notifications.
+     */
+    @Synchronized
+    fun stopCore(context: Service) {
+        destroyCurrentXrayProcess()
+
+        AppConfigs.V2RAY_STATE = AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
+        stopTimer()
+        
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.cancel(NOTIFICATION_ID)
+        
+        sendDisconnectedBroadcast(context)
     }
 
-    internal fun buildDelayConfigJson(configJson: String, proxyPort: Int, filesDir: File,
-        credentials: LocalProxyCredentials): Pair<JSONObject, Int> {
-        // A standalone measurement owns a single temporary input; imported listeners never open.
-        val json = JSONObject(configJson).put("inbounds", JSONArray())
-        val config = XrayConfig(V2RAY_FULL_JSON_CONFIG = json.toString(), LOCAL_SOCKS5_PORT = proxyPort, LOCAL_API_PORT = proxyPort + 1)
-        return buildRuntimeConfigJson(config, filesDir, credentials) to config.LOCAL_SOCKS5_PORT
+    /** Applies an old monitor callback only while it still owns this session. */
+    @Synchronized
+    private fun stopCoreAfterUnexpectedExit(
+        context: Service,
+        process: Process,
+        diagnosticsGeneration: Long
+    ) {
+        if (xrayProcess !== process ||
+            XrayDiagnosticsStore.currentGeneration() != diagnosticsGeneration ||
+            AppConfigs.V2RAY_STATE != AppConfigs.V2RAY_STATES.V2RAY_CONNECTED
+        ) {
+            return
+        }
+        stopCore(context)
     }
 
-    /** Validate the actual native parser before replacing a working session. No raw output escapes. */
-    internal fun validateNative(context: Context, json: JSONObject): Boolean {
-        val file = File(context.noBackupFilesDir, "validate-${UUID.randomUUID()}.json")
+    /** Stops the tracked child before its files can be reset for another session. */
+    private fun destroyCurrentXrayProcess(): Boolean {
+        val process = xrayProcess ?: return true
+        xrayProcess = null
         return try {
-            file.writeText(json.toString())
-            Utilities.copyAssets(context)
-            val builder = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
-                "run", "-test", "-config", file.absolutePath).redirectErrorStream(true)
-            builder.environment()["XRAY_LOCATION_ASSET"] = Utilities.getUserAssetsPath(context)
-            val process = builder.start()
-            val reader = drain(process)
-            val done = process.waitFor(10, TimeUnit.SECONDS)
-            if (!done) process.destroyForcibly()
-            reader.join(1000)
-            done && process.exitValue() == 0
-        } catch (_: Exception) { false } finally { file.delete() }
-    }
-
-    internal fun startCore(context: Service, config: XrayConfig, json: JSONObject,
-        protector: XraySocketProtector?, ownerGeneration: Long, onExit: (Long, Int) -> Unit): Boolean {
-        if (!stopWorkers()) return false
-        return try {
-            val file = File(context.noBackupFilesDir, "xray-${UUID.randomUUID()}.json")
-            runtimeFile = file
-            file.writeText(json.toString())
-            Utilities.copyAssets(context)
-            val builder = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
-                "run", "-config", file.absolutePath).directory(context.noBackupFilesDir).redirectErrorStream(true)
-            builder.environment()["XRAY_LOCATION_ASSET"] = Utilities.getUserAssetsPath(context)
-            if (protector != null) builder.environment()["FLUTTER_VLESS_PROTECT_SOCKET"] = protector.socketName
-            val process = builder.start()
-            xrayProcess = process
-            Thread({
-                try {
-                    process.inputStream.use { stream -> val bytes = ByteArray(4096); while (stream.read(bytes) >= 0) { } }
-                    val code = process.waitFor()
-                    synchronized(this) { if (xrayProcess !== process) return@Thread }
-                    onExit(ownerGeneration, code)
-                } catch (_: Exception) { onExit(ownerGeneration, -1) }
-            }, "xray-monitor").apply { isDaemon = true; start() }
-            if (protector != null && !protector.awaitVerified()) { stopWorkers(); return false }
-            if (!process.isAlive) { stopWorkers(); return false }
-            AppConfigs.V2RAY_CONFIG = config
-            lastProxyUplink = 0; lastProxyDownlink = 0
-            true
-        } catch (_: Exception) { stopWorkers(); false }
-    }
-
-    @Synchronized internal fun stopWorkers(): Boolean {
-        val process = xrayProcess
-        xrayProcess = null // Invalidate callbacks before signaling the old process.
-        if (process != null) {
             process.destroy()
-            if (!process.waitFor(1, TimeUnit.SECONDS)) process.destroyForcibly()
-            if (!process.waitFor(1, TimeUnit.SECONDS)) { xrayProcess = process; return false }
+            repeat(40) {
+                if (!process.isAlive) return true
+                Thread.sleep(25)
+            }
+            Log.e(TAG, "Xray process did not stop within one second")
+            if (xrayProcess == null) {
+                xrayProcess = process
+            }
+            false
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            Log.e(TAG, "Interrupted while waiting for Xray process to stop", e)
+            if (xrayProcess == null) {
+                xrayProcess = process
+            }
+            false
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to destroy Xray process", e)
+            if (xrayProcess == null) {
+                xrayProcess = process
+            }
+            false
         }
-        runtimeFile?.delete(); runtimeFile = null
-        return true
     }
 
-    fun isXrayRunning() = AppConfigs.V2RAY_STATE != AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
-    fun getProviderDebugSnapshot(context: Context) = XrayDiagnosticsStore.snapshot(context.filesDir)
-
-    internal fun publishState(context: Context, state: AppConfigs.V2RAY_STATES, seconds: Long = 0) {
-        AppConfigs.V2RAY_STATE = state
-        val traffic = if (state == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED) getV2rayTraffic(context) else longArrayOf(0, 0, 0, 0)
-        context.sendBroadcast(Intent(AppConfigs.V2RAY_CONNECTION_INFO).setPackage(context.packageName)
-            .putExtra("STATE", state).putExtra("DURATION", seconds.toString())
-            .putExtra("UPLOAD_SPEED", traffic[0]).putExtra("DOWNLOAD_SPEED", traffic[1])
-            .putExtra("UPLOAD_TRAFFIC", traffic[2]).putExtra("DOWNLOAD_TRAFFIC", traffic[3]))
+    fun isXrayRunning(): Boolean {
+        // Check state instead of process because VPN runs in separate service process
+        return AppConfigs.V2RAY_STATE == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED ||
+               AppConfigs.V2RAY_STATE == AppConfigs.V2RAY_STATES.V2RAY_CONNECTING
     }
 
+    private fun startTimer(context: Context) {
+        countDownTimer?.cancel()
+        seconds = 0
+        countDownTimer = object : CountDownTimer(Long.MAX_VALUE, 1000) {
+            override fun onTick(millisUntilFinished: Long) {
+                seconds++
+                val intent = Intent(AppConfigs.V2RAY_CONNECTION_INFO)
+                intent.putExtra("STATE", AppConfigs.V2RAY_STATE)
+                intent.putExtra("DURATION", seconds.toString())
+                
+                val traffic = getV2rayTraffic(context)
+                intent.putExtra("UPLOAD_SPEED", traffic[0])
+                intent.putExtra("DOWNLOAD_SPEED", traffic[1])
+                intent.putExtra("UPLOAD_TRAFFIC", traffic[2])
+                intent.putExtra("DOWNLOAD_TRAFFIC", traffic[3])
+                
+                context.sendBroadcast(intent)
+            }
+
+            override fun onFinish() {}
+        }.start()
+    }
+
+    /**
+     * Queries Xray's stats API for traffic sent through the application proxy.
+     *
+     * The generated configurations give the remote VLESS outbound the stable
+     * `proxy` tag. Counters for injected `api`, `direct`, and `blackhole`
+     * routes are intentionally ignored: polling the API itself generates
+     * bytes and would otherwise make a broken tunnel look active.
+     *
+     * @return `[uploadSpeed, downloadSpeed, totalUpload, totalDownload]`,
+     * where speed is the delta since the previous one-second timer tick.
+     */
     fun getV2rayTraffic(context: Context): LongArray {
-        if (xrayProcess?.isAlive != true) return longArrayOf(0, 0, 0, 0)
-        return try {
-            val process = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
-                "api", "statsquery", "--server=127.0.0.1:${AppConfigs.V2RAY_CONFIG?.LOCAL_API_PORT ?: 10809}", "--pattern", "outbound>>>proxy>>>").start()
-            // Stats are bounded and parsed locally; never included in diagnostics.
-            val output = process.inputStream.bufferedReader().readText().take(64 * 1024)
-            if (!process.waitFor(2, TimeUnit.SECONDS)) { process.destroyForcibly(); return longArrayOf(0, 0, 0, 0) }
-            val stats = JSONObject(output).optJSONArray("stat") ?: JSONArray()
-            var up = 0L; var down = 0L
-            for (i in 0 until stats.length()) {
-                val stat = stats.getJSONObject(i)
-                when (stat.optString("name")) {
-                    "outbound>>>proxy>>>traffic>>>uplink" -> up = stat.optLong("value")
-                    "outbound>>>proxy>>>traffic>>>downlink" -> down = stat.optLong("value")
+        if (!isXrayRunning()) return longArrayOf(0, 0, 0, 0)
+
+        val xrayPath = File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath
+        val cmd = arrayListOf(
+            xrayPath,
+            "api",
+            "statsquery",
+            "--server=127.0.0.1:${AppConfigs.V2RAY_CONFIG?.LOCAL_API_PORT ?: 10809}",
+            "--pattern", ""
+        )
+
+        try {
+            val pb = ProcessBuilder(cmd)
+            val process = pb.start()
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor()
+
+            if (output.isNotEmpty()) {
+                Log.d(TAG, "Stats query output: $output")
+                val json = JSONObject(output)
+                val stats = json.optJSONArray("stat") ?: return longArrayOf(0, 0, 0, 0)
+
+                var proxyUplink = 0L
+                var proxyDownlink = 0L
+
+                for (i in 0 until stats.length()) {
+                    val stat = stats.getJSONObject(i)
+                    val name = stat.optString("name")
+                    val value = stat.optLong("value")
+
+                    if (name == "outbound>>>proxy>>>traffic>>>uplink") {
+                        proxyUplink = value
+                    } else if (name == "outbound>>>proxy>>>traffic>>>downlink") {
+                        proxyDownlink = value
+                    }
                 }
+
+                val uploadSpeed = (proxyUplink - lastProxyUplink).coerceAtLeast(0L)
+                val downloadSpeed = (proxyDownlink - lastProxyDownlink).coerceAtLeast(0L)
+                lastProxyUplink = proxyUplink
+                lastProxyDownlink = proxyDownlink
+
+                return longArrayOf(uploadSpeed, downloadSpeed, proxyUplink, proxyDownlink)
+            } else {
+                Log.d(TAG, "Stats query returned empty output")
             }
-            val result = longArrayOf((up - lastProxyUplink).coerceAtLeast(0), (down - lastProxyDownlink).coerceAtLeast(0), up, down)
-            lastProxyUplink = up; lastProxyDownlink = down
-            result
-        } catch (_: Exception) { longArrayOf(0, 0, 0, 0) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to query stats", e)
+        }
+        return longArrayOf(0, 0, 0, 0)
     }
 
-    fun getServerDelay(context: Context, configJson: String, url: String): Long {
-        var process: Process? = null
-        val file = File(context.noBackupFilesDir, "delay-${UUID.randomUUID()}.json")
-        return try {
-            val port = ServerSocket(0).use { it.localPort }
-            val credentials = LocalProxyCredentials.generate()
-            val (json, socksPort) = buildDelayConfigJson(configJson, port, context.noBackupFilesDir, credentials)
-            file.writeText(json.toString())
-            Utilities.copyAssets(context)
-            val builder = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
-                "run", "-config", file.absolutePath).directory(context.noBackupFilesDir).redirectErrorStream(true)
-            builder.environment()["XRAY_LOCATION_ASSET"] = Utilities.getUserAssetsPath(context)
-            process = builder.start()
-            drain(process)
-            repeat(20) {
-                if (process?.isAlive != true) return -1
-                try { return AuthenticatedSocksClient.measure(socksPort, credentials, url) }
-                catch (_: Exception) { Thread.sleep(100) }
+    private fun stopTimer() {
+        countDownTimer?.cancel()
+        countDownTimer = null
+        seconds = 0
+        lastProxyUplink = 0L
+        lastProxyDownlink = 0L
+    }
+
+    private fun sendDisconnectedBroadcast(context: Context) {
+        val intent = Intent(AppConfigs.V2RAY_CONNECTION_INFO)
+        intent.putExtra("STATE", AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED)
+        intent.putExtra("DURATION", "0")
+        intent.putExtra("UPLOAD_SPEED", 0L)
+        intent.putExtra("DOWNLOAD_SPEED", 0L)
+        intent.putExtra("UPLOAD_TRAFFIC", 0L)
+        intent.putExtra("DOWNLOAD_TRAFFIC", 0L)
+        context.sendBroadcast(intent)
+    }
+
+    private fun showNotification(context: Service, config: XrayConfig) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ActivityCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                return
             }
-            -1
-        } catch (_: Exception) { -1 } finally {
-            process?.destroy()
-            if (process?.waitFor(1, TimeUnit.SECONDS) == false) process?.destroyForcibly()
-            file.delete()
+        }
+
+        val channelId = createNotificationChannel(context, config.APPLICATION_NAME)
+        
+        val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        launchIntent?.action = "FROM_DISCONNECT_BTN"
+        launchIntent?.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
+        
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT else PendingIntent.FLAG_UPDATE_CURRENT
+        val contentPendingIntent = PendingIntent.getActivity(context, 0, launchIntent, flags)
+
+        val stopIntent = Intent(context, XrayVPNService::class.java)
+        stopIntent.putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.STOP_SERVICE)
+        val stopPendingIntent = PendingIntent.getService(context, 0, stopIntent, flags)
+        val smallIcon = if (config.APPLICATION_ICON != 0) config.APPLICATION_ICON else android.R.drawable.ic_dialog_info
+
+        val builder = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(smallIcon)
+            .setContentTitle(config.REMARK)
+            .setContentText("Connected")
+            .addAction(0, config.NOTIFICATION_DISCONNECT_BUTTON_NAME, stopPendingIntent)
+            .setContentIntent(contentPendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setOngoing(true)
+            .setShowWhen(true)
+
+        context.startForeground(NOTIFICATION_ID, builder.build())
+    }
+
+    fun getConnectedV2rayServerDelay(context: Context, url: String): Long {
+        // Use the configured SOCKS port (default 10807)
+        val port = AppConfigs.V2RAY_CONFIG?.LOCAL_SOCKS5_PORT ?: 10807
+        Log.d(TAG, "getConnectedV2rayServerDelay: Testing delay to $url via SOCKS port $port")
+        
+        return try {
+            val start = System.currentTimeMillis()
+            val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port))
+            val connection = java.net.URL(url).openConnection(proxy) as java.net.HttpURLConnection
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+            connection.requestMethod = "HEAD"
+            val responseCode = connection.responseCode
+            val end = System.currentTimeMillis()
+            val delay = end - start
+            connection.disconnect()
+            Log.d(TAG, "getConnectedV2rayServerDelay: Success! Response code: $responseCode, Delay: ${delay}ms")
+            delay
+        } catch (e: Exception) {
+            Log.e(TAG, "getConnectedV2rayServerDelay: Failed to measure delay (VPN may not be running)", e)
+            -1L
         }
     }
 
-    private fun drain(process: Process): Thread = Thread({
-        runCatching { process.inputStream.use { val bytes = ByteArray(4096); while (it.read(bytes) >= 0) { } } }
-    }, "xray-output-discard").apply { isDaemon = true; start() }
+    /**
+     * Measure delay for a server configuration (when not connected).
+     * Temporarily starts Xray with the provided config, measures delay, then stops it.
+     */
+    fun getServerDelay(context: Context, configJson: String, url: String): Long {
+        Log.d(TAG, "getServerDelay: Starting temporary Xray instance")
+        
+        var tempProcess: Process? = null
+        try {
+            // Find a random free port to avoid conflict with running VPN
+            val freePort = try {
+                val socket = java.net.ServerSocket(0)
+                val port = socket.localPort
+                socket.close()
+                port
+            } catch (e: Exception) {
+                10806 // Fallback
+            }
+            
+            val (json, socksPort) = buildDelayConfigJson(configJson, freePort, context.filesDir)
+            Log.d(TAG, "getServerDelay: Using SOCKS port $socksPort")
+            
+            // Write temp config file
+            val tempConfigFile = File(context.filesDir, "temp_delay_config.json")
+            tempConfigFile.writeText(json.toString())
+            
+            // Copy assets
+            Utilities.copyAssets(context)
+            
+            // Start Xray process
+            val xrayExecutable = File(context.applicationInfo.nativeLibraryDir, "libxray.so")
+            if (!xrayExecutable.exists()) {
+                Log.e(TAG, "getServerDelay: Xray executable not found")
+                return -1L
+            }
+            
+            val cmd = listOf(
+                xrayExecutable.absolutePath,
+                "-config", tempConfigFile.absolutePath
+            )
+            
+            val pb = ProcessBuilder(cmd)
+            pb.directory(context.filesDir)
+            val env = pb.environment()
+            env["XRAY_LOCATION_ASSET"] = Utilities.getUserAssetsPath(context)
+            
+            tempProcess = pb.start()
+            
+            // Wait a bit for Xray to start
+            Thread.sleep(1000)
+            
+            // Measure delay
+            val delay = try {
+                val start = System.currentTimeMillis()
+                val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", socksPort))
+                val connection = java.net.URL(url).openConnection(proxy) as java.net.HttpURLConnection
+                connection.connectTimeout = 5000
+                connection.readTimeout = 5000
+                connection.requestMethod = "HEAD"
+                val responseCode = connection.responseCode
+                val end = System.currentTimeMillis()
+                connection.disconnect()
+                val result = end - start
+                Log.d(TAG, "getServerDelay: Success! Response code: $responseCode, Delay: ${result}ms")
+                result
+            } catch (e: Exception) {
+                Log.e(TAG, "getServerDelay: Failed to measure delay", e)
+                -1L
+            }
+            
+            // Stop temp process
+            tempProcess?.destroy()
+            tempConfigFile.delete()
+            
+            return delay
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "getServerDelay: Error starting temp Xray", e)
+            tempProcess?.destroy()
+            return -1L
+        }
+    }
+
+    private fun createNotificationChannel(context: Context, appName: String): String {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channelId = "XRAY_SERVICE_CHANNEL"
+            val channelName = "$appName Background Service"
+            val channel = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_DEFAULT)
+            channel.lightColor = Color.BLUE
+            channel.lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.createNotificationChannel(channel)
+            return channelId
+        }
+        return ""
+    }
 }

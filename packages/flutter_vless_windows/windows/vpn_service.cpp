@@ -176,7 +176,9 @@ bool VpnService::StartWorkers() {
   }
   Event("Authenticated Xray listener ready");
   // Credentials live only in a private file, never in the process command line.
-  std::string tun = "device: wintun://flutter_vless_tun\nproxy: socks5://" + username_ + ":" + password_
+  // The bundled tun2socks uses the "tun" driver on Windows too; Wintun is
+  // the implementation, not a supported URI scheme.
+  std::string tun = "device: tun://flutter_vless_tun\nproxy: socks5://" + username_ + ":" + password_
       + "@127.0.0.1:" + std::to_string(socks_port_) + "\nloglevel: silent\nmtu: 1500\n";
   if (!private_runtime_->WriteConfig(tun, tun_config_path_)) return fail("Cannot write the private tun2socks configuration");
   tun2socks_process_ = native::Launch(tun2socks_executable_path_, {L"-config", tun_config_path_.wstring()});

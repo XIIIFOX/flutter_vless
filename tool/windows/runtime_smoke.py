@@ -205,7 +205,7 @@ def pin_interface(sock, source, ipv6=False):
     sock.bind((source, 0))
 
 
-def physical_denied(address, source, port, udp=False):
+def physical_denied(address, source, port, udp=False, probe=None):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM) as sock:
         sock.settimeout(3)
         pin_interface(sock, source)
@@ -217,6 +217,27 @@ def physical_denied(address, source, port, udp=False):
             # Require an explicit Windows access-denied verdict, not a timeout.
             assert getattr(error, "winerror", None) == 10013, f"Unproven block: {error}"
             return "WSAEACCES"
+        if udp:
+            # A successful UDP send only queues a datagram. Require a kernel
+            # block event for this exact flow, caused by our own WFP filter.
+            source_port = sock.getsockname()[1]
+            owned = {int(value) for value in native(probe, "policy-ids").split()}
+            command = f"""
+$events = Get-WinEvent -FilterHashtable @{{LogName='Security'; Id=5157; StartTime=(Get-Date).AddMinutes(-1)}} -ErrorAction SilentlyContinue
+foreach ($event in $events) {{
+  $values = @{{}}
+  ([xml]$event.ToXml()).Event.EventData.Data | ForEach-Object {{ $values[$_.Name] = $_.'#text' }}
+  if ([long]$values.ProcessID -eq {os.getpid()} -and [int]$values.SourcePort -eq {source_port} -and $values.DestAddress -eq '{address}' -and [int]$values.DestPort -eq {port} -and [int]$values.Protocol -eq 17) {{ $values.FilterRTID }}
+}}
+"""
+            for _ in range(5):
+                output = subprocess.check_output(["powershell", "-NoProfile", "-Command", command],
+                    text=True, timeout=15)
+                matching = {int(value) for value in output.split()}
+                if matching & owned:
+                    return "Windows event 5157: exact UDP flow blocked by owned WFP filter"
+                time.sleep(0.2)
+            raise AssertionError("No owned WFP block event for the physical DNS control")
     raise AssertionError("Physical-interface traffic was permitted")
 
 
@@ -414,10 +435,17 @@ def main():
                             denied.sendall(b"\x05\x01\x02")
                             assert exact(denied, 2) == b"\x05\x02"
                             denied.sendall(b"\x01\x05wrong\x05wrong")
-                            assert exact(denied, 2) == b"\x01\x01", "Managed VPN SOCKS accepted incorrect credentials"
+                            response = exact(denied, 2)
+                            # RFC 1929 permits any nonzero failure code; Xray
+                            # 26.7.28 uses FF, followed by a closed connection.
+                            assert response[0] == 1 and response[1] != 0, "Managed VPN SOCKS accepted incorrect credentials"
+                            try:
+                                assert denied.recv(1) == b"", "Rejected SOCKS session remained open"
+                            except ConnectionResetError:
+                                pass
                         results.append(dict(mode=label, check="native SOCKS rejects noauth and incorrect credentials", passed=True))
                         for udp in (False, True):
-                            actual = physical_denied(external_address if not udp else "1.1.1.1", direct_address, 53 if udp else 443, udp)
+                            actual = physical_denied(external_address if not udp else "1.1.1.1", direct_address, 53 if udp else 443, udp, probe)
                             results.append(dict(mode=label, check="physical DNS denied" if udp else "physical TCP denied", actual=actual, passed=True))
                         for tcp in (False, True):
                             actual = protected_dns(tcp)

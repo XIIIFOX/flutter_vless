@@ -168,6 +168,9 @@ jobs:
         run: |
           Get-NetRoute | Format-Table | Out-File build/windows-runtime/routes-before.log
           Get-NetIPInterface | Format-Table | Out-File build/windows-runtime/interfaces-before.log
+          # Language-independent audit subcategory: Filtering Platform Connection.
+          auditpol /set /subcategory:"{0CCE9226-69AE-11D9-BED3-505054503030}" /failure:enable
+          if ($LASTEXITCODE) { throw 'Cannot enable native WFP block evidence' }
       - name: Exercise native WFP, Wintun, routing, DNS and recovery
         run: python tool/windows/runtime_smoke.py --directory build/windows-runtime --vpn
       - name: Restore the disposable runner after any failure

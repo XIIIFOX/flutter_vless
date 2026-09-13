@@ -37,7 +37,7 @@ int main(int argc,char** argv) {
     std::cout << "PROTECTION_RELEASED=" << released << std::endl;
     return released ? 0 : 21;
   }
-  if (action == "policy-count") {
+  if (action == "policy-count" || action == "policy-ids") {
     if (!isolated) return 20;
     HANDLE engine = nullptr, enumeration = nullptr;
     if (FwpmEngineOpen0(nullptr, RPC_C_AUTHN_WINNT, nullptr, nullptr, &engine)) return 22;
@@ -48,7 +48,10 @@ int main(int argc,char** argv) {
       UINT32 batch = 0; FWPM_FILTER0** filters = nullptr;
       enumerated = FwpmFilterEnum0(engine, enumeration, 256, &filters, &batch);
       if (!enumerated) for (UINT32 i=0;i<batch;++i) {
-        if (filters[i]->providerKey && IsEqualGUID(*filters[i]->providerKey, provider)) ++count;
+        if (filters[i]->providerKey && IsEqualGUID(*filters[i]->providerKey, provider)) {
+          ++count;
+          if (action == "policy-ids") std::cout << filters[i]->filterId << std::endl;
+        }
       }
       if (filters) FwpmFreeMemory0(reinterpret_cast<void**>(&filters));
       if (!batch) break;
@@ -56,7 +59,7 @@ int main(int argc,char** argv) {
     if (enumeration) FwpmFilterDestroyEnumHandle0(engine, enumeration);
     FwpmEngineClose0(engine);
     if (enumerated && enumerated != FWP_E_PROVIDER_NOT_FOUND) return 23;
-    std::cout << count << std::endl;
+    if (action == "policy-count") std::cout << count << std::endl;
     return 0;
   }
   if (action == "guard") {

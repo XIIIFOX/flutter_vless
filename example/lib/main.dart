@@ -1,5 +1,3 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_vless/flutter_vless.dart';
@@ -472,12 +470,11 @@ class _HomePageState extends State<HomePage> {
               icon: const Icon(Icons.timer),
               label: const Text('Delay'),
             ),
-            if (Platform.isIOS || Platform.isMacOS || Platform.isWindows)
-              ElevatedButton.icon(
-                onPressed: _showProviderDiagnostics,
-                icon: const Icon(Icons.bug_report_outlined),
-                label: const Text('VPN Diagnostics'),
-              ),
+            ElevatedButton.icon(
+              onPressed: _showProviderDiagnostics,
+              icon: const Icon(Icons.bug_report_outlined),
+              label: const Text('VPN Diagnostics'),
+            ),
           ],
         ),
       ),

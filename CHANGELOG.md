@@ -2,6 +2,8 @@
 
 ### General
 
+* Fix the example routing editor: restore applied selections, replace and clear its own rules, and avoid bypassing unrelated domains that share an IP address. Preserve imported routing and DNS settings, and retain QUIC sniffing.
+
 * Extend mandatory desktop VPN protection, private diagnostics and local proxy authentication to macOS and Windows. Keep domain-based direct routing and document platform-specific subnet behavior.
 
 * iOS and Android: authenticate internal local proxies and their clients with native session credentials. VPN mode rejects incompatible extra proxy listeners; explicit proxy-only authentication/noauth remains separate.
@@ -53,6 +55,8 @@
   [#23](https://github.com/XIIIFOX/flutter_vless/issues/23).
 
 ### Android
+
+* Show the VPN Diagnostics button in the Android example, including release builds.
 
 * Check VPN readiness through an authenticated local packet path independently of Internet sites and their routing rules. Restore opening the host app from the VPN notification.
 

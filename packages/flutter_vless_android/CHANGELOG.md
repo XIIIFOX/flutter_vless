@@ -1,5 +1,7 @@
 ## 1.1.6 (Unreleased)
 
+* Show the VPN Diagnostics button in the Android example, including release builds.
+
 * Check readiness through an owned local packet path independent of public-site routing, avoid FakeDNS probe collisions, and restore opening the app from its VPN notification.
 
 * Authenticate service-owned local SOCKS, avoid an unsolicited HTTP listener, and measure delay in the owning process.

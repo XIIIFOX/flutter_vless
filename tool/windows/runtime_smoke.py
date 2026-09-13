@@ -14,7 +14,22 @@ import ssl
 import subprocess
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+PORTS = {"inbound": 18580, "direct": 18581, "proxy": 18582}
+DNS_QUERIES = []
+
+
+def dns_response(query):
+    # Echo one well-formed synthetic question and return a documentation IPv4.
+    offset = 12
+    while query[offset]:
+        offset += query[offset] + 1
+    offset += 5
+    DNS_QUERIES.append(query[12:offset].hex())
+    return query[:2] + b"\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00" + query[12:offset] + \
+        b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x00\x00\x04\xc6\x33\x64\x07"
 
 
 def exact(sock, count):
@@ -49,10 +64,16 @@ class Socks(socketserver.BaseRequestHandler):
             sock.sendall(b"\x05\x00")
             _, command, _, kind = exact(sock, 4)
             count = exact(sock, 1)[0] if kind == 3 else {1: 4, 4: 16}[kind]
-            exact(sock, count + 2)
+            exact(sock, count)
+            port = int.from_bytes(exact(sock, 2), "big")
             if command != 1:
                 return
             sock.sendall(b"\x05\x00\x00\x01\x7f\x00\x00\x01\x00\x00")
+            if port == 53:
+                query = exact(sock, int.from_bytes(exact(sock, 2), "big"))
+                response = dns_response(query)
+                sock.sendall(len(response).to_bytes(2, "big") + response)
+                return
             data = b""
             while b"\r\n\r\n" not in data:
                 part = sock.recv(4096)
@@ -72,7 +93,7 @@ class Server(socketserver.ThreadingTCPServer):
 
 
 def request(host, vpn, loopback=False):
-    destination = ("127.0.0.1", 18581) if loopback else (("203.0.113.10", 18581) if vpn else ("127.0.0.1", 18580))
+    destination = ("127.0.0.1", PORTS["direct"]) if loopback else (("203.0.113.10", PORTS["direct"]) if vpn else ("127.0.0.1", PORTS["inbound"]))
     with socket.create_connection(destination, timeout=4) as sock:
         sock.settimeout(4)
         if vpn:
@@ -82,7 +103,7 @@ def request(host, vpn, loopback=False):
             sock.sendall(b"\x05\x01\x00")
             assert exact(sock, 2) == b"\x05\x00"
             sock.sendall(b"\x05\x01\x00\x03" + bytes([len(encoded)]) + encoded +
-                         (18581).to_bytes(2, "big"))
+                         PORTS["direct"].to_bytes(2, "big"))
             head = exact(sock, 4)
             assert head[1] == 0, head
             count = exact(sock, 1)[0] if head[3] == 3 else {1: 4, 4: 16}[head[3]]
@@ -119,37 +140,137 @@ def config(reverse, external_address=None, direct_address="127.0.0.1"):
         "log": {"loglevel": "warning", "access": "none"},
         "dns": {"hosts": {h: direct_address for h in ("2ip.ru", "2ip.io", "myip.com")},
                 "servers": ["localhost"]},
-        "inbounds": [{"port": 18580, "protocol": "socks", "tag": "socks-in",
+        "inbounds": [{"port": PORTS["inbound"], "protocol": "socks", "tag": "socks-in",
                       "listen": "127.0.0.1", "settings": {"auth": "noauth", "udp": True},
                       "sniffing": {"enabled": True, "destOverride": ["http", "tls"],
                                    "routeOnly": False}}],
         "outbounds": [{"protocol": "socks", "tag": "proxy",
-                       "settings": {"servers": [{"address": "127.0.0.1", "port": 18582}]}},
-                      {"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "UseIP"}}],
+                       "settings": {"servers": [{"address": "127.0.0.1", "port": PORTS["proxy"]}]}},
+                      {"protocol": "freedom", "tag": "direct", "settings": {
+                          "domainStrategy": "UseIP", "redirect": f"{direct_address}:{PORTS['direct']}"}}],
         "routing": {"domainStrategy": "AsIs", "rules": [
             {"type": "field", "domain": ["domain:myip.com"] if reverse else ["domain:ru", "domain:io"],
              "outboundTag": "direct"}]}}
     if external_address:
+        profile["outbounds"].append({"protocol": "freedom", "tag": "external-direct"})
         profile["dns"]["hosts"]["api.ipify.org"] = external_address
         profile["routing"]["rules"].append(
-            {"type": "field", "domain": ["full:api.ipify.org"], "outboundTag": "direct"})
+            {"type": "field", "domain": ["full:api.ipify.org"], "outboundTag": "external-direct"})
     return profile
+
+
+def protected_dns(tcp):
+    name = f"{uuid.uuid4().hex}.invalid"
+    question = b"".join(bytes([len(part)]) + part.encode() for part in name.split(".")) + b"\x00\x00\x01\x00\x01"
+    query = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00" + question
+    before = len(DNS_QUERIES)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as sock:
+        sock.settimeout(6)
+        sock.connect(("198.18.0.2", 53))
+        assert sock.getsockname()[0] == "10.0.85.2", "DNS did not select the TUN"
+        sock.sendall((len(query).to_bytes(2, "big") if tcp else b"") + query)
+        response = exact(sock, int.from_bytes(exact(sock, 2), "big")) if tcp else sock.recv(4096)
+    assert response[:2] == query[:2] and response[-4:] == b"\xc6\x33\x64\x07"
+    assert len(DNS_QUERIES) > before and question.hex() in DNS_QUERIES
+    return "DNS reply through selected proxy"
+
+
+def physical_denied(address, source, port, udp=False):
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM) as sock:
+        sock.settimeout(3)
+        sock.bind((source, 0))
+        try:
+            sock.connect((address, port))
+            if udp:
+                sock.send(b"private-dns-block-control")
+        except OSError as error:
+            # Require an explicit Windows access-denied verdict, not a timeout.
+            assert getattr(error, "winerror", None) == 10013, f"Unproven block: {error}"
+            return "WSAEACCES"
+    raise AssertionError("Physical-interface traffic was permitted")
+
+
+def native(probe, *args):
+    completed = subprocess.run([str(probe), *map(str, args)], cwd=probe.parent,
+                               capture_output=True, text=True, timeout=20)
+    assert completed.returncode == 0, f"Native {args[0]} failed: {completed.stdout} {completed.stderr}"
+    return completed.stdout.strip()
+
+
+def await_state(path, running, timeout=30):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            state = json.loads(path.read_text())
+            if state["running"] == running and state["protecting"]:
+                return
+        except (OSError, ValueError, KeyError):
+            pass
+        time.sleep(0.2)
+    raise AssertionError(f"Protected readiness did not become {running}")
+
+
+def kill_worker(pid, name):
+    # Match this probe's child PID and image, never arbitrary user processes.
+    command = f"$p = Get-CimInstance Win32_Process | Where-Object {{ $_.ParentProcessId -eq {pid} -and $_.Name -eq '{name}' }}; if (!$p) {{ throw 'Owned worker absent' }}; $p | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
+    subprocess.run(["powershell", "-NoProfile", "-Command", command], check=True, timeout=15,
+                   stdout=subprocess.DEVNULL)
+
+
+def start_adapter(probe, directory, subnet):
+    stop = directory / f"adapter-{subnet}.stop"
+    stop.unlink(missing_ok=True)
+    log_path = directory / f"adapter-{subnet}.log"
+    log = log_path.open("w")
+    process = subprocess.Popen([str(probe), "adapter", f"FlutterVlessValidation{subnet}", str(subnet), str(stop)],
+                               cwd=directory, stdout=log, stderr=log)
+    log.close()
+    deadline = time.monotonic() + 35
+    while "ADAPTER_READY=" not in log_path.read_text(errors="replace"):
+        if process.poll() is not None or time.monotonic() >= deadline:
+            stop.touch()
+            process.wait(timeout=10)
+            raise AssertionError("Synthetic dual-stack adapter did not become ready")
+        time.sleep(0.2)
+    return process, stop
+
+
+def adapter_datagram(subnet, ipv6, denied):
+    family = socket.AF_INET6 if ipv6 else socket.AF_INET
+    source = f"fd00:85:{subnet}::1" if ipv6 else f"100.64.{subnet}.1"
+    target = f"fd00:85:{subnet}::2" if ipv6 else f"100.64.{subnet}.2"
+    with socket.socket(family, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(3)
+        sock.bind((source, 0))
+        try:
+            sock.connect((target, 45000))
+            sock.send(b"wfp-adapter-control")
+        except OSError as error:
+            assert denied and getattr(error, "winerror", None) == 10013, f"Unproven adapter verdict: {error}"
+            return "WSAEACCES"
+    assert not denied, "Synthetic physical adapter bypassed WFP"
+    return "baseline datagram permitted"
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--vpn", action="store_true")
+    parser.add_argument("--wine-bottle", help="CrossOver bottle for proxy-only tests on macOS")
     args = parser.parse_args()
     if args.vpn and (os.name != "nt" or os.environ.get("GITHUB_ACTIONS") != "true"):
         raise SystemExit("Full VPN tests require a disposable GitHub Windows runner")
     directory = args.directory.resolve()
     probe = directory / "runtime_probe.exe"
     servers = []
+    adapters = []
     results = []
     external_address = None
     direct_address = "127.0.0.1"
     try:
+        with socket.socket() as candidate:
+            candidate.bind(("127.0.0.1", 0))
+            PORTS["inbound"] = candidate.getsockname()[1]
         if args.vpn:
             external_address = socket.gethostbyname("api.ipify.org")
             baseline = external_http(external_address)
@@ -162,27 +283,47 @@ def main():
                                     capture_output=True, text=True, timeout=30)
             (directory / "wintun.log").write_text(driver.stdout + driver.stderr)
             assert driver.returncode == 0, "Wintun adapter creation failed"
+            adapters.append(start_adapter(probe, directory, 2))
+            for ipv6 in (False, True):
+                actual = adapter_datagram(2, ipv6, False)
+                results.append(dict(check="IPv6 adapter baseline" if ipv6 else "IPv4 adapter baseline", actual=actual, passed=True))
         # A VPN freedom socket is pinned to the underlay; use a local target
         # on that interface, not a loopback-only target on another interface.
-        servers = [ThreadingHTTPServer((direct_address, 18581), Direct),
-                   Server(("127.0.0.1", 18582), Socks)]
+        servers = [ThreadingHTTPServer((direct_address, 0), Direct),
+                   Server(("127.0.0.1", 0), Socks)]
+        PORTS["direct"] = servers[0].server_address[1]
+        PORTS["proxy"] = servers[1].server_address[1]
         if args.vpn:
-            servers.append(ThreadingHTTPServer(("127.0.0.1", 18581), Direct))
+            servers.append(ThreadingHTTPServer(("127.0.0.1", PORTS["direct"]), Direct))
         for server in servers:
             threading.Thread(target=server.serve_forever, daemon=True).start()
-        for reverse in (False, True):
-            label = ("vpn" if args.vpn else "proxy") + ("-reverse" if reverse else "")
+        cases = [(False, "stop"), (True, "stop")]
+        if args.vpn:
+            cases.extend([(False, "crash"), (False, "shutdown")])
+        for reverse, ending in cases:
+            label = ("vpn" if args.vpn else "proxy") + ("-reverse" if reverse else "") + ("-" + ending if ending != "stop" else "")
             profile = directory / (label + ".json")
             profile.write_text(json.dumps(config(reverse, external_address, direct_address)))
             stop_file = directory / (label + ".stop")
             stop_file.unlink(missing_ok=True)
+            state_file = directory / (label + ".state.json")
+            state_file.unlink(missing_ok=True)
+            guard_stop = directory / (label + ".guard-stop")
+            guard_stop.unlink(missing_ok=True)
+            guard = None
             with (directory / (label + ".log")).open("w") as log:
-                process = subprocess.Popen([str(probe), "run-vpn" if args.vpn else "run-proxy",
-                                            str(profile), "120", str(stop_file)], cwd=directory, stdout=log, stderr=log)
+                windows_path = lambda path: "Z:" + str(path).replace("/", "\\") if args.wine_bottle else str(path)
+                command = (["/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine",
+                            "--bottle", args.wine_bottle] if args.wine_bottle else [])
+                command += [str(probe), "run-vpn" if args.vpn else "run-proxy", windows_path(profile), "240", windows_path(stop_file), windows_path(state_file)]
+                process = subprocess.Popen(command, cwd=directory, stdout=log, stderr=log)
+                if args.vpn:
+                    guard = subprocess.Popen([str(probe), "guard", str(process.pid), "240", str(guard_stop)],
+                                             cwd=directory, stdout=log, stderr=log)
                 try:
                     if args.vpn:
-                        deadline = time.monotonic() + 20
-                        while "TUN interface configured and capture routes added" not in (directory / (label + ".log")).read_text(errors="replace"):
+                        deadline = time.monotonic() + 65
+                        while "START_RETURN=1" not in (directory / (label + ".log")).read_text(errors="replace"):
                             if process.poll() is not None or time.monotonic() >= deadline:
                                 raise RuntimeError("VPN network setup did not become ready")
                             time.sleep(0.25)
@@ -193,8 +334,16 @@ def main():
                         installed = json.loads(routes)
                         assert {r["DestinationPrefix"] for r in installed} >= {"0.0.0.0/1", "128.0.0.0/1"}
                         time.sleep(1)
+                        assert int(native(probe, "policy-count")) >= 10
+                        results.append(dict(mode=label, check="native WFP filters installed", passed=True))
+                        if len(adapters) == 1:
+                            adapters.append(start_adapter(probe, directory, 3))
                     else:
-                        time.sleep(3)
+                        deadline = time.monotonic() + 25
+                        while "START_RETURN=1" not in (directory / (label + ".log")).read_text(errors="replace"):
+                            if process.poll() is not None or time.monotonic() >= deadline:
+                                raise RuntimeError("Proxy did not report forwarding readiness")
+                            time.sleep(0.1)
                     for host in ("2ip.ru", "2ip.io", "myip.com"):
                         expected = "DIRECT-FIXTURE" if ((host == "myip.com") == reverse) else "PROXY-FIXTURE"
                         try:
@@ -205,6 +354,25 @@ def main():
                         results.append(row)
                         print(json.dumps(row), flush=True)
                     if args.vpn:
+                        for subnet in (2, 3):
+                            for ipv6 in (False, True):
+                                actual = adapter_datagram(subnet, ipv6, True)
+                                results.append(dict(mode=label, check=f"{'new' if subnet == 3 else 'existing'} adapter {'IPv6' if ipv6 else 'IPv4'} blocked", actual=actual, passed=True))
+                        with socket.create_connection(("127.0.0.1", PORTS["inbound"]), timeout=3) as denied:
+                            denied.sendall(b"\x05\x01\x00")
+                            assert exact(denied, 2) == b"\x05\xff", "Managed VPN SOCKS accepted noauth"
+                        with socket.create_connection(("127.0.0.1", PORTS["inbound"]), timeout=3) as denied:
+                            denied.sendall(b"\x05\x01\x02")
+                            assert exact(denied, 2) == b"\x05\x02"
+                            denied.sendall(b"\x01\x05wrong\x05wrong")
+                            assert exact(denied, 2) == b"\x01\x01", "Managed VPN SOCKS accepted incorrect credentials"
+                        results.append(dict(mode=label, check="native SOCKS rejects noauth and incorrect credentials", passed=True))
+                        for udp in (False, True):
+                            actual = physical_denied(external_address if not udp else "1.1.1.1", direct_address, 53 if udp else 443, udp)
+                            results.append(dict(mode=label, check="physical DNS denied" if udp else "physical TCP denied", actual=actual, passed=True))
+                        for tcp in (False, True):
+                            actual = protected_dns(tcp)
+                            results.append(dict(mode=label, check="protected TCP DNS" if tcp else "protected UDP DNS", actual=actual, passed=True))
                         try:
                             actual = request("localhost", True, loopback=True)
                         except Exception as error:
@@ -219,14 +387,36 @@ def main():
                                    passed=actual == "HTTP 200")
                         results.append(row)
                         print(json.dumps(row), flush=True)
-                    stop_file.touch()
-                    code = process.wait(timeout=20)
+                        if not reverse and ending == "stop":
+                            for worker in ("xray.exe", "tun2socks.exe"):
+                                kill_worker(process.pid, worker)
+                                await_state(state_file, False)
+                                actual = physical_denied(external_address, direct_address, 443)
+                                results.append(dict(mode=label, check=worker + " failure remains blocked", actual=actual, passed=True))
+                                await_state(state_file, True, timeout=60)
+                                assert request("myip.com", True) == "PROXY-FIXTURE"
+                                results.append(dict(mode=label, check=worker + " forwarding recovers", passed=True))
+                    if ending == "crash":
+                        process.kill()
+                    elif ending == "shutdown":
+                        stop_file.write_text("shutdown")
+                    else:
+                        stop_file.touch()
+                    code = process.wait(timeout=25)
                     if args.vpn:
+                        if ending != "stop":
+                            assert int(native(probe, "policy-count")) >= 10
+                            actual = physical_denied(external_address, direct_address, 443)
+                            results.append(dict(mode=label, check="application exit retains native WFP block", actual=actual, passed=True))
+                            native(probe, "release-protection")
+                        assert native(probe, "policy-count") == "0"
                         remaining = subprocess.check_output([
                             "powershell", "-NoProfile", "-Command",
                             "@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1') }).Count"], text=True, timeout=25)
                         results.append(dict(mode=label, check="capture routes removed by service", passed=remaining.strip() == "0"))
-                    results.append(dict(mode=label, check="clean shutdown", passed=code == 0, exit_code=code))
+                        assert external_http(external_address) == baseline
+                        results.append(dict(mode=label, check="explicit stop restores ordinary HTTPS", passed=True))
+                    results.append(dict(mode=label, check="requested termination", passed=ending == "crash" or code == 0, exit_code=code))
                 finally:
                     if process.poll() is None:
                         stop_file.touch()
@@ -235,9 +425,23 @@ def main():
                         except subprocess.TimeoutExpired:
                             process.kill()
                             process.wait()
+                    if args.vpn:
+                        # Do not rely on a later Actions step: WFP also covers
+                        # the runner agent, so restore connectivity locally.
+                        native(probe, "release-protection")
+                        guard_stop.touch()
+                        if guard:
+                            guard.wait(timeout=10)
             # Stop removes the Wintun adapter; allow the next creation to settle.
             time.sleep(2)
     finally:
+        for process, stop in adapters:
+            stop.touch()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
         for server in servers:
             server.shutdown()
             server.server_close()

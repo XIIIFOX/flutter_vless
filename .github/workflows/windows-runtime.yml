@@ -3,31 +3,35 @@ name: Windows runtime validation
 on:
   workflow_dispatch:
   push:
-    branches: [fr/windows-runtime-validation]
+    branches: [fr/windows-runtime-validation, fr/windows-security-1.1.6]
 
 permissions:
   contents: read
 
+concurrency:
+  group: windows-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-and-proxy:
-    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Build native regression tests and runtime probe
-        shell: cmd
-        run: tool\windows\build_native_tests.cmd
-      - name: Verify native gateway selection
+      - name: Record toolchain and operating system
         shell: pwsh
         run: |
-          $gateway = & build/windows-runtime/runtime_probe.exe gateway
-          if ($LASTEXITCODE -ne 0) { throw 'Native gateway lookup failed' }
-          $expected = (Find-NetRoute -RemoteIPAddress 8.8.8.8 | Where-Object { $_.DestinationPrefix }).NextHop
-          if ($gateway.Trim() -notin $expected) { throw 'Native gateway differs from Windows routing API' }
-      - name: Download and verify August 2026 Windows runtime
+          New-Item -ItemType Directory -Force build/windows-runtime | Out-Null
+          Get-ComputerInfo | Select-Object WindowsProductName,WindowsVersion,OsBuildNumber | ConvertTo-Json | Out-File build/windows-runtime/environment.log
+          whoami /groups | Out-File -Append build/windows-runtime/environment.log
+      - name: Download and verify the pinned Windows runtime
         shell: pwsh
         run: |
           $url = 'https://github.com/XTLS/Xray-core/releases/download/v26.7.28/Xray-windows-64.zip'
@@ -35,20 +39,60 @@ jobs:
           if ((Get-FileHash build/xray-windows.zip -Algorithm SHA256).Hash.ToLower() -ne 'c7172078fca4711bcd92a4774dcd1822544579c58816197575c47533317fd8d1') { throw 'Xray checksum mismatch' }
           Expand-Archive build/xray-windows.zip build/windows-runtime -Force
           Copy-Item example/windows/xray/tun2socks.exe,example/windows/xray/wintun.dll build/windows-runtime
+          Get-FileHash build/windows-runtime/*.exe,build/windows-runtime/*.dll | Format-Table | Out-File build/windows-runtime/binary-checksums.log
           & build/windows-runtime/xray.exe version
-          & build/windows-runtime/tun2socks.exe -version
-      - name: Exercise domain routing through the Windows proxy service
+          if ($LASTEXITCODE) { throw 'Xray version failed' }
+      - name: Build and run native configuration, WFP policy, process and ACL tests
+        shell: cmd
+        run: |
+          call tool\windows\build_native_tests.cmd > build\windows-runtime\native-tests.log 2>&1
+          set "native_result=%ERRORLEVEL%"
+          type build\windows-runtime\native-tests.log
+          exit /b %native_result%
+      - name: Require real Windows privilege checks
+        shell: pwsh
+        run: |
+          $log = Get-Content build/windows-runtime/native-tests.log -Raw
+          if ($log -match 'SKIP') { throw 'A required native Windows test was skipped' }
+          if ($log -notmatch 'deny filtered same-user') { throw 'Filtered-token boundary was not tested' }
+      - name: Verify gateway selection through Windows APIs
+        shell: pwsh
+        run: |
+          $gateway = & build/windows-runtime/runtime_probe.exe gateway
+          if ($LASTEXITCODE) { throw 'Native gateway lookup failed' }
+          $expected = (Find-NetRoute -RemoteIPAddress 8.8.8.8 | Where-Object { $_.DestinationPrefix }).NextHop
+          if ($gateway.Trim() -notin $expected) { throw 'Native gateway differs from Windows routing API' }
+      - name: Exercise real Xray domain routing and reverse controls
         run: python tool/windows/runtime_smoke.py --directory build/windows-runtime
+      - name: Exercise portable nested runtime and a Unicode path
+        shell: pwsh
+        run: |
+          $portable = Join-Path $env:RUNNER_TEMP 'Vless Space Ω/Portable'
+          New-Item -ItemType Directory -Force "$portable/xray" | Out-Null
+          Copy-Item build/windows-runtime/runtime_probe.exe $portable
+          Copy-Item build/windows-runtime/xray.exe,build/windows-runtime/geoip.dat,build/windows-runtime/geosite.dat,build/windows-runtime/tun2socks.exe,build/windows-runtime/wintun.dll "$portable/xray"
+          python tool/windows/runtime_smoke.py --directory $portable
+          if ($LASTEXITCODE) { throw 'Portable routing failed' }
+          Copy-Item "$portable/proxy-results.json" build/windows-runtime/portable-results.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: windows-runtime-and-logs
-          path: build/windows-runtime
+          name: windows-runtime-${{ matrix.os }}
+          path: |
+            build/windows-runtime/*.exe
+            build/windows-runtime/*.dll
+            build/windows-runtime/*.dat
+            build/windows-runtime/*.log
+            build/windows-runtime/*results.json
           retention-days: 7
 
   example-build:
     needs: build-and-proxy
-    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -59,36 +103,57 @@ jobs:
           cache: true
       - uses: actions/download-artifact@v4
         with:
-          name: windows-runtime-and-logs
+          name: windows-runtime-${{ matrix.os }}
           path: build/windows-runtime
-      - name: Install example dependencies
-        working-directory: example
-        run: flutter pub get
-      - name: Test Windows example diagnostics button
-        working-directory: example
-        run: flutter test test/widget_test.dart
-      - name: Build example Windows application
+      - name: Test example and Windows wrapper
+        shell: pwsh
+        run: |
+          Push-Location example
+          flutter pub get
+          if ($LASTEXITCODE) { throw 'Example dependencies failed' }
+          flutter test test/widget_test.dart
+          if ($LASTEXITCODE) { throw 'Example diagnostics test failed' }
+          Pop-Location
+          Push-Location packages/flutter_vless_windows
+          @'
+          dependency_overrides:
+            flutter_vless_platform_interface:
+              path: ../flutter_vless_platform_interface
+          '@ | Set-Content pubspec_overrides.yaml
+          flutter pub get
+          if ($LASTEXITCODE) { throw 'Wrapper dependencies failed' }
+          flutter analyze
+          if ($LASTEXITCODE) { throw 'Wrapper analysis failed' }
+          flutter test
+          if ($LASTEXITCODE) { throw 'Wrapper tests failed' }
+          Pop-Location
+      - name: Build example Windows application with MSVC
         working-directory: example
         run: flutter build windows --release
-      - name: Bundle verified runtime with example
+      - name: Bundle the verified native runtime
         shell: pwsh
         run: |
           $bundle = 'example/build/windows/x64/runner/Release'
           New-Item -ItemType Directory -Force "$bundle/xray" | Out-Null
           Copy-Item build/windows-runtime/xray.exe,build/windows-runtime/geoip.dat,build/windows-runtime/geosite.dat,build/windows-runtime/tun2socks.exe,build/windows-runtime/wintun.dll "$bundle/xray"
-          $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' -property installationPath
-          $crt = Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
+          $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $crt = Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
+          if (!$crt) { throw 'MSVC runtime directory unavailable' }
           Copy-Item "$($crt.FullName)/*.dll" $bundle
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-example-august-2026
+          name: windows-example-1.1.6-${{ matrix.os }}
           path: example/build/windows/x64/runner/Release
           retention-days: 7
 
   vpn-routing:
     needs: build-and-proxy
-    runs-on: windows-2022
-    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -96,26 +161,28 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          name: windows-runtime-and-logs
+          name: windows-runtime-${{ matrix.os }}
           path: build/windows-runtime
       - name: Record Windows network baseline
         shell: pwsh
         run: |
-          Get-NetRoute -AddressFamily IPv4 | Format-Table | Out-File build/windows-runtime/routes-before.log
+          Get-NetRoute | Format-Table | Out-File build/windows-runtime/routes-before.log
           Get-NetIPInterface | Format-Table | Out-File build/windows-runtime/interfaces-before.log
-      - name: Exercise Wintun and domain routing with ordinary TCP
+      - name: Exercise native WFP, Wintun, routing, DNS and recovery
         run: python tool/windows/runtime_smoke.py --directory build/windows-runtime --vpn
-      - name: Clean up isolated runner network
+      - name: Restore the disposable runner after any failure
         if: always()
         shell: pwsh
         run: |
-          Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction Continue
           Get-Process xray,tun2socks,runtime_probe -ErrorAction SilentlyContinue | Stop-Process -Force
-          Get-NetRoute -AddressFamily IPv4 | Format-Table | Out-File build/windows-runtime/routes-after.log
+          & build/windows-runtime/runtime_probe.exe release-protection
+          if ($LASTEXITCODE) { throw 'Failed to release the test WFP policy' }
+          Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction Continue
+          Get-NetRoute | Format-Table | Out-File build/windows-runtime/routes-after.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: windows-vpn-results
+          name: windows-vpn-results-${{ matrix.os }}
           path: |
             build/windows-runtime/*.log
             build/windows-runtime/*results.json

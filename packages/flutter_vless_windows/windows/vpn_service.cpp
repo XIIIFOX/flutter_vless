@@ -59,7 +59,8 @@ bool TunnelReady(NET_LUID& luid) {
   MIB_UNICASTIPADDRESS_ROW address{}; InitializeUnicastIpAddressEntry(&address);
   address.InterfaceLuid = luid; address.Address.Ipv4.sin_family = AF_INET;
   InetPtonA(AF_INET, "10.0.85.2", &address.Address.Ipv4.sin_addr);
-  return GetUnicastIpAddressEntry(&address) == NO_ERROR && address.DadState == IpDadStatePreferred;
+  return GetUnicastIpAddressEntry(&address) == NO_ERROR && address.DadState == IpDadStatePreferred
+      && address.OnLinkPrefixLength == 24;
 }
 }
 VpnService::VpnService() = default;
@@ -192,20 +193,31 @@ bool VpnService::StartWorkers() {
   tun2socks_process_ = native::Launch(tun2socks_executable_path_, {L"-config", tun_config_path_.wstring()});
   if (!tun2socks_process_) return fail("Cannot launch tun2socks");
   NET_LUID luid{};
+  bool adapter_ready = false;
   for (int i = 0; i < 100 && requested_.load(); ++i) {
-    if (ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &luid) == NO_ERROR) break;
     if (!tun2socks_process_->IsRunning()) return fail("tun2socks exited before creating its adapter");
+    if (ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &luid) == NO_ERROR) {
+      MIB_IF_ROW2 adapter{}; adapter.InterfaceLuid = luid;
+      if (GetIfEntry2(&adapter) == NO_ERROR && adapter.OperStatus == IfOperStatusUp) {
+        adapter_ready = true; break;
+      }
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
-  if (!luid.Value || !requested_.load()) return fail("Wintun adapter unavailable or startup cancelled");
-  if (!native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"address",
-      L"name=flutter_vless_tun", L"source=static", L"address=10.0.85.2", L"mask=255.255.255.0", L"gateway=none"})) return fail("Cannot configure the Wintun IPv4 address");
+  if (!adapter_ready || !requested_.load()) return fail("Wintun adapter unavailable or startup cancelled");
+  // Wintun can retain its address after a worker crash. netsh may reject a
+  // repeated assignment; the IP Helper state is the authoritative readiness
+  // check, including DAD, the exact address and its prefix length.
+  const bool assigned = native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"address",
+      L"name=flutter_vless_tun", L"source=static", L"address=10.0.85.2", L"mask=255.255.255.0", L"gateway=none"});
   bool addressed = false;
   for (int i = 0; i < 150 && requested_.load(); ++i) {
     if (TunnelReady(luid)) { addressed = true; break; }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
-  if (!addressed || !native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"dnsservers",
+  if (!addressed) return fail("Wintun IPv4 address did not become ready");
+  if (!assigned) Event("Reusing the existing ready Wintun IPv4 address");
+  if (!native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"dnsservers",
       L"name=flutter_vless_tun", L"source=static", L"address=198.18.0.2", L"validate=no"})) return fail("Wintun address or virtual DNS did not become ready");
   for (auto prefix : {std::pair<const char*, UINT8>{"0.0.0.0", UINT8{1}}, {"128.0.0.0", UINT8{1}}, {xray_config::kVirtualDns, UINT8{32}}}) {
     MIB_IPFORWARD_ROW2 row{}; InitializeIpForwardEntry(&row);

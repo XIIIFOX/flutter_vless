@@ -126,6 +126,7 @@ import Security
         keychain.failure = nil
         try await provider.startTunnel(options: nil)
         precondition(provider.reachedBootstrap, "Obsolete metadata cannot disable the required OS protection")
+        try await verifyStatusNotificationScope(manager)
         try await verifySecretTransactions()
         print("PASS: preference-load errors; transactional Keychain rollback/migration/cleanup; permission privacy; cold-start secret denial; traffic protection and proxy-switch teardown")
     }
@@ -189,4 +190,21 @@ func verifySecretTransactions() async throws {
     SDK.delayedStop = true
     try await manager.removeFromPreferences()
     precondition(SDK.profile == nil && keychain.records.isEmpty && manager.status == nil)
+}
+
+@MainActor func verifyStatusNotificationScope(_ manager: PacketTunnelManager) async throws {
+    var callbacks = 0
+    manager.statusDidChange = { _ in callbacks += 1 }
+    let loads = SDK.loads
+    NotificationCenter.default.post(name: .NEVPNStatusDidChange, object: NEVPNConnection())
+    try await Task.sleep(nanoseconds: 100_000_000)
+    precondition(callbacks == 0 && SDK.loads == loads,
+                 "Foreign or temporary connection notifications must not trigger status or preference reads")
+    SDK.notifyTemporaryConnections = true
+    NotificationCenter.default.post(name: .NEVPNStatusDidChange, object: SDK.profile!.connection)
+    try await Task.sleep(nanoseconds: 100_000_000)
+    SDK.notifyTemporaryConnections = false
+    precondition(callbacks == 1 && SDK.loads == loads + 1,
+                 "Current connection must emit once; cleanup loads must not recursively trigger cleanup")
+    manager.statusDidChange = nil
 }

@@ -52,6 +52,8 @@ enum SDK {
     static var failAfterNextSave = false
     static var failNextRefresh = false
     static var failNextSave = false
+    static var loads = 0
+    static var notifyTemporaryConnections = false
     static var saves = 0
     static var stopCalls = 0
     static var delayedStop = false
@@ -65,6 +67,10 @@ class NETunnelProviderManager {
     var onDemandRules: [NEOnDemandRule]?
     let connection: NEVPNConnection = NETunnelProviderSession()
     static func loadAllFromPreferences() async throws -> [NETunnelProviderManager] {
+        SDK.loads += 1
+        if SDK.notifyTemporaryConnections {
+            NotificationCenter.default.post(name: .NEVPNStatusDidChange, object: NEVPNConnection())
+        }
         if SDK.failAllLoads { throw SDKError.unavailable }
         return SDK.profile.map { [$0] } ?? []
     }

@@ -11,6 +11,10 @@
 
 ### iOS
 
+* Ignore status notifications from temporary or unrelated iOS VPN connections to prevent recursive preference reads and repeated events.
+* Match native Unicode JSON field aliases before enforcing local authentication; reject ambiguous aliases without changing remote credentials.
+* shared Keychain persistent-reference reads and scoped deletion, and retry transient endpoint bootstrap before route installation.
+
 * iOS: keep VPN configuration in a shared Keychain item, migrate legacy profiles transactionally, and retain traffic protection during native recovery. Configure shared Keychain access through an App Group or a dedicated Keychain group.
 * **Integration required:** update copied `PacketTunnelProvider.swift` together with the plugin and shared support. Updating the Dart dependency alone does not update an application's extension source.
 
@@ -47,6 +51,8 @@
   [#23](https://github.com/XIIIFOX/flutter_vless/issues/23).
 
 ### Android
+
+* Check VPN readiness through an authenticated local packet path independently of Internet sites and their routing rules. Restore opening the host app from the VPN notification.
 
 * Android: retain TUN during worker recovery, restore authorized sessions from Keystore-encrypted storage, protect diagnostics, and add optional `AndroidDnsPolicy.proxy` system DNS routing.
 

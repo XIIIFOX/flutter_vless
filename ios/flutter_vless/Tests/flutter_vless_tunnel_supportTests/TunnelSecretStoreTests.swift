@@ -22,18 +22,22 @@ private final class MemoryKeychain: TunnelKeychainClient {
                 && item[kSecAttrService as String] as? String == query[kSecAttrService as String] as? String
         }
         if let ref = query[kSecValuePersistentRef as String] as? Data {
-            guard let item = items[ref], belongs(item) else { return (errSecItemNotFound, nil) }
-            return (errSecSuccess, item[kSecValueData as String])
+            guard query[kSecAttrService as String] == nil, query[kSecAttrAccessGroup as String] == nil,
+                  query[kSecAttrSynchronizable as String] == nil else { return (errSecParam, nil) }
+            guard var item = items[ref] else { return (errSecItemNotFound, nil) }
+            if query[kSecReturnData as String] as? Bool != true { item.removeValue(forKey: kSecValueData as String) }
+            return (errSecSuccess, item)
         }
         return (errSecSuccess, items.filter { belongs($0.value) }.map(\.key))
     }
     func delete(_ query: [String: Any]) -> OSStatus {
         lastQuery = query
         guard status == errSecSuccess else { return status }
-        guard let ref = query[kSecValuePersistentRef as String] as? Data,
-              let item = items[ref],
-              item[kSecAttrAccessGroup as String] as? String == query[kSecAttrAccessGroup as String] as? String,
-              item[kSecAttrService as String] as? String == query[kSecAttrService as String] as? String else { return errSecItemNotFound }
+        guard let ref = items.first(where: { _, item in
+            item[kSecAttrAccount as String] as? String == query[kSecAttrAccount as String] as? String
+                && item[kSecAttrAccessGroup as String] as? String == query[kSecAttrAccessGroup as String] as? String
+                && item[kSecAttrService as String] as? String == query[kSecAttrService as String] as? String
+        })?.key else { return errSecItemNotFound }
         items.removeValue(forKey: ref)
         return errSecSuccess
     }
@@ -59,6 +63,12 @@ final class TunnelSecretStoreTests: XCTestCase {
         XCTAssertThrowsError(try otherGroup.read(ref))
         let otherProvider = try TunnelSecretStore(accessGroup: "TEAM.shared", providerBundleIdentifier: "other-extension", client: client)
         XCTAssertThrowsError(try otherProvider.read(ref))
+        try otherProvider.remove(ref)
+        XCTAssertEqual(try store.read(ref), Data("secret-password".utf8))
+        client.items[ref]?[kSecAttrSynchronizable as String] = true
+        XCTAssertThrowsError(try store.read(ref))
+        try store.remove(ref)
+        XCTAssertNotNil(client.items[ref], "A foreign/synchronizable reference must never broaden deletion")
     }
 
     func testLargeConfigurationIsExactAndSecurityRefusalNeverTruncates() throws {

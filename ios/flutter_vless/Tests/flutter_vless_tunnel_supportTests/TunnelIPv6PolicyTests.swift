@@ -33,7 +33,7 @@ final class TunnelIPv6PolicyTests: XCTestCase {
     }
 
     func testFakeDNSCannotReplaceIPv6TargetDuringSniffing() {
-        for key in ["fakeDns", "fakedns", "FakeDNS"] {
+        for key in ["fakeDns", "fakedns", "FakeDNS", "fakeDnſ", "faKeDns"] {
             var config: [String: Any] = [key: [["ipPool": "fc00::/18", "poolSize": 1000]]]
             XCTAssertFalse(TunnelIPv6Policy.apply(to: &config))
         }
@@ -41,7 +41,9 @@ final class TunnelIPv6PolicyTests: XCTestCase {
 
     func testGoJSONAliasesCannotOverwritePolicy() throws {
         var config: [String: Any] = [
-            "Inbounds": [["Protocol": "socks", "port": 10808, "Sniffing": ["RouteOnly": false]]],
+            "Inboundſ": [["Protocol": "socks", "port": 10808, "liſten": "127.0.0.1",
+                           "ſettings": ["auth": "noauth", "accountſ": [["uſer": "old", "paſſ": "old"]]],
+                           "Sniffing": ["RouteOnly": false]]],
             "Outbounds": [
                 ["Tag": "proxy", "Protocol": "http", "Settings": ["Address": "203.0.113.7", "port": 443]],
                 ["Tag": "direct", "Protocol": "freedom"]

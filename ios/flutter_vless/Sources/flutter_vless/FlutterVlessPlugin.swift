@@ -762,7 +762,12 @@ final class PacketTunnelManager: ObservableObject {
         NotificationCenter.default
             .publisher(for: .NEVPNStatusDidChange)
             .receive(on: DispatchQueue.main)
-            .sink { [unowned self] _ in
+            .sink { [unowned self] notification in
+                // Preference reads create temporary connections which also
+                // publish status. Reacting to those recursively reloads them
+                // during secret cleanup, flooding the app with status events.
+                guard let connection = notification.object as? NEVPNConnection,
+                      connection === self.manager?.connection else { return }
                 if self.status != .connected { self.forwardingReady = false }
                 pluginLog.info("NEVPNStatusDidChange status=\(self.status?.rawValue ?? -1, privacy: .public)")
                 self.statusDidChange?(self.status)

@@ -134,9 +134,26 @@ public enum LocalProxyAccessPolicy {
 
     private static func normalize(_ object: inout [String: Any], names: [String]) throws {
         for canonical in names {
-            let keys = object.keys.filter { $0.lowercased() == canonical.lowercased() }
+            let keys = object.keys.filter { XrayJSONField.matches($0, canonical) }
             guard keys.count <= 1 else { throw LocalProxyAccessError.ambiguousField }
             if let key = keys.first, key != canonical { object[canonical] = object.removeValue(forKey: key) }
         }
+    }
+}
+
+/// Go encoding/json uses Unicode simple folding for schema field names. Only
+/// long S and Kelvin sign share a fold class with ASCII outside A–Z/a–z.
+/// Do not use full Unicode folding or apply this to user dictionary keys.
+public enum XrayJSONField {
+    public static func matches(_ key: String, _ asciiField: String) -> Bool {
+        func folded(_ scalar: Unicode.Scalar) -> UInt32 {
+            switch scalar.value {
+            case 65...90: return scalar.value + 32
+            case 0x017f: return 115
+            case 0x212a: return 107
+            default: return scalar.value
+            }
+        }
+        return key.unicodeScalars.map(folded) == asciiField.unicodeScalars.map(folded)
     }
 }

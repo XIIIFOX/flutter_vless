@@ -19,7 +19,7 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/integration_test/ios"
 
 SPEC CHECKSUMS:
-  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  Flutter: 71a624a5bc0c04062bf19101d501e466baf2fb47
   flutter_vless: 08759995aaa196da1f748d45d280f9f4b9114a68
   integration_test: 4a889634ef21a45d28d50d622cf412dc6d9f586e
 

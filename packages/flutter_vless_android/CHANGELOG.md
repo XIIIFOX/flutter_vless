@@ -1,5 +1,7 @@
 ## 1.1.6 (Unreleased)
 
+* Check readiness through an owned local packet path independent of public-site routing, avoid FakeDNS probe collisions, and restore opening the app from its VPN notification.
+
 * Authenticate service-owned local SOCKS, avoid an unsolicited HTTP listener, and measure delay in the owning process.
 * Preserve TUN on worker failures; coordinate bounded recovery and encrypted authorized-profile restoration.
 * Add explicit proxy DNS policy, safe diagnostic events and native artifact verification examples.

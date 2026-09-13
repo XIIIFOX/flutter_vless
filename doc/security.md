@@ -93,14 +93,24 @@ For support flows, prefer redacting:
 - subscription URLs
 - server hostnames or IPs when the user asks for privacy
 
+## Android Readiness
+
+VPN readiness checks an owned local response through authenticated SOCKS and,
+unless explicitly excluded, the host application's captured TUN path. User rules
+that block an Internet health-check site therefore do not force recovery.
+The internal probe uses an IPv4 address outside FakeDNS pools. Configurations
+covering every usable IPv4 address with FakeDNS are rejected before replacing
+the current session.
+
 ## iOS Traffic Protection
 
 With the current example Packet Tunnel provider, traffic protection is mandatory
 for VPN sessions. The saved profile enables `includeAllNetworks`
 and on-demand recovery. The provider keeps its routes and virtual DNS while
-retrying a failed transport or restarting its HEV/Xray workers. A rejected runtime
-configuration also keeps installed routes in place and blocks forwarding. To
-replace it, explicitly stop the session and start with a corrected configuration.
+retrying a failed transport or restarting its HEV/Xray workers. Native runtime
+failures after route installation keep forwarding blocked. Endpoint bootstrap is
+retried before installing virtual DNS and routes; exhausted or invalid preparation
+returns a startup error instead of creating a tunnel without a recoverable runtime.
 On-demand rules request a restart after termination of the entire provider. iOS
 controls when that restart occurs and can defer it after a process crash. The plugin cannot guarantee scheduling or continuous capture after the entire
 extension is terminated; system behavior must be checked on the device.

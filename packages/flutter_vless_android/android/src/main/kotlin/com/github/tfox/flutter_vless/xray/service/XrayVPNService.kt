@@ -23,8 +23,6 @@ import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import org.json.JSONObject
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -38,6 +36,7 @@ class XrayVPNService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
     private var process: Process? = null
     private var protector: XraySocketProtector? = null
+    private var readinessProbe: SessionReadinessProbe? = null
     private var config: XrayConfig? = null
     private var sourceConfig: XrayConfig? = null
     private var prepared: JSONObject? = null
@@ -75,7 +74,7 @@ class XrayVPNService : VpnService() {
         if (intent?.action == ACTION_MEASURE_DELAY) {
             @Suppress("DEPRECATION")
             val receiver = intent.getParcelableExtra<ResultReceiver>("receiver")
-            val url = intent.getStringExtra("url") ?: PROBE_URL
+            val url = intent.getStringExtra("url") ?: DEFAULT_DELAY_URL
             worker.execute {
                 val result = runCatching {
                     check(recovery.authorized && AppConfigs.V2RAY_STATE == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED)
@@ -143,6 +142,7 @@ class XrayVPNService : VpnService() {
             candidateDnsServers = dns.systemDnsServers
             val runtime = XrayCoreManager.buildRuntimeConfigJson(candidate, noBackupFilesDir, secret)
             require(XrayCoreManager.validateNative(this, runtime)) { "Native configuration rejected" }
+            if (!candidate.PROXY_ONLY) SessionReadinessProbe.selectHost(runtime)
             runtime
         } catch (_: Exception) {
             event(Event.CONFIG_REJECTED)
@@ -191,7 +191,11 @@ class XrayVPNService : VpnService() {
             protector = if (current.PROXY_ONLY) null else XraySocketProtector(this).also {
                 it.allowPhysicalDnsForEndpointNames(if (current.ANDROID_DNS_POLICY == "proxy") emptySet() else null)
             }
-            val started = XrayCoreManager.startCore(this, current, requireNotNull(prepared), protector, owner) { generation, code ->
+            val runtime = if (current.PROXY_ONLY) requireNotNull(prepared) else {
+                SessionReadinessProbe(SessionReadinessProbe.selectHost(requireNotNull(prepared)))
+                    .also { readinessProbe = it }.configure(requireNotNull(prepared))
+            }
+            val started = XrayCoreManager.startCore(this, current, runtime, protector, owner) { generation, code ->
                 worker.execute { if (recovery.owns(generation)) { event(Event.WORKER_EXIT, code.toLong()); recover(Event.WORKER_EXIT) } }
             }
             if (!started) { recover(Event.PROTECT_FAILED); return }
@@ -204,12 +208,12 @@ class XrayVPNService : VpnService() {
                 event(Event.FD_SENT)
             }
             if (!current.PROXY_ONLY) {
-                try { AuthenticatedSocksClient.measure(current.LOCAL_SOCKS5_PORT, requireNotNull(credentials), PROBE_URL) }
+                try { probeAuthenticatedPath() }
                 catch (_: Exception) { recover(Event.AUTH_PROBE_FAILED); return }
                 // A real host-UID request traverses the captured TUN and authenticated tun2socks.
                 // Explicit user app exclusions mean this cannot prove that path; do not claim it.
                 if (!current.BLOCKED_APPS.contains(packageName)) {
-                    try { probeCapturedPath() } catch (_: Exception) { recover(Event.PATH_PROBE_FAILED); return }
+                    try { requireNotNull(readinessProbe).verify() } catch (_: Exception) { recover(Event.PATH_PROBE_FAILED); return }
                 }
             }
             if (!recovery.owns(owner)) return
@@ -288,21 +292,24 @@ class XrayVPNService : VpnService() {
         worker.schedule({
             if (!recovery.owns(owner)) return@schedule
             if (count > 0 && count % 30 == 0 && config?.PROXY_ONLY == false) {
-                try { AuthenticatedSocksClient.measure(requireNotNull(config).LOCAL_SOCKS5_PORT, requireNotNull(credentials), PROBE_URL) }
+                try { probeAuthenticatedPath() }
                 catch (_: Exception) { recover(Event.AUTH_PROBE_FAILED); return@schedule }
+                if (config?.BLOCKED_APPS?.contains(packageName) == false) {
+                    try { requireNotNull(readinessProbe).verify() }
+                    catch (_: Exception) { recover(Event.PATH_PROBE_FAILED); return@schedule }
+                }
             }
             XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_CONNECTED, (System.nanoTime() - connectedAt) / 1_000_000_000)
             tick(owner, count + 1)
         }, 1, TimeUnit.SECONDS)
     }
 
-    private fun probeCapturedPath() {
-        val connection = URL(PROBE_URL).openConnection() as HttpURLConnection
-        try {
-            connection.connectTimeout = 5000; connection.readTimeout = 5000
-            connection.instanceFollowRedirects = false; connection.requestMethod = "HEAD"
-            require(connection.responseCode in 200..499) { "Captured path unavailable" }
-        } finally { connection.disconnect() }
+    private fun probeAuthenticatedPath() {
+        val probe = requireNotNull(readinessProbe)
+        probe.verify {
+            AuthenticatedSocksClient.connect(requireNotNull(config).LOCAL_SOCKS5_PORT,
+                requireNotNull(credentials), probe.host, probe.port)
+        }
     }
 
     private fun stopWorkers(): Boolean {
@@ -313,6 +320,7 @@ class XrayVPNService : VpnService() {
             if (!child.waitFor(1, TimeUnit.SECONDS)) { process = child; return false }
         }
         if (!XrayCoreManager.stopWorkers()) return false
+        readinessProbe?.close(); readinessProbe = null
         protector?.close(); protector = null
         tunConfigFile?.delete(); tunConfigFile = null
         socketFile?.delete(); socketFile = null
@@ -354,6 +362,11 @@ class XrayVPNService : VpnService() {
             .createNotificationChannel(android.app.NotificationChannel(id, "VPN Service", android.app.NotificationManager.IMPORTANCE_LOW))
         val builder = if (Build.VERSION.SDK_INT >= 26) android.app.Notification.Builder(this, id) else android.app.Notification.Builder(this)
         val current = config
+        packageManager.getLaunchIntentForPackage(packageName)?.let { launch ->
+            launch.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            builder.setContentIntent(android.app.PendingIntent.getActivity(this, 0, launch,
+                android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT))
+        }
         val stop = android.app.PendingIntent.getService(this, 0,
             Intent(this, XrayVPNService::class.java).putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.STOP_SERVICE),
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
@@ -365,6 +378,6 @@ class XrayVPNService : VpnService() {
     }
     companion object {
         const val ACTION_MEASURE_DELAY = "com.github.tfox.flutter_vless.MEASURE_DELAY"
-        private const val PROBE_URL = "https://www.gstatic.com/generate_204"
+        private const val DEFAULT_DELAY_URL = "https://www.gstatic.com/generate_204"
     }
 }

@@ -66,14 +66,23 @@ class ControlledDomainRoutingTest {
         val config = XrayConfig(REMARK = "Controlled routing", V2RAY_FULL_JSON_CONFIG = """
             {"inbounds":[],"dns":{"hosts":{"direct-site.invalid":"10.0.2.2","proxy-site.invalid":"10.0.2.2"},"servers":[]},
              "outbounds":[{"tag":"proxy","protocol":"socks","settings":{"address":"10.0.2.2","port":18080}},
-                          {"tag":"direct","protocol":"freedom","settings":{"domainStrategy":"UseIP"}}],
-             "routing":{"rules":[{"type":"field","domain":["full:direct-site.invalid"],"outboundTag":"direct"},
+                          {"tag":"direct","protocol":"freedom","settings":{"domainStrategy":"UseIP"}},
+                          {"tag":"blocked","protocol":"blackhole"}],
+             "routing":{"rules":[{"type":"field","domain":["domain:gstatic.com"],"outboundTag":"blocked"},
+                                   {"type":"field","domain":["full:direct-site.invalid"],"outboundTag":"direct"},
                                    {"type":"field","domain":["full:proxy-site.invalid"],"outboundTag":"proxy"}]}}
         """.trimIndent())
         try {
             context.startForegroundService(Intent(context, XrayVPNService::class.java)
                 .putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE).putExtra("V2RAY_CONFIG", config))
             awaitReady(); assertRoutes()
+            // A deliberately blocked Internet probe site must not tear down a
+            // working session at the periodic readiness check either.
+            Thread.sleep(33_000)
+            assertTrue(captured())
+            assertEquals("Readiness must not restart a working session", 1, snapshot().lineSequence().count { it == "CONNECTED" })
+            assertFalse(snapshot().contains("AUTH_PROBE_FAILED"))
+            assertRoutes()
             val prior = snapshot().lineSequence().count { it == "CONNECTED" }
             assertEquals(0, ProcessBuilder("pkill", "-9", "-x", "libxray.so").start().waitFor())
             awaitReady(prior); assertRoutes()

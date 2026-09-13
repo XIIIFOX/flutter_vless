@@ -26,8 +26,11 @@ final class FixtureKeychain: TunnelKeychainClient {
         if failReadNumber == readCount { return (errSecInteractionNotAllowed, nil) }
         if let nextReadFailure { self.nextReadFailure = nil; return (nextReadFailure, nil) }
         if let reference = query[kSecValuePersistentRef as String] as? Data {
-            guard let record = records[reference], matches(record, query) else { return (errSecItemNotFound, nil) }
-            return (errSecSuccess, record[kSecValueData as String])
+            guard query[kSecAttrService as String] == nil, query[kSecAttrAccessGroup as String] == nil,
+                  query[kSecAttrSynchronizable as String] == nil else { return (errSecParam, nil) }
+            guard var record = records[reference] else { return (errSecItemNotFound, nil) }
+            if query[kSecReturnData as String] as? Bool != true { record.removeValue(forKey: kSecValueData as String) }
+            return (errSecSuccess, record)
         }
         let references = records.filter { matches($0.value, query) }.map(\.key)
         return references.isEmpty ? (errSecItemNotFound, nil) : (errSecSuccess, references)
@@ -35,8 +38,9 @@ final class FixtureKeychain: TunnelKeychainClient {
     func delete(_ query: [String: Any]) -> OSStatus {
         if let failure { return failure }
         if let deleteFailure { return deleteFailure }
-        guard let reference = query[kSecValuePersistentRef as String] as? Data,
-              let record = records[reference], matches(record, query) else { return errSecItemNotFound }
+        guard let reference = records.first(where: {
+            matches($0.value, query) && $0.value[kSecAttrAccount as String] as? String == query[kSecAttrAccount as String] as? String
+        })?.key else { return errSecItemNotFound }
         records.removeValue(forKey: reference)
         return errSecSuccess
     }

@@ -41,9 +41,10 @@ leave Flutter's generated iOS config pointing at the integration-test listener.
 
 ## Pass Criteria
 
-- iOS debug snapshot contains `SOCKS inbound health check: ok`.
-- iOS debug snapshot contains `SOCKS CONNECT health check: ok`.
-- iOS debug snapshot contains `SOCKS HTTP health check: ok`.
+- iOS debug snapshot confirms protected routes, a successful authenticated watchdog check, and restored forwarding.
+- The connected-delay check returns an actual HTTP response through Xray.
+- With `VPN_TEST_ROUTING=true` and `VPN_ORIGINAL_CONFIG`, the direct domain matches its physical baseline and the proxy domain exits through a different address, including after session replacement. Proxy exits may rotate between requests.
+- `VPN_TEST_RECOVERY_WINDOW_SECONDS` leaves time for an external process fault; the test checks both routes afterward. The host driver must separately record that the fault actually occurred.
 - Android status counters show meaningful download traffic during the browser
   window when `VPN_MATRIX_REQUIRE_BROWSER_TRAFFIC=true`.
 - No case should pass based only on VPN connected state or upload-only counters.

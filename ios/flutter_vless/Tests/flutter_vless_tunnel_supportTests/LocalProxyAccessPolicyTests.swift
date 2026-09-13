@@ -43,6 +43,33 @@ final class LocalProxyAccessPolicyTests: XCTestCase {
         XCTAssertNil(config["Inbounds"])
     }
 
+    func testGoUnicodeFieldAliasesCannotOverrideManagedAuthentication() throws {
+        XCTAssertTrue(XrayJSONField.matches("KeyLogPath", "keyLogPath"))
+        XCTAssertFalse(XrayJSONField.matches("paß", "pass"))
+        XCTAssertFalse(XrayJSONField.matches("lısten", "listen"))
+        let aliasOnly = Data(#"{"inboundſ":[{"protocol":"socks","port":1080,"liſten":"127.0.0.1","\u017Fettings":{"auth":"noauth","accountſ":[{"uſer":"old","paſſ":"old"}]}}]}"#.utf8)
+        var config = try LocalProxyAccessPolicy.normalizedConfig(configData: aliasOnly)
+        try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: credentials)
+        let inbound = try XCTUnwrap((config["inbounds"] as? [[String: Any]])?.first)
+        let settings = try XCTUnwrap(inbound["settings"] as? [String: Any])
+        XCTAssertEqual(settings["auth"] as? String, "password")
+        XCTAssertEqual(settings["accounts"] as? [[String: String]], [["user": credentials.username, "pass": credentials.password]])
+        XCTAssertNil(inbound["ſettings"])
+        XCTAssertNil(inbound["liſten"])
+        XCTAssertNil(settings["accountſ"])
+        for source in [
+            #"{"inbounds":[{"protocol":"socks","port":1080,"settings":{},"ſettings":{"auth":"noauth"}}]}"#,
+            #"{"inbounds":[{"protocol":"socks","port":1080,"listen":"127.0.0.1","liſten":"0.0.0.0"}]}"#,
+            #"{"inbounds":[{"protocol":"socks","port":1080,"settings":{"accounts":[],"accountſ":[]}}]}"#,
+            #"{"inbounds":[],"inboundſ":[]}"#
+        ] {
+            XCTAssertThrowsError(try LocalProxyAccessPolicy.validateVPN(configData: Data(source.utf8)))
+        }
+        let arbitrary = Data(#"{"outbounds":[{"protocol":"socks","settings":{"servers":[{"address":"remote.invalid","users":[{"user":"ſKı","pass":"paß"}]}]}}]}"#.utf8)
+        XCTAssertEqual(try LocalProxyAccessPolicy.normalizedConfig(configData: arbitrary) as NSDictionary,
+                       try JSONSerialization.jsonObject(with: arbitrary) as? NSDictionary)
+    }
+
     func testAmbiguousFieldsAndIncompatibleExtraListenersRejectBeforeMutation() throws {
         let socks: [String: Any] = ["protocol": "socks", "port": 1080, "listen": "127.0.0.1"]
         for extra in [["protocol": "socks", "port": 1081], ["protocol": "http", "port": 8080]] as [[String: Any]] {

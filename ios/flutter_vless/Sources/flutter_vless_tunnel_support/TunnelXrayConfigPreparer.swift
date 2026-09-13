@@ -35,6 +35,34 @@ public struct TunnelPreparedConfig {
 /// that mutating or dropping those server-provisioned values can produce a VPN
 /// that connects locally but cannot fetch HTTP bytes.
 public enum TunnelXrayConfigPreparer {
+    public enum StartupError: Error { case invalidConfiguration, endpointUnavailable }
+
+    /// Retry transient endpoint resolution only before virtual DNS/routes exist.
+    /// A failed preparation must never create a connected tunnel with no runtime
+    /// to recover. Exhaustion is a startup error handled by NetworkExtension.
+    public static func prepareForStartup(
+        jsonData: Data,
+        credentials: LocalProxyCredentials,
+        resolveIPv4: (String) -> String?,
+        attempts: Int = 5,
+        retryDelay: () async throws -> Void = { try await Task.sleep(nanoseconds: 3_000_000_000) }
+    ) async throws -> TunnelPreparedConfig {
+        for attempt in 0..<max(1, attempts) {
+            try Task.checkCancellation()
+            var resolutionFailed = false
+            let prepared = prepare(jsonData: jsonData, credentials: credentials) { host in
+                let address = resolveIPv4(host)
+                resolutionFailed = resolutionFailed || address == nil
+                return address
+            }
+            try Task.checkCancellation()
+            if let prepared { return prepared }
+            guard resolutionFailed else { throw StartupError.invalidConfiguration }
+            if attempt + 1 < attempts { try await retryDelay() }
+        }
+        throw StartupError.endpointUnavailable
+    }
+
     public static func parseConfig(jsonData: Data) -> TunnelParsedConfig? {
         guard
             let configJSON = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],

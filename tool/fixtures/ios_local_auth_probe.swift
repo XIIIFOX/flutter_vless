@@ -78,8 +78,9 @@ func runLocalAuthRuntimeChecks() async throws {
     // Redirect is confined to this fixture: a direct request to probe.invalid
     // cannot reach the origin. The only working path is through local Xray.
     let raw: [String: Any] = [
-        "inbounds": [["tag": "in_proxy", "listen": "127.0.0.1", "port": 18095,
-                      "protocol": "socks", "settings": ["auth": "noauth", "udp": true]]],
+        "inbounds": [["tag": "in_proxy", "liſten": "127.0.0.1", "port": 18095,
+                      "protocol": "socks", "ſettings": ["auth": "noauth", "udp": true,
+                          "accountſ": [["uſer": "old", "paſſ": "old"]]]]],
         "outbounds": [["tag": "direct", "protocol": "freedom", "settings": ["redirect": "127.0.0.1:18096"]]]
     ]
     let source = try JSONSerialization.data(withJSONObject: raw)

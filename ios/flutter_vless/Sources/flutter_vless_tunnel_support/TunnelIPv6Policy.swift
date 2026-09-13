@@ -1,6 +1,7 @@
 import Foundation
 import NetworkExtension
 import Darwin
+import flutter_vless_privacy
 
 /// Capture IPv6 and reject it at Xray until a dual-stack packet path has been
 /// measured on device. Omitting NEIPv6Settings does not disable physical IPv6.
@@ -21,7 +22,7 @@ public enum TunnelIPv6Policy {
     static func apply(to config: inout [String: Any]) -> Bool {
         // FakeDNS can replace Target even with routeOnly enabled. Its virtual
         // address pools are incompatible with this literal-IP block policy.
-        guard !config.keys.contains(where: { $0.lowercased() == "fakedns" }) else { return false }
+        guard !config.keys.contains(where: { XrayJSONField.matches($0, "fakeDns") }) else { return false }
         var outbounds = config["outbounds"] as? [[String: Any]] ?? []
         guard !outbounds.contains(where: { ($0["tag"] as? String) == blockTag }) else { return false }
         outbounds.append(["tag": blockTag, "protocol": "blackhole"])

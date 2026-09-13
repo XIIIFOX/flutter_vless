@@ -1,4 +1,5 @@
 import Foundation
+import flutter_vless_privacy
 
 /// Go's JSON decoder matches struct fields without regard to case. Normalize
 /// policy-owned fields before reading or writing them, and reject ambiguous
@@ -68,7 +69,7 @@ enum TunnelConfigKeys {
 
     private static func fields(_ object: inout [String: Any], _ names: [String]) -> Bool {
         for canonical in names {
-            let matches = object.keys.filter { $0.lowercased() == canonical.lowercased() }
+            let matches = object.keys.filter { XrayJSONField.matches($0, canonical) }
             guard matches.count <= 1 else { return false }
             if let key = matches.first, key != canonical {
                 object[canonical] = object.removeValue(forKey: key)

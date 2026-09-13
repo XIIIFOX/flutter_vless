@@ -12,6 +12,7 @@ import (
 	"github.com/xtls/xray-core/features/routing"
 	routingsession "github.com/xtls/xray-core/features/routing/session"
 	"github.com/xtls/xray-core/infra/conf/serial"
+	"github.com/xtls/xray-core/proxy/socks"
 )
 
 // Validate actual Swift-produced JSON against the pinned core, without starting
@@ -27,6 +28,10 @@ func TestPreparedTunnelConfigs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			data, _, _, err = privateConfig(data)
+			if err != nil {
+				t.Fatal(err)
+			}
 			config, err := serial.DecodeJSONConfig(bytes.NewReader(data))
 			if err != nil {
 				t.Fatal(err)
@@ -34,6 +39,17 @@ func TestPreparedTunnelConfigs(t *testing.T) {
 			built, err := config.Build()
 			if err != nil {
 				t.Fatal(err)
+			}
+			inbound, err := built.Inbound[0].ProxySettings.GetInstance()
+			if err != nil {
+				t.Fatal(err)
+			}
+			auth := inbound.(*socks.ServerConfig)
+			if auth.AuthType != socks.AuthType_PASSWORD || len(auth.Accounts) != 1 || auth.Accounts["test-session"] != "test-session-password" {
+				t.Fatal("Swift policy authentication changed at the native JSON boundary")
+			}
+			if config.InboundConfigs[0].ListenOn.Address.String() != "127.0.0.1" {
+				t.Fatal("Swift policy loopback listener changed at the native JSON boundary")
 			}
 			instance, err := core.New(built)
 			if err != nil {

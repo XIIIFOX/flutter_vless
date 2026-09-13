@@ -103,6 +103,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let runtimeQueue = DispatchQueue(label: "dev.tfox.flutter-vless.ios-runtime")
     private let forwardingLock = NSLock()
     private var forwardingReady = false
+    private var startupPreparation: Task<TunnelPreparedConfig, Error>?
+    private var startupStopped = false
     private var runtimeSpec: RuntimeSpec?
     private var runtimeRecoveryInFlight = false
     // Accessed only on runtimeQueue.
@@ -152,16 +154,30 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let config = try TunnelSecretProfile.load(providerConfiguration,
             providerBundleIdentifier: configuration.providerBundleIdentifier ?? "")
         TunnelDebugStore.shared.configure(groupIdentifier: providerConfiguration["groupIdentifier"] as? String)
+        beginStartup()
         setForwardingReady(false)
         rememberTunnelLog("Starting Xray packet tunnel")
         // Endpoint bootstrap precedes virtual DNS installation. Reuse the
         // prepared endpoints when restarting workers within this same tunnel.
         let credentials = try LocalProxyCredentials.generate()
-        let prepared = prepareXrayConfigForTunnel(config, credentials: credentials)
-        let parsed = prepared.flatMap { parseConfig(jsonData: $0.data) }
-        let addresses = prepared?.bootstrapAddresses ?? []
-        let compatible = TunnelDNSPolicy.allowsRouteExclusions(addresses.map { "\($0)/32" })
-        let usable = prepared != nil && parsed != nil && compatible
+        let preparation = Task {
+            try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: config, credentials: credentials,
+                resolveIPv4: { resolveIPv4Addresses(for: $0).first })
+        }
+        setStartupPreparation(preparation)
+        defer { setStartupPreparation(nil) }
+        let prepared: TunnelPreparedConfig
+        do { prepared = try await preparation.value }
+        catch {
+            rememberTunnelLog("Tunnel preparation failed before route installation")
+            throw tunnelError("Unable to prepare tunnel configuration or resolve its endpoint")
+        }
+        guard !preparation.isCancelled,
+              let parsed = parseConfig(jsonData: prepared.data),
+              TunnelDNSPolicy.allowsRouteExclusions(prepared.bootstrapAddresses.map { "\($0)/32" }) else {
+            throw tunnelError("Tunnel preparation cancelled or incompatible")
+        }
+        let addresses = prepared.bootstrapAddresses
 
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "254.1.1.1")
         settings.mtu = NSNumber(value: tunnelMTU)
@@ -176,15 +192,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         dns.matchDomains = [""]
         settings.dnsSettings = dns
         try await setTunnelNetworkSettings(settings)
+        guard !preparation.isCancelled else { throw CancellationError() }
         rememberTunnelLog("Protected tunnel routes and virtual DNS installed")
 
-        if usable, let prepared, let parsed {
-            runtimeSpec = RuntimeSpec(config: prepared.data, port: parsed.inboundPort,
-                geoAssetsDirectory: providerConfiguration["geoAssetsDirectory"] as? String, credentials: credentials)
-        } else {
-            runtimeSpec = nil
-            rememberTunnelLog("Tunnel configuration rejected; protected traffic remains blocked")
-        }
+        runtimeSpec = RuntimeSpec(config: prepared.data, port: parsed.inboundPort,
+            geoAssetsDirectory: providerConfiguration["geoAssetsDirectory"] as? String, credentials: credentials)
         startTunnelWatchdog(port: runtimeSpec?.port)
         // NE connected only means the routes are installed. The plugin
         // queries forwarding readiness before publishing CONNECTED.
@@ -192,6 +204,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        forwardingLock.lock()
+        startupStopped = true
+        startupPreparation?.cancel()
+        forwardingLock.unlock()
         rememberTunnelLog("Stopping Xray packet tunnel, reason=\(reason.rawValue)")
         setForwardingReady(false)
         stopTunnelWatchdog()
@@ -199,6 +215,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             _ = self.stopNativeRuntime()
             completionHandler()
         }
+    }
+
+    private func setStartupPreparation(_ task: Task<TunnelPreparedConfig, Error>?) {
+        forwardingLock.lock()
+        if startupStopped { task?.cancel() }
+        startupPreparation = task
+        forwardingLock.unlock()
+    }
+
+    private func beginStartup() {
+        forwardingLock.lock()
+        startupStopped = false
+        forwardingLock.unlock()
     }
 
     private func startNativeRuntime(_ spec: RuntimeSpec) throws {
@@ -459,25 +488,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             tunnelLog.warning("Could not parse outbound server address; VPN routing loop exclusion will be skipped")
         }
         return ParsedConfig(inboundPort: parsed.inboundPort, serverAddress: parsed.serverAddress)
-    }
-
-    /// Normalizes imported Xray JSON for iOS packet-tunnel constraints.
-    ///
-    /// The same URL parser is used for standalone Xray configs and for this
-    /// extension, but iOS has tighter rules: file logs may be denied inside the
-    /// extension sandbox, DNS must line up with `NEDNSSettings`, and the remote
-    /// proxy server must not be reached through the tunnel that depends on it.
-    private func prepareXrayConfigForTunnel(_ jsonData: Data, credentials: LocalProxyCredentials) -> TunnelPreparedConfig? {
-        guard let prepared = TunnelXrayConfigPreparer.prepare(
-            jsonData: jsonData,
-            credentials: credentials,
-            resolveIPv4: { resolveIPv4Addresses(for: $0).first }
-        ) else {
-            tunnelLog.warning("Could not prepare Xray config for iOS tunnel")
-            return nil
-        }
-        rememberTunnelLog("Xray configuration prepared, steps=\(prepared.logMessages.count)")
-        return prepared
     }
 
     private func buildIPv4ExcludedRoutes(serverAddresses: [String]) -> [NEIPv4Route] {

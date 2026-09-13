@@ -3,6 +3,46 @@ import XCTest
 
 final class TunnelDNSPolicyTests: XCTestCase {
     private static let credentials = try! LocalProxyCredentials(username: "test-session", password: "test-session-password")
+    func testStartupRetriesEndpointResolutionAndProducesRecoverableRuntime() async throws {
+        let data = Data(#"{"inbounds":[{"protocol":"socks","port":10808}],"outbounds":[{"protocol":"http","settings":{"address":"bootstrap.invalid","port":443}}]}"#.utf8)
+        var attempts = 0
+        var pauses = 0
+        let prepared = try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: data, credentials: Self.credentials,
+            resolveIPv4: { _ in attempts += 1; return attempts < 3 ? nil : "203.0.113.7" },
+            retryDelay: { pauses += 1 })
+        XCTAssertEqual(attempts, 3)
+        XCTAssertEqual(pauses, 2)
+        XCTAssertEqual(prepared.bootstrapAddresses, ["203.0.113.7"])
+        XCTAssertEqual(TunnelXrayConfigPreparer.parseConfig(jsonData: prepared.data)?.inboundPort, 10808)
+        do {
+            _ = try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: data, credentials: Self.credentials,
+                resolveIPv4: { _ in nil }, attempts: 2, retryDelay: {})
+            XCTFail("Unavailable endpoints must fail startup, never install a runtime-less tunnel")
+        } catch { XCTAssertTrue(error is TunnelXrayConfigPreparer.StartupError) }
+        do {
+            _ = try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: Data("{}".utf8), credentials: Self.credentials,
+                resolveIPv4: { _ in XCTFail("Invalid input must not resolve"); return nil },
+                retryDelay: { XCTFail("Invalid configuration must not retry") })
+            XCTFail("Invalid input must fail startup")
+        } catch { XCTAssertTrue(error is TunnelXrayConfigPreparer.StartupError) }
+    }
+
+    func testStartupCancellationDuringBackoffCannotPublishPreparedRuntime() async throws {
+        let waiting = expectation(description: "bootstrap retry")
+        let data = Data(#"{"inbounds":[{"protocol":"socks","port":10808}],"outbounds":[{"protocol":"http","settings":{"address":"bootstrap.invalid","port":443}}]}"#.utf8)
+        let task = Task {
+            try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: data, credentials: Self.credentials,
+                resolveIPv4: { _ in nil }, retryDelay: {
+                    waiting.fulfill()
+                    try await Task.sleep(nanoseconds: 30_000_000_000)
+                })
+        }
+        await fulfillment(of: [waiting], timeout: 2)
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Stopped startup must not complete") }
+        catch { XCTAssertTrue(error is CancellationError) }
+    }
+
     func testHTTPAndSocksDNSUseTCPProxyAndKeepApplicationRules() throws {
         for proto in ["http", "socks"] {
             let applicationRule: [String: Any] = ["inboundTag": ["socks-direct"], "outboundTag": "direct"]

@@ -92,7 +92,7 @@ public enum XrayPrivacyConfig {
 
     private static func fields(_ object: inout [String: Any], _ names: [String]) -> Bool {
         for name in names {
-            let matches = object.keys.filter { $0.lowercased() == name.lowercased() }
+            let matches = object.keys.filter { XrayJSONField.matches($0, name) }
             guard matches.count <= 1 else { return false }
             if let key = matches.first, key != name { object[name] = object.removeValue(forKey: key) }
         }

@@ -105,20 +105,47 @@ public final class TunnelSecretStore {
     }
 
     public func read(_ reference: Data) throws -> Data {
-        guard !reference.isEmpty else { throw TunnelSecretError.invalidProfile }
-        var query = scope
-        query[kSecValuePersistentRef as String] = reference
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        let (status, value) = client.copy(query)
-        guard status == errSecSuccess else { throw TunnelSecretError.keychain(operation: "read", status: status) }
-        guard let data = value as? Data, !data.isEmpty else { throw TunnelSecretError.emptyConfiguration }
+        guard let item = try referencedItem(reference, includeData: true) else {
+            throw TunnelSecretError.keychain(operation: "read", status: errSecItemNotFound)
+        }
+        guard let data = item[kSecValueData as String] as? Data, !data.isEmpty else {
+            throw TunnelSecretError.emptyConfiguration
+        }
         return data
     }
 
+    private func referencedItem(_ reference: Data, includeData: Bool) throws -> [String: Any]? {
+        guard !reference.isEmpty else { throw TunnelSecretError.invalidProfile }
+        // Security rejects persistent-reference queries combined with search
+        // attributes (-50). Resolve the reference, then validate its ownership
+        // before returning any data. The class still constrains the query.
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecUseDataProtectionKeychain as String: true,
+            kSecValuePersistentRef as String: reference,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        if includeData { query[kSecReturnData as String] = true }
+        let (status, value) = client.copy(query)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw TunnelSecretError.keychain(operation: "read", status: status) }
+        guard let item = value as? [String: Any] else { throw TunnelSecretError.profileVerificationFailed }
+        guard item[kSecAttrService as String] as? String == service,
+              item[kSecAttrAccessGroup as String] as? String == accessGroup,
+              item[kSecAttrSynchronizable as String] as? Bool == false else { return nil }
+        return item
+    }
+
     public func remove(_ reference: Data) throws {
+        guard let item = try referencedItem(reference, includeData: false) else { return }
+        guard let account = item[kSecAttrAccount as String] as? String, !account.isEmpty else {
+            throw TunnelSecretError.profileVerificationFailed
+        }
+        // Each revision has an immutable, unique account. Keep the scope in
+        // the actual delete query too, even if an item changed after lookup.
         var query = scope
-        query[kSecValuePersistentRef as String] = reference
+        query[kSecAttrAccount as String] = account
         let status = client.delete(query)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw TunnelSecretError.keychain(operation: "delete", status: status)

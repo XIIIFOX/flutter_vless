@@ -12,6 +12,9 @@ import socket
 import socketserver
 import ssl
 import subprocess
+import struct
+import sys
+from functools import lru_cache
 import threading
 import time
 import uuid
@@ -145,7 +148,7 @@ def config(reverse, external_address=None, direct_address="127.0.0.1"):
                       "sniffing": {"enabled": True, "destOverride": ["http", "tls"],
                                    "routeOnly": False}}],
         "outbounds": [{"protocol": "socks", "tag": "proxy",
-                       "settings": {"servers": [{"address": "127.0.0.1", "port": PORTS["proxy"]}]}},
+                       "settings": {"servers": [{"address": direct_address, "port": PORTS["proxy"]}]}},
                       {"protocol": "freedom", "tag": "direct", "settings": {
                           "domainStrategy": "UseIP", "redirect": f"{direct_address}:{PORTS['direct']}"}}],
         "routing": {"domainStrategy": "AsIs", "rules": [
@@ -175,10 +178,37 @@ def protected_dns(tcp):
     return "DNS reply through selected proxy"
 
 
+def system_dns():
+    name = f"{uuid.uuid4().hex}.invalid."
+    before = len(DNS_QUERIES)
+    answer = subprocess.check_output([sys.executable, "-c",
+        "import socket,sys; print(socket.gethostbyname(sys.argv[1]))", name],
+        text=True, timeout=25).strip()
+    assert answer == "198.51.100.7" and len(DNS_QUERIES) > before
+    return "Windows resolver used the protected DNS proxy"
+
+
+@lru_cache
+def source_interface(source):
+    # Discover the actual interface, including localized/renamed adapters.
+    value = subprocess.check_output(["powershell", "-NoProfile", "-Command",
+        f"(Get-NetIPAddress -IPAddress '{source}' -ErrorAction Stop | Select-Object -First 1).InterfaceIndex"],
+        text=True, timeout=15)
+    return int(value.strip())
+
+
+def pin_interface(sock, source, ipv6=False):
+    index = source_interface(source)
+    # IP_UNICAST_IF expects network byte order; IPV6_UNICAST_IF uses host order.
+    sock.setsockopt(socket.IPPROTO_IPV6 if ipv6 else socket.IPPROTO_IP, 31,
+                    index if ipv6 else struct.pack("!I", index))
+    sock.bind((source, 0))
+
+
 def physical_denied(address, source, port, udp=False):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM) as sock:
         sock.settimeout(3)
-        sock.bind((source, 0))
+        pin_interface(sock, source)
         try:
             sock.connect((address, port))
             if udp:
@@ -235,21 +265,40 @@ def start_adapter(probe, directory, subnet):
     return process, stop
 
 
-def adapter_datagram(subnet, ipv6, denied):
+def adapter_datagram(directory, subnet, ipv6, denied):
     family = socket.AF_INET6 if ipv6 else socket.AF_INET
     source = f"fd00:85:{subnet}::1" if ipv6 else f"100.64.{subnet}.1"
     target = f"fd00:85:{subnet}::2" if ipv6 else f"100.64.{subnet}.2"
+    token = uuid.uuid4().hex
+    verdict = "send accepted"
     with socket.socket(family, socket.SOCK_DGRAM) as sock:
         sock.settimeout(3)
-        sock.bind((source, 0))
+        pin_interface(sock, source, ipv6)
         try:
             sock.connect((target, 45000))
-            sock.send(b"wfp-adapter-control")
+            sock.send(("wfp-adapter-control-" + token).encode())
         except OSError as error:
             assert denied and getattr(error, "winerror", None) == 10013, f"Unproven adapter verdict: {error}"
-            return "WSAEACCES"
-    assert not denied, "Synthetic physical adapter bypassed WFP"
-    return "baseline datagram permitted"
+            verdict = "WSAEACCES"
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        observed = token in (directory / f"adapter-{subnet}.log").read_text(errors="replace")
+        if observed:
+            break
+        time.sleep(0.05)
+    assert observed != denied, f"Adapter packet evidence disagrees with expected block: observed={observed}, {verdict}"
+    if denied:
+        # TCP supplies a synchronous WFP verdict as an independent control.
+        with socket.socket(family, socket.SOCK_STREAM) as tcp:
+            tcp.settimeout(3)
+            pin_interface(tcp, source, ipv6)
+            try:
+                tcp.connect((target, 45000))
+            except OSError as error:
+                assert getattr(error, "winerror", None) == 10013, f"Unproven TCP block: {error}"
+            else:
+                raise AssertionError("Adapter TCP bypassed WFP")
+    return f"{verdict}; control packet {'absent' if denied else 'observed'} at adapter"
 
 
 def main():
@@ -285,12 +334,12 @@ def main():
             assert driver.returncode == 0, "Wintun adapter creation failed"
             adapters.append(start_adapter(probe, directory, 2))
             for ipv6 in (False, True):
-                actual = adapter_datagram(2, ipv6, False)
+                actual = adapter_datagram(directory, 2, ipv6, False)
                 results.append(dict(check="IPv6 adapter baseline" if ipv6 else "IPv4 adapter baseline", actual=actual, passed=True))
         # A VPN freedom socket is pinned to the underlay; use a local target
         # on that interface, not a loopback-only target on another interface.
         servers = [ThreadingHTTPServer((direct_address, 0), Direct),
-                   Server(("127.0.0.1", 0), Socks)]
+                   Server((direct_address, 0), Socks)]
         PORTS["direct"] = servers[0].server_address[1]
         PORTS["proxy"] = servers[1].server_address[1]
         if args.vpn:
@@ -356,7 +405,7 @@ def main():
                     if args.vpn:
                         for subnet in (2, 3):
                             for ipv6 in (False, True):
-                                actual = adapter_datagram(subnet, ipv6, True)
+                                actual = adapter_datagram(directory, subnet, ipv6, True)
                                 results.append(dict(mode=label, check=f"{'new' if subnet == 3 else 'existing'} adapter {'IPv6' if ipv6 else 'IPv4'} blocked", actual=actual, passed=True))
                         with socket.create_connection(("127.0.0.1", PORTS["inbound"]), timeout=3) as denied:
                             denied.sendall(b"\x05\x01\x00")
@@ -388,6 +437,7 @@ def main():
                         results.append(row)
                         print(json.dumps(row), flush=True)
                         if not reverse and ending == "stop":
+                            results.append(dict(mode=label, check="ordinary Windows DNS resolver", actual=system_dns(), passed=True))
                             for worker in ("xray.exe", "tun2socks.exe"):
                                 kill_worker(process.pid, worker)
                                 await_state(state_file, False)
@@ -416,6 +466,11 @@ def main():
                         results.append(dict(mode=label, check="capture routes removed by service", passed=remaining.strip() == "0"))
                         assert external_http(external_address) == baseline
                         results.append(dict(mode=label, check="explicit stop restores ordinary HTTPS", passed=True))
+                        if not reverse and ending == "stop":
+                            for subnet in (2, 3):
+                                for ipv6 in (False, True):
+                                    actual = adapter_datagram(directory, subnet, ipv6, False)
+                                    results.append(dict(mode=label, check=f"adapter {subnet} {'IPv6' if ipv6 else 'IPv4'} restored", actual=actual, passed=True))
                     results.append(dict(mode=label, check="requested termination", passed=ending == "crash" or code == 0, exit_code=code))
                 finally:
                     if process.poll() is None:

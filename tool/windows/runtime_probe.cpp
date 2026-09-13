@@ -93,7 +93,11 @@ int main(int argc,char** argv) {
     auto start = reinterpret_cast<Start>(GetProcAddress(dll,"WintunStartSession"));
     auto end = reinterpret_cast<Close>(GetProcAddress(dll,"WintunEndSession"));
     auto get_luid = reinterpret_cast<Luid>(GetProcAddress(dll,"WintunGetAdapterLUID"));
-    if (!create || !close || !start || !end || !get_luid) return 31;
+    using Receive = BYTE* (WINAPI*)(void*,DWORD*);
+    using Release = void (WINAPI*)(void*,const BYTE*);
+    auto receive = reinterpret_cast<Receive>(GetProcAddress(dll,"WintunReceivePacket"));
+    auto release = reinterpret_cast<Release>(GetProcAddress(dll,"WintunReleaseReceivePacket"));
+    if (!create || !close || !start || !end || !get_luid || !receive || !release) return 31;
     void* adapter = create(arguments[2].c_str(), L"FlutterVlessValidation", nullptr);
     if (!adapter) return 32;
     void* session = start(adapter, 0x400000);
@@ -113,6 +117,17 @@ int main(int argc,char** argv) {
       else InetPtonA(AF_INET6, ip.c_str(), &row.Address.Ipv6.sin6_addr);
       const auto code = CreateUnicastIpAddressEntry(&row);
       if (code != NO_ERROR) { std::cout << "ADAPTER_ADDRESS_ERROR=" << code << std::endl; ok = false; break; }
+      MIB_IPFORWARD_ROW2 route{}; InitializeIpForwardEntry(&route);
+      route.InterfaceLuid = luid;
+      route.DestinationPrefix.Prefix.si_family = static_cast<ADDRESS_FAMILY>(family);
+      route.NextHop.si_family = static_cast<ADDRESS_FAMILY>(family);
+      route.DestinationPrefix.PrefixLength = family == AF_INET ? 24 : 64;
+      const auto network = family == AF_INET ? "100.64." + std::to_string(subnet) + ".0" : "fd00:85:" + std::to_string(subnet) + "::";
+      if (family == AF_INET) InetPtonA(AF_INET, network.c_str(), &route.DestinationPrefix.Prefix.Ipv4.sin_addr);
+      else InetPtonA(AF_INET6, network.c_str(), &route.DestinationPrefix.Prefix.Ipv6.sin6_addr);
+      route.Protocol = static_cast<NL_ROUTE_PROTOCOL>(MIB_IPPROTO_NETMGMT);
+      const auto route_code = CreateIpForwardEntry2(&route);
+      if (route_code != NO_ERROR && route_code != ERROR_OBJECT_ALREADY_EXISTS) { ok = false; break; }
       bool ready = false;
       for (int retry=0; retry<30; ++retry) {
         if (GetUnicastIpAddressEntry(&row) == NO_ERROR && row.DadState == IpDadStatePreferred) { ready = true; break; }
@@ -123,7 +138,21 @@ int main(int argc,char** argv) {
     if (ok) {
       std::cout << "ADAPTER_READY=" << luid.Value << std::endl;
       const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);
-      while (!std::filesystem::exists(std::filesystem::path(arguments[4])) && std::chrono::steady_clock::now() < deadline) Sleep(250);
+      while (!std::filesystem::exists(std::filesystem::path(arguments[4])) && std::chrono::steady_clock::now() < deadline) {
+        DWORD size = 0;
+        BYTE* packet = receive(session, &size);
+        if (!packet) { Sleep(10); continue; }
+        // Record only our random control marker, never unrelated packet data.
+        const std::string bytes(reinterpret_cast<char*>(packet), size);
+        const std::string prefix = "wfp-adapter-control-";
+        const auto at = bytes.find(prefix);
+        if (at != std::string::npos && bytes.size() >= at + prefix.size() + 32) {
+          const auto token = bytes.substr(at + prefix.size(), 32);
+          if (token.find_first_not_of("0123456789abcdef") == std::string::npos)
+            std::cout << "CONTROL_PACKET=" << token << std::endl;
+        }
+        release(session, packet);
+      }
     }
     end(session); close(adapter); FreeLibrary(dll);
     return ok ? 0 : 35;

@@ -1,5 +1,7 @@
 ## 1.1.6 (Unreleased)
 
+* Chain protected DNS with `streamSettings.sockopt.dialerProxy`, replacing the `proxySettings` field removed in Xray-core v26.9.9.
+
 * Bound and cancel transport endpoint DNS lookups during startup. If system DNS is unavailable, bootstrap public endpoint names over certificate-validated HTTPS before installing virtual DNS; keep tunnel traffic protection enabled.
 * Make Packet Tunnel traffic protection mandatory and retain capture routes and virtual DNS while native workers recover. Report `CONNECTED` only after provider forwarding is ready.
 * Protect system DNS through Xray without a physical resolver fallback. Capture and block IPv6 while forwarding remains IPv4-only; reject incompatible FakeDNS configurations.
@@ -10,7 +12,7 @@
 * Preserve packet batches when the HEV socket is busy, size both socket directions for traffic bursts, and expose numeric bridge counters in diagnostics. Add bulk transfer and backpressure regression coverage for macOS throughput.
 * Remove physical-interface reachability probes and replace raw native diagnostics with bounded private messages.
 * Restore owned proxy settings on stop; preserve changes made by another application.
-* Prepare macOS runtime revision `xray-macos-v26.7.28-r1`, adding private startup and asset-location bridges, pinned mobile build tooling, and the 128 KiB HTTP/2 upload scratch limit. The local archive must be published before distributing packages that use its hosted fallback.
+* Publish macOS runtime revision `xray-macos-v26.9.9`, adding private startup and asset-location bridges, pinned mobile build tooling, and the 128 KiB HTTP/2 upload scratch limit.
 
 ## 1.1.5
 

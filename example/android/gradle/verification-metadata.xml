@@ -12,12 +12,18 @@
     </trusted-artifacts>
   </configuration>
   <components>
-    <component group="dev.tfox.fluttervless" name="xray-android" version="26.7.28-protect1">
-      <artifact name="xray-android-26.7.28-protect1.aar">
-        <sha256 value="54785c3c5437473d8f9c8071a6138ae781ed2038e57beb47b6a46de3545c3ad8" origin="GitHub release asset 547535638, release xray-android-v26.7.28-protect1; independently matched Maven Central"/>
+    <component group="dev.tfox.fluttervless" name="xray-android" version="26.9.9-protect1">
+      <artifact name="xray-android-26.9.9-protect1.aar">
+        <sha256 value="82e485f4840dab3187c672ae18a9fa4816314abe26469b96647f264ceaf1fa69" origin="Maven Central 26.9.9-protect1; content independently matched to reviewed release inputs"/>
       </artifact>
-      <artifact name="xray-android-26.7.28-protect1.pom">
-        <sha256 value="7ce7fc19a20d33dfed9579c057a2218f8bb95ad34eb482b8584fc87d12624957" origin="Maven Central POM reviewed against committed release publication: same coordinates, no dependencies or repositories"/>
+      <artifact name="xray-android-26.9.9-protect1.pom">
+        <sha256 value="0b5c799f7ce48160c9a536c2cde1aa1ee976925daa88ff527e91efbc7d929308" origin="Maven Central 26.9.9-protect1; content independently matched to reviewed release inputs"/>
+      </artifact>
+      <artifact name="xray-android-26.9.9-protect1-sources.jar">
+        <sha256 value="c6deada2fac53b8ea6523dbda77597b128006674616f140f04df23264c6d1aa3" origin="Maven Central 26.9.9-protect1; content independently matched to reviewed release inputs"/>
+      </artifact>
+      <artifact name="xray-android-26.9.9-protect1-javadoc.jar">
+        <sha256 value="c6deada2fac53b8ea6523dbda77597b128006674616f140f04df23264c6d1aa3" origin="Maven Central 26.9.9-protect1; content independently matched to reviewed release inputs"/>
       </artifact>
     </component>
   </components>

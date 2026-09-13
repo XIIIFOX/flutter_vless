@@ -106,7 +106,7 @@ void main() {
         case 'getConnectedServerDelay':
           return 42;
         case 'getCoreVersion':
-          return 'Xray 26.7.28';
+          return 'Xray 26.9.9';
         case 'getProviderDebugSnapshot':
           return 'android xray diagnostics';
       }
@@ -126,7 +126,7 @@ void main() {
       await plugin.getConnectedServerDelay('https://example.com/generate_204'),
       42,
     );
-    expect(await plugin.getCoreVersion(), 'Xray 26.7.28');
+    expect(await plugin.getCoreVersion(), 'Xray 26.9.9');
     expect(
       await plugin.getProviderDebugSnapshot(),
       'android xray diagnostics',

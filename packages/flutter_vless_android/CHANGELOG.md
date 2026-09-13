@@ -1,5 +1,7 @@
 ## 1.1.6 (Unreleased)
 
+* Chain protected DNS with `streamSettings.sockopt.dialerProxy`, replacing the `proxySettings` field removed in Xray-core v26.9.9.
+
 * Show the VPN Diagnostics button in the Android example, including release builds.
 
 * Check readiness through an owned local packet path independent of public-site routing, avoid FakeDNS probe collisions, and restore opening the app from its VPN notification.
@@ -8,8 +10,8 @@
 * Preserve TUN on worker failures; coordinate bounded recovery and encrypted authorized-profile restoration.
 * Add explicit proxy DNS policy, safe diagnostic events and native artifact verification examples.
 
-* Updated the Android runtime dependency to `dev.tfox.fluttervless:xray-android:26.7.28-protect1`.
-* Rebuilt Android `libxray.so` binaries for `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` against Xray-core `v26.7.28`.
+* Updated the Android runtime dependency to `dev.tfox.fluttervless:xray-android:26.9.9-protect1`.
+* Rebuilt Android `libxray.so` binaries for `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` against Xray-core `v26.9.9`.
 * Added bounded, cross-process Xray/tun2socks diagnostics through
   `getProviderDebugSnapshot`.
 

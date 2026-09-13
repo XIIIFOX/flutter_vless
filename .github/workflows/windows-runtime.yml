@@ -34,9 +34,9 @@ jobs:
       - name: Download and verify the pinned Windows runtime
         shell: pwsh
         run: |
-          $url = 'https://github.com/XTLS/Xray-core/releases/download/v26.7.28/Xray-windows-64.zip'
+          $url = 'https://github.com/XTLS/Xray-core/releases/download/v26.9.9/Xray-windows-64.zip'
           Invoke-WebRequest $url -OutFile build/xray-windows.zip
-          if ((Get-FileHash build/xray-windows.zip -Algorithm SHA256).Hash.ToLower() -ne 'c7172078fca4711bcd92a4774dcd1822544579c58816197575c47533317fd8d1') { throw 'Xray checksum mismatch' }
+          if ((Get-FileHash build/xray-windows.zip -Algorithm SHA256).Hash.ToLower() -ne '244deaba2098c2964e49bba90df3707777e5f5f428a82d2f29604015f24beec2') { throw 'Xray checksum mismatch' }
           Expand-Archive build/xray-windows.zip build/windows-runtime -Force
           Copy-Item example/windows/xray/tun2socks.exe,example/windows/xray/wintun.dll build/windows-runtime
           Get-FileHash build/windows-runtime/*.exe,build/windows-runtime/*.dll | Format-Table | Out-File build/windows-runtime/binary-checksums.log

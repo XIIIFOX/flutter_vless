@@ -2,13 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-XRAY_RUNTIME_VERSION="${XRAY_RUNTIME_VERSION:-26.7.28-protect1}"
-if [ "$XRAY_RUNTIME_VERSION" != "26.7.28-protect1" ] || [ -n "${FLUTTER_VLESS_ANDROID_RUNTIME_REPO:-}" ] || [ -n "${ORG_GRADLE_PROJECT_flutterVlessAndroidRuntimeRepo:-}" ] ||
-   { [ -n "${ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion:-}" ] && [ "$ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion" != "26.7.28-protect1" ]; }; then
+XRAY_RUNTIME_VERSION="${XRAY_RUNTIME_VERSION:-26.9.9-protect1}"
+if [ "$XRAY_RUNTIME_VERSION" != "26.9.9-protect1" ] || [ -n "${FLUTTER_VLESS_ANDROID_RUNTIME_REPO:-}" ] || [ -n "${ORG_GRADLE_PROJECT_flutterVlessAndroidRuntimeRepo:-}" ] ||
+   { [ -n "${ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion:-}" ] && [ "$ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion" != "26.9.9-protect1" ]; }; then
   echo "Official runtime verification rejects repository/version overrides" >&2
   exit 1
 fi
-XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-26.7.28}"
+XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-26.9.9}"
 MAVEN_BASE_URL="https://repo1.maven.org/maven2/dev/tfox/fluttervless/xray-android/$XRAY_RUNTIME_VERSION"
 MAVEN_CENTRAL_RETRY_SECONDS="${MAVEN_CENTRAL_RETRY_SECONDS:-600}"
 TMP_DIR="$(mktemp -d)"
@@ -127,21 +127,23 @@ fi
     -PflutterVlessOfficialRuntimeVerification=true --dependency-verification=strict
 )
 
-APK_SEARCH_DIRS=()
-for dir in "$ROOT_DIR/build" "$ROOT_DIR/example/build"; do
-  if [ -d "$dir" ]; then
-    APK_SEARCH_DIRS+=("$dir")
-  fi
-done
-
-APK_PATH="$(
-  find "${APK_SEARCH_DIRS[@]}" -type f -name 'app-debug.apk' -print | head -n 1
-)"
-
-if [ -z "$APK_PATH" ]; then
-  echo "Could not find app-debug.apk after Android build" >&2
+# Check the output of this build, not an older APK elsewhere under build/.
+APK_PATH="$ROOT_DIR/example/build/app/outputs/apk/debug/app-debug.apk"
+if [ ! -f "$APK_PATH" ]; then
+  echo "Could not find the example debug APK after Android build: $APK_PATH" >&2
   exit 1
 fi
+
+python3 - "$AAR_PATH" "$APK_PATH" <<'PYVERIFY'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as aar, zipfile.ZipFile(sys.argv[2]) as apk:
+    for abi in ['arm64-v8a', 'armeabi-v7a', 'x86_64']:
+        for library in ['libxray.so', 'libtun2socks.so']:
+            assert apk.read(f'lib/{abi}/{library}') == aar.read(f'jni/{abi}/{library}'), f'Packaged runtime differs: {abi}/{library}'
+    for asset in ['geoip.dat', 'geosite.dat']:
+        assert apk.read(f'assets/{asset}') == aar.read(f'assets/{asset}'), f'Packaged geodata differs: {asset}'
+print('PASS: APK native libraries and geodata match the published Maven AAR byte for byte')
+PYVERIFY
 
 for entry in \
   "lib/arm64-v8a/libxray.so" \

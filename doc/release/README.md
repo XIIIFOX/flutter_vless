@@ -11,16 +11,16 @@ separate `CHANGELOG.md` beside its `pubspec.yaml`; add a versioned entry there
 only when that package itself is being released.
 
 For 1.1.6, PR #24 belongs in the root changelog because the iOS implementation
-lives in the root package. The Xray-core `v26.7.28` runtime update also changes
+lives in the root package. The Xray-core `v26.9.9` runtime update also changes
 the Android and macOS implementation packages, so their package versions and
-changelogs must be updated. Windows and the platform-interface package have no
-change in this release and keep their existing versions.
+changelogs must be updated. The desktop protection and DNS compatibility changes are recorded in the
+Windows changelog as well. Package publication remains a separate release step.
 
 Runtime release notes for this train:
 
-* [Android v26.7.28](xray-android-v26.7.28.md)
-* [iOS v26.7.28](xray-ios-v26.7.28.md)
-* [macOS v26.7.28](xray-macos-v26.7.28.md)
+* [Android v26.9.9-protect1](xray-android-v26.9.9-protect1.md)
+* [iOS v26.9.9](xray-ios-v26.9.9.md)
+* [macOS v26.9.9](xray-macos-v26.9.9.md)
 
 ## Local Checklist
 

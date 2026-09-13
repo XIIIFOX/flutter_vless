@@ -7,18 +7,18 @@ The wrapper exports `XRaySetAssetLocation` in addition to the lifecycle API.
 Keep this symbol when rebuilding: the iOS app and Packet Tunnel use it to set
 Xray's asset directory from inside the Go runtime.
 
-Current target Xray-core version: `v26.7.28`.
-Release commit used by the script: `5ca6f4b7d4dc20a881d4330e498892697627ec0c`.
-Current wrapper artifact tag: `xray-ios-v26.7.28-r3`.
+Current target Xray-core version: `v26.9.9`.
+Release commit used by the script: `52a412d9e2f5c2a5142b1b4e2ab3771dacb8b120`.
+Current wrapper artifact tag: `xray-ios-v26.9.9`.
 The privacy revision adds `XRayStartPrivate`; all iOS entry points require this
 symbol so an older cached framework fails to link instead of bypassing policy.
 It disables raw access/error output, sanitizes startup/runtime callbacks, and
 turns off REALITY debug prints and TLS key files, including XHTTP downloads and
-Realm finalmask TLS. Xray-core remains 26.7.28; the H2BUF cap remains 128 KiB.
+Realm finalmask TLS. Xray-core is 26.9.9; the H2BUF cap remains 128 KiB.
 
 The release archive is available at
-`https://github.com/XIIIFOX/flutter_vless/releases/download/xray-ios-v26.7.28-r3/XRay.xcframework.zip`
-with SHA-256 `3792dc3ae6ffa42922c4604827812e48e29307d381d5db40a2c3932e0b779a60`.
+`https://github.com/XIIIFOX/flutter_vless/releases/download/xray-ios-v26.9.9/XRay.xcframework.zip`
+with SHA-256 `dd07e1897bdff4c3e4e1a3958629ad5d9517676ecd470bfd99ec35e46184549e`.
 SwiftPM and CocoaPods verify this checksum when downloading the framework.
 A rebuild may produce a different archive checksum; use a new revision and
 coordinate both manifests with the exact artifact.
@@ -27,7 +27,8 @@ Requirements:
 
 - Full Xcode with iOS SDK installed and selected with `xcode-select`.
 - Go 1.27 or newer installed.
-- `gomobile` installed, or let the script install it into `$HOME/go/bin`.
+- The script installs the pinned `gomobile` and `gobind` into its temporary build directory.
+- Go 1.27.0 is selected by default through `GOTOOLCHAIN`.
 
 Build:
 
@@ -51,7 +52,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer ./ios/build_xray_ios.sh
 Useful overrides:
 
 ```bash
-XRAY_MOBILE_DIR=../third_party/xray-mobile XRAY_CORE_REF=5ca6f4b7d4dc20a881d4330e498892697627ec0c IOS_VERSION=15.0 ./build_xray_ios.sh
+XRAY_MOBILE_DIR=../third_party/xray-mobile XRAY_CORE_REF=52a412d9e2f5c2a5142b1b4e2ab3771dacb8b120 IOS_VERSION=15.0 ./build_xray_ios.sh
 ```
 
 The build script copies `XRAY_MOBILE_DIR` into `ios/build_xray_ios/xray-mobile`

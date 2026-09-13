@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 root = Path(__file__).resolve().parents[1]
-version = "26.7.28-protect1"
+version = "26.9.9-protect1"
 repo = root / "android_runtime/xray_android/build/repo"
 artifacts = repo / f"dev/tfox/fluttervless/xray-android/{version}"
 aar = artifacts / f"xray-android-{version}.aar"

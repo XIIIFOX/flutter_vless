@@ -2,6 +2,10 @@
 
 ### General
 
+* Chain protected DNS with `streamSettings.sockopt.dialerProxy`, replacing the `proxySettings` field removed in Xray-core v26.9.9.
+
+* Update native Xray-core to `v26.9.9` with pinned source revisions and verified release artifacts.
+
 * Fix the example routing editor: restore applied selections, replace and clear its own rules, and avoid bypassing unrelated domains that share an IP address. Preserve imported routing and DNS settings, and retain QUIC sniffing.
 
 * Extend mandatory desktop VPN protection, private diagnostics and local proxy authentication to macOS and Windows. Keep domain-based direct routing and document platform-specific subnet behavior.
@@ -44,7 +48,7 @@
 * Added dynamic `geoip.dat` and `geosite.dat` loading through
   `geoAssetsDirectory`. The Go bridge validates the files and supports restoring
   the default asset lookup; VPN mode uses an extension-readable App Group path.
-* Published runtime revision `xray-ios-v26.7.28-r3` with Xray-core `v26.7.28`,
+* Published runtime revision `xray-ios-v26.9.9` with Xray-core `v26.9.9`,
   the asset and private logging bridges, and updated SwiftPM/CocoaPods checksums.
 * Capped Go HTTP/2 upload scratch buffers at 128 KiB per stream to reduce memory
   pressure during concurrent XHTTP uploads. Builds require Go 1.27 or newer,
@@ -66,8 +70,8 @@
   entire UID. Only runtime transport and bootstrap sockets bypass the VPN through
   the native socket protection bridge; configured blocked applications still bypass it.
 * Made required socket protection failures reject runtime startup or socket use.
-* Published `dev.tfox.fluttervless:xray-android:26.7.28-protect1` with Xray-core
-  `v26.7.28` for `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`.
+* Published `dev.tfox.fluttervless:xray-android:26.9.9-protect1` with Xray-core
+  `v26.9.9` for `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`.
 * Added bounded cross-process Xray/tun2socks diagnostics.
 
 ### macOS
@@ -82,9 +86,11 @@
 * Preserve packet batches when the HEV socket is busy, size both socket directions for traffic bursts, and expose numeric bridge counters in diagnostics. Add bulk transfer and backpressure regression coverage for macOS throughput.
 * Remove physical-interface reachability probes and replace raw native diagnostics with bounded private messages.
 * Restore owned proxy settings on stop; preserve changes made by another application.
-* Prepare macOS runtime revision `xray-macos-v26.7.28-r1`, adding private startup and asset-location bridges, pinned mobile build tooling, and the 128 KiB HTTP/2 upload scratch limit. The local archive must be published before distributing packages that use its hosted fallback.
+* Publish macOS runtime revision `xray-macos-v26.9.9`, adding private startup and asset-location bridges, pinned mobile build tooling, and the 128 KiB HTTP/2 upload scratch limit.
 
 ### Windows
+
+* Update the verified Windows workflow runtime to Xray-core `v26.9.9`.
 
 * Install mandatory Windows Filtering Platform protection before VPN setup. Keep it during native worker failure, recovery and application crashes; remove only this application's filters on explicit stop. A retained policy can be cleared by restarting the application as administrator and stopping VPN.
 * Block physical IPv4/DNS fallback and IPv6 outside the tunnel, including newly attached adapters. Route virtual DNS through the selected proxy and bootstrap transport endpoints before protection starts.

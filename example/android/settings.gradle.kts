@@ -32,7 +32,7 @@ if (providers.gradleProperty("flutterVlessOfficialRuntimeVerification").orNull =
         "Official runtime verification rejects repository overrides"
     }
     val version = providers.gradleProperty("flutterVlessXrayRuntimeVersion").orNull
-    check(version == null || version == "26.7.28-protect1") {
+    check(version == null || version == "26.9.9-protect1") {
         "Official runtime verification rejects version overrides"
     }
     check(gradle.startParameter.dependencyVerificationMode == org.gradle.api.artifacts.verification.DependencyVerificationMode.STRICT) {

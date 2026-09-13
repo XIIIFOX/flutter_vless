@@ -1,5 +1,9 @@
 ## 1.1.6 (Unreleased)
 
+* Chain protected DNS with `streamSettings.sockopt.dialerProxy`, replacing the `proxySettings` field removed in Xray-core v26.9.9.
+
+* Update the verified Windows workflow runtime to Xray-core `v26.9.9`.
+
 * Install mandatory Windows Filtering Platform protection before VPN setup. Keep it during native worker failure, recovery and application crashes; remove only this application's filters on explicit stop. A retained policy can be cleared by restarting the application as administrator and stopping VPN.
 * Block physical IPv4/DNS fallback and IPv6 outside the tunnel, including newly attached adapters. Route virtual DNS through the selected proxy and bootstrap transport endpoints before protection starts.
 * Authenticate the internal SOCKS proxy, bind outbound sockets to the available underlay, retry failed workers and require a private challenge-response through TUN, tun2socks and Xray before reporting `CONNECTED`.

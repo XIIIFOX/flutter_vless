@@ -4,7 +4,7 @@ This guide explains how to build the native libraries (`libxray.so` and `libtun2
 
 Android runtime files are stored in `android_runtime/xray_android/src/main` and published as the Maven Central AAR `dev.tfox.fluttervless:xray-android`. They are not stored in the `flutter_vless_android` Pub.dev package.
 
-The current revision is `26.7.28-protect1`. The same AAR and its SHA-256 checksum are also available in [GitHub Releases](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.7.28-protect1).
+The current revision is `26.9.9-protect1`. The same AAR and its SHA-256 checksum are also available in [GitHub Releases](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.9.9-protect1).
 
 **Key Features:**
 - ✅ **Android 15+ Support**: Builds with 16KB page size alignment.
@@ -65,7 +65,7 @@ If you see `0x1000`, it is **NOT** compatible with 16KB devices.
 The `flutter_vless_android` Pub.dev package consumes the Android device runtime through the Maven artifact:
 
 ```text
-dev.tfox.fluttervless:xray-android:26.7.28-protect1
+dev.tfox.fluttervless:xray-android:26.9.9-protect1
 ```
 
 After rebuilding `libxray.so`, `libtun2socks.so`, or the geodata files in `android_runtime/xray_android/src/main`, build the local Maven repository from the repository root:
@@ -90,7 +90,7 @@ tool/publish_android_runtime_maven.sh
 
 ## Protected VPN runtime
 
-`26.7.28-protect1` adds the protected socket runtime integration to Xray v26.7.28.
+`26.9.9-protect1` adds the protected socket runtime integration to Xray v26.9.9.
 Use the matching plugin and Maven runtime revision together.
 An older runtime fails the VPN capability handshake; there is no implicit UID bypass.
 Proxy-only does not enable the socket broker. Explicit `BLOCKED_APPS` still bypass VPN.

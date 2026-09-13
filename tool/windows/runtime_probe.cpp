@@ -82,6 +82,25 @@ int main(int argc,char** argv) {
     std::cout << gateway << std::endl;
     return gateway.empty() ? 5 : 0;
   }
+  if (action == "source-interface") {
+    if (arguments.size() < 3) return 2;
+    MIB_UNICASTIPADDRESS_TABLE* table = nullptr;
+    if (GetUnicastIpAddressTable(AF_UNSPEC, &table) != NO_ERROR) return 25;
+    const std::string expected(arguments[2].begin(), arguments[2].end());
+    NET_IFINDEX index = 0;
+    for (ULONG i = 0; i < table->NumEntries; ++i) {
+      const auto& row = table->Table[i];
+      char address[INET6_ADDRSTRLEN]{};
+      const auto family = row.Address.si_family;
+      const void* bytes = family == AF_INET ? static_cast<const void*>(&row.Address.Ipv4.sin_addr)
+          : static_cast<const void*>(&row.Address.Ipv6.sin6_addr);
+      if (InetNtopA(family, bytes, address, sizeof(address)) && expected == address) { index = row.InterfaceIndex; break; }
+    }
+    FreeMibTable(table);
+    if (!index) return 25;
+    std::cout << index << std::endl;
+    return 0;
+  }
   if (action == "adapter") {
     if (!isolated || arguments.size() < 5) return 20;
     const auto path = flutter_vless::native::FindBundledFile(L"wintun.dll");

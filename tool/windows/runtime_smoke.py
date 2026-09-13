@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORTS = {"inbound": 18580, "direct": 18581, "proxy": 18582}
 DNS_QUERIES = []
+PROBE = None
 
 
 def dns_response(query):
@@ -191,10 +192,7 @@ def system_dns():
 @lru_cache
 def source_interface(source):
     # Discover the actual interface, including localized/renamed adapters.
-    value = subprocess.check_output(["powershell", "-NoProfile", "-Command",
-        f"(Get-NetIPAddress -IPAddress '{source}' -ErrorAction Stop | Select-Object -First 1).InterfaceIndex"],
-        text=True, timeout=15)
-    return int(value.strip())
+    return int(native(PROBE, "source-interface", source))
 
 
 def pin_interface(sock, source, ipv6=False):
@@ -323,6 +321,7 @@ def adapter_datagram(directory, subnet, ipv6, denied):
 
 
 def main():
+    global PROBE
     parser = argparse.ArgumentParser()
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--vpn", action="store_true")
@@ -332,6 +331,7 @@ def main():
         raise SystemExit("Full VPN tests require a disposable GitHub Windows runner")
     directory = args.directory.resolve()
     probe = directory / "runtime_probe.exe"
+    PROBE = probe
     servers = []
     adapters = []
     results = []
@@ -471,8 +471,8 @@ def main():
                             # This disposable VM keeps its addresses and routes.
                             index = source_interface(direct_address)
                             subprocess.run(["powershell", "-NoProfile", "-Command",
-                                f"Get-NetAdapter -InterfaceIndex {index} | Rename-NetAdapter -NewName 'Vless Underlay Ω' -ErrorAction Stop"],
-                                check=True, timeout=15, stdout=subprocess.DEVNULL)
+                                f"Get-NetAdapter | Where-Object {{ $_.ifIndex -eq {index} }} | Rename-NetAdapter -NewName 'Vless Underlay Ω' -ErrorAction Stop"],
+                                check=True, timeout=45, stdout=subprocess.DEVNULL)
                             await_state(state_file, False)
                             actual = physical_denied(external_address, direct_address, 443)
                             results.append(dict(mode=label, check="underlay rename remains protected", actual=actual, passed=True))

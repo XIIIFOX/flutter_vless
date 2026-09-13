@@ -8,7 +8,8 @@ preferences. These modes have separate lifecycles and guarantees.
 
 ```text
 macOS application traffic
-  -> Network Extension packetFlow / owned utun
+  -> Network Extension packetFlow readPackets/writePackets
+  -> owned datagram socket pair (Darwin packet framing)
   -> HEV tun2socks
   -> authenticated loopback SOCKS inbound
   -> Xray routing
@@ -28,14 +29,26 @@ that Network Extension packet forwarding works.
 4. The provider reads the secret, supplies fresh local SOCKS credentials and
    prepares transport endpoint addresses before installing virtual DNS.
 5. It installs capture routes and starts its recovery watchdog.
-6. Xray and HEV start using the prepared configuration and the provider's own
-   validated packet-flow descriptor.
+6. Xray and HEV start using the prepared configuration. An owned socket pair
+   connects HEV to the public `NEPacketTunnelFlow` packet API.
 7. The application reports `CONNECTED` only when Network Extension is connected
    and the provider reports forwarding readiness.
 
 Preparation failures reject startup. The provider never runs the original JSON
 as a fallback. An identical active configuration is an idempotent start; a
 changed profile requires an explicit stop before replacement.
+
+Endpoint bootstrap gives the system resolver two seconds per lookup. If it does
+not return an address, the provider resolves public transport names using HTTPS
+to `https://1.1.1.1/dns-query` with normal certificate validation, a five-second
+request/resource timeout, and no redirects, cookies or persistent cache. This
+uses the same upstream as tunnel DNS, without depending on mDNSResponder while
+the protected tunnel is starting. Single-label names and reserved local suffixes
+do not use the public fallback. Only transport endpoint names are queried, never
+routing domains, sniffed destinations or TLS/Reality server names. Responses must
+match the question and its CNAME chain. Cancellation stops outstanding lookups;
+bootstrap retries are bounded. No bootstrap lookup runs after virtual DNS is
+installed or during worker recovery.
 
 ## Network and configuration invariants
 
@@ -58,6 +71,22 @@ mappings align endpoint resolution with routing without rewriting remote
 credentials or the transport's domain fields.
 
 ## Readiness, recovery and stop
+
+The packet bridge keeps one outstanding `readPackets` call across worker
+recovery. Old-generation callbacks and buffered packets are discarded on restart.
+Both socket descriptors belong to this provider's bridge; there is no private
+KVC lookup, descriptor enumeration or selection of another tunnel. Datagrams
+preserve packet boundaries and HEV's four-byte Darwin address-family header.
+Invalid/oversized frames are dropped. Each socket requests 512 KiB send and
+receive buffers, falling back to 256/128/64 KiB if the OS rejects a larger size.
+When the worker's socket is full, the bridge retains the current batch and retries
+without issuing another `readPackets` call. The pending batch is capped at 4 MiB
+and 4096 packets; exceeding either limit stops forwarding and requests recovery.
+Pause, recovery and stop clear queued packets and cancel retries. Diagnostics
+include packet counts, backpressure waits and buffer usage without packet data.
+Descriptors close only after the native worker exits.
+The adapter uses Apple's [public packet API](https://developer.apple.com/documentation/networkextension/nepackettunnelflow)
+and the framing used by [HEV 2.15.0](https://github.com/heiher/hev-socks5-tunnel/blob/2.15.0/src/hev-tunnel-macos.h).
 
 The provider checks the HEV worker state and authenticated SOCKS forwarding.
 Network Extension's connected status alone means that the system accepted the

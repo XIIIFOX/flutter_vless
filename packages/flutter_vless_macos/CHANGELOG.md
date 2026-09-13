@@ -1,11 +1,14 @@
 ## 1.1.6 (Unreleased)
 
+* Bound and cancel transport endpoint DNS lookups during startup. If system DNS is unavailable, bootstrap public endpoint names over certificate-validated HTTPS before installing virtual DNS; keep tunnel traffic protection enabled.
 * Make Packet Tunnel traffic protection mandatory and retain capture routes and virtual DNS while native workers recover. Report `CONNECTED` only after provider forwarding is ready.
 * Protect system DNS through Xray without a physical resolver fallback. Capture and block IPv6 while forwarding remains IPv4-only; reject incompatible FakeDNS configurations.
 * Authenticate the managed loopback proxy with native session credentials. Reject all additional listeners in VPN mode and remove imported management APIs while preserving explicit proxy-only authentication and traffic counters.
 * Store VPN profiles as scoped Keychain persistent references and migrate legacy plaintext profiles transactionally. Serialize profile operations and disarm recovery before explicit stop.
 * Preserve domain bypass rules and translate IPv4 `bypassSubnets` into Xray direct rules below DNS/IPv6 protection. Reject live configuration replacement until the current session is explicitly stopped.
-* Use only the provider's validated packet-flow descriptor. Remove physical-interface reachability probes and replace raw native diagnostics with bounded private messages.
+* Connect HEV through the public `NEPacketTunnelFlow` read/write API and an owned datagram socket pair, without private descriptor lookup or descriptor scanning. Preserve one outstanding packet read across worker recovery and bound packet buffering.
+* Preserve packet batches when the HEV socket is busy, size both socket directions for traffic bursts, and expose numeric bridge counters in diagnostics. Add bulk transfer and backpressure regression coverage for macOS throughput.
+* Remove physical-interface reachability probes and replace raw native diagnostics with bounded private messages.
 * Restore owned proxy settings on stop; preserve changes made by another application.
 * Prepare macOS runtime revision `xray-macos-v26.7.28-r1`, adding private startup and asset-location bridges, pinned mobile build tooling, and the 128 KiB HTTP/2 upload scratch limit. The local archive must be published before distributing packages that use its hosted fallback.
 

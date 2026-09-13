@@ -112,6 +112,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     // Accessed only on runtimeQueue.
     private var hasStartedHEV = false
     private var hevStopSignal: DispatchGroup?
+    private var packetBridge: TunnelPacketBridge?
 
     private struct RuntimeSpec {
         let config: Data
@@ -159,7 +160,10 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         let credentials = try LocalProxyCredentials.generate()
         let preparation = Task {
             try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: config, credentials: credentials,
-                resolveIPv4: { resolveIPv4Addresses(for: $0).first })
+                resolveIPv4: {
+                    rememberTunnelLog("Resolving VPN transport endpoint")
+                    return try await TunnelEndpointResolver.resolveIPv4($0, event: rememberTunnelLog)
+                })
         }
         setStartupPreparation(preparation)
         defer { setStartupPreparation(nil) }
@@ -209,7 +213,10 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         setForwardingReady(false)
         stopTunnelWatchdog()
         runtimeQueue.async {
-            _ = self.stopNativeRuntime()
+            if self.stopNativeRuntime() {
+                self.packetBridge?.shutdown()
+                self.packetBridge = nil
+            }
             completionHandler()
         }
     }
@@ -234,6 +241,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
 
     /// Runs on runtimeQueue. A blocked native quit must not stall NE teardown.
     private func stopNativeRuntime() -> Bool {
+        packetBridge?.pause()
         var stopped = true
         if hasStartedHEV {
             requestHEVStop()
@@ -390,12 +398,26 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         let config = TunnelHEVConfiguration.make(port: port, credentials: credentials, mtu: tunnelMTU, logURL: logURL)
         rememberTunnelLog("Starting HEV socks5 tunnel on 127.0.0.1:\(port), log=\(logURL.path)")
         tunnelLog.info("Starting HEV socks5 tunnel on 127.0.0.1:\(port, privacy: .public), mtu \(tunnelMTU, privacy: .public)")
-        guard let tunnelFD = packetFlowFileDescriptor() else {
-            throw tunnelError("Unable to identify this provider's packet-flow descriptor")
+        let bridge: TunnelPacketBridge
+        if let existing = packetBridge {
+            bridge = existing
+        } else {
+            bridge = try TunnelPacketBridge(flow: packetFlow, mtu: tunnelMTU) { [weak self] in
+                self?.watchdogQueue.async { [weak self] in
+                    guard let self, !self.watchdogSuspended else { return }
+                    self.setForwardingReady(false)
+                    rememberTunnelLog("Packet flow bridge failed; restarting protected native workers")
+                    self.scheduleNativeRecovery(after: 0)
+                }
+            }
+            packetBridge = bridge
         }
+        bridge.start()
+        rememberTunnelLog("Public packetFlow bridge ready for HEV")
         hasStartedHEV = true
         hevLifecycle.beginStart()
         DispatchQueue.global(qos: .userInitiated).async {
+            defer { withExtendedLifetime(bridge) {} }
             tunnelLog.info("HEV socks5 tunnel thread entered")
             self.hevLifecycle.markThreadEntered()
             guard !self.hevLifecycle.isStopRequested else {
@@ -404,7 +426,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             }
             let exitCode = config.withCString { pointer in
                 pointer.withMemoryRebound(to: UInt8.self, capacity: config.utf8.count) {
-                    hev_socks5_tunnel_main_from_str($0, UInt32(config.utf8.count), tunnelFD)
+                    hev_socks5_tunnel_main_from_str($0, UInt32(config.utf8.count), bridge.workerDescriptor)
                 }
             }
             let exitedUnexpectedly = self.hevLifecycle.markExited(code: exitCode)
@@ -428,109 +450,6 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             requestHEVStop()
             throw tunnelError("Timed out waiting for HEV startup")
         }
-    }
-
-    private func packetFlowFileDescriptor() -> Int32? {
-        var attempts: [String] = []
-        for attempt in 1...12 {
-            let rawValue = packetFlow.value(forKeyPath: "socket.fileDescriptor")
-            let rawType = rawValue.map { String(describing: type(of: $0)) } ?? "nil"
-            let rawDescription = String(describing: rawValue)
-            if let fileDescriptor = int32FileDescriptor(from: rawValue), utunUnit(for: fileDescriptor) != nil {
-                let validation = describeUtunFileDescriptor(fileDescriptor)
-                attempts.append("#\(attempt) rawType=\(rawType) raw=\(rawDescription) fd=\(fileDescriptor) \(validation)")
-                rememberTunnelLog("packetFlow fd KVC attempts: \(attempts.joined(separator: " | "))")
-                rememberTunnelLog("Detected utun fd candidates before HEV start: \(describeUtunFileDescriptorCandidates(utunFileDescriptorCandidates()))")
-                rememberTunnelLog("Using explicit packetFlow file descriptor \(fileDescriptor) for HEV")
-                tunnelLog.info("Using explicit packetFlow file descriptor \(fileDescriptor, privacy: .public) for HEV")
-                return fileDescriptor
-            }
-            attempts.append("#\(attempt) rawType=\(rawType) raw=\(rawDescription) converted=nil")
-            usleep(50_000)
-        }
-        rememberTunnelLog("Unable to identify packetFlow descriptor; refusing descriptor autodetection")
-        return nil
-    }
-
-    private func int32FileDescriptor(from value: Any?) -> Int32? {
-        if let value = value as? Int32 {
-            return value >= 0 ? value : nil
-        }
-        if let value = value as? Int {
-            return value >= 0 && value <= Int(Int32.max) ? Int32(value) : nil
-        }
-        if let value = value as? NSNumber {
-            let intValue = value.intValue
-            return intValue >= 0 && intValue <= Int(Int32.max) ? Int32(intValue) : nil
-        }
-        return nil
-    }
-
-    private func describeUtunFileDescriptor(_ fd: Int32) -> String {
-        guard let unit = utunUnit(for: fd) else {
-            return "utunValidation=not-utun"
-        }
-        return "utunValidation=ok unit=\(unit)"
-    }
-
-    private struct UtunFileDescriptorCandidate {
-        let fd: Int32
-        let unit: UInt32
-
-        var interfaceName: String {
-            guard unit > 0 else {
-                return "utun?"
-            }
-            return "utun\(unit - 1)"
-        }
-
-        var logDescription: String {
-            "fd=\(fd)/unit=\(unit)/if=\(interfaceName)"
-        }
-    }
-
-    private func utunFileDescriptorCandidates() -> [UtunFileDescriptorCandidate] {
-        var candidates: [UtunFileDescriptorCandidate] = []
-        for fd in Int32(0)...Int32(1024) {
-            if let unit = utunUnit(for: fd) {
-                candidates.append(UtunFileDescriptorCandidate(fd: fd, unit: unit))
-            }
-        }
-        return candidates
-    }
-
-    private func describeUtunFileDescriptorCandidates(_ candidates: [UtunFileDescriptorCandidate]) -> String {
-        if candidates.isEmpty {
-            return "none"
-        }
-        return candidates.map(\.logDescription).joined(separator: ", ")
-    }
-
-    private func utunUnit(for fd: Int32) -> UInt32? {
-        var ctlInfo = ctl_info()
-        withUnsafeMutablePointer(to: &ctlInfo.ctl_name) {
-            $0.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: $0.pointee)) {
-                _ = strcpy($0, "com.apple.net.utun_control")
-            }
-        }
-
-        var address = sockaddr_ctl()
-        var length = socklen_t(MemoryLayout.size(ofValue: address))
-        let peerResult = withUnsafeMutablePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                getpeername(fd, $0, &length)
-            }
-        }
-        guard peerResult == 0, address.sc_family == AF_SYSTEM else {
-            return nil
-        }
-        guard ioctl(fd, CTLIOCGINFO, &ctlInfo) == 0 else {
-            return nil
-        }
-        guard address.sc_id == ctlInfo.ctl_id else {
-            return nil
-        }
-        return address.sc_unit
     }
 
     private func startXRay(xrayConfig: Data, geoAssetsDirectory: String?) throws {
@@ -826,60 +745,6 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         return size.uint64Value
     }
 
-    private func resolveIPv4Addresses(for host: String) -> [String] {
-        if isIPv4Literal(host) {
-            return [host]
-        }
-        return resolveAddresses(for: host, family: AF_INET)
-    }
-
-    private func resolveIPv6Addresses(for host: String) -> [String] {
-        if isIPv6Literal(host) {
-            return [host]
-        }
-        return resolveAddresses(for: host, family: AF_INET6)
-    }
-
-    private func resolveAddresses(for host: String, family: Int32) -> [String] {
-        var hints = addrinfo(
-            ai_flags: 0,
-            ai_family: family,
-            ai_socktype: SOCK_STREAM,
-            ai_protocol: IPPROTO_TCP,
-            ai_addrlen: 0,
-            ai_canonname: nil,
-            ai_addr: nil,
-            ai_next: nil
-        )
-        var result: UnsafeMutablePointer<addrinfo>?
-        let status = getaddrinfo(host, nil, &hints, &result)
-        guard status == 0, let first = result else {
-            tunnelLog.warning("Failed to resolve \(host, privacy: .public): \(String(cString: gai_strerror(status)), privacy: .public)")
-            return []
-        }
-        defer { freeaddrinfo(first) }
-
-        var addresses: [String] = []
-        var pointer: UnsafeMutablePointer<addrinfo>? = first
-        while let current = pointer {
-            if current.pointee.ai_family == AF_INET {
-                var addr = current.pointee.ai_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
-                var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-                if inet_ntop(AF_INET, &addr, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil {
-                    addresses.append(String(cString: buffer))
-                }
-            } else if current.pointee.ai_family == AF_INET6 {
-                var addr = current.pointee.ai_addr.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { $0.pointee.sin6_addr }
-                var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
-                if inet_ntop(AF_INET6, &addr, &buffer, socklen_t(INET6_ADDRSTRLEN)) != nil {
-                    addresses.append(String(cString: buffer))
-                }
-            }
-            pointer = current.pointee.ai_next
-        }
-        return Array(Set(addresses)).sorted()
-    }
-
     private func isIPv4Literal(_ address: String) -> Bool {
         var addr = in_addr()
         return address.withCString { inet_pton(AF_INET, $0, &addr) } == 1
@@ -904,6 +769,11 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         lastTrafficLogDate = Date()
         let stats = Socks5Tunnel.stats
         rememberTunnelLog("Traffic \(context): upPackets=\(stats.up.packets) upBytes=\(stats.up.bytes) downPackets=\(stats.down.packets) downBytes=\(stats.down.bytes)")
+        runtimeQueue.async {
+            if let bridge = self.packetBridge?.statistics() {
+                rememberTunnelLog("Packet bridge: upPackets=\(bridge.upPackets) downPackets=\(bridge.downPackets) backpressureWaits=\(bridge.backpressureWaits) queuedBytes=\(bridge.queuedBytes) peakQueuedBytes=\(bridge.peakQueuedBytes) receiveBufferBytes=\(bridge.receiveBufferBytes)")
+            }
+        }
         tunnelLog.info("Traffic stats context=\(context, privacy: .public) upPackets=\(stats.up.packets, privacy: .public) upBytes=\(stats.up.bytes, privacy: .public) downPackets=\(stats.down.packets, privacy: .public) downBytes=\(stats.down.bytes, privacy: .public)")
     }
 }

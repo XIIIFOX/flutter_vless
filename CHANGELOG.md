@@ -2,9 +2,11 @@
 
 ### General
 
+* Extend mandatory desktop VPN protection, private diagnostics and local proxy authentication to macOS and Windows. Keep domain-based direct routing and document platform-specific subnet behavior.
+
 * iOS and Android: authenticate internal local proxies and their clients with native session credentials. VPN mode rejects incompatible extra proxy listeners; explicit proxy-only authentication/noauth remains separate.
 * Add explicit native capability checks for new security options, runtime checksum verification, and regression/runtime tests.
-* Native Xray/Tun2Socks artifacts retain their existing pinned versions; authentication uses already supported runtime features.
+* Native local authentication uses supported SOCKS/HTTP runtime features. macOS additionally requires the private-startup runtime bridge described below.
 
 * Added `getProviderDebugSnapshot()` across Android, iOS, macOS, and Windows,
   with bounded native diagnostics available after stop or failure.
@@ -66,37 +68,25 @@
 
 ### macOS
 
-* Updated Xray-core to `v26.7.28` and the SwiftPM/CocoaPods runtime tag and
-  checksum to `xray-macos-v26.7.28`.
-* Exposed bounded Packet Tunnel and proxy-only Xray diagnostics through the
-  shared Dart API.
+* Make Packet Tunnel traffic protection mandatory and retain capture routes and virtual DNS while native workers recover. Report `CONNECTED` only after provider forwarding is ready.
+* Protect system DNS through Xray without a physical resolver fallback. Capture and block IPv6 while forwarding remains IPv4-only; reject incompatible FakeDNS configurations.
+* Authenticate the managed loopback proxy with native session credentials. Reject all additional listeners in VPN mode and remove imported management APIs while preserving explicit proxy-only authentication and traffic counters.
+* Store VPN profiles as scoped Keychain persistent references and migrate legacy plaintext profiles transactionally. Serialize profile operations and disarm recovery before explicit stop.
+* Preserve domain bypass rules and translate IPv4 `bypassSubnets` into Xray direct rules below DNS/IPv6 protection. Reject live configuration replacement until the current session is explicitly stopped.
+* Use only the provider's validated packet-flow descriptor. Remove physical-interface reachability probes and replace raw native diagnostics with bounded private messages.
+* Restore owned proxy settings on stop; preserve changes made by another application.
+* Prepare macOS runtime revision `xray-macos-v26.7.28-r1`, adding private startup and asset-location bridges, pinned mobile build tooling, and the 128 KiB HTTP/2 upload scratch limit. The local archive must be published before distributing packages that use its hosted fallback.
 
 ### Windows
 
-* Resolved the outbound gateway through the Windows API instead of parsing
-  English `ipconfig` output.
-
-* Waited for the TUN IPv4 address to become usable before installing capture
-  routes, including when reconnecting after adapter recreation.
-
-* Captured IPv4 with two session-owned `/1` routes so physical interface metrics
-  cannot silently bypass the VPN; removed these routes on stop or setup failure.
-
-* Exposed the VPN Diagnostics button in the Windows example.
-
-* Bound Windows `direct` transports to the pre-tunnel network interface to prevent
-  domain bypass connections from looping back into the VPN.
-
-* Preserved domain routing, DNS settings, and outbound server ports when preparing
-  Xray configurations. SOCKS listener detection now uses JSON structure and is
-  independent of property order; occupied ports are replaced only on inbounds.
-* Used Xray's dedicated API listener without inserting duplicate routing blocks.
-* Joined failed service workers during stop and reflected service failure in
-  the Windows running status. Removed raw config fragments from endpoint errors.
-
-* Exposed thread-safe, bounded Xray/tun2socks diagnostics through the shared
-  Dart API.
-* Fixed the native registration header path for the federated Windows package.
+* Install mandatory Windows Filtering Platform protection before VPN setup. Keep it during native worker failure, recovery and application crashes; remove only this application's filters on explicit stop. A retained policy can be cleared by restarting the application as administrator and stopping VPN.
+* Block physical IPv4/DNS fallback and IPv6 outside the tunnel, including newly attached adapters. Route virtual DNS through the selected proxy and bootstrap transport endpoints before protection starts.
+* Authenticate the internal SOCKS proxy, bind outbound sockets to the available underlay, retry failed workers and require a private challenge-response through TUN, tun2socks and Xray before reporting `CONNECTED`.
+* Preserve domain routing and support IPv4 `bypassSubnets` as direct rules inside Xray, below mandatory DNS and IPv6 rules. Reject extra VPN proxy listeners, ambiguous configuration fields and unsupported IPv6 endpoints.
+* Launch bundled executables by absolute application-relative paths with explicit arguments, bounded output and owned child jobs. Remove CWD, PATH and AppData executable discovery and shell command construction.
+* Keep the VPN's Xray executable and configuration files in an unpredictable Administrators/System-owned directory. Require an elevated Xray token for its WFP exception and restrict DHCP permission to the Windows DHCP service. Keep proxy-only temporary files owner/System-only; remove configuration files after startup. Suppress raw worker output, imported log destinations and runtime debug environment overrides.
+* Serialize native operations, join outstanding work before plugin destruction, and restore the proxy preferences captured before the session.
+* Add policy, private-process/file, failure-transaction and local routing regression tests. Keep the VPN Diagnostics button available in the Windows example.
 
 ## 1.1.5
 

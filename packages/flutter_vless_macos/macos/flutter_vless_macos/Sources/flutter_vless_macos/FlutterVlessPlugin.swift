@@ -4,10 +4,14 @@
 import Foundation
 import FlutterMacOS
 import AppKit
+import SystemConfiguration
 import NetworkExtension
 import Combine
 
 import CXRay
+#if canImport(flutter_vless_macos_privacy)
+import flutter_vless_macos_privacy
+#endif
 
 import os
 import CFNetwork
@@ -24,7 +28,7 @@ import Darwin
 //
 // - Proxy-only mode:
 //   Runs Xray in the app process and configures macOS system proxy settings
-//   with `networksetup`. It is useful and fast, but it cannot capture UDP/QUIC
+//   through SystemConfiguration. It cannot capture UDP/QUIC
 //   and cannot force apps that ignore system proxy settings.
 //
 // - Packet Tunnel mode:
@@ -36,7 +40,7 @@ import Darwin
 // can work through a local proxy; it does not prove the Network Extension,
 // utun, DNS resolver, server host-route exclusion, or HEV path.
 
-private let pluginLog = Logger(
+private let pluginLog = NativePrivacyLogger(
     subsystem: Bundle.main.bundleIdentifier ?? "flutter_vless.Runner",
     category: "FlutterVlessPlugin"
 )
@@ -62,7 +66,8 @@ private final class PluginDebugStore {
             fileURL = nil
             return
         }
-        fileURL = containerURL.appendingPathComponent("flutter_vless_app_debug.log")
+        try? FileManager.default.removeItem(at: containerURL.appendingPathComponent("flutter_vless_app_debug.log"))
+        fileURL = containerURL.appendingPathComponent("flutter_vless_app_private_v2.log")
         try? "FlutterVless app debug log\n".write(to: fileURL!, atomically: true, encoding: .utf8)
     }
 
@@ -75,7 +80,10 @@ private final class PluginDebugStore {
         }
         if let handle = try? FileHandle(forWritingTo: fileURL) {
             defer { try? handle.close() }
-            try? handle.seekToEnd()
+            if let size = try? handle.seekToEnd(), size > 128 * 1024 {
+                try? handle.truncate(atOffset: 0)
+                try? handle.seek(toOffset: 0)
+            }
             if let data = "\(line)\n".data(using: .utf8) {
                 try? handle.write(contentsOf: data)
             }
@@ -94,9 +102,9 @@ private final class PluginDebugStore {
     }
 }
 
-private func pluginDebug(_ message: String) {
-    PluginDebugStore.shared.append(message)
-    pluginLog.info("\(message, privacy: .public)")
+private func pluginDebug(_ message: NativeDiagnosticMessage) {
+    PluginDebugStore.shared.append(message.text)
+    pluginLog.info(message)
 }
 
 /// Captures the system routing and resolver state from the app process.
@@ -139,7 +147,7 @@ private struct SystemNetworkDiagnostics {
                 output.append("--- \(name) ---")
                 output.append(run(executable: executable, arguments: arguments))
             }
-            pluginDebug(output.joined(separator: "\n"))
+            pluginDebug("System network snapshot omitted from private diagnostics")
         }
     }
 
@@ -224,419 +232,77 @@ private struct SystemNetworkDiagnostics {
     }
 }
 
-private struct AppNetworkProbe {
-    static func logProbe(reason: String) {
-        Task.detached(priority: .utility) {
-            pluginDebug("App direct network probe begin reason=\(reason)")
-            let interfaceNames = SystemNetworkDiagnostics.allInterfaceNames()
-            let defaultInterface = SystemNetworkDiagnostics.currentDefaultInterface()
-            let routeInterface = SystemNetworkDiagnostics.routeInterface(for: "1.1.1.1")
-            let activeUtuns = interfaceNames.filter { $0.hasPrefix("utun") }
-            pluginDebug("App direct network probe interfaces defaultIf=\(defaultInterface ?? "nil") routeIf1.1.1.1=\(routeInterface ?? "nil") activeUtun=\(activeUtuns.joined(separator: ",")) hasEn0=\(interfaceNames.contains("en0"))")
-            let httpIP = rawHTTPProbe(
-                name: "raw-http-ip-literal",
-                host: "1.1.1.1",
-                port: 80,
-                path: "/cdn-cgi/trace"
-            )
-            pluginDebug("App direct network probe result \(httpIP)")
-            if let routeInterface {
-                let boundRoute = rawHTTPProbe(
-                    name: "raw-http-ip-literal-bound-\(routeInterface)",
-                    host: "1.1.1.1",
-                    port: 80,
-                    path: "/cdn-cgi/trace",
-                    boundInterface: routeInterface
-                )
-                pluginDebug("App direct network probe result \(boundRoute)")
-            }
-            if interfaceNames.contains("en0"), routeInterface != "en0" {
-                let boundEn0 = rawHTTPProbe(
-                    name: "raw-http-ip-literal-bound-en0",
-                    host: "1.1.1.1",
-                    port: 80,
-                    path: "/cdn-cgi/trace",
-                    boundInterface: "en0"
-                )
-                pluginDebug("App direct network probe result \(boundEn0)")
-            }
-            let httpsDomain = await request(
-                name: "https-domain",
-                url: "https://google.com/generate_204"
-            )
-            pluginDebug("App direct network probe result \(httpsDomain)")
-        }
-    }
 
-    private static func rawHTTPProbe(
-        name: String,
-        host: String,
-        port: UInt16,
-        path: String,
-        boundInterface: String? = nil
-    ) -> String {
-        let fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
-        guard fd >= 0 else {
-            return "\(name) socket failed errno=\(errno) message=\(posixMessage(errno))"
-        }
-        defer { close(fd) }
-
-        var timeout = timeval(tv_sec: 6, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
-        var boundInterfaceDescription = ""
-        if let boundInterface {
-            var interfaceIndex = if_nametoindex(boundInterface)
-            guard interfaceIndex != 0 else {
-                return "\(name) bind-interface failed interface=\(boundInterface) errno=\(errno) message=\(posixMessage(errno))"
-            }
-            let bindResult = setsockopt(
-                fd,
-                IPPROTO_IP,
-                IP_BOUND_IF,
-                &interfaceIndex,
-                socklen_t(MemoryLayout<UInt32>.size)
-            )
-            guard bindResult == 0 else {
-                let err = errno
-                return "\(name) bind-interface failed interface=\(boundInterface)#\(interfaceIndex) errno=\(err) message=\(posixMessage(err))"
-            }
-            boundInterfaceDescription = " boundIf=\(boundInterface)#\(interfaceIndex)"
-        }
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = port.bigEndian
-        guard inet_pton(AF_INET, host, &address.sin_addr) == 1 else {
-            return "\(name) inet_pton failed host=\(host)"
-        }
-
-        let start = DispatchTime.now().uptimeNanoseconds
-        let connectResult = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        let connectElapsed = (DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-        guard connectResult == 0 else {
-            let err = errno
-            return "\(name) connect failed host=\(host):\(port)\(boundInterfaceDescription) errno=\(err) message=\(posixMessage(err)) delay=\(connectElapsed)ms"
-        }
-
-        let request = """
-        GET \(path) HTTP/1.1\r
-        Host: \(host)\r
-        User-Agent: flutter-vless-app-probe\r
-        Connection: close\r
-        \r
-
-        """
-        let requestBytes = Array(request.utf8)
-        let sent = requestBytes.withUnsafeBytes {
-            send(fd, $0.baseAddress, requestBytes.count, 0)
-        }
-        guard sent == requestBytes.count else {
-            let err = errno
-            return "\(name) send failed sent=\(sent)\(boundInterfaceDescription) errno=\(err) message=\(posixMessage(err)) connectDelay=\(connectElapsed)ms"
-        }
-
-        var buffer = [UInt8](repeating: 0, count: 512)
-        let bufferCount = buffer.count
-        let received = buffer.withUnsafeMutableBytes {
-            recv(fd, $0.baseAddress, bufferCount, 0)
-        }
-        let totalElapsed = (DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-        guard received > 0 else {
-            let err = errno
-            return "\(name) recv failed received=\(received)\(boundInterfaceDescription) errno=\(err) message=\(posixMessage(err)) connectDelay=\(connectElapsed)ms totalDelay=\(totalElapsed)ms"
-        }
-
-        let response = String(decoding: buffer.prefix(received), as: UTF8.self)
-        let firstLine = response.components(separatedBy: "\r\n").first ?? response
-        return "\(name) ok host=\(host):\(port)\(boundInterfaceDescription) bytes=\(received) firstLine=\(firstLine) connectDelay=\(connectElapsed)ms totalDelay=\(totalElapsed)ms"
-    }
-
-    private static func posixMessage(_ code: Int32) -> String {
-        guard let pointer = strerror(code) else {
-            return "unknown"
-        }
-        return String(cString: pointer)
-    }
-
-    private static func request(name: String, url: String) async -> String {
-        guard let probeURL = URL(string: url) else {
-            return "\(name) invalid-url \(url)"
-        }
-
-        var request = URLRequest(url: probeURL)
-        request.httpMethod = "GET"
-        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        request.timeoutInterval = 6
-
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 6
-        configuration.timeoutIntervalForResource = 6
-        configuration.waitsForConnectivity = false
-        configuration.connectionProxyDictionary = [:]
-
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-
-        let start = DispatchTime.now().uptimeNanoseconds
-        do {
-            let (data, response) = try await session.data(for: request)
-            let elapsed = (DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-            if let httpResponse = response as? HTTPURLResponse {
-                return "\(name) ok status=\(httpResponse.statusCode) bytes=\(data.count) delay=\(elapsed)ms url=\(url)"
-            }
-            return "\(name) ok non-http bytes=\(data.count) delay=\(elapsed)ms url=\(url)"
-        } catch {
-            let elapsed = (DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-            let nsError = error as NSError
-            return "\(name) failed domain=\(nsError.domain) code=\(nsError.code) message=\(nsError.localizedDescription) delay=\(elapsed)ms url=\(url)"
-        }
-    }
-}
-
-// MARK: - System Proxy Helper (macOS only)
-/// Wrapper around macOS `networksetup` for proxy-only mode.
-///
-/// This helper must never be used as a substitute for Packet Tunnel routing.
-/// macOS system proxy settings affect cooperative TCP clients only. They do not
-/// capture UDP/QUIC and do not guarantee that all apps use the proxy. Packet
-/// Tunnel mode clears system proxies before startup so the two modes do not
-/// mask each other's behavior during debugging.
 private struct SystemProxyHelper {
-    static func getNetworkServices() -> [String] {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/sbin/networksetup")
-        task.arguments = ["-listallnetworkservices"]
-        
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        
-        do {
-            try task.run()
-            task.waitUntilExit()
-            
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let output = String(data: data, encoding: .utf8) {
-                return output.components(separatedBy: .newlines)
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty && !$0.contains("*") && $0 != "An asterisk (*) denotes that a network service is disabled." }
-            }
-        } catch {
-            pluginLog.error("Error getting network services: \(error.localizedDescription, privacy: .public)")
+    private static let lock = NSLock()
+    private static var previous: [String: [String: Any]] = [:]
+    private static var installed: [String: [String: Any]] = [:]
+    private static func preferences() throws -> SCPreferences {
+        guard let preferences = SCPreferencesCreate(nil, "flutter_vless" as CFString, nil), SCPreferencesLock(preferences, true) else {
+            throw NSError(domain: "flutter_vless.proxy", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unable to lock system proxy preferences"])
         }
-        
-        return ["Wi-Fi", "Ethernet"] // Fallback
+        return preferences
     }
-
-    /// Parses the XRay config to find the proxy inbound port.
-    /// Prefers HTTP inbound (tag "http_proxy"), then falls back to SOCKS, then "in_proxy".
-    static func parseProxyPort(config: String) -> (httpPort: String?, socksPort: String?) {
+    static func setSystemProxy(config: String) throws {
         guard let data = config.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let inbounds = json["inbounds"] as? [[String: Any]] else {
-            return (nil, nil)
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw LocalProxyAccessError.malformedConfiguration }
+        lock.lock(); defer { lock.unlock() }
+        let prefs = try preferences(); defer { SCPreferencesUnlock(prefs) }
+        guard let set = SCNetworkSetCopyCurrent(prefs), let services = SCNetworkSetCopyServices(set) as? [SCNetworkService] else {
+            throw NSError(domain: "flutter_vless.proxy", code: 2, userInfo: [NSLocalizedDescriptionKey: "No network services available"])
         }
-        var httpPort: String? = nil
-        var socksPort: String? = nil
-        for inbound in inbounds {
-            let proto = inbound["protocol"] as? String ?? ""
-            let tag = inbound["tag"] as? String ?? ""
-            guard let port = inbound["port"] as? Int else { continue }
-            if proto == "http" || tag == "http_proxy" {
-                httpPort = String(port)
-            }
-            if proto == "socks" || tag == "in_proxy" || tag == "socks" {
-                socksPort = String(port)
-            }
-        }
-        return (httpPort, socksPort)
-    }
-
-    /// Extracts outbound addresses so proxy-only mode can bypass the proxy
-    /// server itself.
-    ///
-    /// Without this bypass, a system proxy configuration can accidentally make
-    /// Xray's own outbound connection try to reach the server through the local
-    /// proxy it is currently providing.
-    static func parseOutboundAddresses(config: String) -> [String] {
-        var addresses: [String] = []
-        guard let data = config.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return []
-        }
-        var rawAddresses: [String] = []
-        if let outbounds = json["outbounds"] as? [[String: Any]] {
-            for outbound in outbounds {
-                if let settings = outbound["settings"] as? [String: Any] {
-                    if let vnext = settings["vnext"] as? [[String: Any]] {
-                        for server in vnext {
-                            if let address = server["address"] as? String, !address.isEmpty {
-                                rawAddresses.append(address)
-                            }
-                        }
-                    }
-                    if let servers = settings["servers"] as? [[String: Any]] {
-                        for server in servers {
-                            if let address = server["address"] as? String, !address.isEmpty {
-                                rawAddresses.append(address)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if let outbound = json["outbound"] as? [String: Any] {
-            if let settings = outbound["settings"] as? [String: Any] {
-                if let vnext = settings["vnext"] as? [[String: Any]] {
-                    for server in vnext {
-                        if let address = server["address"] as? String, !address.isEmpty {
-                            rawAddresses.append(address)
-                        }
-                    }
-                }
-                if let servers = settings["servers"] as? [[String: Any]] {
-                    for server in servers {
-                        if let address = server["address"] as? String, !address.isEmpty {
-                            rawAddresses.append(address)
-                        }
-                    }
-                }
-            }
-        }
-        for addr in rawAddresses {
-            let resolved = resolveDomainToIPs(addr)
-            for r in resolved {
-                if !addresses.contains(r) {
-                    addresses.append(r)
-                }
-            }
-        }
-        return addresses
-    }
-
-    /// Resolves domains for proxy bypass lists.
-    ///
-    /// The original domain is kept in the returned list as a fallback because
-    /// `networksetup -setproxybypassdomains` accepts both hostnames and IPs, and
-    /// DNS can change between setup time and connection time.
-    static func resolveDomainToIPs(_ domain: String) -> [String] {
-        var hints = addrinfo()
-        hints.ai_family = AF_UNSPEC
-        hints.ai_socktype = SOCK_STREAM
-        
-        var res: UnsafeMutablePointer<addrinfo>? = nil
-        let status = getaddrinfo(domain, nil, &hints, &res)
-        guard status == 0, let firstAddr = res else {
-            return [domain]
-        }
-        
-        var ips: [String] = []
-        var ptr: UnsafeMutablePointer<addrinfo>? = firstAddr
-        while ptr != nil {
-            guard let info = ptr?.pointee else { break }
-            var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            if getnameinfo(info.ai_addr, info.ai_addrlen, &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST) == 0 {
-                let ip = String(cString: hostname)
-                if !ip.isEmpty {
-                    ips.append(ip)
-                }
-            }
-            ptr = info.ai_next
-        }
-        freeaddrinfo(res)
-        
-        var result = Array(Set(ips))
-        if !result.contains(domain) {
-            result.append(domain)
-        }
-        return result
-    }
-
-    /// Configures macOS system proxy settings (HTTP + HTTPS + SOCKS) for all network services.
-    ///
-    /// ОЧЕНЬ ВАЖНЫЙ НЮАНС (ПРОБЛЕМА QUIC / UDP):
-    /// Системные прокси в macOS (networksetup) физически не поддерживают перехват UDP-трафика.
-    /// Современные сайты (например, Google, YouTube, ChatGPT, 2ip.ru) по умолчанию используют
-    /// протокол HTTP/3 (QUIC), который работает поверх UDP. 
-    /// Если браузер отправляет запрос по QUIC, он ПОЛНОСТЬЮ ИГНОРИРУЕТ системный прокси и идёт напрямую!
-    /// В результате пользователь видит свой реальный IP-адрес.
-    /// 
-    /// Единственный способ перехватить весь трафик (включая UDP и QUIC) на macOS/iOS — 
-    /// использовать полноценный VPN-туннель (PacketTunnelProvider / NetworkExtension), 
-    /// а не Proxy-Only режим. Для локального тестирования VPN-режима необходим платный
-    /// Apple Developer Account. В Proxy-Only режиме пользователи могут отключать QUIC
-    /// в настройках браузера (например, chrome://flags/#enable-quic), чтобы трафик шел через TCP (Proxy).
-    static func setSystemProxy(config: String) {
-        let services = getNetworkServices()
-        let ports = parseProxyPort(config: config)
-
-        var bypassDomains = ["localhost", "127.0.0.1", "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "*.local"]
-        let outbounds = parseOutboundAddresses(config: config)
-        for addr in outbounds {
-            if !bypassDomains.contains(addr) {
-                bypassDomains.append(addr)
-            }
-        }
-
+        var changes: [String: [String: Any]] = [:]
         for service in services {
-            // Set HTTP proxy (most apps check this)
-            if let httpPort = ports.httpPort {
-                runNetworkSetup(["-setwebproxy", service, "127.0.0.1", httpPort])
-                runNetworkSetup(["-setwebproxystate", service, "on"])
-                // Set HTTPS proxy (same HTTP proxy handles CONNECT for HTTPS)
-                runNetworkSetup(["-setsecurewebproxy", service, "127.0.0.1", httpPort])
-                runNetworkSetup(["-setsecurewebproxystate", service, "on"])
+            guard let proto = SCNetworkServiceCopyProtocol(service, kSCNetworkProtocolTypeProxies),
+                  let id = SCNetworkServiceGetServiceID(service) as String? else { continue }
+            let current = SCNetworkProtocolGetConfiguration(proto) as? [String: Any] ?? [:]
+            var next = current
+            next["ProxyAutoConfigEnable"] = 0; next["ProxyAutoDiscoveryEnable"] = 0
+            next["HTTPEnable"] = 0; next["HTTPSEnable"] = 0; next["SOCKSEnable"] = 0
+            var hasProxy = false
+            for inbound in json["inbounds"] as? [[String: Any]] ?? [] {
+                guard let port = inbound["port"] as? Int, (1...65535).contains(port),
+                      let kind = inbound["protocol"] as? String else { continue }
+                let keys = kind == "socks" ? ["SOCKS"] : (kind == "http" ? ["HTTP", "HTTPS"] : [])
+                for key in keys { next[key + "Enable"] = 1; next[key + "Proxy"] = "127.0.0.1"; next[key + "Port"] = port; hasProxy = true }
             }
-
-            // Set SOCKS proxy (for apps that support SOCKS5)
-            if let socksPort = ports.socksPort {
-                runNetworkSetup(["-setsocksfirewallproxy", service, "127.0.0.1", socksPort])
-                runNetworkSetup(["-setsocksfirewallproxystate", service, "on"])
+            guard hasProxy else { throw LocalProxyAccessError.incompatibleInbounds }
+            if previous[id] == nil { previous[id] = current }
+            guard SCNetworkProtocolSetConfiguration(proto, next as CFDictionary) else {
+                throw NSError(domain: "flutter_vless.proxy", code: 3, userInfo: [NSLocalizedDescriptionKey: "Unable to configure system proxy"])
             }
-
-            // Set bypass domains
-            runNetworkSetup(["-setproxybypassdomains", service] + bypassDomains)
+            changes[id] = next
         }
-        pluginLog.info("System proxy set: HTTP=\(ports.httpPort ?? "none", privacy: .public) SOCKS=\(ports.socksPort ?? "none", privacy: .public) services=\(services.count, privacy: .public)")
+        guard !changes.isEmpty, SCPreferencesCommitChanges(prefs), SCPreferencesApplyChanges(prefs) else {
+            // Keep ownership information if commit succeeded but apply failed.
+            installed.merge(changes) { _, new in new }
+            throw NSError(domain: "flutter_vless.proxy", code: 4, userInfo: [NSLocalizedDescriptionKey: "Unable to apply system proxy preferences"])
+        }
+        installed.merge(changes) { _, new in new }
     }
-
-    /// Clears ALL system proxy settings (HTTP + HTTPS + SOCKS).
     static func clearSystemProxy() {
-        let services = getNetworkServices()
+        lock.lock(); defer { lock.unlock() }
+        guard !installed.isEmpty, let prefs = try? preferences() else { return }
+        defer { SCPreferencesUnlock(prefs) }
+        guard let services = SCNetworkServiceCopyAll(prefs) as? [SCNetworkService] else { return }
+        var restored: [String] = []
         for service in services {
-            runNetworkSetup(["-setwebproxystate", service, "off"])
-            runNetworkSetup(["-setsecurewebproxystate", service, "off"])
-            runNetworkSetup(["-setsocksfirewallproxystate", service, "off"])
+            guard let id = SCNetworkServiceGetServiceID(service) as String?, let owned = installed[id], let original = previous[id],
+                  let proto = SCNetworkServiceCopyProtocol(service, kSCNetworkProtocolTypeProxies) else { continue }
+            // A user/another application may have taken over the proxy meanwhile.
+            guard let current = SCNetworkProtocolGetConfiguration(proto) as? [String: Any],
+                  NSDictionary(dictionary: owned).isEqual(to: current) else {
+                installed.removeValue(forKey: id); previous.removeValue(forKey: id)
+                continue
+            }
+            if SCNetworkProtocolSetConfiguration(proto, original as CFDictionary) { restored.append(id) }
         }
-        pluginLog.info("System proxy cleared for \(services.count, privacy: .public) services")
-    }
-
-    /// Helper to run networksetup commands.
-    private static func runNetworkSetup(_ arguments: [String]) {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/sbin/networksetup")
-        task.arguments = arguments
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
-        task.waitUntilExit()
+        guard SCPreferencesCommitChanges(prefs), SCPreferencesApplyChanges(prefs) else { return }
+        for id in restored { installed.removeValue(forKey: id); previous.removeValue(forKey: id) }
     }
 }
 
-// MARK: - Core Classes
 
-/// Normalizes runtime JSON before the embedded Xray 26.x core sees it.
-///
-/// This is intentionally small and conservative: it keeps user-owned config
-/// values intact, but removes the TLS `allowInsecure` field that Xray removed,
-/// and converts common exported transport aliases to the canonical keys used by
-/// Xray's config structs.
 private func normalizeXrayRuntimeConfig(_ value: Any) -> Any {
     if var map = value as? [String: Any] {
         func moveAlias(_ from: String, _ to: String) {
@@ -676,8 +342,8 @@ private final class PluginXRayLogger: NSObject, XRayLoggerProtocol {
 
     func logInput(_ s: String?) {
         if let message = s {
-            store.append(source: "xray", message: message)
-            pluginLog.info("XRay app runtime: \(message, privacy: .public)")
+            store.append(source: "xray", message: NativeLogPrivacy.runtimeEvent(message).text)
+            pluginLog.info(NativeLogPrivacy.runtimeEvent(message))
         }
     }
 
@@ -689,8 +355,8 @@ private final class PluginXRayLogger: NSObject, XRayLoggerProtocol {
         store.snapshot()
     }
 
-    func record(source: String, message: String) {
-        store.append(source: source, message: message)
+    func record(source: String, message: NativeDiagnosticMessage) {
+        store.append(source: source, message: message.text)
     }
 }
 
@@ -703,20 +369,22 @@ private final class PluginXRayLogger: NSObject, XRayLoggerProtocol {
 private actor ServerDelayRunner {
     private let logger = PluginXRayLogger()
 
-    func measure(config: String, url: String) async -> Int64 {
+    func measure(config: String, url: String, geoAssetsDirectory: String? = nil) async -> Int64 {
         do {
             guard URL(string: url) != nil else {
                 throw NSError(domain: "FlutterVless", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid probe URL"])
             }
 
             let proxyPort = Self.findFreePort()
-            let delayConfig = try Self.buildDelayConfigData(config: config, proxyPort: proxyPort)
+            let credentials = try LocalProxyCredentials.generate()
+            let delayConfig = try Self.buildDelayConfigData(config: config, proxyPort: proxyPort, credentials: credentials)
 
             XRaySetMemoryLimit()
+            try configureXrayAssetLocation(geoAssetsDirectory)
             var startError: NSError?
-            let started = XRayStart(delayConfig, logger, &startError)
+            let started = XRayStartPrivate(delayConfig, logger, &startError)
             guard started else {
-                throw startError ?? NSError(domain: "FlutterVless", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to start XRay delay probe"])
+                throw startError.map { NativeLogPrivacy.operationError($0) } ?? NSError(domain: "FlutterVless", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to start XRay delay probe"])
             }
             defer {
                 XRayStop()
@@ -725,101 +393,47 @@ private actor ServerDelayRunner {
 
             pluginLog.info("Started XRay delay probe on HTTP proxy port \(proxyPort, privacy: .public)")
             try await Task.sleep(nanoseconds: 1_000_000_000)
-            return try await Self.measureURL(url, proxyPort: proxyPort)
+            return try await Self.measureURL(url, proxyPort: proxyPort, credentials: credentials)
         } catch {
-            pluginLog.error("Server delay probe failed: \(error.localizedDescription, privacy: .public)")
+            pluginLog.error("Server delay probe failed: \(NativeLogPrivacy.operationError(error).localizedDescription, privacy: .public)")
             return -1
         }
     }
 
-    /// Builds a temporary HTTP-proxy config for delay measurement.
-    ///
-    /// We rewrite only the local inbound used by the probe. Outbound protocol
-    /// details are preserved so the delay test exercises the same server and
-    /// credentials as the real start request.
-    private static func buildDelayConfigData(config: String, proxyPort: Int) throws -> Data {
-        guard
-            let data = config.data(using: .utf8),
-            var json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any]
-        else {
+    private static func buildDelayConfigData(config: String, proxyPort: Int, credentials: LocalProxyCredentials) throws -> Data {
+        guard let data = config.data(using: .utf8) else {
             throw NSError(domain: "FlutterVless", code: 3, userInfo: [NSLocalizedDescriptionKey: "Invalid XRay config JSON"])
         }
 
-        json = normalizeXrayRuntimeConfig(json) as? [String: Any] ?? json
+        var json = try LocalProxyAccessPolicy.normalizedConfig(configData: data)
 
-        var inbounds = json["inbounds"] as? [[String: Any]] ?? []
-        var hasProxyInbound = false
-
-        for index in inbounds.indices {
-            guard
-                inbounds[index]["protocol"] as? String == "http" ||
-                inbounds[index]["protocol"] as? String == "socks"
-            else {
-                continue
-            }
-            inbounds[index]["protocol"] = "http"
-            inbounds[index]["port"] = proxyPort
-            inbounds[index]["listen"] = "127.0.0.1"
-            inbounds[index]["settings"] = [:]
-            hasProxyInbound = true
-            break
+        guard XrayPrivacyConfig.apply(to: &json) else {
+            throw NSError(domain: "FlutterVless", code: 13, userInfo: [NSLocalizedDescriptionKey: "Invalid private Xray configuration"])
         }
 
-        if !hasProxyInbound {
-            inbounds.append([
-                "tag": "socks",
-                "port": proxyPort,
-                "listen": "127.0.0.1",
-                "protocol": "http",
-                "settings": [:]
-            ])
+        // A probe owns one listener. Reject extra user proxy listeners before
+        // replacing the selected inbound, preserving its routing tag.
+        let inbounds = json["inbounds"] as? [[String: Any]] ?? []
+        let proxyInbounds = inbounds.filter {
+            ["http", "socks"].contains(($0["protocol"] as? String ?? "").lowercased())
         }
-
-        if var log = json["log"] as? [String: Any] {
-            log["access"] = ""
-            log["error"] = ""
-            log["dnsLog"] = false
-            json["log"] = log
+        guard proxyInbounds.count <= 1,
+              inbounds.count == proxyInbounds.count else {
+            throw NSError(domain: "FlutterVless", code: 14,
+                userInfo: [NSLocalizedDescriptionKey: "Delay probes require at most one local proxy inbound"])
         }
-
-        json["inbounds"] = inbounds
+        json["inbounds"] = [[
+            "tag": proxyInbounds.first?["tag"] as? String ?? "in_proxy",
+            "port": proxyPort, "listen": "127.0.0.1", "protocol": "http",
+            "settings": ["accounts": [["user": credentials.username, "pass": credentials.password]]]
+        ]]
         return try JSONSerialization.data(withJSONObject: json, options: [])
     }
 
-    private static func measureURL(_ url: String, proxyPort: Int) async throws -> Int64 {
-        guard let probeURL = URL(string: url) else {
-            throw NSError(domain: "FlutterVless", code: 4, userInfo: [NSLocalizedDescriptionKey: "Invalid probe URL"])
-        }
-
-        var request = URLRequest(url: probeURL)
-        request.httpMethod = "GET"
-        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        request.timeoutInterval = 5
-
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 5
-        configuration.timeoutIntervalForResource = 5
-        configuration.connectionProxyDictionary = [
-            kCFNetworkProxiesHTTPEnable as String: true,
-            kCFNetworkProxiesHTTPProxy as String: "127.0.0.1",
-            kCFNetworkProxiesHTTPPort as String: proxyPort,
-            "HTTPSEnable": true,
-            "HTTPSProxy": "127.0.0.1",
-            "HTTPSPort": proxyPort
-        ]
-
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-
-        let start = DispatchTime.now().uptimeNanoseconds
-        let (_, response) = try await session.data(for: request)
-        let elapsed = (DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-        if let httpResponse = response as? HTTPURLResponse {
-            pluginLog.info("Server delay probe response=\(httpResponse.statusCode, privacy: .public) delay=\(elapsed, privacy: .public)ms")
-        } else {
-            pluginLog.info("Server delay probe delay=\(elapsed, privacy: .public)ms")
-        }
-        return Int64(elapsed)
+    private static func measureURL(_ url: String, proxyPort: Int,
+                                   credentials: LocalProxyCredentials) async throws -> Int64 {
+        guard let probeURL = URL(string: url) else { throw URLError(.badURL) }
+        return try await LocalHTTPProxyClient(port: proxyPort, credentials: credentials).measure(url: probeURL)
     }
 
     private static func findFreePort() -> Int {
@@ -862,100 +476,104 @@ private actor ServerDelayRunner {
     }
 }
 
-/// App-process proxy-only runtime.
-///
-/// Proxy-only is valuable for fast local checks and for users who explicitly
-/// want system proxy behavior, but it has known limits:
-///
-/// - it cannot capture UDP/QUIC;
-/// - browsers may bypass it for HTTP/3 unless QUIC is disabled or blocked;
-/// - stale proxy settings can break all network access if not cleaned up.
-///
-/// For that reason cleanup happens on normal stop, app termination, and signal
-/// handlers. Packet Tunnel mode always stops proxy-only mode before saving or
-/// starting the VPN profile.
 private final class ProxyOnlyRunner {
     private let logger = PluginXRayLogger()
     private(set) var isRunning = false
     private(set) var connectedDate: Date?
-    /// Tracks total bytes uploaded since last start.
-    private(set) var totalUpload: Int64 = 0
-    /// Tracks total bytes downloaded since last start.
-    private(set) var totalDownload: Int64 = 0
+    private var delayEndpoint: (protocolName: String, port: Int, credentials: LocalProxyCredentials?)?
 
-    func start(configData: Data, configString: String) throws {
+    func start(configData: Data, geoAssetsDirectory: String?) throws {
+        let preparedConfig = try Self.buildProxyOnlyConfigData(configData: configData)
+        let endpoint = try Self.findDelayEndpoint(preparedConfig)
         if isRunning {
             stop()
         }
 
         logger.reset()
         do {
-            let preparedConfig = try Self.buildProxyOnlyConfigData(configData: configData)
             XRaySetMemoryLimit()
+            try configureXrayAssetLocation(geoAssetsDirectory)
             var startError: NSError?
-            let started = XRayStart(preparedConfig, logger, &startError)
+            let started = XRayStartPrivate(preparedConfig, logger, &startError)
             guard started else {
                 throw startError ?? NSError(domain: "FlutterVless", code: 10, userInfo: [NSLocalizedDescriptionKey: "Failed to start XRay proxy-only mode"])
             }
 
-            // IMPORTANT: pass preparedConfig (not original configString) so setSystemProxy
-            // can see the HTTP inbound that buildProxyOnlyConfigData added.
-            let preparedConfigString = String(data: preparedConfig, encoding: .utf8) ?? configString
-            SystemProxyHelper.setSystemProxy(config: preparedConfigString)
-
+            do { try SystemProxyHelper.setSystemProxy(config: String(decoding: preparedConfig, as: UTF8.self)) }
+            catch { SystemProxyHelper.clearSystemProxy(); XRayStop(); throw error }
             isRunning = true
+            delayEndpoint = endpoint
             connectedDate = Date()
-            totalUpload = 0
-            totalDownload = 0
             pluginLog.info("Started XRay proxy-only mode configBytes=\(preparedConfig.count, privacy: .public)")
         } catch {
-            logger.record(source: "runtime", message: "Proxy-only start failed: \(error.localizedDescription)")
-            throw error
+            logger.record(source: "runtime", message: "Proxy-only start failed: \(NativeLogPrivacy.operationError(error).localizedDescription)")
+            throw NativeLogPrivacy.operationError(error)
         }
     }
 
     func stop() {
-        // Always clear system proxy first — even if isRunning is somehow false,
-        // this guarantees we never leave a dead proxy configured.
+        // Retry pending restoration even after a failed startup or earlier stop.
         SystemProxyHelper.clearSystemProxy()
         guard isRunning else {
             return
         }
         XRayStop()
         isRunning = false
+        delayEndpoint = nil
         connectedDate = nil
-        totalUpload = 0
-        totalDownload = 0
         pluginLog.info("Stopped XRay proxy-only mode")
     }
 
-    /// Unconditional emergency cleanup — called when the process is about to exit.
-    /// Does NOT check `isRunning` because the app might crash at any time.
-    /// 
-    /// ВАЖНО: Если приложение завершится некорректно (краш или принудительная остановка в Xcode)
-    /// и системные настройки прокси не будут очищены, на Mac полностью пропадет интернет!
-    /// (так как macOS будет пытаться отправлять весь трафик на выключенный локальный порт XRay).
-    func forceCleanup() {
-        SystemProxyHelper.clearSystemProxy()
-        XRayStop()
-        isRunning = false
-        connectedDate = nil
-        pluginLog.info("Force cleanup: cleared system proxy and stopped XRay")
+    func measureConnectedDelay(url: String) async -> Int64 {
+        guard isRunning, let endpoint = delayEndpoint, let url = URL(string: url) else { return -1 }
+        if endpoint.protocolName == "http" {
+            return (try? await LocalHTTPProxyClient(port: endpoint.port, credentials: endpoint.credentials).measure(url: url)) ?? -1
+        }
+        return await withCheckedContinuation { continuation in
+            LocalProxyDelayClient.measure(url: url, port: endpoint.port, credentials: endpoint.credentials) {
+                continuation.resume(returning: $0)
+            }
+        }
     }
 
-    func measureConnectedDelay(url: String) -> Int64 {
-        guard isRunning else {
-            return -1
+    private static func findDelayEndpoint(_ data: Data) throws -> (protocolName: String, port: Int, credentials: LocalProxyCredentials?)? {
+        let json = try LocalProxyAccessPolicy.normalizedConfig(configData: data)
+        for inbound in json["inbounds"] as? [[String: Any]] ?? [] {
+            guard let proto = inbound["protocol"] as? String, ["socks", "http"].contains(proto),
+                  let port = inbound["port"] as? Int else { continue }
+            let settings = inbound["settings"] as? [String: Any] ?? [:]
+            let accounts = settings["accounts"] as? [[String: Any]] ?? settings["users"] as? [[String: Any]] ?? []
+            let auth = settings["auth"] as? String ?? "noauth"
+            guard proto == "http" || ["noauth", "password"].contains(auth) else {
+                throw LocalProxyAccessError.invalidCredentials
+            }
+            var credentials: LocalProxyCredentials?
+            if proto == "http" && !accounts.isEmpty || proto == "socks" && auth == "password" {
+                guard let account = accounts.first, let user = account["user"] as? String,
+                      let pass = account["pass"] as? String else { throw LocalProxyAccessError.invalidCredentials }
+                credentials = try LocalProxyCredentials(username: user, password: pass)
+            }
+            return (proto, port, credentials)
         }
-        var error: NSError?
-        var delay: Int64 = -1
-        XRayMeasureDelay(url, &delay, &error)
-        if let error {
-            pluginLog.error("Proxy-only connected delay failed: \(error.localizedDescription, privacy: .public)")
-            return -1
-        }
-        return delay
+        return nil
     }
+
+    private(set) var totalUpload: Int64 = 0
+    private(set) var totalDownload: Int64 = 0
+    func queryTrafficStats() -> (upload: Int64, download: Int64) {
+        guard isRunning else { return (0, 0) }
+        let raw = XRayQueryStats("")
+        var up: Int64 = 0, down: Int64 = 0
+        for line in raw.components(separatedBy: "\n") {
+            guard let last = line.components(separatedBy: ">>>").last,
+                  let value = Int64(last.trimmingCharacters(in: .whitespaces)), value >= 0 else { continue }
+            if line.contains("uplink"), value <= Int64.max - up { up += value }
+            if line.contains("downlink"), value <= Int64.max - down { down += value }
+        }
+        totalUpload = up; totalDownload = down
+        return (up, down)
+    }
+    func forceCleanup() { stop() }
 
     func debugSnapshot() -> String {
         logger.snapshot()
@@ -965,182 +583,36 @@ private final class ProxyOnlyRunner {
         logger.reset()
     }
 
-    /// Queries real traffic stats via XRay stats gRPC API.
-    func queryTrafficStats() -> (upload: Int64, download: Int64) {
-        guard isRunning else { return (0, 0) }
-        let raw = XRayQueryStats("") ?? ""
-        guard !raw.isEmpty else { return (totalUpload, totalDownload) }
-        var up: Int64 = 0
-        var down: Int64 = 0
-        for line in raw.components(separatedBy: "\n") {
-            let parts = line.components(separatedBy: ">>>")
-            guard parts.count >= 2, let value = Int64(parts.last!.trimmingCharacters(in: .whitespaces)) else { continue }
-            if line.contains("uplink") { up += value }
-            else if line.contains("downlink") { down += value }
-        }
-        totalUpload = up
-        totalDownload = down
-        return (up, down)
-    }
+    fileprivate static func buildProxyOnlyConfigData(configData: Data) throws -> Data {
+        var json = try LocalProxyAccessPolicy.normalizedConfig(configData: configData)
 
-    /// Normalizes a config for app-process proxy-only mode.
-    ///
-    /// This is separate from `TunnelXrayConfigPreparer` because proxy-only has
-    /// different constraints:
-    ///
-    /// - it needs an HTTP inbound for macOS system web/secure-web proxy fields;
-    /// - it should keep a SOCKS inbound for apps that support SOCKS;
-    /// - it injects Xray stats API plumbing for local traffic counters;
-    /// - it does not install utun routes or NetworkExtension DNS settings.
-    private static func buildProxyOnlyConfigData(configData: Data) throws -> Data {
-        guard var json = try JSONSerialization.jsonObject(with: configData, options: []) as? [String: Any] else {
-            throw NSError(domain: "FlutterVless", code: 11, userInfo: [NSLocalizedDescriptionKey: "Invalid XRay config JSON"])
+        guard XrayPrivacyConfig.apply(to: &json) else {
+            throw NSError(domain: "FlutterVless", code: 13, userInfo: [NSLocalizedDescriptionKey: "Invalid private Xray configuration"])
         }
 
-        json = normalizeXrayRuntimeConfig(json) as? [String: Any] ?? json
-
-        if var log = json["log"] as? [String: Any] {
-            log["access"] = ""
-            log["error"] = ""
-            log["dnsLog"] = false
-            json["log"] = log
-        } else {
-            json["log"] = ["access": "", "error": "", "dnsLog": false, "loglevel": "warning"]
-        }
-
-        // Ensure stats are enabled for traffic tracking
-        if json["stats"] == nil {
-            json["stats"] = [String: Any]()
-        }
-
-        // Ensure policy.system.statsOutboundUplink/Downlink are enabled
-        var policy = json["policy"] as? [String: Any] ?? [:]
-        var system = policy["system"] as? [String: Any] ?? [:]
-        system["statsOutboundUplink"] = true
-        system["statsOutboundDownlink"] = true
-        policy["system"] = system
-        json["policy"] = policy
-
-        // Ensure we have both HTTP and SOCKS inbounds for maximum compatibility.
-        var inbounds = json["inbounds"] as? [[String: Any]] ?? []
-        
-        // Check if HTTP inbound exists
-        let hasHTTP = inbounds.contains { ($0["protocol"] as? String) == "http" }
-        // Check if SOCKS inbound exists
-        let hasSOCKS = inbounds.contains {
-            let proto = $0["protocol"] as? String
-            return proto == "socks"
-        }
-
-        // If the config has an "in_proxy" tag with socks/http, use it.
-        // Otherwise add our own inbounds.
-        if !hasHTTP {
-            // Find a free port for HTTP (use SOCKS port + 1 if SOCKS exists)
-            let httpPort: Int
-            if let existingSOCKS = inbounds.first(where: { ($0["protocol"] as? String) == "socks" }),
-               let socksPort = existingSOCKS["port"] as? Int {
-                httpPort = socksPort + 1
-            } else {
-                httpPort = 10809
-            }
-            
-            // ВАЖНО: Мы добавляем HTTP Inbound, так как системные прокси macOS лучше работают
-            // с HTTP-прокси (особенно для HTTPS CONNECT запросов). 
-            // Также мы ОБЯЗАТЕЛЬНО включаем 'sniffing', чтобы XRay мог извлекать доменные имена
-            // (SNI) из трафика. Без sniffing правила маршрутизации по доменам (routing -> domain)
-            // работать не будут, и трафик может пойти напрямую.
-            inbounds.append([
-                "tag": "http_proxy",
-                "listen": "127.0.0.1",
-                "port": httpPort,
-                "protocol": "http",
-                "settings": ["allowTransparent": false],
-                "sniffing": ["enabled": true, "destOverride": ["http", "tls", "quic"]]
-            ])
-        }
-
-        if !hasSOCKS && !inbounds.contains(where: { ($0["tag"] as? String) == "in_proxy" }) {
-            inbounds.append([
-                "tag": "socks",
-                "listen": "127.0.0.1",
-                "port": 10808,
-                "protocol": "socks",
-                "settings": ["auth": "noauth", "udp": true]
-            ])
-        }
-
-        json["inbounds"] = inbounds
-
-        // Inject XRay API service (gRPC on 127.0.0.1:10085) for stats queries.
-        // Only add if not already present.
-        let hasAPI = (json["api"] as? [String: Any]) != nil
-        if !hasAPI {
-            json["api"] = [
-                "tag": "api",
-                "services": ["StatsService"]
+        if json["inbounds"] as? [[String: Any]] == nil {
+            json["inbounds"] = [
+                [
+                    "tag": "socks",
+                    "listen": "127.0.0.1",
+                    "port": 10807,
+                    "protocol": "socks",
+                    "settings": ["auth": "noauth", "udp": true]
+                ]
             ]
-            // Add routing rule to direct API traffic to the API inbound
-            var routing = json["routing"] as? [String: Any] ?? ["domainStrategy": "AsIs"]
-            var rules = routing["rules"] as? [[String: Any]] ?? []
-            // Prepend the API rule so it takes priority
-            let apiRule: [String: Any] = [
-                "type": "field",
-                "inboundTag": ["api"],
-                "outboundTag": "api"
-            ]
-            rules.insert(apiRule, at: 0)
-            routing["rules"] = rules
-            json["routing"] = routing
-
-            // Add the API inbound listener on 10085
-            inbounds.append([
-                "tag": "api",
-                "listen": "127.0.0.1",
-                "port": 10085,
-                "protocol": "dokodemo-door",
-                "settings": ["address": "127.0.0.1"]
-            ])
-            json["inbounds"] = inbounds
-
-            // ВАЖНО: Если мы добавили правило маршрутизации с `outboundTag: "api"`,
-            // мы ОБЯЗАНЫ добавить outbound с тегом "api" в конфигурацию!
-            // Если XRay встретит правило маршрутизации, ссылающееся на несуществующий outbound,
-            // его внутренний роутер (dispatcher) может начать сбрасывать весь трафик.
-            // Если XRay начнет сбрасывать (drop) TCP-соединения, браузеры (Chrome, Safari)
-            // решат, что прокси "мертв", и автоматически начнут слать трафик напрямую (fallback to direct).
-            var outbounds = json["outbounds"] as? [[String: Any]] ?? []
-            if !outbounds.contains(where: { ($0["tag"] as? String) == "api" }) {
-                outbounds.append([
-                    "tag": "api",
-                    "protocol": "freedom",
-                    "settings": [:]
-                ])
-                json["outbounds"] = outbounds
-            }
         }
 
-        return try JSONSerialization.data(withJSONObject: json, options: [])
+        let prepared = try JSONSerialization.data(withJSONObject: json, options: [])
+        _ = try findDelayEndpoint(prepared)
+        return prepared
     }
 }
 
-/// Flutter-facing macOS plugin implementation.
-///
-/// Responsibilities:
-///
-/// - MethodChannel dispatch for initialize/start/stop/delay/debug calls.
-/// - EventChannel status stream for UI duration/speed/counter updates.
-/// - App-process proxy-only lifecycle.
-/// - Packet Tunnel profile management through `PacketTunnelManager`.
-/// - Repeated provider/debug polling while the VPN is active.
-///
-/// The status stream is intentionally optimistic when `startVPNTunnel` returns:
-/// the UI can show "connecting/connected" quickly, but the provider debug
-/// snapshot remains the source of truth for whether DNS, server routes, Xray,
-/// HEV, and real HTTPS all worked.
 public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
     private var packetTunnelManager: PacketTunnelManager? = nil
     private let serverDelayRunner = ServerDelayRunner()
+    private let commands = NativeOperationQueue()
     private let proxyOnlyRunner = ProxyOnlyRunner()
 
     private var timer: Timer?
@@ -1265,19 +737,19 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             }
 
             if let status = self.packetTunnelManager?.status,
-               status == .invalid || status == .disconnected {
+               status == .invalid || status == .disconnected, self.packetTunnelManager?.isRecoveryEnabled != true {
                 pluginDebug("Packet tunnel is no longer active while polling status=\(status.rawValue)")
                 self.stopTimer(reason: "vpn-status-\(status.rawValue)")
                 return
             }
             if self.packetTunnelManager?.status == .connected {
-                self.logAppNetworkProbe(reason: "timer-connected")
             }
 
             let elapsed = Date().timeIntervalSince(self.packetTunnelManager?.connectedDate ?? Date())
             let seconds = Int(elapsed)
             self.emitStatus(duration: seconds, state: self.currentWireState(), reason: "timer-vpn")
             Task{
+                await self.packetTunnelManager?.refreshForwardingState()
                 do{
                     let response =  try await self.packetTunnelManager?.sendProviderMessage(data: "xray_traffic".data(using: .utf8)!)
                     if response != nil{
@@ -1343,13 +815,19 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         return Int(Date().timeIntervalSince(packetTunnelManager?.connectedDate ?? Date()))
     }
 
+    private func refreshRuntimePolling(reason: String) {
+        if currentWireState() == "DISCONNECTED" { stopTimer(reason: reason) }
+        else { startTimer(reason: reason) }
+    }
+
     private func currentWireState() -> String {
         if proxyOnlyRunner.isRunning {
             return "CONNECTED"
         }
+        if packetTunnelManager?.isRecoveryEnabled == true && packetTunnelManager?.forwardingReady != true { return "CONNECTING" }
         switch packetTunnelManager?.status {
         case .connected:
-            return "CONNECTED"
+            return packetTunnelManager?.forwardingReady == true ? "CONNECTED" : "CONNECTING"
         case .connecting, .reasserting:
             return "CONNECTING"
         case .disconnecting:
@@ -1377,13 +855,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         SystemNetworkDiagnostics.logSnapshot(reason: reason)
     }
 
-    private func logAppNetworkProbe(reason: String, force: Bool = false) {
-        guard force || Date().timeIntervalSince(lastAppNetworkProbeDate) >= 10 else {
-            return
-        }
-        lastAppNetworkProbeDate = Date()
-        AppNetworkProbe.logProbe(reason: reason)
-    }
+
 
     /// Requests provider-side debug evidence.
     ///
@@ -1398,7 +870,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         lastProviderDebugLogDate = Date()
         Task {
             do {
-                guard let response = try await self.packetTunnelManager?.sendProviderMessage(data: "xray_debug".data(using: .utf8)!) else {
+                guard let response = try await self.packetTunnelManager?.sendProviderMessage(data: Data(NativeLogPrivacy.snapshotCommand.utf8)) else {
                     if let snapshot = self.packetTunnelManager?.readSharedDebugLog(), !snapshot.isEmpty {
                         pluginLog.info("Provider shared debug snapshot:\n\(snapshot, privacy: .public)")
                     } else {
@@ -1448,12 +920,21 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     /// Calling both cleanup paths is deliberate. It is safe when one mode is not
     /// running and prevents stale system proxy settings from surviving a switch
     /// between proxy-only and VPN mode.
-    private func stopVless(result: FlutterResult) {
+    private func stopVless(result: @escaping FlutterResult) {
         pluginLog.info("stopVless requested")
-        proxyOnlyRunner.stop()
-        packetTunnelManager?.stop()
-        stopTimer()
-        result(nil)
+        let operation = commands.submit {
+            self.proxyOnlyRunner.stop()
+            try await self.packetTunnelManager?.stop()
+        }
+        Task {
+            do {
+                try await operation.value
+                refreshRuntimePolling(reason: "stopVless")
+                result(nil)
+            } catch {
+                result(FlutterError(code: "VPN_STOP_ERROR", message: "Unable to disable VPN recovery. Retry stopping the VPN.", details: nil))
+            }
+        }
     }
 
     private func getConnectedServerDelay(call: FlutterMethodCall, result: @escaping FlutterResult){
@@ -1465,7 +946,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         Task {
             do {
                 if self.proxyOnlyRunner.isRunning {
-                    let delay = self.proxyOnlyRunner.measureConnectedDelay(url: url)
+                    let delay = await self.proxyOnlyRunner.measureConnectedDelay(url: url)
                     result(Int(delay))
                     return
                 }
@@ -1489,7 +970,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 return
             }
             do {
-                guard let response = try await packetTunnelManager?.sendProviderMessage(data: "xray_debug".data(using: .utf8)!) else {
+                guard let response = try await packetTunnelManager?.sendProviderMessage(data: Data(NativeLogPrivacy.snapshotCommand.utf8)) else {
                     result(boundedNativeDiagnosticsSnapshot(
                         packetTunnelManager?.readSharedDebugLog() ?? ""
                     ))
@@ -1514,10 +995,17 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             result(FlutterError(code: "INVALID_ARGUMENTS", message: "Invalid arguments for getServerDelay.", details: nil))
             return
         }
-        Task {
-            let delay = await serverDelayRunner.measure(config: config, url: url)
-            result(delay)
+        let operation = commands.submit {
+            // The app-process Xray is a singleton; a temporary probe must not
+            // replace an intentionally running proxy-only runtime.
+            guard !self.proxyOnlyRunner.isRunning else { return Int64(-1) }
+            return await self.serverDelayRunner.measure(
+                config: config,
+                url: url,
+                geoAssetsDirectory: arguments["geo_assets_directory"] as? String
+            )
         }
+        Task { result((try? await operation.value) ?? -1) }
     }
 
     /// Starts either proxy-only mode or Packet Tunnel VPN mode.
@@ -1536,61 +1024,55 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return
         }
         let proxyOnly = arguments["proxy_only"] as? Bool ?? false
-        if proxyOnly {
-            do {
-                try proxyOnlyRunner.start(configData: configData, configString: config)
-                pluginLog.info("Proxy-only start requested successfully remark=\(remark, privacy: .public)")
-                startTimer()
-                result(nil)
-            } catch {
-                pluginLog.error("Failed to start proxy-only mode: \(error.localizedDescription, privacy: .public)")
-                result(FlutterError(code: "PROXY_ONLY_ERROR",
-                                    message: "Failed to start proxy-only mode: \(error.localizedDescription)",
-                                    details: nil))
+        let bypassArgument = arguments["bypass_subnets"]
+        let bypassSubnets = bypassArgument as? [String]
+        let hasBypassArgument = bypassArgument != nil && !(bypassArgument is NSNull)
+        let geoAssetsDirectory = arguments["geo_assets_directory"] as? String
+        guard !hasBypassArgument || bypassSubnets != nil else {
+            result(FlutterError(code: "INCOMPATIBLE_ROUTING", message: "bypassSubnets must be a list of IPv4 CIDRs", details: nil)); return
+        }
+        do {
+            try DesktopBypassPolicy.validate(bypassSubnets ?? [])
+            if proxyOnly {
+                _ = try ProxyOnlyRunner.buildProxyOnlyConfigData(configData: configData)
+            } else {
+                try LocalProxyAccessPolicy.validateVPN(configData: configData)
             }
+        } catch {
+            result(FlutterError(code: "INCOMPATIBLE_LOCAL_PROXY",
+                message: "VPN requires one supported loopback SOCKS inbound without extra proxy listeners.", details: nil))
             return
         }
-
-        proxyOnlyRunner.stop()
-        proxyOnlyRunner.clearDiagnostics()
-        packetTunnelManager?.remark = remark
-        let bypassSubnets = arguments["bypass_subnets"] as? [String] ?? []
-        pluginDebug("startVless VPN remark=\(remark) configBytes=\(configData.count) currentProxyOnly=\(self.packetTunnelManager?.proxyOnly ?? false) bypassCount=\(self.packetTunnelManager?.bypassSubnets.count ?? 0) hasEventSink=\(eventSink != nil)")
-        
+        let operation = commands.submit {
+            if proxyOnly {
+                // Switching modes is an explicit request to release the system VPN.
+                try await self.packetTunnelManager?.stop(waitForDisconnect: true)
+                try self.proxyOnlyRunner.start(configData: configData, geoAssetsDirectory: geoAssetsDirectory)
+            } else {
+                guard let manager = self.packetTunnelManager else {
+                    throw NSError(domain: "VPN", code: 1, userInfo: nil)
+                }
+                self.proxyOnlyRunner.stop()
+                self.proxyOnlyRunner.clearDiagnostics()
+                manager.remark = remark
+                manager.xrayConfig = configData
+                manager.bypassSubnets = bypassSubnets ?? []
+                manager.proxyOnly = false
+                manager.geoAssetsDirectory = geoAssetsDirectory
+                try await manager.start()
+            }
+        }
         Task {
             do {
-                if self.packetTunnelManager?.isActive == true {
-                    if self.packetTunnelManager?.storedConfigurationMatches(
-                        xrayConfig: configData,
-                        bypassSubnets: bypassSubnets,
-                        proxyOnly: false
-                    ) == true {
-                        pluginDebug("VPN already active with same configuration; skipping preference save/start")
-                        self.startTimer(reason: "vpn-already-active")
-                        result(nil)
-                        return
-                    }
-                    pluginDebug("VPN active with a different configuration; stopping before restart")
-                    self.packetTunnelManager?.stop()
-                    try await self.packetTunnelManager?.waitUntilInactive()
-                }
-
-                self.packetTunnelManager?.xrayConfig = configData
-                self.packetTunnelManager?.bypassSubnets = bypassSubnets
-                self.packetTunnelManager?.proxyOnly = false
-                try await packetTunnelManager?.saveToPreferences()
-                try await packetTunnelManager?.start()
-                pluginDebug("VPN start requested successfully; starting UI/traffic timer")
-                startTimer(reason: "startVless-success", initialState: "CONNECTING")
+                try await operation.value
+                self.refreshRuntimePolling(reason: "startVless-success")
                 result(nil)
-                return
             } catch {
-                pluginDebug("Failed to start VPN: \(error.localizedDescription)")
-                result(FlutterError(code: "VPN_ERROR",
-                                    message: "Failed to start VPN: \(error.localizedDescription)",
-                                    details: nil))
-                stopTimer(reason: "startVless-error")
-                return
+                pluginLog.error("Failed to start runtime: \(NativeLogPrivacy.operationError(error).localizedDescription, privacy: .public)")
+                result(FlutterError(code: error is TunnelSecretError ? "VPN_KEYCHAIN_ERROR" : (proxyOnly ? "PROXY_ONLY_ERROR" : "VPN_ERROR"),
+                    message: error is TunnelSecretError || error is DesktopTunnelError ? error.localizedDescription : NativeLogPrivacy.operationError(error).localizedDescription,
+                    details: nil))
+                self.refreshRuntimePolling(reason: "startVless-error")
             }
         }
     }
@@ -1602,21 +1084,17 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     /// and, on some machines, makes the system briefly lose the manager we are
     /// observing.
     private func requestPermission(result: @escaping FlutterResult) {
+        let operation = commands.submit { await self.packetTunnelManager?.testSaveAndLoadProfile() ?? false }
         Task {
-            if self.packetTunnelManager?.isActive == true {
-                pluginDebug("requestPermission skipped preference rewrite because VPN is active")
-                result(true)
-                return
-            }
-            let isGranted = await packetTunnelManager?.testSaveAndLoadProfile() ?? false
-            pluginDebug("requestPermission result=\(isGranted)")
+            let isGranted = (try? await operation.value) ?? false
+            pluginLog.info("requestPermission result=\(isGranted, privacy: .public)")
             result(isGranted)
         }
     }
 
     private func getCoreVersion(result: @escaping FlutterResult) {
         Task {
-            let version = String(cString: XRayGetVersion())
+            let version = XRayGetVersion()
             pluginLog.info("XRay core version: \(version, privacy: .public)")
             result(version)
         }
@@ -1637,7 +1115,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
         PluginDebugStore.shared.configure(groupIdentifier: groupIdentifier)
         pluginDebug("initializeVless providerBundleIdentifier=\(providerBundleIdentifier) groupIdentifier=\(groupIdentifier)")
-        self.packetTunnelManager = PacketTunnelManager(providerBundleIdentifier: "\(providerBundleIdentifier).XrayTunnel", groupIdentifier: groupIdentifier)
+        self.packetTunnelManager = PacketTunnelManager(providerBundleIdentifier: "\(providerBundleIdentifier).XrayTunnel", groupIdentifier: groupIdentifier, keychainAccessGroup: arguments["keychainAccessGroup"] as? String)
         self.packetTunnelManager?.statusDidChange = { [weak self] status in
             guard let self else { return }
             pluginDebug("PacketTunnelManager status callback raw=\(status?.rawValue ?? -1) timerRunning=\(self.timer != nil) proxyOnly=\(self.proxyOnlyRunner.isRunning)")
@@ -1648,12 +1126,11 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                     self.didScheduleConnectedDiagnostics = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
                         self?.logSystemNetworkSnapshot(reason: "vpn-connected-delayed", force: true)
-                        self?.logAppNetworkProbe(reason: "vpn-connected-delayed", force: true)
                     }
                 }
             case .disconnected, .invalid:
                 self.didScheduleConnectedDiagnostics = false
-                if !self.proxyOnlyRunner.isRunning {
+                if !self.proxyOnlyRunner.isRunning && self.packetTunnelManager?.isRecoveryEnabled != true {
                     self.stopTimer(reason: "vpn-status-\(status?.rawValue ?? -1)")
                 }
             default:
@@ -1685,11 +1162,16 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 final class PacketTunnelManager: ObservableObject {
     var providerBundleIdentifier: String?
     var groupIdentifier: String?
+    let keychainAccessGroup: String?
+    private let keychainClient: TunnelKeychainClient
+    private let preferenceOperations = NativeOperationQueue()
     var remark: String = "Xray"
     var xrayConfig: Data = "".data(using: .utf8)!
     var bypassSubnets: [String] = []
     var proxyOnly: Bool = false
+    var geoAssetsDirectory: String?
     var statusDidChange: ((NEVPNStatus?) -> Void)?
+    private(set) var forwardingReady = false
 
     private var cancellables: Set<AnyCancellable> = []
 
@@ -1705,16 +1187,17 @@ final class PacketTunnelManager: ObservableObject {
         manager.flatMap { $0.connection.connectedDate }
     }
 
-    var isActive: Bool {
-        guard let status else {
-            return false
-        }
-        return status == .connecting || status == .connected || status == .reasserting
+    var isRecoveryEnabled: Bool {
+        manager?.isEnabled == true && manager?.isOnDemandEnabled == true
+            && (manager?.protocolConfiguration?.includeAllNetworks == true)
     }
 
-    init(providerBundleIdentifier: String, groupIdentifier: String) {
+    init(providerBundleIdentifier: String, groupIdentifier: String, keychainAccessGroup: String? = nil,
+         keychainClient: TunnelKeychainClient = SystemTunnelKeychainClient()) {
         self.providerBundleIdentifier = providerBundleIdentifier
         self.groupIdentifier = groupIdentifier
+        self.keychainAccessGroup = keychainAccessGroup
+        self.keychainClient = keychainClient
         isProcessing = true
         Task(priority: .userInitiated) {
             await self.reload()
@@ -1724,20 +1207,20 @@ final class PacketTunnelManager: ObservableObject {
         }
     }
 
+
     func reload() async {
         self.cancellables.removeAll()
-        self.manager = await self.loadTunnelProviderManager()
-        pluginDebug("Reloaded tunnel manager exists=\(self.manager != nil) status=\(self.status?.rawValue ?? -1)")
+        do { try await self.preferenceOperations.submit { try await self.loadAndMigrate() }.value } catch { /* Retain the last known policy. */ }
+        pluginLog.info("Reloaded tunnel manager: \(self.manager != nil, privacy: .public)")
         statusDidChange?(self.status)
         NotificationCenter.default
             .publisher(for: .NEVPNConfigurationChange, object: nil)
             .receive(on: DispatchQueue.main)
             .sink { [unowned self] _ in
-                pluginDebug("NEVPNConfigurationChange received currentStatus=\(self.status?.rawValue ?? -1)")
+                pluginLog.info("NEVPNConfigurationChange received")
                 Task(priority: .high) {
-                    self.manager = await self.loadTunnelProviderManager()
+                    do { try await self.preferenceOperations.submit { try await self.loadAndMigrate() }.value } catch { /* Retain the last known policy. */ }
                     await MainActor.run {
-                        pluginDebug("NEVPNConfigurationChange reload complete status=\(self.status?.rawValue ?? -1)")
                         self.statusDidChange?(self.status)
                     }
                 }
@@ -1746,170 +1229,359 @@ final class PacketTunnelManager: ObservableObject {
         NotificationCenter.default
             .publisher(for: .NEVPNStatusDidChange)
             .receive(on: DispatchQueue.main)
-            .sink { [unowned self] _ in
-                pluginDebug("NEVPNStatusDidChange status=\(self.status?.rawValue ?? -1)")
+            .sink { [unowned self] notification in
+                // Preference reads create temporary connections which also
+                // publish status. Reacting to those recursively reloads them
+                // during secret cleanup, flooding the app with status events.
+                guard let connection = notification.object as? NEVPNConnection,
+                      connection === self.manager?.connection else { return }
+                if self.status != .connected { self.forwardingReady = false }
+                pluginLog.info("NEVPNStatusDidChange status=\(self.status?.rawValue ?? -1, privacy: .public)")
                 self.statusDidChange?(self.status)
                 objectWillChange.send()
+                if self.status == .disconnected || self.status == .invalid {
+                    _ = self.preferenceOperations.submit { try await self.cleanupUnusedSecrets() }
+                }
             }
             .store(in: &cancellables)
     }
 
-    /// Saves the Packet Tunnel profile with the current runtime config.
-    ///
-    /// `providerConfiguration` is the only structured handoff from the app
-    /// process to the extension at startup. Keep values small and serializable:
-    /// raw Xray config bytes, bypass subnets, proxy-only flag for diagnostics,
-    /// and App Group id for shared debug logs.
-    ///
-    /// Route flags are deliberate:
-    ///
-    /// - `includeAllNetworks = false`: the provider's IPv4 default route is
-    ///   enough for normal full-tunnel capture without taking over every Apple
-    ///   path category.
-    /// - `excludeLocalNetworks = false`: keep the profile simple; explicit
-    ///   user bypass subnets still work through `excludedRoutes`.
-    /// - `enforceRoutes = false`: this matches current sing-box Apple defaults
-    ///   and avoids forcing macOS into a stale utun-scoped route after startup
-    ///   or teardown.
+    /// Permission is a disabled placeholder: no config, secret, or on-demand.
     func saveToPreferences() async throws {
-        guard let providerBundleIdentifier = providerBundleIdentifier else {
-            throw NSError(domain: "VPN", code: 1, userInfo: [NSLocalizedDescriptionKey: "Provider bundle identifier is missing."])
-        }
+        try await preferenceOperations.submit { try await self.savePermissionProfile() }.value
+    }
 
-        do {
-            let manager = self.manager ?? NETunnelProviderManager()
-            self.manager = manager
-            manager.localizedDescription = remark
-            let dnsServers = SystemNetworkDiagnostics.currentDNSServers()
-            manager.protocolConfiguration = {
-                let configuration = NETunnelProviderProtocol()
-                configuration.providerBundleIdentifier = providerBundleIdentifier
-                configuration.serverAddress = "Xray"
-                configuration.providerConfiguration = [
-                    "xrayConfig": self.xrayConfig,
-                    "bypassSubnets": self.bypassSubnets,
-                    "proxyOnly": self.proxyOnly,
-                    "groupIdentifier": self.groupIdentifier ?? "",
-                    "dnsServers": dnsServers
-                ]
-                // Keep the profile flags close to current sing-box Apple
-                // defaults; the actual capture/exclusions are defined by the
-                // provider's NEPacketTunnelNetworkSettings.
-                configuration.includeAllNetworks = false
-                configuration.excludeLocalNetworks = false
-                configuration.enforceRoutes = false
-                return configuration
-            }()
-            manager.isEnabled = true
-            if let configuration = manager.protocolConfiguration as? NETunnelProviderProtocol {
-                pluginDebug("Saving VPN preferences provider=\(providerBundleIdentifier) configBytes=\(self.xrayConfig.count) dnsServers=\(dnsServers.isEmpty ? "provider-fallback" : dnsServers.joined(separator: ",")) includeAllNetworks=\(configuration.includeAllNetworks) excludeLocalNetworks=\(configuration.excludeLocalNetworks) enforceRoutes=\(configuration.enforceRoutes) hasManager=\(self.manager != nil)")
+    private func validateRouting() throws {
+        _ = try DesktopBypassPolicy.validate(bypassSubnets)
+    }
+
+    private func secretStore(accessGroup: String? = nil) throws -> TunnelSecretStore {
+        try TunnelSecretStore(accessGroup: accessGroup ?? keychainAccessGroup ?? groupIdentifier,
+            providerBundleIdentifier: providerBundleIdentifier ?? "", client: keychainClient)
+    }
+
+    private func protectedProtocol() throws -> NETunnelProviderProtocol {
+        guard let providerBundleIdentifier else { throw TunnelSecretError.invalidProfile }
+        let configuration = NETunnelProviderProtocol()
+        configuration.providerBundleIdentifier = providerBundleIdentifier
+        configuration.serverAddress = "Xray"
+        configuration.includeAllNetworks = true
+        configuration.excludeLocalNetworks = false
+        configuration.disconnectOnSleep = false
+        if #available(macOS 13.3, *) {
+            configuration.excludeAPNs = false
+            configuration.excludeCellularServices = false
+        }
+        return configuration
+    }
+
+    private func savePermissionProfile() async throws {
+        // Existing permission checks must not migrate, replace, or disarm a
+        // live profile merely to display the operating system's consent sheet.
+        if let existing = try await loadTunnelProviderManager() {
+            manager = existing
+            return
+        }
+        let manager = NETunnelProviderManager()
+        let configuration = try protectedProtocol()
+        configuration.providerConfiguration = ["configSchemaVersion": TunnelSecretProfile.schemaVersion,
+                                               "groupIdentifier": groupIdentifier ?? ""]
+        manager.protocolConfiguration = configuration
+        manager.localizedDescription = remark
+        manager.isEnabled = false
+        manager.isOnDemandEnabled = false
+        manager.onDemandRules = nil
+        try await manager.saveToPreferences()
+        self.manager = manager
+        try await manager.loadFromPreferences()
+    }
+
+    /// Runs only on preferenceOperations, including notification-driven loads.
+    private func loadAndMigrate() async throws {
+        guard let loaded = try await loadTunnelProviderManager() else {
+            manager = nil
+            try? secretStore().reconcile(keeping: [])
+            return
+        }
+        manager = loaded
+        if let old = (loaded.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
+           let legacy = old["xrayConfig"] as? Data {
+            let store = try secretStore()
+            var safe = launchMetadata(from: old)
+            safe["keychainAccessGroup"] = store.accessGroup
+            try await persist(legacy, metadata: safe, manager: loaded, activate: loaded.isEnabled,
+                              preserveRecoveryPolicy: true, store: store)
+        }
+        try await cleanupUnusedSecrets()
+    }
+
+    private func launchMetadata(from old: [String: Any]? = nil) -> [String: Any] {
+        // Allowlist metadata; never carry arbitrary legacy dictionary entries
+        // (including passwords/private keys) into the new preference schema.
+        var result: [String: Any] = ["configSchemaVersion": TunnelSecretProfile.schemaVersion,
+            "groupIdentifier": old?["groupIdentifier"] as? String ?? groupIdentifier ?? "",
+            "bypassSubnets": old?["bypassSubnets"] as? [String] ?? bypassSubnets,
+            "proxyOnly": old?["proxyOnly"] as? Bool ?? proxyOnly]
+        if let directory = old?["geoAssetsDirectory"] as? String ?? geoAssetsDirectory {
+            result["geoAssetsDirectory"] = directory
+        }
+        return result
+    }
+
+    private func persist(_ config: Data, metadata: [String: Any], manager: NETunnelProviderManager,
+                         activate: Bool, preserveRecoveryPolicy: Bool = false,
+                         store: TunnelSecretStore) async throws {
+        // Fail before any preference/session mutation, including oversized data
+        // rejected by Security. There is no truncation or plaintext fallback.
+        let reference = try store.insert(config)
+        do { guard try store.read(reference) == config else { throw TunnelSecretError.profileVerificationFailed } }
+        catch { try? store.remove(reference); throw error }
+        let previousProtocol = manager.protocolConfiguration
+        let previousDescription = manager.localizedDescription
+        let previousEnabled = manager.isEnabled
+        let previousOnDemand = manager.isOnDemandEnabled
+        let previousRules = manager.onDemandRules
+        let configuration = try protectedProtocol()
+        var safe = metadata
+        safe["xrayConfigReference"] = reference
+        safe["keychainAccessGroup"] = store.accessGroup
+        configuration.providerConfiguration = safe
+        manager.protocolConfiguration = configuration
+        manager.localizedDescription = remark
+        if !preserveRecoveryPolicy {
+            manager.isEnabled = activate
+            if activate {
+                let rule = NEOnDemandRuleConnect()
+                rule.interfaceTypeMatch = .any
+                manager.onDemandRules = [rule]
+                manager.isOnDemandEnabled = true
             } else {
-                pluginDebug("Saving VPN preferences provider=\(providerBundleIdentifier) configBytes=\(self.xrayConfig.count) dnsServers=\(dnsServers.isEmpty ? "provider-fallback" : dnsServers.joined(separator: ","))")
+                manager.isOnDemandEnabled = false
+                manager.onDemandRules = nil
             }
+        }
+        var persisted = false
+        do {
             try await manager.saveToPreferences()
+            persisted = true
+            self.manager = manager
             try await manager.loadFromPreferences()
-            pluginDebug("VPN preferences saved and reloaded status=\(manager.connection.status.rawValue) enabled=\(manager.isEnabled)")
+            let readback = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
+            guard try TunnelSecretProfile.reference(in: readback) == reference,
+                  try store.read(reference) == config else { throw TunnelSecretError.profileVerificationFailed }
         } catch {
-            pluginDebug("Error saving VPN preferences: \(error.localizedDescription)")
+            // Restore the prior version. Keep an already activated protective
+            // policy armed even when the SDK refresh fails after saving it.
+            manager.protocolConfiguration = previousProtocol
+            manager.localizedDescription = previousDescription
+            if !persisted {
+                manager.isEnabled = previousEnabled
+                manager.isOnDemandEnabled = previousOnDemand
+                manager.onDemandRules = previousRules
+            }
+            do { try await manager.saveToPreferences() }
+            catch {
+                // Even a failed save callback can have an uncertain outcome.
+                // Keep both immutable revisions until a successful readback.
+                self.manager = manager
+                throw TunnelSecretError.profileVerificationFailed
+            }
+            self.manager = manager
+            // A provider may have launched while the new preferences existed.
+            // Reconciliation after disconnect safely retires either revision.
+            try? await cleanupUnusedSecrets()
             throw error
         }
+        self.manager = manager
+        try await cleanupUnusedSecrets()
+        pluginLog.info("VPN preferences saved with Keychain reference active=\(activate, privacy: .public)")
+    }
+
+    private func saveConfiguration(activate: Bool) async throws {
+        try validateRouting()
+        let store = try secretStore()
+        let manager = try await loadTunnelProviderManager() ?? NETunnelProviderManager()
+        let existingGroup = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["keychainAccessGroup"] as? String
+        guard existingGroup == nil || existingGroup == store.accessGroup else {
+            // Moving a live profile between groups loses the durable inventory
+            // of its prior revisions. Require explicit profile removal first.
+            throw TunnelSecretError.accessGroupChanged
+        }
+        try await persist(xrayConfig, metadata: launchMetadata(), manager: manager, activate: activate, store: store)
+    }
+
+    /// Reconcile only while the provider cannot still hold an earlier revision.
+    /// Delete failures leave inventory entries for retry, never break forwarding.
+    private func cleanupUnusedSecrets() async throws {
+        guard let current = try await loadTunnelProviderManager() else {
+            try? secretStore().reconcile(keeping: [])
+            return
+        }
+        guard current.connection.status == .disconnected || current.connection.status == .invalid else { return }
+        // Armed on-demand can race an observed disconnected state. Keep every
+        // revision until explicit stop has also persisted disarming.
+        guard !current.isOnDemandEnabled else { return }
+        let metadata = (current.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
+        let references = (try? TunnelSecretProfile.reference(in: metadata)).map { Set([$0]) } ?? []
+        try? secretStore(accessGroup: metadata["keychainAccessGroup"] as? String).reconcile(keeping: references)
     }
 
     func removeFromPreferences() async throws {
-        guard let manager = manager else {
-            return
-        }
-        pluginLog.info("Removing VPN preferences")
-        try await manager.removeFromPreferences()
+        try await preferenceOperations.submit {
+            guard let manager = try await self.loadTunnelProviderManager() else {
+                try? self.secretStore().reconcile(keeping: [])
+                return
+            }
+            let oldGroup = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["keychainAccessGroup"] as? String
+            try await self.stopLoaded(manager, waitForDisconnect: true)
+            try await manager.removeFromPreferences()
+            self.manager = nil
+            // No profile and no active provider can own an item now. Failures
+            // remain in the scoped Keychain inventory and retry on next load.
+            try? self.secretStore(accessGroup: oldGroup).reconcile(keeping: [])
+        }.value
     }
 
-    /// Starts the saved VPN profile.
-    ///
-    /// `startVPNTunnel` returning successfully does not mean provider health is
-    /// complete. It means macOS accepted the start request. The plugin starts UI
-    /// polling after this, while provider health checks prove the real data path.
     func start() async throws {
-        guard let manager = manager else {
-            throw NSError(domain: "VPN", code: 1, userInfo: [NSLocalizedDescriptionKey: "Manager not found"])
-        }
+        try await preferenceOperations.submit {
+            try self.validateRouting()
+            if let active = try await self.loadTunnelProviderManager(),
+               [.connecting, .connected, .reasserting].contains(active.connection.status) {
+                self.manager = active
+                guard self.storedConfigurationMatches(xrayConfig: self.xrayConfig,
+                    bypassSubnets: self.bypassSubnets, proxyOnly: self.proxyOnly) else {
+                    throw DesktopTunnelError.configurationInUse
+                }
+                // Do not persist a revision that the running provider has not read.
+                return
+            }
+            // Storage validation precedes changing the current readiness flag.
+            try await self.saveConfiguration(activate: true)
+            self.forwardingReady = false
+            guard let manager = self.manager else { throw TunnelSecretError.invalidProfile }
+            switch manager.connection.status {
+            case .connecting, .connected, .reasserting: return
+            default: try manager.connection.startVPNTunnel()
+            }
+        }.value
+    }
 
-        if manager.connection.status == .connected || manager.connection.status == .connecting {
-            pluginDebug("Skipping startVPNTunnel because status=\(manager.connection.status.rawValue)")
-            return
-        }
+    func stop(waitForDisconnect: Bool = false) async throws {
+        try await preferenceOperations.submit {
+            guard let manager = try await self.loadTunnelProviderManager() else {
+                self.manager = nil
+                return
+            }
+            try await self.stopLoaded(manager, waitForDisconnect: waitForDisconnect)
+            try await self.cleanupUnusedSecrets()
+        }.value
+    }
 
-        if !manager.isEnabled {
-            manager.isEnabled = true
-            try await manager.saveToPreferences()
-        }
-
-        do {
-            pluginDebug("Calling startVPNTunnel currentStatus=\(manager.connection.status.rawValue) enabled=\(manager.isEnabled)")
-            try manager.connection.startVPNTunnel()
-            pluginDebug("startVPNTunnel returned currentStatus=\(manager.connection.status.rawValue)")
-        } catch {
-            pluginDebug("Failed to start VPN tunnel: \(error.localizedDescription)")
+    private func stopLoaded(_ manager: NETunnelProviderManager, waitForDisconnect: Bool) async throws {
+        let enabled = manager.isEnabled
+        let onDemand = manager.isOnDemandEnabled
+        let rules = manager.onDemandRules
+        manager.isOnDemandEnabled = false
+        manager.onDemandRules = nil
+        manager.isEnabled = false
+        do { try await manager.saveToPreferences() }
+        catch {
+            manager.isEnabled = enabled
+            manager.isOnDemandEnabled = onDemand
+            manager.onDemandRules = rules
             throw error
         }
-    }
-
-    func stop() {
-        guard let manager = manager else {
-            return
-        }
-        pluginDebug("Calling stopVPNTunnel currentStatus=\(manager.connection.status.rawValue)")
+        self.manager = manager
+        try await manager.loadFromPreferences()
         manager.connection.stopVPNTunnel()
-    }
-
-    func waitUntilInactive(timeoutSeconds: TimeInterval = 5) async throws {
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
-        while isActive && Date() < deadline {
-            try await Task.sleep(nanoseconds: 150_000_000)
+        if waitForDisconnect {
+            let deadline = Date().addingTimeInterval(20)
+            while manager.connection.status != .disconnected && manager.connection.status != .invalid {
+                guard Date() < deadline else {
+                    throw NSError(domain: "VPN", code: 4,
+                        userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for the VPN to stop"])
+                }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
         }
+        pluginLog.info("VPN recovery disabled; manual stop requested")
     }
 
-    /// Avoids restarting an already-active VPN with identical provider config.
-    ///
-    /// This reduces preference churn and repeated configuration notifications
-    /// during manual testing from the example app.
-    func storedConfigurationMatches(xrayConfig: Data, bypassSubnets: [String], proxyOnly: Bool) -> Bool {
-        guard
-            let configuration = manager?.protocolConfiguration as? NETunnelProviderProtocol,
-            let providerConfiguration = configuration.providerConfiguration
-        else {
-            return false
-        }
-        let storedConfig = providerConfiguration["xrayConfig"] as? Data
-        let storedBypassSubnets = providerConfiguration["bypassSubnets"] as? [String] ?? []
-        let storedProxyOnly = providerConfiguration["proxyOnly"] as? Bool ?? false
-        return storedConfig == xrayConfig &&
-            storedBypassSubnets == bypassSubnets &&
-            storedProxyOnly == proxyOnly
+    func refreshForwardingState() async {
+        guard isRecoveryEnabled else { return }
+        let session = manager
+        let response = try? await sendProviderMessage(data: Data("xray_runtime_state".utf8))
+        // Ignore a reply from a session replaced by a queued start/stop.
+        guard session === manager else { return }
+        forwardingReady = response == Data("ready".utf8) && status == .connected
     }
 
-    /// Fallback reader for provider debug evidence.
-    ///
-    /// Used when `sendProviderMessage("xray_debug")` returns nil or throws
-    /// during extension startup/shutdown.
-    func readSharedDebugLog() -> String? {
-        guard let groupIdentifier,
-              !groupIdentifier.isEmpty,
-              let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupIdentifier) else {
+    @discardableResult
+    func sendProviderMessage(data: Data) async throws -> Data? {
+        guard let manager = manager else {
+            pluginLog.warning("sendProviderMessage skipped: manager is nil")
             return nil
         }
-        let providerURL = containerURL.appendingPathComponent("flutter_vless_tunnel_debug.log")
-        let hevURL = containerURL.appendingPathComponent("hev-socks5-tunnel.log")
-        var sections: [String] = []
-        if let provider = boundedSharedLogTail(at: providerURL, maxLines: 200) {
-            sections.append(provider.content)
+
+        guard let session = manager.connection as? NETunnelProviderSession else {
+            pluginLog.error("sendProviderMessage failed: invalid connection type")
+            throw NSError(domain: "VPN", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid connection type"])
         }
-        if let hev = boundedSharedLogTail(at: hevURL, maxLines: 160) {
-            sections.append("--- HEV persisted log tail bytes=\(hev.size) ---\n\(hev.content)")
+
+        guard session.status == .connected || session.status == .reasserting else {
+            return nil
         }
-        return sections.isEmpty ? nil : sections.joined(separator: "\n")
+
+        return try await withCheckedThrowingContinuation { continuation in
+            let reply = NativeReplyGate<Data?> { continuation.resume(with: $0) }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) {
+                reply.resolve(.failure(NSError(domain: "VPN", code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "Provider reply timed out"])))
+            }
+            do {
+                try session.sendProviderMessage(data) { response in
+                    reply.resolve(.success(response))
+                }
+            } catch {
+                reply.resolve(.failure(error))
+            }
+        }
     }
 
-    private func boundedSharedLogTail(
+    func testSaveAndLoadProfile() async -> Bool {
+        do {
+            try await saveToPreferences()
+            return true
+        } catch {
+            pluginLog.error("Error during permission profile save: \(NativeLogPrivacy.operationError(error).localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    func sharedProviderDebugSnapshot() -> String {
+        guard let groupIdentifier,
+              !groupIdentifier.isEmpty,
+              let containerURL = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: groupIdentifier
+              ) else {
+            return ""
+        }
+        NativeLogPrivacy.removeLegacyProviderLog(in: containerURL)
+        let providerURL = containerURL.appendingPathComponent(NativeLogPrivacy.providerLogFilename)
+        let hevURL = containerURL.appendingPathComponent("hev-socks5-tunnel-error-v2.log")
+        var sections: [String] = []
+
+        if let provider = boundedFileTail(at: providerURL, maxLines: 200) {
+            sections.append(provider.content)
+        }
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: hevURL.path),
+           let size = attributes[.size] as? NSNumber {
+            sections.append("HEV diagnostic file bytes=\(size.uint64Value); raw contents omitted")
+        }
+        return sections.joined(separator: "\n")
+    }
+
+    private func boundedFileTail(
         at url: URL,
         maxBytes: UInt64 = 64 * 1024,
         maxLines: Int
@@ -1939,54 +1611,12 @@ final class PacketTunnelManager: ObservableObject {
         }
     }
 
-    /// Sends an internal control/debug message to the Packet Tunnel provider.
-    ///
-    /// Do not use this for high-frequency data transfer. It is for status,
-    /// counters, health evidence, and connected delay probes. The actual VPN
-    /// traffic flows through utun/HEV/Xray, not provider messages.
-    @discardableResult
-    func sendProviderMessage(data: Data) async throws -> Data? {
-        guard let manager = manager else {
-            pluginDebug("sendProviderMessage skipped: manager is nil bytes=\(data.count)")
-            return nil
-        }
 
-        guard let session = manager.connection as? NETunnelProviderSession else {
-            pluginDebug("sendProviderMessage failed: invalid connection type status=\(manager.connection.status.rawValue) bytes=\(data.count)")
-            throw NSError(domain: "VPN", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid connection type"])
-        }
-
-        let message = String(data: data, encoding: .utf8) ?? "<\(data.count) bytes>"
-        pluginDebug("sendProviderMessage begin message=\(message) status=\(manager.connection.status.rawValue)")
-        return try await withCheckedThrowingContinuation { continuation in
-            do {
-                try session.sendProviderMessage(data) { response in
-                    pluginDebug("sendProviderMessage response message=\(message) responseBytes=\(response?.count ?? -1)")
-                    continuation.resume(with: .success(response))
-                }
-            } catch {
-                pluginDebug("sendProviderMessage throw message=\(message) error=\(error.localizedDescription)")
-                continuation.resume(with: .failure(error))
-            }
-        }
-    }
-
-    func testSaveAndLoadProfile() async -> Bool {
-        do {
-            try await saveToPreferences()
-            let _ = await loadTunnelProviderManager()
-            pluginDebug("testSaveAndLoadProfile succeeded status=\(self.status?.rawValue ?? -1)")
-            return true
-        } catch {
-            pluginDebug("Error during save and load test: \(error.localizedDescription)")
-            return false
-        }
-    }
-
-    private func loadTunnelProviderManager() async -> NETunnelProviderManager? {
+    private func loadTunnelProviderManager() async throws -> NETunnelProviderManager? {
         do {
             let managers = try await NETunnelProviderManager.loadAllFromPreferences()
-            pluginDebug("Loaded \(managers.count) tunnel manager(s) from preferences")
+            pluginLog.info("Loaded \(managers.count, privacy: .public) tunnel manager(s) from preferences")
+
 
             guard let reval = managers.first(where: {
                 guard let configuration = $0.protocolConfiguration as? NETunnelProviderProtocol else {
@@ -1994,16 +1624,58 @@ final class PacketTunnelManager: ObservableObject {
                 }
                 return configuration.providerBundleIdentifier == providerBundleIdentifier
             }) else {
-                pluginDebug("No tunnel manager found for provider=\(self.providerBundleIdentifier ?? "nil")")
+                pluginLog.warning("No tunnel manager found for provider=\(self.providerBundleIdentifier ?? "nil", privacy: .public)")
                 return nil
             }
 
             try await reval.loadFromPreferences()
-            pluginDebug("Loaded matching tunnel manager enabled=\(reval.isEnabled) status=\(reval.connection.status.rawValue) connectedDate=\(String(describing: reval.connection.connectedDate))")
+            pluginLog.info("Loaded matching tunnel manager enabled=\(reval.isEnabled, privacy: .public) status=\(reval.connection.status.rawValue, privacy: .public)")
             return reval
         } catch {
-            pluginDebug("Error loading tunnel provider manager: \(error.localizedDescription)")
-            return nil
+            pluginLog.error("Error loading tunnel provider manager: \(NativeLogPrivacy.operationError(error).localizedDescription, privacy: .public)")
+            throw error
         }
+    }
+    var isActive: Bool { [.connected, .connecting, .reasserting, .disconnecting].contains(status ?? .invalid) }
+    func readSharedDebugLog() -> String? { sharedProviderDebugSnapshot() }
+    func waitUntilInactive(timeoutSeconds: TimeInterval = 20) async throws {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while isActive {
+            guard Date() < deadline else { throw NSError(domain: "VPN", code: 4, userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for VPN shutdown"]) }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+    func storedConfigurationMatches(xrayConfig: Data, bypassSubnets: [String], proxyOnly: Bool) -> Bool {
+        guard isRecoveryEnabled,
+              let configuration = manager?.protocolConfiguration as? NETunnelProviderProtocol,
+              let metadata = configuration.providerConfiguration,
+              let stored = try? TunnelSecretProfile.load(metadata, providerBundleIdentifier: providerBundleIdentifier ?? "", client: keychainClient) else { return false }
+        return stored == xrayConfig && (metadata["bypassSubnets"] as? [String] ?? []) == bypassSubnets
+            && (metadata["geoAssetsDirectory"] as? String) == geoAssetsDirectory && !proxyOnly
+    }
+
+}
+
+private func configureXrayAssetLocation(_ directory: String?) throws {
+    if directory?.isEmpty == true {
+        throw NSError(
+            domain: "FlutterVless",
+            code: 12,
+            userInfo: [NSLocalizedDescriptionKey: "Xray geo asset directory must not be empty"]
+        )
+    }
+    var error: NSError?
+    let configured = XRaySetAssetLocation(directory ?? "", &error)
+    guard configured else {
+        throw NativeLogPrivacy.operationError(error ?? NSError(
+            domain: "FlutterVless",
+            code: 13,
+            userInfo: [NSLocalizedDescriptionKey: "Failed to configure Xray geo asset directory"]
+        ))
+    }
+    if let directory {
+        pluginLog.info("Configured Xray geo asset directory: \(directory, privacy: .public)")
+    } else {
+        pluginLog.info("Using Xray default geo asset lookup")
     }
 }

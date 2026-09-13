@@ -107,9 +107,10 @@ class FlutterVless {
   /// [blockedApps] is Android-specific and contains package names that should
   /// be excluded from the VPN route.
   ///
-  /// [bypassSubnets] contains CIDR routes that should be excluded from the
-  /// tunnel on platforms that support route exclusions. Use it for local LAN,
-  /// DNS, server-host, or app-specific bypass behavior.
+  /// [bypassSubnets] selects destination subnets that may bypass the proxy.
+  /// On macOS and Windows VPN sessions, IPv4 CIDRs become Xray `direct` rules;
+  /// DNS protection and IPv6 blocking take precedence. They do not create
+  /// physical route exclusions. IPv6 bypass CIDRs are rejected.
   /// iOS VPN sessions reject non-empty system route exclusions. Use Xray
   /// `direct` routing rules to bypass selected destinations while retaining
   /// mandatory traffic protection during connection and recovery.
@@ -117,7 +118,7 @@ class FlutterVless {
   /// Set [proxyOnly] to `true` when the app should start local Xray proxy
   /// behavior without installing a system VPN or Packet Tunnel route.
   ///
-  /// On iOS, [geoAssetsDirectory] can select an absolute App Group directory
+  /// On iOS and macOS, [geoAssetsDirectory] can select an absolute App Group directory
   /// containing non-empty `geoip.dat` and `geosite.dat` files for this session.
   /// Omit it to use Xray's bundled/default asset lookup.
   ///

@@ -1,6 +1,11 @@
 import Foundation
 
-/// Coordinates the asynchronous HEV worker with NetworkExtension lifecycle.
+/// Thread-safe lifecycle state for a long-running tunnel worker such as HEV.
+///
+/// `NEPacketTunnelProvider.startTunnel` must not report success when the worker
+/// exits immediately, and `stopTunnel` must be able to distinguish an expected
+/// shutdown from a worker crash. This class keeps that coordination independent
+/// from NetworkExtension so it can be unit-tested on the host.
 public final class TunnelProcessLifecycle: @unchecked Sendable {
     public enum StartupResult: Equatable {
         case running
@@ -39,6 +44,7 @@ public final class TunnelProcessLifecycle: @unchecked Sendable {
         condition.unlock()
     }
 
+    /// Records worker termination and returns `true` for an unexpected exit.
     @discardableResult
     public func markExited(code: Int32) -> Bool {
         condition.lock()
@@ -49,18 +55,29 @@ public final class TunnelProcessLifecycle: @unchecked Sendable {
         return unexpected
     }
 
-    public func requestStop() {
+    /// Returns true only for the first stop request for a running worker.
+    @discardableResult
+    public func requestStop() -> Bool {
         condition.lock()
+        let shouldSignal: Bool
+        if case .running = state {
+            shouldSignal = !stopRequested
+        } else {
+            shouldSignal = false
+        }
         stopRequested = true
         if case .exited = state {
-            // Keep the exit code available to waiters.
+            // Preserve the exit code for callers waiting on it.
         } else {
             state = .stopping
         }
         condition.broadcast()
         condition.unlock()
+        return shouldSignal
     }
 
+    /// Waits for the worker to enter its blocking run loop and remain there for
+    /// `gracePeriod`. A worker that returns immediately is reported as failed.
     public func waitForStableStartup(gracePeriod: TimeInterval) -> StartupResult {
         let entryDeadline = Date().addingTimeInterval(gracePeriod)
         condition.lock()
@@ -120,6 +137,7 @@ public final class TunnelProcessLifecycle: @unchecked Sendable {
     }
 }
 
+/// Counts consecutive watchdog failures without reacting to transient errors.
 public struct TunnelWatchdogFailurePolicy: Equatable {
     public let failureThreshold: Int
     public private(set) var consecutiveFailures = 0
@@ -129,6 +147,7 @@ public struct TunnelWatchdogFailurePolicy: Equatable {
         self.failureThreshold = failureThreshold
     }
 
+    /// Returns `true` once the configured failure threshold has been reached.
     @discardableResult
     public mutating func record(success: Bool) -> Bool {
         if success {
@@ -144,6 +163,7 @@ public struct TunnelWatchdogFailurePolicy: Equatable {
     }
 }
 
+/// Bounded append-only diagnostics used by the provider and containing app.
 public enum TunnelFileLog {
     public static func append(
         _ line: String,
@@ -180,6 +200,8 @@ public enum TunnelFileLog {
         )
     }
 
+    /// Truncates an externally-written log in place so an active writer keeps
+    /// using the same inode. This is used for HEV's C logger.
     public static func trimIfNeeded(
         _ url: URL,
         maxFileBytes: Int = 512 * 1024,
@@ -242,6 +264,7 @@ public enum TunnelFileLog {
         guard startedMidFile, let newline = data.firstIndex(of: 0x0a) else {
             return data
         }
-        return Data(data[data.index(after: newline)...])
+        let next = data.index(after: newline)
+        return Data(data[next...])
     }
 }

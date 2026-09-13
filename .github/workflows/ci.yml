@@ -211,6 +211,11 @@ jobs:
         env:
           FLUTTER_XCODE_CODE_SIGNING_ALLOWED: "NO"
         run: flutter build macos --debug
+      - name: Test macOS protection policies and real localhost runtime
+        run: |
+          bash tool/test_macos_tunnel_support.sh
+          bash tool/test_macos_manager_policy.sh
+          bash tool/test_macos_privacy_runtime.sh
 
   windows:
     name: Windows native plugin build
@@ -245,3 +250,6 @@ jobs:
         run: |
           flutter pub get
           flutter build windows --debug
+      - name: Test Windows native security boundaries
+        shell: cmd
+        run: tool\windows\build_native_tests.cmd

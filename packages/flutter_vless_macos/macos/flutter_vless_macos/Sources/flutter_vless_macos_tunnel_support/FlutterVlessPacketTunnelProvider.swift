@@ -8,118 +8,27 @@
 import NetworkExtension
 import Network
 import CXRay
-import Tun2SocksKit
 import Tun2SocksKitC
 import HevSocks5Tunnel
-import Foundation
-import CFNetwork
+import Tun2SocksKit
+import flutter_vless_macos_privacy
 import os
 import Darwin
 
-// MARK: - macOS Packet Tunnel Maintenance Notes
-//
-// This file is the Network Extension side of macOS VPN mode. It does not run in
-// the Flutter app process. It runs inside the `XrayTunnel.appex` sandbox, owns
-// the utun interface, starts Xray in-process, and starts HEV tun2socks to bridge
-// packets from NetworkExtension into Xray's local SOCKS inbound.
-//
-// The working packet path is:
-//
-//   macOS apps
-//     -> NetworkExtension Packet Tunnel utun
-//     -> HEV socks5 tunnel / tun2socks
-//     -> local Xray SOCKS inbound on 127.0.0.1
-//     -> Xray proxy outbound
-//     -> remote VLESS server
-//
-// Important lessons from the macOS bring-up:
-//
-// 1. `NEVPNStatus.connected` is not enough. macOS can report a connected tunnel
-//    while DNS is unusable, Xray's outbound server route loops into utun, or
-//    HEV only sees upload-side packets. Keep the layered health checks in this
-//    file and treat them as part of the runtime contract.
-// 2. Publish explicit Packet Tunnel DNS settings. macOS can otherwise create an
-//    unreachable default resolver while ordinary app sockets already prefer the
-//    utun route. Use public IPv4 DNS with `matchDomains = [""]` and keep DNS host
-//    exclusions disabled so the resolver follows the validated packet path.
-// 3. The remote proxy server needs a host route outside utun. Without it, Xray
-//    tries to reach the server through the same tunnel that depends on Xray
-//    reaching the server.
-// 4. The packet path is intentionally IPv4-only until IPv6 route exclusions and
-//    IPv6 health checks are designed as one feature. Partial IPv6 support caused
-//    "connected but browser does not load" failures.
-// 5. Do not replace the Xray outbound server domain with an IP here. The
-//    preparer may add Xray DNS host mapping and the provider may exclude the
-//    resolved IP, but the outbound config must preserve domain/SNI/authority
-//    semantics for VLESS, XHTTP, TLS, and Reality transports.
-//
-// The companion architecture note is:
-//   doc/macos_packet_tunnel_architecture.md
-//
-// If this file changes, run a real macOS Packet Tunnel smoke test and verify
-// the golden logs listed in that note, not just a local proxy delay probe.
-
-private let tunnelLog = Logger(
+private let tunnelLog = NativePrivacyLogger(
     subsystem: Bundle.main.bundleIdentifier ?? "flutter_vless.XrayTunnel",
     category: "PacketTunnel"
 )
-
-/// Conservative MTU for a nested path of Packet Tunnel -> HEV -> SOCKS -> Xray.
-///
-/// `1500` looked tempting because the physical Wi-Fi interface often advertises
-/// it, but the user-visible path is not just Wi-Fi. It includes utun, HEV, TLS,
-/// and XHTTP/VLESS framing. `1280` avoids fragmentation-sensitive stalls and is
-/// aligned with the minimum IPv6 MTU, even though this implementation currently
-/// keeps the packet path IPv4-only.
-private let tunnelMTU = 1280
-
-/// IPv4 addresses for the virtual utun interface.
-///
-/// macOS behaved poorly with a broad `198.18.0.1/16` interface assignment: app
-/// TCP connections selected the utun route, then failed immediately with
-/// `ENETDOWN` before HEV saw a TCP session. A /32 local address was also not
-/// reliable in the example app: route snapshots showed `default -> link#utun`
-/// while app sockets failed with `ENETUNREACH`, and ifconfig still showed a
-/// self-peer (`198.18.0.2 --> 198.18.0.2`). Current Apple sing-box builds keep
-/// `tunnelRemoteAddress` independent from the IPv4 address, and HEV/Xray
-/// examples commonly use the local tunnel address as the default-route gateway.
-private let tunnelRemoteAddress = "127.0.0.1"
-private let tunnelLocalAddress = "198.18.0.1"
-private let tunnelDefaultGatewayAddress = "198.18.0.1"
-private let tunnelLocalSubnetMask = "255.255.255.0"
-private let tunnelLocalPrefixLength = 24
-private let tunnelDefaultDNSServers = ["1.1.1.1", "8.8.8.8"]
-
-/// Upper bound for macOS to accept Packet Tunnel network settings.
-///
-/// The provider must not remain in `NEVPNStatus.connecting` indefinitely. A
-/// timeout here makes startup fail cleanly so the app can tear the profile down
-/// instead of leaving the system route/DNS state half-transitioned.
-private let networkSettingsTimeoutSeconds: TimeInterval = 15
-
-/// HEV TCP buffer size used by the validated macOS path.
-///
-/// This is intentionally modest for an extension process. Increasing it can
-/// improve throughput in some environments, but it should be tested together
-/// with memory pressure and long-running browser traffic because extensions run
-/// with tighter lifecycle constraints than the app.
-private let hevTCPBufferSize = 4096
+private let tunnelMTU = 1500
+private let dnsServers = [TunnelDNSPolicy.virtualServer]
 private let hevStartupGraceSeconds: TimeInterval = 0.25
 private let hevShutdownTimeoutSeconds: TimeInterval = 2
 private let watchdogIntervalSeconds: TimeInterval = 60
 
-/// Small debug ring buffer shared by all provider callbacks.
-///
-/// macOS Network Extensions are painful to debug because the provider process is
-/// not the Flutter Runner process. `print`/stdout output can disappear, LLDB has
-/// to attach to another process, and Xcode stop/kill often races with provider
-/// teardown. This store keeps the essential startup evidence in memory and, when
-/// App Groups are configured, mirrors it to a shared file so the app can still
-/// show diagnostics when `sendProviderMessage` is temporarily unavailable.
-///
-/// Keep this focused on operational facts, not noisy per-packet logs. The final
-/// regression checklist depends on the exact messages for DNS publication,
-/// server route exclusion, Xray startup, HEV startup, and SOCKS health checks.
+/// macOS runs this extension in a separate process from the Flutter app, and the
+/// Runner console does not reliably show extension stdout. Keeping a small
+/// in-memory ring buffer lets the app ask the provider for the exact startup
+/// and health-check evidence that matters on a real device.
 private final class TunnelDebugStore {
     static let shared = TunnelDebugStore()
     private let lock = NSLock()
@@ -127,34 +36,26 @@ private final class TunnelDebugStore {
     private let maxLines = 120
     private var fileURL: URL?
 
-    /// Opens the optional App Group debug file.
-    ///
-    /// The App Group is not just convenience: when the app asks for
-    /// `xray_debug` during startup or shutdown, `NETunnelProviderSession` may
-    /// return nil even though the extension has useful evidence. The shared file
-    /// is the fallback used by the app-side manager.
     func configure(groupIdentifier: String?) {
         lock.lock()
         defer { lock.unlock() }
         guard let groupIdentifier,
               !groupIdentifier.isEmpty,
-              let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupIdentifier) else {
+              let containerURL = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: groupIdentifier
+              ) else {
             fileURL = nil
             return
         }
-        fileURL = containerURL.appendingPathComponent("flutter_vless_tunnel_debug.log")
+        NativeLogPrivacy.removeLegacyProviderLog(in: containerURL)
+        fileURL = containerURL.appendingPathComponent(NativeLogPrivacy.providerLogFilename)
     }
 
-    /// Appends one timestamped provider event to memory and the shared file.
-    ///
-    /// This method intentionally swallows file errors. Diagnostics must never
-    /// make the VPN fail to start; the in-memory buffer is still enough for the
-    /// normal provider-message path.
-    func append(_ message: String) {
+    func append(_ message: NativeDiagnosticMessage) {
         lock.lock()
         defer { lock.unlock() }
         let timestamp = ISO8601DateFormatter().string(from: Date())
-        let line = "\(timestamp) \(message)"
+        let line = "\(timestamp) \(message.text)"
         lines.append(line)
         if lines.count > maxLines {
             lines.removeFirst(lines.count - maxLines)
@@ -182,72 +83,14 @@ private final class TunnelDebugStore {
     }
 }
 
-private final class SingleResumeBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var didResume = false
-
-    func resume(_ body: () -> Void) {
-        lock.lock()
-        guard !didResume else {
-            lock.unlock()
-            return
-        }
-        didResume = true
-        lock.unlock()
-        body()
-    }
-}
-
-private func rememberTunnelLog(_ message: String) {
+private func rememberTunnelLog(_ message: NativeDiagnosticMessage) {
     TunnelDebugStore.shared.append(message)
 }
 
-private final class TerminalFailureGate {
-    private let lock = NSLock()
-    private var reported = false
-
-    func reset() {
-        lock.lock()
-        reported = false
-        lock.unlock()
-    }
-
-    func claim() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !reported else { return false }
-        reported = true
-        return true
-    }
-}
-
-/// Network Extension Packet Tunnel provider for macOS VPN mode.
-///
-/// This provider owns the validated Packet Tunnel path. It prepares imported
-/// Xray JSON for the extension sandbox, applies NetworkExtension DNS/routing,
-/// starts Xray, starts HEV tun2socks, and exposes debug/stat messages to the app.
-///
-/// Do not collapse this into the proxy-only path. Proxy-only and Packet Tunnel
-/// mode solve different problems:
-///
-/// - Proxy-only configures macOS system proxy settings and cannot capture UDP or
-///   apps that ignore the system proxy.
-/// - Packet Tunnel mode captures IP packets through utun and needs explicit
-///   DNS/server route handling to avoid self-recursion.
-///
-/// The provider deliberately emits multiple health checks because each one
-/// proves a different layer:
-///
-/// - server TCP route check: Xray's remote server is reachable outside utun.
-/// - SOCKS inbound check: local Xray is listening.
-/// - SOCKS CONNECT check: Xray accepts outbound SOCKS requests.
-/// - SOCKS HTTP literal-IP check: response bytes return through Xray.
-/// - URLSession HTTPS through SOCKS: a higher-level client can complete HTTPS.
 open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
 
     private let logger = CustomXRayLogger()
     private let hevLifecycle = TunnelProcessLifecycle()
-    private let terminalFailureGate = TerminalFailureGate()
     private let watchdogQueue = DispatchQueue(label: "dev.tfox.flutter-vless.macos-watchdog", qos: .utility)
     private var lastTrafficLogDate: Date = .distantPast
     private var hevLogURL: URL?
@@ -256,284 +99,224 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     private var watchdogPolicy = TunnelWatchdogFailurePolicy(failureThreshold: 3)
     private var watchdogSuspended = false
     private var watchdogInboundPort: Int?
+    private var recoveryCheck: DispatchWorkItem?
+    private var watchdogGeneration = 0
+    private var watchdogInboundHealthy = false
+    private let runtimeQueue = DispatchQueue(label: "dev.tfox.flutter-vless.macos-runtime")
+    private let forwardingLock = NSLock()
+    private var forwardingReady = false
+    private var startupPreparation: Task<TunnelPreparedConfig, Error>?
+    private var startupStopped = false
+    private var runtimeSpec: RuntimeSpec?
+    private var runtimeRecoveryInFlight = false
+    // Accessed only on runtimeQueue.
+    private var hasStartedHEV = false
+    private var hevStopSignal: DispatchGroup?
 
-    /// Legacy callback entrypoint used by macOS NetworkExtension.
-    ///
-    /// Keep this override even though Swift also supports async tunnel
-    /// entrypoints. In practice, using the callback signature made startup
-    /// behavior explicit and avoided ambiguity about which override macOS called
-    /// from generated extension targets.
-    open override func startTunnel(options: [String : NSObject]?, completionHandler: @escaping (Error?) -> Void) {
-        rememberTunnelLog("Legacy startTunnel entrypoint called")
-        tunnelLog.info("Legacy startTunnel entrypoint called")
-        Task {
-            do {
-                try await startTunnelAsync(options: options)
-                completionHandler(nil)
-            } catch {
-                rememberTunnelLog("startTunnel failed: \(error.localizedDescription)")
-                tunnelLog.error("startTunnel failed: \(error.localizedDescription, privacy: .public)")
-                cleanupAfterStartupFailure()
-                completionHandler(error)
-            }
-        }
+    private struct RuntimeSpec {
+        let config: Data
+        let port: Int
+        let geoAssetsDirectory: String?
+        let credentials: LocalProxyCredentials
     }
 
-    /// Starts the complete Packet Tunnel data path.
-    ///
-    /// Ordering matters:
-    ///
-    /// 1. Normalize Xray JSON before parsing ports/routes.
-    /// 2. Apply `NEPacketTunnelNetworkSettings` before starting Xray/HEV so
-    ///    packet flow and routes are owned by NetworkExtension first.
-    /// 3. Start Xray before HEV because HEV immediately connects to the local
-    ///    SOCKS inbound.
-    /// 4. Run server-route and SOCKS health checks asynchronously after startup.
-    ///    They are diagnostics only and must not block `startTunnel`, otherwise
-    ///    macOS can leave the VPN profile stuck in `connecting`.
-    private func startTunnelAsync(options: [String : NSObject]?) async throws {
-        guard
-            let protocolConfiguration = protocolConfiguration as? NETunnelProviderProtocol,
-            let providerConfiguration = protocolConfiguration.providerConfiguration
-        else {
+    private func setForwardingReady(_ ready: Bool) {
+        forwardingLock.lock()
+        forwardingReady = ready
+        forwardingLock.unlock()
+        reasserting = !ready
+    }
+
+    private func isForwardingReady() -> Bool {
+        forwardingLock.lock()
+        defer { forwardingLock.unlock() }
+        return forwardingReady && hevLifecycle.isRunning
+    }
+
+    open override func startTunnel(options: [String : NSObject]? = nil) async throws {
+        guard let configuration = protocolConfiguration as? NETunnelProviderProtocol else {
             throw tunnelError("Missing tunnel provider configuration")
         }
-        tunnelLog.info("Provider configuration keys: \(providerConfiguration.keys.sorted().joined(separator: ","), privacy: .public)")
-        guard let xrayConfig: Data = providerConfiguration["xrayConfig"] as? Data else {
-            throw tunnelError("Missing Xray config")
+        let providerConfiguration = configuration.providerConfiguration ?? [:]
+        // An old system profile cannot provide the required OS routing policy.
+        // Restart from the host app to save the current protected configuration.
+        guard configuration.includeAllNetworks && !configuration.excludeLocalNetworks else {
+            throw tunnelError("VPN profile requires traffic protection; reconnect from the app")
         }
-        tunnelLog.info("Received Xray config bytes=\(xrayConfig.count, privacy: .public)")
-        // The imported config is user/server owned, but it still has to be made
-        // safe for an extension sandbox and deterministic Packet Tunnel routing.
-        // If preparation fails, fall back to the original config so unsupported
-        // future formats are not hard-blocked; health checks below will still
-        // reveal whether the runtime path is usable.
-        let preparedXrayConfig = prepareXrayConfigForTunnel(xrayConfig) ?? xrayConfig
+        if #available(macOS 13.3, *), configuration.excludeAPNs || configuration.excludeCellularServices {
+            throw tunnelError("VPN profile has unsupported service exclusions; reconnect from the app")
+        }
         let bypassSubnets = providerConfiguration["bypassSubnets"] as? [String] ?? []
+        let storedConfig = try TunnelSecretProfile.load(providerConfiguration,
+            providerBundleIdentifier: configuration.providerBundleIdentifier ?? "")
+        let config = try DesktopBypassPolicy.apply(to: storedConfig, cidrs: bypassSubnets)
         TunnelDebugStore.shared.configure(groupIdentifier: providerConfiguration["groupIdentifier"] as? String)
-        terminalFailureGate.reset()
+        beginStartup()
+        setForwardingReady(false)
         rememberTunnelLog("Starting Xray packet tunnel")
-        tunnelLog.info("Starting Xray packet tunnel options=\(String(describing: options), privacy: .public)")
-        tunnelLog.info("Bypass subnet count=\(bypassSubnets.count, privacy: .public)")
-        if (providerConfiguration["proxyOnly"] as? Bool) == true {
-            tunnelLog.warning("proxyOnly is not supported by the macOS packet tunnel; starting VPN mode")
+        // Endpoint bootstrap precedes virtual DNS installation. Reuse the
+        // prepared endpoints when restarting workers within this same tunnel.
+        let credentials = try LocalProxyCredentials.generate()
+        let preparation = Task {
+            try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: config, credentials: credentials,
+                resolveIPv4: { resolveIPv4Addresses(for: $0).first })
         }
-        guard let parsedConfig = parseConfig(jsonData: preparedXrayConfig) else {
-            throw tunnelError("Unable to find a SOCKS/HTTP inbound port in Xray config")
+        setStartupPreparation(preparation)
+        defer { setStartupPreparation(nil) }
+        let prepared: TunnelPreparedConfig
+        do { prepared = try await preparation.value }
+        catch {
+            rememberTunnelLog("Tunnel preparation failed before route installation")
+            throw tunnelError("Unable to prepare tunnel configuration or resolve its endpoint")
         }
-        let appDNSServers = providerConfiguration["dnsServers"] as? [String] ?? []
-        rememberTunnelLog("App provided DNS snapshot before VPN: \(appDNSServers.isEmpty ? "none" : appDNSServers.joined(separator: ","))")
-        tunnelLog.info("App provided DNS snapshot before VPN: \(appDNSServers.isEmpty ? "none" : appDNSServers.joined(separator: ","), privacy: .public)")
-        rememberTunnelLog("Using local Xray inbound port \(parsedConfig.inboundPort), server=\(parsedConfig.serverAddress ?? "nil")")
-        tunnelLog.info("Using local Xray inbound port \(parsedConfig.inboundPort, privacy: .public)")
+        guard !preparation.isCancelled,
+              let parsed = parseConfig(jsonData: prepared.data),
+              TunnelDNSPolicy.allowsRouteExclusions(prepared.bootstrapAddresses.map { "\($0)/32" }) else {
+            throw tunnelError("Tunnel preparation cancelled or incompatible")
+        }
+        let addresses = prepared.bootstrapAddresses
 
-        // `tunnelRemoteAddress` is only the NetworkExtension remote endpoint
-        // label. It is not the TUN IPv4 gateway and not the actual VLESS server.
-        // The real server is carried in the Xray outbound and route-excluded
-        // below.
-        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: tunnelRemoteAddress)
+        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "254.1.1.1")
         settings.mtu = NSNumber(value: tunnelMTU)
-        rememberTunnelLog("Configured packet tunnel MTU=\(tunnelMTU)")
-        settings.ipv4Settings = {
-            let settings = NEIPv4Settings(
-                addresses: [tunnelLocalAddress],
-                subnetMasks: [tunnelLocalSubnetMask]
-            )
-            // Default route through utun is what makes this VPN mode, not just a
-            // local proxy. The remote server host route is excluded to avoid
-            // startup recursion.
-            let defaultRoute = NEIPv4Route(destinationAddress: "0.0.0.0", subnetMask: "0.0.0.0")
-            defaultRoute.gatewayAddress = tunnelDefaultGatewayAddress
-            settings.includedRoutes = [defaultRoute]
-            settings.excludedRoutes = buildIPv4ExcludedRoutes(
-                serverAddress: parsedConfig.serverAddress,
-                bypassSubnets: bypassSubnets
-            )
-            rememberTunnelLog("IPv4 settings local=\(tunnelLocalAddress)/\(tunnelLocalPrefixLength) gateway=\(tunnelDefaultGatewayAddress) remoteLabel=\(tunnelRemoteAddress) subnetMask=\(tunnelLocalSubnetMask) includedRoutes=default excludedRoutes=\(settings.excludedRoutes?.count ?? 0)")
-            tunnelLog.info("IPv4 settings local=\(tunnelLocalAddress, privacy: .public)/\(tunnelLocalPrefixLength, privacy: .public) gateway=\(tunnelDefaultGatewayAddress, privacy: .public) remoteLabel=\(tunnelRemoteAddress, privacy: .public) subnetMask=\(tunnelLocalSubnetMask, privacy: .public) includedRoutes=default excludedRoutes=\(settings.excludedRoutes?.count ?? 0, privacy: .public)")
-            return settings
-        }()
-        // Keep the packet path IPv4-only for now. With IPv6 enabled, macOS can
-        // create IPv4-mapped IPv6 routes such as ::ffff:<xray-server> through
-        // another utun interface, bypassing the explicit IPv4 server exclusion
-        // and starving the Xray outbound connection.
-        settings.ipv6Settings = nil
-        rememberTunnelLog("IPv6 tunnel routing disabled; using IPv4-only packet tunnel")
-        tunnelLog.info("IPv6 tunnel routing disabled; using IPv4-only packet tunnel")
-        let dnsSettings = NEDNSSettings(servers: tunnelDefaultDNSServers)
-        dnsSettings.matchDomains = [""]
-        settings.dnsSettings = dnsSettings
-        rememberTunnelLog("Packet tunnel DNS servers=\(tunnelDefaultDNSServers.joined(separator: ",")) matchDomains=default appSnapshot=\(appDNSServers.isEmpty ? "none" : appDNSServers.joined(separator: ","))")
-        tunnelLog.info("Packet tunnel DNS servers=\(tunnelDefaultDNSServers.joined(separator: ","), privacy: .public) matchDomains=default")
-        try await applyTunnelNetworkSettings(settings)
-        try self.startXRay(xrayConfig: preparedXrayConfig)
-        let tunnelFileDescriptor = packetFlowFileDescriptor()
-        try self.startSocks5Tunnel(
-            serverPort: parsedConfig.inboundPort,
-            tunnelFileDescriptor: tunnelFileDescriptor
+        let ipv4 = NEIPv4Settings(addresses: ["198.18.0.1"], subnetMasks: ["255.255.0.0"])
+        ipv4.includedRoutes = [NEIPv4Route.default(), NEIPv4Route(destinationAddress: TunnelDNSPolicy.virtualServer, subnetMask: "255.255.255.255")]
+        ipv4.excludedRoutes = buildIPv4ExcludedRoutes(
+            serverAddresses: addresses.filter { isIPv4Literal($0) }
         )
-        startTunnelWatchdog(port: parsedConfig.inboundPort)
-        logServerTCPRouteHealthCheck(
-            host: parsedConfig.serverAddress,
-            port: parsedConfig.serverPort ?? 443
-        )
-        logSocksInboundHealthCheck(port: parsedConfig.inboundPort)
+        settings.ipv4Settings = ipv4
+        settings.ipv6Settings = TunnelIPv6Policy.networkSettings(proxyAddresses: addresses)
+        let dns = NEDNSSettings(servers: dnsServers)
+        dns.matchDomains = [""]
+        settings.dnsSettings = dns
+        try await setTunnelNetworkSettings(settings)
+        guard !preparation.isCancelled else { throw CancellationError() }
+        rememberTunnelLog("Protected tunnel routes and virtual DNS installed")
+
+        runtimeSpec = RuntimeSpec(config: prepared.data, port: parsed.inboundPort,
+            geoAssetsDirectory: providerConfiguration["geoAssetsDirectory"] as? String, credentials: credentials)
+        startTunnelWatchdog(port: runtimeSpec?.port)
+        // NE connected only means the routes are installed. The plugin
+        // queries forwarding readiness before publishing CONNECTED.
+        watchdogQueue.async { self.scheduleNativeRecovery(after: 0) }
     }
 
-    private func applyTunnelNetworkSettings(_ settings: NEPacketTunnelNetworkSettings) async throws {
-        rememberTunnelLog("Applying tunnel network settings")
-        tunnelLog.info("Applying tunnel network settings")
-        try await setTunnelNetworkSettings(settings, timeoutSeconds: networkSettingsTimeoutSeconds)
-        rememberTunnelLog("Tunnel network settings applied")
-        tunnelLog.info("Tunnel network settings applied")
-    }
-
-    private func setTunnelNetworkSettings(
-        _ settings: NEPacketTunnelNetworkSettings?,
-        timeoutSeconds: TimeInterval
-    ) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let resumeBox = SingleResumeBox()
-            let timeoutTask = Task {
-                let nanoseconds = UInt64(timeoutSeconds * 1_000_000_000)
-                try? await Task.sleep(nanoseconds: nanoseconds)
-                guard !Task.isCancelled else {
-                    return
-                }
-                resumeBox.resume {
-                    let message = "Timed out applying packet tunnel network settings after \(Int(timeoutSeconds))s"
-                    rememberTunnelLog(message)
-                    continuation.resume(throwing: tunnelError(message))
-                }
-            }
-
-            self.setTunnelNetworkSettings(settings) { error in
-                timeoutTask.cancel()
-                resumeBox.resume {
-                    if let error {
-                        rememberTunnelLog("Applying tunnel network settings failed: \(error.localizedDescription)")
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume()
-                    }
-                }
-            }
+    open override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        forwardingLock.lock()
+        startupStopped = true
+        startupPreparation?.cancel()
+        forwardingLock.unlock()
+        rememberTunnelLog("Stopping Xray packet tunnel, reason=\(reason.rawValue)")
+        setForwardingReady(false)
+        stopTunnelWatchdog()
+        runtimeQueue.async {
+            _ = self.stopNativeRuntime()
+            completionHandler()
         }
     }
 
-    private func cleanupAfterStartupFailure() {
-        let shouldWaitForHEV = hevLifecycle.isRunning || hevLifecycle.isStopRequested
-        stopTunnelWatchdog()
-        hevLifecycle.requestStop()
-        Socks5Tunnel.quit()
-        if shouldWaitForHEV,
-           !hevLifecycle.waitForExit(timeout: hevShutdownTimeoutSeconds) {
-            rememberTunnelLog("Timed out waiting for HEV after startup failure")
+    private func setStartupPreparation(_ task: Task<TunnelPreparedConfig, Error>?) {
+        forwardingLock.lock()
+        if startupStopped { task?.cancel() }
+        startupPreparation = task
+        forwardingLock.unlock()
+    }
+
+    private func beginStartup() {
+        forwardingLock.lock()
+        startupStopped = false
+        forwardingLock.unlock()
+    }
+
+    private func startNativeRuntime(_ spec: RuntimeSpec) throws {
+        try startXRay(xrayConfig: spec.config, geoAssetsDirectory: spec.geoAssetsDirectory)
+        try startSocks5Tunnel(serverPort: spec.port, credentials: spec.credentials)
+    }
+
+    /// Runs on runtimeQueue. A blocked native quit must not stall NE teardown.
+    private func stopNativeRuntime() -> Bool {
+        var stopped = true
+        if hasStartedHEV {
+            requestHEVStop()
+            stopped = hevLifecycle.waitForExit(timeout: hevShutdownTimeoutSeconds)
+            if let signal = hevStopSignal,
+               signal.wait(timeout: .now() + hevShutdownTimeoutSeconds) != .success {
+                stopped = false
+            }
         }
         stopXRay()
-        setTunnelNetworkSettings(nil) { error in
-            if let error {
-                rememberTunnelLog("Clearing tunnel network settings after startup failure failed: \(error.localizedDescription)")
-                tunnelLog.error("Clearing tunnel network settings after startup failure failed: \(error.localizedDescription, privacy: .public)")
-            } else {
-                rememberTunnelLog("Cleared tunnel network settings after startup failure")
-                tunnelLog.info("Cleared tunnel network settings after startup failure")
-            }
-        }
+        if !stopped { rememberTunnelLog("Native shutdown pending; protected traffic remains blocked") }
+        return stopped
     }
 
-    /// Stops Xray and HEV.
-    ///
-    /// The HEV log tail is captured before shutdown because it is often the only
-    /// evidence of whether real app traffic reached TCP splice or stayed as UDP
-    /// churn. `Socks5Tunnel.quit()` is intentionally called even after Xray
-    /// stops; HEV is the owner of the utun packet consumer thread.
-    open override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        rememberTunnelLog("Stopping Xray packet tunnel, reason=\(reason.rawValue)")
-        tunnelLog.info("Stopping Xray packet tunnel, reason: \(reason.rawValue, privacy: .public)")
-        logTrafficStats(context: "stop")
-        if let hevTail = readHevLogTail(), !hevTail.isEmpty {
-            rememberTunnelLog("--- HEV log tail before stop bytes=\(hevLogSizeBytes()) ---\n\(hevTail)")
-        }
-        stopTunnelWatchdog()
-        hevLifecycle.requestStop()
-        Socks5Tunnel.quit()
-        DispatchQueue.global(qos: .utility).async {
-            if !self.hevLifecycle.waitForExit(timeout: hevShutdownTimeoutSeconds) {
-                rememberTunnelLog("Timed out waiting for HEV to stop")
-                tunnelLog.warning("Timed out waiting for HEV to stop")
-            } else {
-                rememberTunnelLog("HEV stopped before tunnel teardown")
-            }
-            self.stopXRay()
-            self.clearTunnelNetworkSettingsBeforeStop(completionHandler: completionHandler)
-        }
-    }
-
-    private func clearTunnelNetworkSettingsBeforeStop(completionHandler: @escaping () -> Void) {
-        let resumeBox = SingleResumeBox()
-        let timeoutTask = DispatchWorkItem {
-            resumeBox.resume {
-                rememberTunnelLog("Timed out clearing tunnel network settings during stop; completing stop anyway")
-                tunnelLog.warning("Timed out clearing tunnel network settings during stop")
-                completionHandler()
-            }
-        }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3, execute: timeoutTask)
-        setTunnelNetworkSettings(nil) { error in
-            timeoutTask.cancel()
-            resumeBox.resume {
-                if let error {
-                    rememberTunnelLog("Clearing tunnel network settings during stop failed: \(error.localizedDescription)")
-                    tunnelLog.error("Clearing tunnel network settings during stop failed: \(error.localizedDescription, privacy: .public)")
-                } else {
-                    rememberTunnelLog("Cleared tunnel network settings during stop")
-                    tunnelLog.info("Cleared tunnel network settings during stop")
+    /// Runs on watchdogQueue. Keep the NE routes/DNS installed during recovery.
+    private func scheduleNativeRecovery(after delay: TimeInterval) {
+        guard !watchdogSuspended, !runtimeRecoveryInFlight,
+              let spec = runtimeSpec else { return }
+        runtimeRecoveryInFlight = true
+        setForwardingReady(false)
+        let generation = watchdogGeneration
+        runtimeQueue.asyncAfter(deadline: .now() + delay) {
+            guard self.watchdogQueue.sync(execute: {
+                guard self.watchdogGeneration == generation else { return false }
+                if self.watchdogSuspended {
+                    self.runtimeRecoveryInFlight = false
+                    return false
                 }
-                completionHandler()
+                return true
+            }) else { return }
+            var started = false
+            if self.stopNativeRuntime() {
+                do {
+                    try self.startNativeRuntime(spec)
+                    started = true
+                } catch {
+                    rememberTunnelLog("Native restart failed; protected traffic remains blocked")
+                    _ = self.stopNativeRuntime()
+                }
+            }
+            let runtimeStarted = started
+            self.watchdogQueue.async {
+                guard self.watchdogGeneration == generation else { return }
+                self.runtimeRecoveryInFlight = false
+                guard !self.watchdogSuspended else { return }
+                self.watchdogPolicy.reset()
+                if runtimeStarted {
+                    self.performTunnelHealthCheck(trigger: "native-restart")
+                } else {
+                    self.scheduleNativeRecovery(after: 3)
+                }
             }
         }
     }
 
-    /// Provider-message bridge used by the Flutter app.
-    ///
-    /// This is not a public user API, but it is a critical internal operations
-    /// API. It lets the app poll byte counters and retrieve the provider-side
-    /// proof chain without attaching a debugger to the extension process.
-    ///
-    /// Supported messages:
-    ///
-    /// - `xray_traffic`: HEV byte counters as `up,down`.
-    /// - `xray_debug`: provider ring buffer plus HEV log tail.
-    /// - `xray_delay<url>`: connected Xray delay probe.
     open override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         if let message = String(data: messageData, encoding: .utf8) {
-            if (message == "xray_traffic"){
+            if message == "xray_runtime_state" {
+                completionHandler?(Data((isForwardingReady() ? "ready" : "recovering").utf8))
+            } else if (message == "xray_traffic"){
                 logTrafficStats(context: "poll")
                 let stats = Socks5Tunnel.stats
                 completionHandler?("\(stats.up.bytes),\(stats.down.bytes)".data(using: .utf8))
-            } else if (message == "xray_debug") {
+            } else if (message == "xray_debug" || message == NativeLogPrivacy.snapshotCommand) {
                 // This bridge is intentionally part of the runtime API used by
                 // smoke tests and manual Xcode runs. It is the fastest way to
                 // compare TCP/Reality and XHTTP behavior without attaching LLDB
                 // to the extension process separately.
                 var snapshot = TunnelDebugStore.shared.snapshot()
-                if let hevTail = readHevLogTail(), !hevTail.isEmpty {
-                    snapshot += "\n--- HEV log tail bytes=\(hevLogSizeBytes()) ---\n\(hevTail)"
-                }
+                snapshot += "\nHEV diagnostic file bytes=\(hevLogSizeBytes()); raw contents omitted"
                 completionHandler?(snapshot.data(using: .utf8))
             }else if (message.hasPrefix("xray_delay")){
-                var error: NSError?
-                var delay: Int64 = -1
-                let url = String(message[message.index(message.startIndex, offsetBy: 10)...])
-                tunnelLog.info("Measuring connected delay url=\(url, privacy: .public)")
-                XRayMeasureDelay(url, &delay, &error)
-                if let error {
-                    tunnelLog.error("Connected delay error: \(error.localizedDescription, privacy: .public)")
-                } else {
-                    tunnelLog.info("Connected delay result=\(delay, privacy: .public)")
+                let rawURL = String(message.dropFirst(10))
+                watchdogQueue.async {
+                    guard self.isForwardingReady(), let spec = self.runtimeSpec,
+                          let url = URL(string: rawURL) else {
+                        completionHandler?(Data("-1".utf8))
+                        return
+                    }
+                    LocalProxyDelayClient.measure(url: url, port: spec.port, credentials: spec.credentials) { delay in
+                        completionHandler?(Data("\(delay)".utf8))
+                    }
                 }
-                completionHandler?("\(delay)".data(using: .utf8))
             }
             else{
                 tunnelLog.info("Echoing unknown provider message: \(message, privacy: .public)")
@@ -566,20 +349,36 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    /// Starts HEV tun2socks against the local Xray SOCKS inbound.
-    ///
-    /// Xray can start successfully while no browser bytes return. HEV is the
-    /// bridge that decides whether utun packets actually become SOCKS sessions.
-    /// HEV file output is intentionally limited to errors; bounded provider
-    /// snapshots retain the lifecycle evidence needed after a failure.
-    private func startSocks5Tunnel(serverPort port: Int, tunnelFileDescriptor: Int32?) throws {
+    private func requestHEVStop() {
+        let shouldSignal = hevLifecycle.requestStop()
+        // HEV 2.15 quit waits for its event descriptor. After run has returned
+        // that descriptor is gone, so signalling an exited worker would hang.
+        if shouldSignal {
+            // The native worker may also exit between the state check and the
+            // signal. Never let HEV's blocking quit stall NE's teardown callback.
+            let signal = DispatchGroup()
+            signal.enter()
+            hevStopSignal = signal
+            DispatchQueue.global(qos: .utility).async {
+                defer { signal.leave() }
+                if !self.hevLifecycle.waitForExit(timeout: 0) { Socks5Tunnel.quit() }
+            }
+        }
+    }
+
+    private func startSocks5Tunnel(serverPort port: Int, credentials: LocalProxyCredentials) throws {
         // HEV is the tun2socks bridge: it reads IP packets from NetworkExtension
         // and forwards them into the local SOCKS inbound opened by Xray.
         // Xray alone can start successfully while user traffic still cannot
         // leave the device; HEV logs close that gap during real-device tests.
         let logDirectory = TunnelDebugStore.shared.logDirectoryURL()
             ?? FileManager.default.temporaryDirectory
-        let logURL = logDirectory.appendingPathComponent("hev-socks5-tunnel.log")
+        try TunnelHEVLogPolicy.removeLegacyLogs(
+            appGroupDirectory: TunnelDebugStore.shared.logDirectoryURL(),
+            temporaryDirectory: FileManager.default.temporaryDirectory,
+            workerStopped: !hasStartedHEV || hevLifecycle.waitForExit(timeout: 0)
+        )
+        let logURL = logDirectory.appendingPathComponent(TunnelHEVLogPolicy.filename)
         hevLogURL = logURL
         try? TunnelFileLog.trimIfNeeded(logURL)
         try? TunnelFileLog.append(
@@ -588,46 +387,25 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             maxFileBytes: 512 * 1024,
             retainedBytes: 256 * 1024
         )
-        let config = """
-        tunnel:
-          mtu: \(tunnelMTU)
-        socks5:
-          port: \(port)
-          address: 127.0.0.1
-          udp: 'udp'
-        misc:
-          task-stack-size: 20480
-          tcp-buffer-size: \(hevTCPBufferSize)
-          max-session-count: 512
-          connect-timeout: 5000
-          tcp-read-write-timeout: 300000
-          udp-read-write-timeout: 60000
-          log-file: \(logURL.path)
-          log-level: error
-          limit-nofile: 65535
-        """
-        rememberTunnelLog("HEV config summary: tunnel.mtu=\(tunnelMTU), socks5=127.0.0.1:\(port), udp=udp, tcpBuffer=\(hevTCPBufferSize), timeoutMs=5000/300000/60000")
-        if let tunnelFileDescriptor {
-            rememberTunnelLog("Starting HEV socks5 tunnel on 127.0.0.1:\(port), fd=\(tunnelFileDescriptor), mtu=\(tunnelMTU), tcpBuffer=\(hevTCPBufferSize), log=\(logURL.path)")
-            tunnelLog.info("Starting HEV socks5 tunnel on 127.0.0.1:\(port, privacy: .public), fd \(tunnelFileDescriptor, privacy: .public), mtu \(tunnelMTU, privacy: .public), tcpBuffer \(hevTCPBufferSize, privacy: .public)")
-        } else {
-            rememberTunnelLog("Starting HEV socks5 tunnel on 127.0.0.1:\(port) using Tun2SocksKit fd autodetect fallback, mtu=\(tunnelMTU), tcpBuffer=\(hevTCPBufferSize), log=\(logURL.path)")
-            tunnelLog.warning("Starting HEV socks5 tunnel using fd autodetect fallback on 127.0.0.1:\(port, privacy: .public)")
+        let config = TunnelHEVConfiguration.make(port: port, credentials: credentials, mtu: tunnelMTU, logURL: logURL)
+        rememberTunnelLog("Starting HEV socks5 tunnel on 127.0.0.1:\(port), log=\(logURL.path)")
+        tunnelLog.info("Starting HEV socks5 tunnel on 127.0.0.1:\(port, privacy: .public), mtu \(tunnelMTU, privacy: .public)")
+        guard let tunnelFD = packetFlowFileDescriptor() else {
+            throw tunnelError("Unable to identify this provider's packet-flow descriptor")
         }
+        hasStartedHEV = true
         hevLifecycle.beginStart()
         DispatchQueue.global(qos: .userInitiated).async {
             tunnelLog.info("HEV socks5 tunnel thread entered")
             self.hevLifecycle.markThreadEntered()
-            let exitCode: Int32
-            if let tunnelFileDescriptor {
-                rememberTunnelLog("HEV explicit-fd run begin fd=\(tunnelFileDescriptor)")
-                exitCode = config.withCString { rawPointer in
-                    rawPointer.withMemoryRebound(to: UInt8.self, capacity: config.utf8.count) {
-                        hev_socks5_tunnel_main_from_str($0, UInt32(config.utf8.count), tunnelFileDescriptor)
-                    }
+            guard !self.hevLifecycle.isStopRequested else {
+                self.hevLifecycle.markExited(code: 0)
+                return
+            }
+            let exitCode = config.withCString { pointer in
+                pointer.withMemoryRebound(to: UInt8.self, capacity: config.utf8.count) {
+                    hev_socks5_tunnel_main_from_str($0, UInt32(config.utf8.count), tunnelFD)
                 }
-            } else {
-                exitCode = Socks5Tunnel.run(withConfig: .string(content: config))
             }
             let exitedUnexpectedly = self.hevLifecycle.markExited(code: exitCode)
             rememberTunnelLog("HEV socks5 tunnel exited with code \(exitCode)")
@@ -647,8 +425,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         case .exited(let code):
             throw tunnelError("HEV exited during startup with code \(code)")
         case .timedOut:
-            hevLifecycle.requestStop()
-            Socks5Tunnel.quit()
+            requestHEVStop()
             throw tunnelError("Timed out waiting for HEV startup")
         }
     }
@@ -659,7 +436,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             let rawValue = packetFlow.value(forKeyPath: "socket.fileDescriptor")
             let rawType = rawValue.map { String(describing: type(of: $0)) } ?? "nil"
             let rawDescription = String(describing: rawValue)
-            if let fileDescriptor = int32FileDescriptor(from: rawValue) {
+            if let fileDescriptor = int32FileDescriptor(from: rawValue), utunUnit(for: fileDescriptor) != nil {
                 let validation = describeUtunFileDescriptor(fileDescriptor)
                 attempts.append("#\(attempt) rawType=\(rawType) raw=\(rawDescription) fd=\(fileDescriptor) \(validation)")
                 rememberTunnelLog("packetFlow fd KVC attempts: \(attempts.joined(separator: " | "))")
@@ -671,15 +448,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             attempts.append("#\(attempt) rawType=\(rawType) raw=\(rawDescription) converted=nil")
             usleep(50_000)
         }
-        let candidates = utunFileDescriptorCandidates()
-        rememberTunnelLog("Could not read packetFlow socket file descriptor; attempts: \(attempts.joined(separator: " | "))")
-        rememberTunnelLog("Detected utun fd candidates after KVC failure: \(describeUtunFileDescriptorCandidates(candidates))")
-        if candidates.count == 1, let candidate = candidates.first {
-            rememberTunnelLog("Using the only detected utun file descriptor for HEV after KVC failure: \(candidate.logDescription)")
-            tunnelLog.info("Using only detected utun file descriptor \(candidate.fd, privacy: .public) for HEV after KVC failure")
-            return candidate.fd
-        }
-        tunnelLog.warning("Could not read packetFlow socket file descriptor; HEV will use fd autodetect fallback")
+        rememberTunnelLog("Unable to identify packetFlow descriptor; refusing descriptor autodetection")
         return nil
     }
 
@@ -764,21 +533,33 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         return address.sc_unit
     }
 
-    /// Starts Xray inside the extension process.
-    ///
-    /// The config passed here should already be normalized by
-    /// `TunnelXrayConfigPreparer`. In particular, file log paths must be cleared
-    /// before this call because imported desktop paths may not exist inside the
-    /// extension sandbox and can fail startup before networking is tested.
-    private func startXRay(xrayConfig: Data) throws {
+    private func startXRay(xrayConfig: Data, geoAssetsDirectory: String?) throws {
+        // This limits the Go runtime only. HEV session caps and bounded Swift/C
+        // diagnostics below protect the rest of the extension memory budget.
         XRaySetMemoryLimit()
 
         // Create an error pointer
         var error: NSError?
 
+        // This must cross the gomobile bridge: Swift setenv() is not visible to
+        // Go's os.LookupEnv after the Go runtime has initialized on iOS.
+        if geoAssetsDirectory?.isEmpty == true {
+            throw tunnelError("Xray geo asset directory must not be empty")
+        }
+        guard XRaySetAssetLocation(geoAssetsDirectory ?? "", &error) else {
+            rememberTunnelLog("Xray asset configuration failed")
+            throw NativeLogPrivacy.operationError(error ?? tunnelError("Xray asset configuration failed"))
+        }
+        if let geoAssetsDirectory {
+            rememberTunnelLog("Using Xray geo assets from \(geoAssetsDirectory)")
+            tunnelLog.info("Using custom Xray geo asset directory: \(geoAssetsDirectory, privacy: .public)")
+        } else {
+            rememberTunnelLog("Using Xray default geo asset lookup")
+        }
+
         // Start XRay with the config data
         tunnelLog.info("Starting XRay version=\(XRayGetVersion(), privacy: .public) configBytes=\(xrayConfig.count, privacy: .public)")
-        let started = XRayStart(xrayConfig, logger, &error)
+        let started = XRayStartPrivate(xrayConfig, logger, &error)
 
         if started {
             rememberTunnelLog("XRay started successfully")
@@ -786,7 +567,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         } else if let error = error {
             rememberTunnelLog("Failed to start XRay: \(error.localizedDescription)")
             tunnelLog.error("Failed to start XRay: \(error.localizedDescription, privacy: .public)")
-            throw error
+            throw NativeLogPrivacy.operationError(error)
         } else {
             rememberTunnelLog("Failed to start XRay with unknown error")
             throw tunnelError("Failed to start XRay with unknown error")
@@ -798,15 +579,9 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         tunnelLog.info("XRay stopped \(XRayGetVersion(), privacy: .public)")
     }
 
-    /// Minimal values the provider needs after config normalization.
-    ///
-    /// `serverAddress` intentionally stays as the original outbound domain when
-    /// the config used a domain. The provider resolves it only for route
-    /// exclusions and health checks; Xray keeps the domain semantics.
     private struct ParsedConfig {
         let inboundPort: Int
         let serverAddress: String?
-        let serverPort: Int?
     }
 
     private func parseConfig(jsonData: Data) -> ParsedConfig? {
@@ -819,74 +594,23 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         } else {
             tunnelLog.warning("Could not parse outbound server address; VPN routing loop exclusion will be skipped")
         }
-        return ParsedConfig(
-            inboundPort: parsed.inboundPort,
-            serverAddress: parsed.serverAddress,
-            serverPort: parsed.serverPort
-        )
+        return ParsedConfig(inboundPort: parsed.inboundPort, serverAddress: parsed.serverAddress)
     }
 
-    /// Normalizes imported Xray JSON for macOS packet-tunnel constraints.
-    ///
-    /// The same URL parser is used for standalone Xray configs and for this
-    /// extension, but packet tunnels have tighter rules: file logs may be denied
-    /// inside the extension sandbox, and the remote proxy server must not be
-    /// reached through the tunnel that depends on it.
-    private func prepareXrayConfigForTunnel(_ jsonData: Data) -> Data? {
-        guard let prepared = TunnelXrayConfigPreparer.prepare(
-            jsonData: jsonData,
-            resolveIPv4: { resolveIPv4Addresses(for: $0).first }
-        ) else {
-            tunnelLog.warning("Could not prepare Xray config for macOS tunnel")
-            return nil
-        }
-        for message in prepared.logMessages {
-            rememberTunnelLog(message)
-            tunnelLog.info("\(message, privacy: .public)")
-        }
-        return prepared.data
-    }
-
-    /// Builds IPv4 routes that must not enter the Packet Tunnel default route.
-    ///
-    /// This method is one of the most important guardrails in the macOS VPN
-    /// path. The default route goes to utun, but these hosts/subnets must remain
-    /// outside:
-    ///
-    /// - user-provided bypass subnets,
-    /// - the resolved remote proxy server IP.
-    ///
-    /// Removing the server exclusion can create an Xray self-routing loop where
-    /// the server connection tries to traverse the tunnel it is meant to
-    /// establish.
-    private func buildIPv4ExcludedRoutes(
-        serverAddress: String?,
-        bypassSubnets: [String]
-    ) -> [NEIPv4Route] {
-        var routes = bypassSubnets.compactMap { ipv4Route(fromCIDR: $0) }
-        rememberTunnelLog("DNS route exclusions disabled; using Packet Tunnel DNS settings")
-        tunnelLog.info("DNS route exclusions disabled; using Packet Tunnel DNS settings")
-        if let serverAddress {
-            let serverAddresses = resolveIPv4Addresses(for: serverAddress)
-            let serverRoutes = serverAddresses.map {
-                NEIPv4Route(destinationAddress: $0, subnetMask: "255.255.255.255")
-            }
-            routes.append(contentsOf: serverRoutes)
-            if serverRoutes.isEmpty {
-                rememberTunnelLog("No IPv4 address resolved for outbound server \(serverAddress)")
-                tunnelLog.warning("No IPv4 address resolved for outbound server \(serverAddress, privacy: .public)")
-            } else {
-                rememberTunnelLog("Excluded IPv4 server route(s): \(serverAddresses.joined(separator: ","))")
-                tunnelLog.info("Excluded \(serverRoutes.count, privacy: .public) IPv4 server route(s) from VPN: \(serverAddresses.joined(separator: ","), privacy: .public)")
-            }
+    private func buildIPv4ExcludedRoutes(serverAddresses: [String]) -> [NEIPv4Route] {
+        let routes = serverAddresses.map {
+            NEIPv4Route(destinationAddress: $0, subnetMask: "255.255.255.255")
         }
         return routes
     }
 
-    private func startTunnelWatchdog(port: Int) {
+    private func startTunnelWatchdog(port: Int?) {
         watchdogQueue.sync {
+            watchdogGeneration += 1
+            runtimeRecoveryInFlight = false
             watchdogInboundPort = port
             watchdogPolicy.reset()
+            watchdogInboundHealthy = false
             watchdogSuspended = false
 
             watchdogTimer?.cancel()
@@ -919,6 +643,9 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
 
     private func stopTunnelWatchdog() {
         watchdogQueue.sync {
+            watchdogGeneration += 1
+            recoveryCheck?.cancel()
+            recoveryCheck = nil
             watchdogSuspended = true
             watchdogPolicy.reset()
             watchdogTimer?.cancel()
@@ -931,22 +658,45 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
 
     /// Must be called while already executing on `watchdogQueue`.
     private func scheduleTunnelHealthCheck(trigger: String, after delay: TimeInterval) {
+        let generation = watchdogGeneration
         watchdogQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard self?.watchdogGeneration == generation else { return }
             self?.performTunnelHealthCheck(trigger: trigger)
         }
     }
 
-    private func performTunnelHealthCheck(trigger: String) {
+    private func scheduleRecoveryCheck() {
+        guard recoveryCheck == nil else { return }
+        let check = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.recoveryCheck = nil
+            self.performTunnelHealthCheck(trigger: "recovery")
+        }
+        recoveryCheck = check
+        watchdogQueue.asyncAfter(deadline: .now() + 3, execute: check)
+    }
+
+    /// Checks both the HEV worker state and the Xray SOCKS-to-Internet path.
+    /// Recovery keeps protected sessions scoped to the tunnel. A dead local
+    /// runtime is restarted by the saved on-demand policy.
+    @discardableResult
+    private func performTunnelHealthCheck(trigger: String) -> Bool {
         guard !watchdogSuspended,
-              !hevLifecycle.isStopRequested,
-              hevLifecycle.isRunning,
-              let port = watchdogInboundPort else {
-            return
+              !runtimeRecoveryInFlight,
+              let port = watchdogInboundPort,
+              let credentials = runtimeSpec?.credentials else {
+            return false
+        }
+        guard !hevLifecycle.isStopRequested, hevLifecycle.isRunning else {
+            setForwardingReady(false)
+            scheduleNativeRecovery(after: 3)
+            return false
         }
 
-        let inboundResult = socksInboundHealthCheck(port: port)
-        let connectResult = socksConnectHealthCheck(port: port)
-        let httpResult = socksHTTPHealthCheck(port: port)
+        let inboundResult = socksInboundHealthCheck(port: port, credentials: credentials)
+        watchdogInboundHealthy = inboundResult.hasPrefix("ok")
+        let connectResult = socksConnectHealthCheck(port: port, credentials: credentials)
+        let httpResult = socksHTTPHealthCheck(port: port, credentials: credentials)
         if let hevLogURL {
             try? TunnelFileLog.trimIfNeeded(hevLogURL)
         }
@@ -957,10 +707,17 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         rememberTunnelLog(
             "Watchdog \(trigger): success=\(success) inbound=[\(inboundResult)] connect=[\(connectResult)] http=[\(httpResult)]"
         )
+        setForwardingReady(success)
         if success {
             tunnelLog.info("Tunnel watchdog \(trigger, privacy: .public) passed")
+            reasserting = false
+            recoveryCheck?.cancel()
+            recoveryCheck = nil
+            rememberTunnelLog("Protected tunnel forwarding restored")
         } else {
             tunnelLog.warning("Tunnel watchdog \(trigger, privacy: .public) failed")
+            reasserting = true
+            scheduleRecoveryCheck()
         }
 
         if watchdogPolicy.record(success: success) {
@@ -969,144 +726,28 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
                 code: 2
             )
         }
+        return success
     }
 
-    private func reportTerminalFailure(_ message: String, code: Int) {
-        guard !hevLifecycle.isStopRequested else {
+    private func reportTerminalFailure(_ message: NativeDiagnosticMessage, code: Int) {
+        watchdogQueue.async {
+            self.handleRuntimeFailure(message, code: code)
+        }
+    }
+
+    /// Runs on the watchdog queue; native recovery retains the tunnel routes.
+    private func handleRuntimeFailure(_ message: NativeDiagnosticMessage, code: Int) {
+        guard !watchdogSuspended else { return }
+        setForwardingReady(false)
+        if hevLifecycle.isRunning && watchdogInboundHealthy {
+            rememberTunnelLog("Protected tunnel waiting for transport recovery")
             return
         }
-        guard terminalFailureGate.claim() else {
-            return
-        }
-
-        rememberTunnelLog("Terminal tunnel failure: \(message)")
-        tunnelLog.fault("Terminal tunnel failure: \(message, privacy: .public)")
-        hevLifecycle.requestStop()
-        Socks5Tunnel.quit()
-        let error = NSError(
-            domain: "flutter_vless.packet_tunnel",
-            code: code,
-            userInfo: [NSLocalizedDescriptionKey: message]
-        )
-        cancelTunnelWithError(error)
+        rememberTunnelLog("Restarting native workers inside the protected tunnel")
+        scheduleNativeRecovery(after: 0)
     }
 
-    /// Runs layered startup health checks after Xray has had a moment to bind.
-    ///
-    /// These checks intentionally overlap. A lower-level pass does not make the
-    /// higher-level checks redundant:
-    ///
-    /// - SOCKS inbound pass proves Xray opened a local port.
-    /// - CONNECT pass proves Xray accepts an outbound request.
-    /// - literal-IP HTTP pass proves response bytes return through Xray.
-    /// - URLSession HTTPS pass proves a higher-level Apple networking client can
-    ///   complete HTTPS through the same local SOCKS path.
-    private func logSocksInboundHealthCheck(port: Int) {
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) {
-            rememberTunnelLog("SOCKS health checks begin port=\(port)")
-            // The three checks separate local startup from real Internet reach:
-            // 1. SOCKS inbound: Xray opened the local port.
-            // 2. CONNECT: Xray accepted an outbound request.
-            // 3. HTTP 204: bytes came back from the public Internet.
-            // TCP/Reality is treated as working only after the third line is ok.
-            let result = self.socksInboundHealthCheck(port: port)
-            rememberTunnelLog("SOCKS inbound health check: \(result)")
-            tunnelLog.info("SOCKS inbound health check: \(result, privacy: .public)")
-            let connectResult = self.socksConnectHealthCheck(port: port)
-            rememberTunnelLog("SOCKS CONNECT health check: \(connectResult)")
-            tunnelLog.info("SOCKS CONNECT health check: \(connectResult, privacy: .public)")
-            let httpResult = self.socksHTTPHealthCheck(port: port)
-            rememberTunnelLog("SOCKS HTTP health check: \(httpResult)")
-            tunnelLog.info("SOCKS HTTP health check: \(httpResult, privacy: .public)")
-            let xrayDelayResult = self.xrayInternalDelayHealthCheck(url: "https://google.com/generate_204")
-            rememberTunnelLog("XRay internal delay health check: \(xrayDelayResult)")
-            tunnelLog.info("XRay internal delay health check: \(xrayDelayResult, privacy: .public)")
-            Task {
-                rememberTunnelLog("SOCKS URLSession HTTPS health check begin port=\(port) url=https://google.com/generate_204")
-                let urlSessionResult = await self.socksURLSessionHealthCheck(
-                    port: port,
-                    url: "https://google.com/generate_204"
-                )
-                rememberTunnelLog("SOCKS URLSession HTTPS health check: \(urlSessionResult)")
-                tunnelLog.info("SOCKS URLSession HTTPS health check: \(urlSessionResult, privacy: .public)")
-            }
-        }
-    }
-
-    private func logServerTCPRouteHealthCheck(host: String?, port: Int) {
-        guard let host else {
-            return
-        }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) {
-            rememberTunnelLog("Server TCP route health check begin host=\(host) port=\(port)")
-            let serverRouteResult = self.serverTCPRouteHealthCheck(host: host, port: port)
-            rememberTunnelLog("Server TCP route health check: \(serverRouteResult)")
-            tunnelLog.info("Server TCP route health check: \(serverRouteResult, privacy: .public)")
-        }
-    }
-
-    /// Calls Xray's own delay API from inside the provider.
-    ///
-    /// This check is useful for comparing with proxy-only behavior, but it is
-    /// not sufficient as a Packet Tunnel success signal. It does not prove
-    /// macOS DNS resolver health, HEV packet forwarding, or browser TCP
-    /// fallback.
-    private func xrayInternalDelayHealthCheck(url: String) -> String {
-        var error: NSError?
-        var delay: Int64 = -1
-        XRayMeasureDelay(url, &delay, &error)
-        if let error {
-            return "failed delay=\(delay) error=\(error.localizedDescription)"
-        }
-        return "ok delay=\(delay)ms"
-    }
-
-    /// Runs a real `URLSession` HTTPS request through the local SOCKS inbound.
-    ///
-    /// This complements the raw socket HTTP probe. It exercises CFNetwork's
-    /// client path, proxy dictionary handling, TLS, and response parsing. A
-    /// `204` response from `https://google.com/generate_204` was the final
-    /// "browser-like client can use this tunnel" proof in the macOS fix.
-    private func socksURLSessionHealthCheck(port: Int, url: String) async -> String {
-        guard let probeURL = URL(string: url) else {
-            return "invalid url"
-        }
-
-        var request = URLRequest(url: probeURL)
-        request.httpMethod = "GET"
-        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        request.timeoutInterval = 8
-
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 8
-        configuration.timeoutIntervalForResource = 8
-        configuration.connectionProxyDictionary = [
-            kCFNetworkProxiesSOCKSEnable as String: true,
-            kCFNetworkProxiesSOCKSProxy as String: "127.0.0.1",
-            kCFNetworkProxiesSOCKSPort as String: port
-        ]
-
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-
-        let start = DispatchTime.now().uptimeNanoseconds
-        do {
-            let (_, response) = try await session.data(for: request)
-            let elapsed = (DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-            if let httpResponse = response as? HTTPURLResponse {
-                return "ok status=\(httpResponse.statusCode) delay=\(elapsed)ms"
-            }
-            return "ok non-http delay=\(elapsed)ms"
-        } catch {
-            return "failed error=\(error.localizedDescription)"
-        }
-    }
-
-    /// Performs only the SOCKS no-auth greeting.
-    ///
-    /// A pass here means "Xray has a local SOCKS inbound and it responds to
-    /// negotiation." It says nothing about routing to the remote server.
-    private func socksInboundHealthCheck(port: Int) -> String {
+    private func socksInboundHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String {
         let fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
         guard fd >= 0 else {
             return "socket failed errno=\(errno)"
@@ -1134,330 +775,46 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             return "connect 127.0.0.1:\(port) failed errno=\(errno)"
         }
 
-        let greeting: [UInt8] = [0x05, 0x01, 0x00]
-        let sent = greeting.withUnsafeBytes {
-            send(fd, $0.baseAddress, greeting.count, 0)
-        }
-        guard sent == greeting.count else {
-            return "send greeting failed sent=\(sent) errno=\(errno)"
-        }
-
-        var response = [UInt8](repeating: 0, count: 2)
-        let responseCount = response.count
-        let received = response.withUnsafeMutableBytes {
-            recv(fd, $0.baseAddress, responseCount, 0)
-        }
-        guard received == 2 else {
-            return "recv greeting failed received=\(received) errno=\(errno)"
-        }
-
-        return "ok response=\(response.map { String(format: "%02x", $0) }.joined(separator: " "))"
+        return LocalSOCKS5Client.authenticate(fd: fd, credentials: credentials) ? "ok authenticated" : "authentication failed"
     }
 
-    /// Verifies that the remote proxy server is reachable after tunnel routes.
-    ///
-    /// This runs after `setTunnelNetworkSettings`, so it observes the real
-    /// routing table with utun installed. If this TCP connect fails, the most
-    /// likely cause is an incorrect/missing server host exclusion or an IPv6
-    /// path that bypasses the IPv4 exclusion strategy.
-    private func serverTCPRouteHealthCheck(host: String, port: Int) -> String {
-        let addresses = isIPv4Literal(host) ? [host] : resolveIPv4Addresses(for: host)
-        rememberTunnelLog("Server TCP route health check resolved host=\(host) addresses=\(addresses.isEmpty ? "none" : addresses.joined(separator: ","))")
-        guard let addressString = addresses.first else {
-            return "resolve \(host) failed"
-        }
-
-        let fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
-        guard fd >= 0 else {
-            return "socket failed errno=\(errno)"
-        }
-        defer { close(fd) }
-
-        var timeout = timeval(tv_sec: 5, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = UInt16(port).bigEndian
-        guard inet_pton(AF_INET, addressString, &address.sin_addr) == 1 else {
-            return "inet_pton \(addressString) failed"
-        }
-
-        let start = DispatchTime.now().uptimeNanoseconds
-        let connectResult = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        let elapsed = (DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-        guard connectResult == 0 else {
-            return "connect \(addressString):\(port) failed errno=\(errno) delay=\(elapsed)ms"
-        }
-        return "ok \(addressString):\(port) delay=\(elapsed)ms"
+    private func socksConnectHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String {
+        do {
+            let fd = try LocalSOCKS5Client.openConnection(proxyPort: port, credentials: credentials,
+                                                        host: "1.1.1.1", port: 80, timeout: 5)
+            close(fd)
+            return "ok authenticated connect"
+        } catch { return "authenticated connect failed" }
     }
 
-    /// Performs a SOCKS CONNECT to `1.1.1.1:80`.
-    ///
-    /// This is stronger than the greeting but still weaker than an HTTP byte
-    /// check. It proves Xray accepted the request and returned a SOCKS success
-    /// response. It does not prove the remote HTTP response made it back.
-    private func socksConnectHealthCheck(port: Int) -> String {
-        let fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
-        guard fd >= 0 else {
-            return "socket failed errno=\(errno)"
-        }
-        defer { close(fd) }
-
-        var timeout = timeval(tv_sec: 5, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = UInt16(port).bigEndian
-        guard inet_pton(AF_INET, "127.0.0.1", &address.sin_addr) == 1 else {
-            return "inet_pton failed"
-        }
-
-        let connectResult = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard connectResult == 0 else {
-            return "connect 127.0.0.1:\(port) failed errno=\(errno)"
-        }
-
-        let greeting: [UInt8] = [0x05, 0x01, 0x00]
-        guard sendAll(fd: fd, bytes: greeting) else {
-            return "send greeting failed errno=\(errno)"
-        }
-        guard let greetingResponse = recvExact(fd: fd, count: 2) else {
-            return "recv greeting failed errno=\(errno)"
-        }
-        guard greetingResponse == [0x05, 0x00] else {
-            return "unexpected greeting=\(hex(greetingResponse))"
-        }
-
-        let request: [UInt8] = [
-            0x05, 0x01, 0x00, 0x01,
-            0x01, 0x01, 0x01, 0x01,
-            0x00, 0x50
-        ]
-        guard sendAll(fd: fd, bytes: request) else {
-            return "send connect failed errno=\(errno)"
-        }
-        guard let header = recvExact(fd: fd, count: 4) else {
-            return "recv connect header failed errno=\(errno)"
-        }
-        guard header.count == 4 else {
-            return "short connect header=\(hex(header))"
-        }
-        let atyp = header[3]
-        let remaining: Int
-        switch atyp {
-        case 0x01:
-            remaining = 6
-        case 0x03:
-            guard let lengthBytes = recvExact(fd: fd, count: 1), let length = lengthBytes.first else {
-                return "recv domain length failed errno=\(errno)"
-            }
-            remaining = Int(length) + 2
-        case 0x04:
-            remaining = 18
-        default:
-            return "unexpected connect atyp=\(String(format: "%02x", atyp)) header=\(hex(header))"
-        }
-        let tail = recvExact(fd: fd, count: remaining) ?? []
-        let status = header[1] == 0x00 ? "ok" : "failed"
-        return "\(status) response=\(hex(header + tail))"
+    /// Requires authenticated CONNECT and a successful HTTP response from the proxy path.
+    private func socksHTTPHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String {
+        do {
+            let fd = try LocalSOCKS5Client.openConnection(proxyPort: port, credentials: credentials,
+                                                        host: "www.gstatic.com", port: 80)
+            defer { close(fd) }
+            let request = "GET /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\nConnection: close\r\n\r\n"
+            guard LocalSOCKS5Client.sendAll(fd: fd, bytes: Array(request.utf8)),
+                  let response = recvSome(fd: fd, maxCount: 512),
+                  let status = String(bytes: response, encoding: .utf8)?.split(separator: " ").dropFirst().first,
+                  let code = Int(status), (200...399).contains(code) else { return "HTTP response failed" }
+            return "ok authenticated HTTP"
+        } catch { return "authenticated HTTP connection failed" }
     }
 
-    /// Performs an HTTP request through the same local SOCKS inbound used by HEV.
-    ///
-    /// This is the decisive regression signal for the current investigation:
-    /// TCP/Reality returned `HTTP/1.1 204 No Content` on device, while failing
-    /// XHTTP links reached earlier stages but did not return usable page bytes.
-    private func socksHTTPHealthCheck(port: Int) -> String {
-        // Use a literal IP here so the health check validates Xray bytes
-        // without depending on the extension process resolver after the system
-        // default route has already moved into the packet tunnel. DNS is tested
-        // separately through route snapshots and URLSession behavior.
-        let targetAddress = "1.1.1.1"
-        let hostHeader = "1.1.1.1"
-        let path = "/cdn-cgi/trace"
-        let targetOctets = targetAddress.split(separator: ".").compactMap { UInt8($0) }
-        guard targetOctets.count == 4 else {
-            return "invalid IPv4 target"
-        }
-
-        let fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
-        guard fd >= 0 else {
-            return "socket failed errno=\(errno)"
-        }
-        defer { close(fd) }
-
-        var timeout = timeval(tv_sec: 8, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = UInt16(port).bigEndian
-        guard inet_pton(AF_INET, "127.0.0.1", &address.sin_addr) == 1 else {
-            return "inet_pton failed"
-        }
-
-        let connectResult = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard connectResult == 0 else {
-            return "connect 127.0.0.1:\(port) failed errno=\(errno)"
-        }
-
-        guard sendAll(fd: fd, bytes: [0x05, 0x01, 0x00]),
-              let greetingResponse = recvExact(fd: fd, count: 2),
-              greetingResponse == [0x05, 0x00] else {
-            return "socks greeting failed errno=\(errno)"
-        }
-
-        var request: [UInt8] = [0x05, 0x01, 0x00, 0x01]
-        request.append(contentsOf: targetOctets)
-        request.append(0x00)
-        request.append(0x50)
-        guard sendAll(fd: fd, bytes: request) else {
-            return "send connect failed errno=\(errno)"
-        }
-        guard let header = recvExact(fd: fd, count: 4) else {
-            return "recv connect header failed errno=\(errno)"
-        }
-        guard header.count == 4, header[1] == 0x00 else {
-            return "connect failed response=\(hex(header)) errno=\(errno)"
-        }
-        let atyp = header[3]
-        let remaining: Int
-        switch atyp {
-        case 0x01:
-            remaining = 6
-        case 0x03:
-            guard let lengthBytes = recvExact(fd: fd, count: 1), let length = lengthBytes.first else {
-                return "recv domain length failed errno=\(errno)"
-            }
-            remaining = Int(length) + 2
-        case 0x04:
-            remaining = 18
-        default:
-            return "unexpected connect atyp=\(String(format: "%02x", atyp))"
-        }
-        _ = recvExact(fd: fd, count: remaining)
-
-        let httpRequest = """
-        GET \(path) HTTP/1.1\r
-        Host: \(hostHeader)\r
-        User-Agent: flutter-vless-healthcheck\r
-        Connection: close\r
-        \r
-
-        """
-        guard sendAll(fd: fd, bytes: Array(httpRequest.utf8)) else {
-            return "send http failed errno=\(errno)"
-        }
-        switch recvSome(fd: fd, maxCount: 512) {
-        case .success(let response):
-            let text = String(decoding: response, as: UTF8.self)
-            let firstLine = text.components(separatedBy: "\r\n").first ?? text
-            return "ok \(targetAddress)\(path) \(firstLine)"
-        case .closed:
-            return "recv http closed by peer"
-        case .failed(let err):
-            return "recv http failed errno=\(err)"
-        }
-    }
-
-    /// Distinguishes a clean peer close from a socket error.
-    ///
-    /// During the regression, "no bytes returned" was materially different from
-    /// "remote closed after CONNECT". Preserve that distinction in logs.
-    private enum SocketReadResult {
-        case success([UInt8])
-        case closed
-        case failed(Int32)
-    }
-
-    private func sendAll(fd: Int32, bytes: [UInt8]) -> Bool {
-        var sentTotal = 0
-        while sentTotal < bytes.count {
-            let sent = bytes.withUnsafeBytes {
-                send(fd, $0.baseAddress!.advanced(by: sentTotal), bytes.count - sentTotal, 0)
-            }
-            guard sent > 0 else {
-                return false
-            }
-            sentTotal += sent
-        }
-        return true
-    }
-
-    private func recvExact(fd: Int32, count: Int) -> [UInt8]? {
-        var result: [UInt8] = []
-        result.reserveCapacity(count)
-        while result.count < count {
-            var buffer = [UInt8](repeating: 0, count: count - result.count)
-            let bufferCount = buffer.count
-            let received = buffer.withUnsafeMutableBytes {
-                recv(fd, $0.baseAddress, bufferCount, 0)
-            }
-            guard received > 0 else {
-                return nil
-            }
-            result.append(contentsOf: buffer.prefix(received))
-        }
-        return result
-    }
-
-    private func recvSome(fd: Int32, maxCount: Int) -> SocketReadResult {
+    private func recvSome(fd: Int32, maxCount: Int) -> [UInt8]? {
         var buffer = [UInt8](repeating: 0, count: maxCount)
         let received = buffer.withUnsafeMutableBytes {
             recv(fd, $0.baseAddress, maxCount, 0)
         }
-        if received > 0 {
-            return .success(Array(buffer.prefix(received)))
+        guard received > 0 else {
+            return nil
         }
-        if received == 0 {
-            return .closed
-        }
-        return .failed(errno)
+        return Array(buffer.prefix(received))
     }
 
     private func hex(_ bytes: [UInt8]) -> String {
         bytes.map { String(format: "%02x", $0) }.joined(separator: " ")
-    }
-
-    /// Reads only the tail of HEV's debug log for provider snapshots.
-    ///
-    /// Full HEV logs can become very large. The tail is enough to identify
-    /// whether recent traffic is TCP splice, UDP churn, or session timeout.
-    private func readHevLogTail() -> String? {
-        guard let hevLogURL else {
-            return nil
-        }
-        try? TunnelFileLog.trimIfNeeded(hevLogURL)
-        guard
-              let content = try? TunnelFileLog.tail(
-                of: hevLogURL,
-                maxBytes: 64 * 1024,
-                maxLines: 160
-              ),
-              !content.isEmpty else {
-            return nil
-        }
-        return content
     }
 
     private func hevLogSizeBytes() -> UInt64 {
@@ -1469,60 +826,6 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         return size.uint64Value
     }
 
-    /// Kept for the future dual-stack path. It is intentionally unused while
-    /// `settings.ipv6Settings` is nil, because enabling IPv6 without an HTTP
-    /// health check recreated the "connected but browser does not load" state.
-    private func buildIPv6ExcludedRoutes(serverAddress: String?) -> [NEIPv6Route] {
-        guard let serverAddress else { return [] }
-        let serverAddresses = resolveIPv6Addresses(for: serverAddress)
-        let routes = serverAddresses.map {
-            NEIPv6Route(destinationAddress: $0, networkPrefixLength: 128)
-        }
-        if !routes.isEmpty {
-            tunnelLog.info("Excluded \(routes.count, privacy: .public) IPv6 server route(s) from VPN: \(serverAddresses.joined(separator: ","), privacy: .public)")
-        }
-        return routes
-    }
-
-    /// Parses user bypass subnets.
-    ///
-    /// Only IPv4 bypasses are accepted in the current Packet Tunnel path because
-    /// IPv6 routing is intentionally disabled. Silently accepting IPv6-looking
-    /// values here would give users a false sense of coverage.
-    private func ipv4Route(fromCIDR cidr: String) -> NEIPv4Route? {
-        let parts = cidr.split(separator: "/")
-        guard parts.count == 2,
-              let prefix = Int(parts[1]),
-              (0...32).contains(prefix),
-              let subnetMask = subnetMask(prefixLength: prefix) else {
-            tunnelLog.warning("Ignoring invalid IPv4 bypass subnet: \(cidr, privacy: .public)")
-            return nil
-        }
-        let address = String(parts[0])
-        guard isIPv4Literal(address) else {
-            tunnelLog.warning("Ignoring non-IPv4 bypass subnet: \(cidr, privacy: .public)")
-            return nil
-        }
-        return NEIPv4Route(destinationAddress: address, subnetMask: subnetMask)
-    }
-
-    private func subnetMask(prefixLength: Int) -> String? {
-        guard (0...32).contains(prefixLength) else { return nil }
-        let mask = prefixLength == 0 ? UInt32(0) : UInt32.max << UInt32(32 - prefixLength)
-        return [
-            (mask >> 24) & 0xff,
-            (mask >> 16) & 0xff,
-            (mask >> 8) & 0xff,
-            mask & 0xff
-        ].map(String.init).joined(separator: ".")
-    }
-
-    /// Resolves IPv4 addresses for DNS host mapping and route exclusions.
-    ///
-    /// The first IPv4 is also what the server TCP route health check uses. If a
-    /// provider returns multiple A records and one is bad, future work may need
-    /// to test/exclude more than the first, but the current implementation logs
-    /// all resolved addresses that it excludes.
     private func resolveIPv4Addresses(for host: String) -> [String] {
         if isIPv4Literal(host) {
             return [host]
@@ -1551,7 +854,6 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         var result: UnsafeMutablePointer<addrinfo>?
         let status = getaddrinfo(host, nil, &hints, &result)
         guard status == 0, let first = result else {
-            rememberTunnelLog("Failed to resolve \(host): \(String(cString: gai_strerror(status)))")
             tunnelLog.warning("Failed to resolve \(host, privacy: .public): \(String(cString: gai_strerror(status)), privacy: .public)")
             return []
         }
@@ -1588,15 +890,15 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         return address.withCString { inet_pton(AF_INET6, $0, &addr) } == 1
     }
 
-    private func tunnelError(_ message: String) -> NSError {
-        tunnelLog.error("\(message, privacy: .public)")
+    private func tunnelError(_ message: NativeDiagnosticMessage) -> NSError {
+        tunnelLog.error(message)
         return NSError(domain: "flutter_vless.packet_tunnel", code: 1, userInfo: [
-            NSLocalizedDescriptionKey: message
+            NSLocalizedDescriptionKey: message.text
         ])
     }
 
     private func logTrafficStats(context: String) {
-        guard Date().timeIntervalSince(lastTrafficLogDate) >= 2 || context != "poll" else {
+        guard Date().timeIntervalSince(lastTrafficLogDate) >= 5 || context != "poll" else {
             return
         }
         lastTrafficLogDate = Date()
@@ -1610,8 +912,9 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
 class CustomXRayLogger: NSObject, XRayLoggerProtocol {
     func logInput(_ s: String?) {
         if let logMessage = s {
-            TunnelDebugStore.shared.append("XRay: \(logMessage)")
-            tunnelLog.info("XRay: \(logMessage, privacy: .public)")
+            let event = NativeLogPrivacy.runtimeEvent(logMessage)
+            TunnelDebugStore.shared.append(event)
+            tunnelLog.info(event)
         }
     }
 }

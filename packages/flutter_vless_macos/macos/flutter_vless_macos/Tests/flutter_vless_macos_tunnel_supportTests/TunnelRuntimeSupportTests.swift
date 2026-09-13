@@ -6,18 +6,18 @@ final class TunnelRuntimeSupportTests: XCTestCase {
     func testPreparerForcesWarningLogging() throws {
         let source = try JSONSerialization.data(withJSONObject: [
             "log": ["loglevel": "debug"],
-            "inbounds": [],
-            "outbounds": []
+            "inbounds": [["protocol": "socks", "port": 10808]],
+            "outbounds": [["protocol": "socks", "tag": "proxy", "settings": ["servers": [["address": "127.0.0.1", "port": 9999]]]]]
         ])
 
-        let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: source))
+        let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: source, credentials: try LocalProxyCredentials.generate()))
         let output = try XCTUnwrap(
             JSONSerialization.jsonObject(with: prepared.data) as? [String: Any]
         )
         let log = try XCTUnwrap(output["log"] as? [String: Any])
         XCTAssertEqual(log["loglevel"] as? String, "warning")
-        XCTAssertEqual(log["access"] as? String, "")
-        XCTAssertEqual(log["error"] as? String, "")
+        XCTAssertEqual(log["access"] as? String, "none")
+        XCTAssertEqual(log["error"] as? String, "none")
     }
 
     func testImmediateWorkerExitFailsStartup() {

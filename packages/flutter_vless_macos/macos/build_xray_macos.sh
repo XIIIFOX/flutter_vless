@@ -7,8 +7,9 @@ XRAY_MOBILE_DIR="${XRAY_MOBILE_DIR:-$REPO_ROOT/third_party/xray-mobile}"
 XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.7.28}"
 XRAY_CORE_REF="${XRAY_CORE_REF:-5ca6f4b7d4dc20a881d4330e498892697627ec0c}"
 XRAY_MACOS_DEPLOYMENT_TARGET="${XRAY_MACOS_DEPLOYMENT_TARGET:-13.0}"
-BUILD_DIR="${BUILD_DIR:-$SCRIPT_DIR/build_xray_macos}"
+BUILD_DIR="${BUILD_DIR:-$REPO_ROOT/build/xray_macos}"
 OUTPUT_XCFRAMEWORK="${OUTPUT_XCFRAMEWORK:-$SCRIPT_DIR/XRay.xcframework}"
+export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.0}"
 
 export MACOSX_DEPLOYMENT_TARGET="$XRAY_MACOS_DEPLOYMENT_TARGET"
 export CGO_CFLAGS="${CGO_CFLAGS:-} -mmacosx-version-min=$XRAY_MACOS_DEPLOYMENT_TARGET"
@@ -18,14 +19,6 @@ export CGO_LDFLAGS="${CGO_LDFLAGS:-} -mmacosx-version-min=$XRAY_MACOS_DEPLOYMENT
 if ! command -v go >/dev/null 2>&1; then
     echo "Error: Go is required."
     exit 1
-fi
-
-if ! command -v gomobile >/dev/null 2>&1; then
-    echo "gomobile not found, installing it with go install..."
-    go install golang.org/x/mobile/cmd/gomobile@latest
-    go install golang.org/x/mobile/cmd/gobind@latest
-    export PATH="$HOME/go/bin:$PATH"
-    gomobile init
 fi
 
 if ! xcrun --sdk macosx --show-sdk-path >/dev/null 2>&1; then
@@ -51,8 +44,60 @@ echo "Using vendored xray-mobile source from $XRAY_MOBILE_DIR"
 
 # Xray-core uses calendar release tags but keeps the original module path.
 go get "github.com/xtls/xray-core@$XRAY_CORE_REF"
-go get -tool golang.org/x/mobile/cmd/gobind
+MOBILE_VERSION="$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
+go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
+mkdir -p "$BUILD_DIR/tools"
+GOBIN="$BUILD_DIR/tools" go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_VERSION"
+GOBIN="$BUILD_DIR/tools" go install "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
+export PATH="$BUILD_DIR/tools:$PATH"
 go mod tidy
+
+# Keep the same bounded XHTTP scratch allocation as the mobile runtime.
+# Patch a private Go toolchain copy, never the installed SDK.
+H2BUF_CAP_KB="${H2BUF_CAP_KB:-128}"
+case "$H2BUF_CAP_KB" in
+    ''|*[!0-9]*) echo "Error: H2BUF_CAP_KB must be a number (got '$H2BUF_CAP_KB')"; exit 1 ;;
+esac
+if [ "$H2BUF_CAP_KB" -lt 16 ] || [ "$H2BUF_CAP_KB" -gt 512 ]; then
+    echo "Error: H2BUF_CAP_KB must be between 16 and 512 (got $H2BUF_CAP_KB)"
+    exit 1
+fi
+
+GOROOT_LIVE="$(go env GOROOT)"
+GOROOT_PATCHED="$BUILD_DIR/goroot-patched"
+H2_REL="src/net/http/internal/http2/transport.go"
+if [ ! -f "$GOROOT_LIVE/$H2_REL" ]; then
+    echo "Error: $H2_REL not found in GOROOT ($GOROOT_LIVE)."
+    echo "The H2BUF patch requires the Go >= 1.27 stdlib http2 layout."
+    echo "Your Go version: $(go version)"
+    exit 1
+fi
+rm -rf "$GOROOT_PATCHED"
+cp -Rc "$GOROOT_LIVE" "$GOROOT_PATCHED" 2>/dev/null || cp -R "$GOROOT_LIVE" "$GOROOT_PATCHED"
+# Toolchains downloaded through GOTOOLCHAIN live in the read-only module cache.
+# Make only the temporary clone writable so it can be patched and removed later.
+chmod -R u+w "$GOROOT_PATCHED"
+H2_FILE="$GOROOT_PATCHED/$H2_REL"
+H2BUF_CAP_KB="$H2BUF_CAP_KB" python3 - "$H2_FILE" <<'PYEOF'
+import os, sys
+path = sys.argv[1]
+cap = os.environ["H2BUF_CAP_KB"]
+src = open(path).read()
+old = "const max = 512 << 10"
+n = src.count(old)
+if n != 1:
+    sys.stderr.write(
+        f"Error: expected exactly one occurrence of '{old}' in {path}, found {n}.\n"
+        "The Go stdlib http2 source has changed; update the H2BUF patch anchor.\n")
+    sys.exit(1)
+open(path, "w").write(src.replace(old, f"const max = {cap} << 10 // H2BUF patch (flutter_vless issue #23)"))
+print(f"H2BUF: capped h2 upload scratch buffer at {cap} KiB in GOROOT clone")
+PYEOF
+export GOROOT="$GOROOT_PATCHED"
+export PATH="$GOROOT_PATCHED/bin:$PATH"
+grep -q "H2BUF patch" "$H2_FILE" || { echo "Error: H2BUF patch verification failed"; exit 1; }
+echo "H2BUF: building with $(go version) from patched GOROOT clone"
+
 
 # Verify our file compiles before proceeding
 echo "Verifying Go compilation..."

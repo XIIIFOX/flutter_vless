@@ -1,24 +1,13 @@
-## Unreleased
+## 1.1.6 (Unreleased)
 
-* Resolved the outbound gateway through the Windows API instead of parsing
-  English `ipconfig` output.
-
-* Waited for the TUN IPv4 address to become usable before installing capture
-  routes, including when reconnecting after adapter recreation.
-
-* Captured IPv4 with two session-owned `/1` routes so physical interface metrics
-  cannot silently bypass the VPN; removed these routes on stop or setup failure.
-
-* Exposed the VPN Diagnostics button in the Windows example.
-
-* Bound Windows `direct` transports to the pre-tunnel network interface to prevent
-  domain bypass connections from looping back into the VPN.
-
-* Preserved Xray domain rules, DNS settings, and server ports during proxy/VPN
-  configuration. Selected SOCKS listeners structurally regardless of key order.
-* Added a dedicated API listener without duplicate routing blocks.
-* Joined failed workers on stop and reflected native service failures in status.
-* Removed config fragments from endpoint extraction diagnostics.
+* Install mandatory Windows Filtering Platform protection before VPN setup. Keep it during native worker failure, recovery and application crashes; remove only this application's filters on explicit stop. A retained policy can be cleared by restarting the application as administrator and stopping VPN.
+* Block physical IPv4/DNS fallback and IPv6 outside the tunnel, including newly attached adapters. Route virtual DNS through the selected proxy and bootstrap transport endpoints before protection starts.
+* Authenticate the internal SOCKS proxy, bind outbound sockets to the available underlay, retry failed workers and require a private challenge-response through TUN, tun2socks and Xray before reporting `CONNECTED`.
+* Preserve domain routing and support IPv4 `bypassSubnets` as direct rules inside Xray, below mandatory DNS and IPv6 rules. Reject extra VPN proxy listeners, ambiguous configuration fields and unsupported IPv6 endpoints.
+* Launch bundled executables by absolute application-relative paths with explicit arguments, bounded output and owned child jobs. Remove CWD, PATH and AppData executable discovery and shell command construction.
+* Keep the VPN's Xray executable and configuration files in an unpredictable Administrators/System-owned directory. Require an elevated Xray token for its WFP exception and restrict DHCP permission to the Windows DHCP service. Keep proxy-only temporary files owner/System-only; remove configuration files after startup. Suppress raw worker output, imported log destinations and runtime debug environment overrides.
+* Serialize native operations, join outstanding work before plugin destruction, and restore the proxy preferences captured before the session.
+* Add policy, private-process/file, failure-transaction and local routing regression tests. Keep the VPN Diagnostics button available in the Windows example.
 
 ## 1.1.1
 

@@ -13,7 +13,7 @@ macOS implementation of the flutter_vless plugin.
   cxray_pod_include_dir = '${PODS_TARGET_SRCROOT}/flutter_vless_macos/Sources/CXRay/include'
   cxray_user_include_dir = '${PODS_ROOT}/../Flutter/ephemeral/.symlinks/plugins/flutter_vless_macos/macos/flutter_vless_macos/Sources/CXRay/include'
 
-  s.source_files = 'flutter_vless_macos/Sources/flutter_vless_macos/**/*.swift'
+  s.source_files = 'flutter_vless_macos/Sources/flutter_vless_macos/**/*.swift', 'flutter_vless_macos/Sources/flutter_vless_macos_privacy/**/*.swift'
   s.dependency 'FlutterMacOS'
   s.platform = :osx, '13.0'
   s.osx.deployment_target = '13.0'
@@ -27,9 +27,9 @@ macOS implementation of the flutter_vless plugin.
       exit 0
     fi
 
-    DEFAULT_FRAMEWORK_URL="https://github.com/XIIIFOX/flutter_vless/releases/download/xray-macos-v26.7.28/XRay.xcframework.zip"
+    DEFAULT_FRAMEWORK_URL="https://github.com/XIIIFOX/flutter_vless/releases/download/xray-macos-v26.7.28-r1/XRay.xcframework.zip"
     FRAMEWORK_URL="${FLUTTER_VLESS_MACOS_FRAMEWORK_URL:-$DEFAULT_FRAMEWORK_URL}"
-    FRAMEWORK_SHA256="${FLUTTER_VLESS_MACOS_FRAMEWORK_SHA256:-be0102278d72659086d6b7235adff20a07bdd4966a003f5cf3eeae5850ceb8ab}"
+    FRAMEWORK_SHA256="${FLUTTER_VLESS_MACOS_FRAMEWORK_SHA256:-d5404549c4b1737d2b6798b27a1cb61466d1fe6cd7b885a84552ffbe153fd102}"
 
     rm -rf "$FRAMEWORK_DIR" "$FRAMEWORK_ZIP"
 

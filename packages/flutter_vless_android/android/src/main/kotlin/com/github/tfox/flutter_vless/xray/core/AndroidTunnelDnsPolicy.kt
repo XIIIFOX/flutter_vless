@@ -148,7 +148,7 @@ internal object AndroidTunnelDnsPolicy {
         val relay = JSONObject().put("tag", RELAY_TAG).put("protocol", "dns")
             .put("settings", JSONObject().put("rewriteNetwork", "tcp").put("rewriteAddress", "1.1.1.1")
                 .put("rewritePort", 53).put("rules", JSONArray().put(JSONObject().put("action", "direct"))))
-            .put("proxySettings", JSONObject().put("tag", selectedTag))
+            .put("streamSettings", JSONObject().put("sockopt", JSONObject().put("dialerProxy", selectedTag)))
         config.put("outbounds", JSONArray(outbounds).put(relay))
         // Explicit proxy policy owns system DNS. No local/+local/OS fallback is retained.
         config.put("dns", JSONObject().put("hosts", hosts).put("servers", JSONArray().put("tcp://1.1.1.1"))

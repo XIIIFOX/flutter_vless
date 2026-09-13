@@ -48,7 +48,8 @@ class AndroidTunnelDnsPolicyTest {
             assertEquals("dns", relay.getString("protocol"))
             assertEquals("tcp", relay.getJSONObject("settings").getString("rewriteNetwork"))
             assertEquals("1.1.1.1", relay.getJSONObject("settings").getString("rewriteAddress"))
-            assertEquals("proxy", relay.getJSONObject("proxySettings").getString("tag"))
+            assertFalse(relay.has("proxySettings"))
+            assertEquals("proxy", relay.getJSONObject("streamSettings").getJSONObject("sockopt").getString("dialerProxy"))
             val dns = output.getJSONObject("dns")
             assertEquals("tcp://1.1.1.1", dns.getJSONArray("servers").getString(0))
             assertTrue(dns.getBoolean("disableFallback"))
@@ -84,9 +85,9 @@ class AndroidTunnelDnsPolicyTest {
         rejected { prepare(ambiguous, "missing") }
         rejected { prepare(ambiguous, "direct") }
         val chosen = JSONObject(prepare(ambiguous, "two").configJson)
-        assertEquals("two", chosen.getJSONArray("outbounds").getJSONObject(3).getJSONObject("proxySettings").getString("tag"))
+        assertEquals("two", chosen.getJSONArray("outbounds").getJSONObject(3).getJSONObject("streamSettings").getJSONObject("sockopt").getString("dialerProxy"))
         val conventional = JSONObject(prepare(config(outbound(tag = "other"), outbound("vless"))).configJson)
-        assertEquals("proxy", conventional.getJSONArray("outbounds").getJSONObject(3).getJSONObject("proxySettings").getString("tag"))
+        assertEquals("proxy", conventional.getJSONArray("outbounds").getJSONObject(3).getJSONObject("streamSettings").getJSONObject("sockopt").getString("dialerProxy"))
     }
 
     @Test fun reservedTagsAndVirtualEndpointRoutingConflictsRejectBeforeResolution() {

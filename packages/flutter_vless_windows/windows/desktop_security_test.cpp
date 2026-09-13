@@ -33,6 +33,11 @@ int main() {
   Require(rules[0]["ip"] == Json::array({"::/0"}), "IPv6 does not precede bypass rules");
   Require(rules[1]["inboundTag"] == Json::array({kDnsUpstream}) && rules[1]["outboundTag"] == "proxy", "internal DNS not proxied");
   Require(rules[2]["outboundTag"] == kDnsRelay, "system DNS not relayed");
+  const auto relay = std::find_if(config["outbounds"].begin(), config["outbounds"].end(),
+      [](const Json& outbound) { return outbound.value("tag", "") == kDnsRelay; });
+  Require(relay != config["outbounds"].end(), "missing DNS relay");
+  Require(!relay->contains("proxySettings"), "removed proxySettings emitted");
+  Require((*relay)["streamSettings"]["sockopt"]["dialerProxy"] == "proxy", "DNS relay chain missing");
   Require(rules[3] == source["routing"]["rules"][0] && rules[4] == source["routing"]["rules"][1], "domain bypass rules reordered or removed");
   Require(config["outbounds"][1]["streamSettings"]["sockopt"]["interface"] == "Ethernet", "direct sockets reenter capture");
   for (const auto& key : {"FakeDNS", "fakedns", "fakeDnS"}) {

@@ -69,10 +69,10 @@ public enum TunnelDNSPolicy {
             "settings": [
                 "rewriteNetwork": "tcp", "rewriteAddress": "1.1.1.1", "rewritePort": 53,
                 // In DNS outbound vocabulary this means relay through its
-                // dialer, which proxySettings below chains to the proxy.
+                // dialer, which dialerProxy below chains to the proxy.
                 "rules": [["action": "direct"]]
             ],
-            "proxySettings": ["tag": selectedTag]
+            "streamSettings": ["sockopt": ["dialerProxy": selectedTag]]
         ])
         config["outbounds"] = outbounds
         // The sample owns system DNS, as before. Never use tcp+local/local or

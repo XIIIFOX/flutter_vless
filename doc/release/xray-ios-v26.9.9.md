@@ -11,3 +11,5 @@ Native runtime for the flutter_vless 1.1.6 release train; Flutter packages remai
 This is a prerelease native artifact for integration testing, matching the upstream prerelease status.
 
 Archive SHA-256: `dd07e1897bdff4c3e4e1a3958629ad5d9517676ecd470bfd99ec35e46184549e`.
+
+Use with the updated flutter_vless 1.1.6 sources: generated DNS chaining now uses `streamSettings.sockopt.dialerProxy`. Xray v26.9.9 rejects the removed `proxySettings` field in older configurations.

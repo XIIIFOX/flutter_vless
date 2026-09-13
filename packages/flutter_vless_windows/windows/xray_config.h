@@ -340,7 +340,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   if (proxy.empty()) return std::nullopt;
   config["outbounds"].push_back({{"tag", kDnsRelay}, {"protocol", "dns"},
       {"settings", {{"rewriteNetwork", "tcp"}, {"rewriteAddress", "1.1.1.1"}, {"rewritePort", 53},
-          {"rules", Json::array({{{"action", "direct"}}})}}}, {"proxySettings", {{"tag", proxy}}}});
+          {"rules", Json::array({{{"action", "direct"}}})}}}, {"streamSettings", {{"sockopt", {{"dialerProxy", proxy}}}}}});
   config["outbounds"].push_back({{"tag", kIpv6Block}, {"protocol", "blackhole"}});
   config["dns"] = {{"hosts", hosts}, {"servers", Json::array({"tcp://1.1.1.1"})}, {"tag", kDnsUpstream},
       {"queryStrategy", "UseIPv4"}, {"disableFallback", true}};

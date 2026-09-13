@@ -41,6 +41,7 @@ python3 - "$OUT/runtime.log" <<'PY'
 from pathlib import Path
 import sys
 text=Path(sys.argv[1]).read_text()
+assert "RUNTIME=26.9.9" in text, "Unexpected embedded Xray version"
 assert 'MACOS_COUNTERS_AND_API_BOUNDARY_PASS' in text
 for marker in ['privacy-canary.invalid','synthetic-password-canary','d2719f44-f51f-4c35-aeae-246230d21f38','local-user-canary','local-password-canary']:
     assert marker not in text, 'Private marker escaped'

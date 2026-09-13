@@ -225,7 +225,7 @@ def start_adapter(probe, directory, subnet):
     process = subprocess.Popen([str(probe), "adapter", f"FlutterVlessValidation{subnet}", str(subnet), str(stop)],
                                cwd=directory, stdout=log, stderr=log)
     log.close()
-    deadline = time.monotonic() + 35
+    deadline = time.monotonic() + 60
     while "ADAPTER_READY=" not in log_path.read_text(errors="replace"):
         if process.poll() is not None or time.monotonic() >= deadline:
             stop.touch()

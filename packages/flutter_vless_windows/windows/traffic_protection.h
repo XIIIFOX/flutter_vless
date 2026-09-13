@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <atomic>
 #include <functional>
+#include <vector>
 
 namespace flutter_vless {
 // A non-dynamic WFP policy survives worker/application crashes. Only an explicit
@@ -20,12 +21,16 @@ class TrafficProtection {
   bool Inspect();
   bool Release();
   bool Active() const { return active_.load(); }
+  DWORD Error() const { return last_error_.load(); }
  private:
   bool Open();
   bool DeleteFilters();
+  bool OwnedFilterIds(std::vector<UINT64>& ids);
+  bool Check(DWORD error) { if (error != ERROR_SUCCESS) last_error_.store(error); return error == ERROR_SUCCESS; }
   HANDLE engine_ = nullptr;
   HANDLE owner_ = nullptr;
   std::atomic<bool> active_{false};
+  std::atomic<DWORD> last_error_{ERROR_SUCCESS};
   std::function<std::wstring()> dhcp_sid_;
 };
 }  // namespace flutter_vless

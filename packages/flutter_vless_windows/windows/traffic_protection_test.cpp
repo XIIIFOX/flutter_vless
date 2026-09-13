@@ -11,6 +11,9 @@
 #include <vector>
 
 namespace {
+GUID owned_provider{};
+GUID foreign_provider = {0xdec0de,0x1234,0x5678,{1,2,3,4,5,6,7,8}};
+size_t enumeration_offset = 0;
 struct Rule {
   GUID layer{}; FWP_ACTION_TYPE action{}; UINT64 weight=0, interface_=0, id=0;
   bool loop=false, app=false, service_app=false, elevated=false, service=false; UINT8 protocol=0; UINT16 local=0, remote=0;
@@ -42,7 +45,7 @@ DWORD WINAPI FwpmTransactionBegin0(HANDLE,UINT32) { transaction=true; pending=li
 DWORD WINAPI FwpmTransactionAbort0(HANDLE) { transaction=false; pending.clear(); return ERROR_SUCCESS; }
 DWORD WINAPI FwpmTransactionCommit0(HANDLE) { transaction=false; live=pending; return ERROR_SUCCESS; }
 DWORD WINAPI FwpmProviderAdd0(HANDLE,const FWPM_PROVIDER0* provider,PSECURITY_DESCRIPTOR) {
-  assert(provider->flags&FWPM_PROVIDER_FLAG_PERSISTENT); return ERROR_SUCCESS;
+  assert(provider->flags&FWPM_PROVIDER_FLAG_PERSISTENT); owned_provider=provider->providerKey; return ERROR_SUCCESS;
 }
 DWORD WINAPI FwpmSubLayerAdd0(HANDLE,const FWPM_SUBLAYER0* layer,PSECURITY_DESCRIPTOR) {
   assert(layer->flags&FWPM_SUBLAYER_FLAG_PERSISTENT); return ERROR_SUCCESS;
@@ -53,19 +56,26 @@ DWORD WINAPI FwpmGetAppIdFromFileName0(const wchar_t* path,FWP_BYTE_BLOB** resul
 }
 void WINAPI FwpmFreeMemory0(void** value) { LocalFree(*value);*value=nullptr; }
 DWORD WINAPI FwpmFilterCreateEnumHandle0(HANDLE,const FWPM_FILTER_ENUM_TEMPLATE0* match,HANDLE* enumeration) {
-  assert(match->providerKey); *enumeration=reinterpret_cast<HANDLE>(1);return ERROR_SUCCESS;
+  assert(!match); enumeration_offset=0; *enumeration=reinterpret_cast<HANDLE>(1);return ERROR_SUCCESS;
 }
 DWORD WINAPI FwpmFilterDestroyEnumHandle0(HANDLE,HANDLE) {return ERROR_SUCCESS;}
 DWORD WINAPI FwpmFilterEnum0(HANDLE,HANDLE,UINT32 maximum,FWPM_FILTER0*** entries,UINT32* count) {
   const auto& source = transaction ? pending : live;
-  *count=std::min<UINT32>(maximum,static_cast<UINT32>(source.size()));
+  *count=std::min<UINT32>(maximum,static_cast<UINT32>(source.size()+1-enumeration_offset));
   auto* block=static_cast<unsigned char*>(LocalAlloc(LPTR, std::max<size_t>(1,*count*(sizeof(FWPM_FILTER0*)+sizeof(FWPM_FILTER0)))));
   *entries=reinterpret_cast<FWPM_FILTER0**>(block);
   auto* rows=reinterpret_cast<FWPM_FILTER0*>(block+*count*sizeof(FWPM_FILTER0*));
-  for(UINT32 i=0;i<*count;++i){ rows[i].filterId=source[i].id;(*entries)[i]=&rows[i]; }
+  for(UINT32 i=0;i<*count;++i){
+    const size_t index=enumeration_offset+i;
+    rows[i].filterId=index==0?9999:source[index-1].id;
+    rows[i].providerKey=index==0?&foreign_provider:&owned_provider;
+    (*entries)[i]=&rows[i];
+  }
+  enumeration_offset+=*count;
   return ERROR_SUCCESS;
 }
 DWORD WINAPI FwpmFilterDeleteById0(HANDLE,UINT64 id) {
+  assert(id!=9999); // foreign filters must survive every cleanup and rollback
   pending.erase(std::remove_if(pending.begin(),pending.end(),[&](const Rule& r){return r.id==id;}),pending.end());return ERROR_SUCCESS;
 }
 DWORD WINAPI FwpmFilterAdd0(HANDLE,const FWPM_FILTER0* filter,PSECURITY_DESCRIPTOR,UINT64* id) {

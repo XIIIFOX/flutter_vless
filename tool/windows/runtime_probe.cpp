@@ -42,12 +42,17 @@ int main(int argc,char** argv) {
     HANDLE engine = nullptr, enumeration = nullptr;
     if (FwpmEngineOpen0(nullptr, RPC_C_AUTHN_WINNT, nullptr, nullptr, &engine)) return 22;
     GUID provider = {0x258726c7,0x1b37,0x4524,{0xb4,0x53,0x80,0x7a,0xe3,0x17,0x39,0x06}};
-    FWPM_FILTER_ENUM_TEMPLATE0 match{}; match.providerKey = &provider;
-    match.enumType = FWP_FILTER_ENUM_FULLY_CONTAINED;
-    const auto created = FwpmFilterCreateEnumHandle0(engine, &match, &enumeration);
-    UINT32 count = 0; FWPM_FILTER0** filters = nullptr;
-    const auto enumerated = created ? created : FwpmFilterEnum0(engine, enumeration, 256, &filters, &count);
-    if (filters) FwpmFreeMemory0(reinterpret_cast<void**>(&filters));
+    const auto created = FwpmFilterCreateEnumHandle0(engine, nullptr, &enumeration);
+    UINT32 count = 0; DWORD enumerated = created;
+    while (!enumerated) {
+      UINT32 batch = 0; FWPM_FILTER0** filters = nullptr;
+      enumerated = FwpmFilterEnum0(engine, enumeration, 256, &filters, &batch);
+      if (!enumerated) for (UINT32 i=0;i<batch;++i) {
+        if (filters[i]->providerKey && IsEqualGUID(*filters[i]->providerKey, provider)) ++count;
+      }
+      if (filters) FwpmFreeMemory0(reinterpret_cast<void**>(&filters));
+      if (!batch) break;
+    }
     if (enumeration) FwpmFilterDestroyEnumHandle0(engine, enumeration);
     FwpmEngineClose0(engine);
     if (enumerated && enumerated != FWP_E_PROVIDER_NOT_FOUND) return 23;
@@ -108,9 +113,14 @@ int main(int argc,char** argv) {
       else InetPtonA(AF_INET6, ip.c_str(), &row.Address.Ipv6.sin6_addr);
       const auto code = CreateUnicastIpAddressEntry(&row);
       if (code != NO_ERROR) { std::cout << "ADAPTER_ADDRESS_ERROR=" << code << std::endl; ok = false; break; }
+      bool ready = false;
+      for (int retry=0; retry<30; ++retry) {
+        if (GetUnicastIpAddressEntry(&row) == NO_ERROR && row.DadState == IpDadStatePreferred) { ready = true; break; }
+        Sleep(500);
+      }
+      if (!ready) { std::cout << "ADAPTER_DAD_NOT_READY=" << family << std::endl; ok = false; break; }
     }
     if (ok) {
-      Sleep(2500);
       std::cout << "ADAPTER_READY=" << luid.Value << std::endl;
       const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);
       while (!std::filesystem::exists(std::filesystem::path(arguments[4])) && std::chrono::steady_clock::now() < deadline) Sleep(250);

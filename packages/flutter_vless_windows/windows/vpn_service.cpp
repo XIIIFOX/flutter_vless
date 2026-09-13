@@ -73,7 +73,7 @@ bool VpnService::Start(const std::string& config) {
   if (!native::IsAdministrator() || !xray || !tun || !wintun || wintun->parent_path() != tun->parent_path()) {
     Event("VPN requires administrator rights and bundled native executables"); return false;
   }
-  if (!protection_.Inspect()) { Event("Windows traffic protection is unavailable or another VPN session owns it"); return false; }
+  if (!protection_.Inspect()) { Event(("Windows traffic protection is unavailable, code=" + std::to_string(protection_.Error())).c_str()); return false; }
   auto underlay = Underlay();
   auto user = native::RandomHex(16), password = native::RandomHex(32);
   auto cache = bootstrap_cache_;
@@ -109,7 +109,7 @@ bool VpnService::Start(const std::string& config) {
   current_config_ = *prepared; username_ = user; password_ = password;
   socks_port_ = *xray_config::SocksPort(current_config_);
   // WFP must exist before native workers, resolver configuration or capture.
-  if (!protection_.Install(xray_executable_path_)) { Event("Could not install mandatory Windows traffic protection"); return false; }
+  if (!protection_.Install(xray_executable_path_)) { Event(("Could not install mandatory Windows traffic protection, code=" + std::to_string(protection_.Error())).c_str()); return false; }
   requested_.store(true); ready_.store(false);
   { std::lock_guard<std::mutex> lock(state_mutex_); first_attempt_finished_ = false; }
   vpn_thread_ = std::thread(&VpnService::RunVpn, this);

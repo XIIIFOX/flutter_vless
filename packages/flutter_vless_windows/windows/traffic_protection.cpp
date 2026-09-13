@@ -23,11 +23,11 @@ std::wstring DhcpServiceSid() {
 bool TrafficProtection::Open() {
   if (engine_) return true;
   owner_ = CreateEventW(nullptr, TRUE, FALSE, L"Global\\FlutterVlessProtectedVpn");
-  if (!owner_) return false;
+  if (!owner_) { last_error_.store(GetLastError()); return false; }
   if (GetLastError() == ERROR_ALREADY_EXISTS) {
-    CloseHandle(owner_); owner_ = nullptr; return false;
+    last_error_.store(ERROR_ALREADY_EXISTS); CloseHandle(owner_); owner_ = nullptr; return false;
   }
-  if (FwpmEngineOpen0(nullptr, RPC_C_AUTHN_WINNT, nullptr, nullptr, &engine_) != ERROR_SUCCESS) {
+  if (!Check(FwpmEngineOpen0(nullptr, RPC_C_AUTHN_WINNT, nullptr, nullptr, &engine_))) {
     CloseHandle(owner_); owner_ = nullptr; return false;
   }
   return true;
@@ -37,59 +37,54 @@ TrafficProtection::~TrafficProtection() {
   if (engine_) FwpmEngineClose0(engine_);
   if (owner_) { CloseHandle(owner_); }
 }
-bool TrafficProtection::Inspect() {
-  // Claim this application's singleton and discover a policy left by a crash
-  // before deciding whether ordinary endpoint DNS bootstrap is permissible.
-  if (!Open()) return false;
-  FWPM_FILTER_ENUM_TEMPLATE0 match{}; match.providerKey = const_cast<GUID*>(&provider);
-  match.enumType = FWP_FILTER_ENUM_FULLY_CONTAINED;
+bool TrafficProtection::OwnedFilterIds(std::vector<UINT64>& ids) {
+  // A null enumeration template covers all layers/actions and also works on a
+  // first launch, when our provider does not exist. Only our exact provider
+  // GUID is retained; no foreign filter can be removed by cleanup.
+  ids.clear();
   HANDLE enumeration = nullptr;
-  auto status = FwpmFilterCreateEnumHandle0(engine_, &match, &enumeration);
-  if (status == FWP_E_PROVIDER_NOT_FOUND) { active_ = false; return true; }
-  if (status != ERROR_SUCCESS) return false;
-  FWPM_FILTER0** entries = nullptr; UINT32 count = 0;
-  status = FwpmFilterEnum0(engine_, enumeration, 1, &entries, &count);
-  if (entries) FwpmFreeMemory0(reinterpret_cast<void**>(&entries));
-  FwpmFilterDestroyEnumHandle0(engine_, enumeration);
-  if (status != ERROR_SUCCESS) return false;
-  active_ = count != 0;
-  return true;
-}
-bool TrafficProtection::DeleteFilters() {
-  FWPM_FILTER_ENUM_TEMPLATE0 match{};
-  match.providerKey = const_cast<GUID*>(&provider);
-  match.enumType = FWP_FILTER_ENUM_FULLY_CONTAINED;
-  match.flags = FWP_FILTER_ENUM_FLAG_INCLUDE_BOOTTIME | FWP_FILTER_ENUM_FLAG_INCLUDE_DISABLED;
-  HANDLE enumeration = nullptr;
-  if (FwpmFilterCreateEnumHandle0(engine_, &match, &enumeration) != ERROR_SUCCESS) return false;
+  if (!Check(FwpmFilterCreateEnumHandle0(engine_, nullptr, &enumeration))) return false;
   bool ok = true;
   for (;;) {
     FWPM_FILTER0** entries = nullptr; UINT32 count = 0;
-    if (FwpmFilterEnum0(engine_, enumeration, 256, &entries, &count) != ERROR_SUCCESS) { ok = false; break; }
+    if (!Check(FwpmFilterEnum0(engine_, enumeration, 256, &entries, &count))) { ok = false; break; }
     for (UINT32 i = 0; i < count; ++i) {
-      if (FwpmFilterDeleteById0(engine_, entries[i]->filterId) != ERROR_SUCCESS) ok = false;
+      if (entries[i]->providerKey && IsEqualGUID(*entries[i]->providerKey, provider)) ids.push_back(entries[i]->filterId);
     }
-    FwpmFreeMemory0(reinterpret_cast<void**>(&entries));
-    if (count == 0 || !ok) break;
+    if (entries) FwpmFreeMemory0(reinterpret_cast<void**>(&entries));
+    if (count == 0) break;
   }
   FwpmFilterDestroyEnumHandle0(engine_, enumeration);
   return ok;
 }
+bool TrafficProtection::Inspect() {
+  if (!Open()) return false;
+  std::vector<UINT64> ids;
+  if (!OwnedFilterIds(ids)) return false;
+  active_ = !ids.empty();
+  return true;
+}
+bool TrafficProtection::DeleteFilters() {
+  std::vector<UINT64> ids;
+  if (!OwnedFilterIds(ids)) return false;
+  for (auto id : ids) if (!Check(FwpmFilterDeleteById0(engine_, id))) return false;
+  return true;
+}
 bool TrafficProtection::Install(const std::filesystem::path& xray, const NET_LUID* tunnel) {
-  if (!Open() || FwpmTransactionBegin0(engine_, 0) != ERROR_SUCCESS) return false;
+  if (!Open() || !Check(FwpmTransactionBegin0(engine_, 0))) return false;
   FWPM_PROVIDER0 p{}; p.providerKey = provider;
   p.displayData.name = const_cast<wchar_t*>(L"Flutter Vless traffic protection");
   p.flags = FWPM_PROVIDER_FLAG_PERSISTENT;
   auto status = FwpmProviderAdd0(engine_, &p, nullptr);
-  bool ok = status == ERROR_SUCCESS || status == FWP_E_ALREADY_EXISTS;
+  bool ok = status == FWP_E_ALREADY_EXISTS || Check(status);
   FWPM_SUBLAYER0 layer{}; layer.subLayerKey = sublayer;
   layer.providerKey = const_cast<GUID*>(&provider);
   layer.displayData.name = p.displayData.name;
   layer.flags = FWPM_SUBLAYER_FLAG_PERSISTENT; layer.weight = 0xffff;
   status = FwpmSubLayerAdd0(engine_, &layer, nullptr);
-  ok = ok && (status == ERROR_SUCCESS || status == FWP_E_ALREADY_EXISTS) && DeleteFilters();
+  ok = ok && (status == FWP_E_ALREADY_EXISTS || Check(status)) && DeleteFilters();
   FWP_BYTE_BLOB* app = nullptr;
-  ok = ok && FwpmGetAppIdFromFileName0(xray.c_str(), &app) == ERROR_SUCCESS;
+  ok = ok && Check(FwpmGetAppIdFromFileName0(xray.c_str(), &app));
   PSECURITY_DESCRIPTOR administrator = nullptr, dhcp = nullptr;
   FWP_BYTE_BLOB administrator_blob{}, dhcp_blob{};
   ULONG administrator_size = 0, dhcp_size = 0;
@@ -120,7 +115,7 @@ bool TrafficProtection::Install(const std::filesystem::path& xray, const NET_LUI
     filter.action.type = action;
     filter.numFilterConditions = static_cast<UINT32>(conditions.size());
     filter.filterCondition = conditions.data();
-    ok = FwpmFilterAdd0(engine_, &filter, nullptr, nullptr) == ERROR_SUCCESS;
+    ok = Check(FwpmFilterAdd0(engine_, &filter, nullptr, nullptr));
   };
   FWPM_FILTER_CONDITION0 loop{};
   loop.fieldKey = FWPM_CONDITION_FLAGS; loop.matchType = FWP_MATCH_FLAGS_ALL_SET;
@@ -165,16 +160,16 @@ bool TrafficProtection::Install(const std::filesystem::path& xray, const NET_LUI
   if (administrator) LocalFree(administrator);
   if (dhcp) LocalFree(dhcp);
   if (!ok) { FwpmTransactionAbort0(engine_); return false; }
-  if (FwpmTransactionCommit0(engine_) != ERROR_SUCCESS) return false;
+  if (!Check(FwpmTransactionCommit0(engine_))) return false;
   active_ = true;
   return true;
 }
 bool TrafficProtection::Release() {
   // Also recovers this policy after a previous application crash.
-  if (!Open() || FwpmTransactionBegin0(engine_, 0) != ERROR_SUCCESS) return false;
+  if (!Open() || !Check(FwpmTransactionBegin0(engine_, 0))) return false;
   if (!DeleteFilters()) { FwpmTransactionAbort0(engine_); return false; }
   auto result = FwpmTransactionCommit0(engine_);
-  if (result != ERROR_SUCCESS) return false;
+  if (!Check(result)) return false;
   active_ = false;
   FwpmEngineClose0(engine_); engine_ = nullptr;
   CloseHandle(owner_); owner_ = nullptr;

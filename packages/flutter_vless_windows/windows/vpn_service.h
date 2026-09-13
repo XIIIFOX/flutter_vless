@@ -9,7 +9,12 @@
 #include <filesystem>
 #include <optional>
 #include <vector>
+#include <map>
 
+#include <condition_variable>
+#include "traffic_protection.h"
+#include "protected_runtime.h"
+#include "packet_path_probe.h"
 #include "proxy_service.h" // For ProcessHandle and helper functions
 
 namespace fs = std::filesystem;
@@ -25,7 +30,7 @@ namespace fs = std::filesystem;
  * @details Key Responsibilities:
  * - **Process Management**: Starts and stops Xray and Tun2Socks processes.
  * - **Configuration Injection**: Modifies the Xray config to inject API, DNS, and Routing rules required for VPN mode.
- * - **Network Configuration**: Configures the Windows TUN interface (IP, DNS, Routes) using `netsh` and `route` commands.
+ * - **Network Configuration**: Configures the Windows TUN interface (IP, DNS, Routes) using Windows APIs and a trusted system utility.
  * - **Traffic Statistics**: Periodically queries the Xray API to retrieve upload/download traffic stats.
  * - **Routing Management**: Sets up split tunneling (bypassing the VPN server IP) to prevent routing loops.
  */
@@ -59,6 +64,7 @@ class VpnService {
    * - Removes this session's capture routes before stopping Tun2Socks.
    */
   void Stop();
+  void Shutdown();
 
   /**
    * @brief Checks if the VPN service is currently running.
@@ -77,107 +83,34 @@ class VpnService {
   void GetTrafficStats(int64_t& upload, int64_t& download);
 
  private:
-  // --- Lifecycle Methods ---
-  
-  /**
-   * @brief Main loop for the VPN service thread.
-   * @details Monitors the processes and keeps the service alive.
-   */
   void RunVpn();
-
-  /**
-   * @brief Starts the Xray process.
-   * @param config_path Path to the temporary JSON configuration file.
-   * @return true if started successfully.
-   */
-  bool StartXrayProcess(const std::string& config_path);
-
-  /**
-   * @brief Starts the Tun2Socks process.
-   * @param socks_port The local SOCKS port Xray is listening on.
-   * @return true if started successfully.
-   */
-  bool StartTun2SocksProcess(uint16_t socks_port);
-
-  /**
-   * @brief Terminates both child processes.
-   */
-  void StopProcesses();
-  
-  // --- Statistics Methods ---
-
-  /**
-   * @brief Periodically queries Xray API for traffic stats.
-   * @details Runs in a separate thread (`stats_thread_`).
-   */
+  bool StartWorkers();
+  void StopWorkers();
+  void StopSession(bool release_protection);
   void UpdateTrafficStats();
-
-  /**
-   * @brief Executes an Xray API command via the executable.
-   * @param args Command line arguments for the API call.
-   * @param[out] output The stdout output from the command.
-   * @return true if the command executed successfully.
-   */
-  bool RunXrayApiCommand(const std::string& args, std::string& output);
-
-  /**
-   * @brief Injects VPN-specific configuration into the user's Xray config.
-   * 
-   * @param config Original user configuration.
-   * @return Modified configuration string.
-   * 
-   * @details Adds a dedicated API listener and statistics policy while preserving
-   * caller routing rules, DNS settings and outbound transport configuration.
-   */
-  std::string InjectApiConfig(const std::string& config);
-  
-  // --- Helper Methods ---
-
-  bool WriteConfigToFile(const std::string& config, fs::path& config_path);
-  std::optional<fs::path> FindTun2SocksExecutable();
-  std::optional<fs::path> FindXrayExecutable();
-  std::optional<fs::path> FindXrayAssets(const fs::path& executable_path);
-  
-  // --- Routing Helpers ---
-
-  /**
-   * @brief Extracts the VPN server address (domain or IP) from the config.
-   */
-  std::string ExtractServerAddress(const std::string& config);
-
-  /**
-   * @brief Resolves a domain name to an IP address.
-   * @details Used to create specific route bypass rules for the VPN server.
-   */
-  std::string ResolveToIP(const std::string& address);
-
-  /**
-   * @brief Retrieves the system's default gateway IP.
-   * @details Used to construct `route ADD` commands for bypass routes.
-   */
-  std::string GetDefaultGateway();
-
-  // --- Members ---
-  
-  std::atomic<bool> is_running_{false};
+  std::atomic<bool> requested_{false};
+  std::atomic<bool> ready_{false};
   std::thread vpn_thread_;
-  std::thread stats_thread_;
-  
+  std::mutex state_mutex_;
+  std::condition_variable state_changed_;
+  bool first_attempt_finished_ = false;
   std::unique_ptr<ProcessHandle> xray_process_;
   std::unique_ptr<ProcessHandle> tun2socks_process_;
-  
   fs::path xray_executable_path_;
   fs::path tun2socks_executable_path_;
   fs::path temp_config_path_;
-  
+  fs::path tun_config_path_;
   std::string current_config_;
-  std::vector<std::string> capture_routes_;
-  
-  // Stats synchronization
+  std::map<std::string, std::string> bootstrap_cache_;
+  std::string username_, password_;
+  uint16_t socks_port_ = 0;
+  flutter_vless::TrafficProtection protection_;
+  std::unique_ptr<flutter_vless::native::ProtectedRuntime> private_runtime_;
+  std::unique_ptr<flutter_vless::PacketPathProbe> packet_probe_;
+  std::vector<MIB_IPFORWARD_ROW2> capture_routes_;
   std::mutex stats_mutex_;
-  int64_t total_upload_ = 0;
-  int64_t total_download_ = 0;
-  std::string api_address_ = "127.0.0.1:10086"; // Dedicated API port for VPN service
+  int64_t total_upload_ = 0, total_download_ = 0;
+ public:
+  bool IsProtecting() const { return protection_.Active(); }
 };
-
-#endif // VPN_SERVICE_H_
+#endif

@@ -30,6 +30,10 @@ set(PLUGIN_NAME "flutter_vless_windows")
 # Define the plugin library. Its name must match `plugin.platforms[].name`.
 add_library(${PLUGIN_NAME}_plugin SHARED
   "diagnostics_log.cpp"
+  "native_runtime.cpp"
+  "protected_runtime.cpp"
+  "packet_path_probe.cpp"
+  "traffic_protection.cpp"
   "flutter_vless_plugin.cpp"
   "v2ray_manager.cpp"
   "proxy_service.cpp"
@@ -59,7 +63,7 @@ target_include_directories(${PLUGIN_NAME}_plugin INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 # Link the plugin to Flutter's library.
-target_link_libraries(${PLUGIN_NAME}_plugin PRIVATE flutter flutter_wrapper_plugin)
+target_link_libraries(${PLUGIN_NAME}_plugin PRIVATE flutter flutter_wrapper_plugin ws2_32 wininet iphlpapi shlwapi version ole32 shell32 uuid advapi32 bcrypt fwpuclnt)
 
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an

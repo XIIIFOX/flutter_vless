@@ -24,7 +24,9 @@ class V2rayManager {
 
   bool Start(const std::string& config, bool proxy_only);
   void Stop();
+  void Shutdown();
   bool IsRunning() const;
+  bool IsProtecting() const;
 
   // Stats
   void GetTrafficStats(int64_t& upload, int64_t& download);
@@ -56,7 +58,7 @@ class V2rayManager {
   std::atomic<bool> is_running_{false};
   std::thread v2ray_thread_;
   std::string current_config_;
-  bool proxy_only_ = false;
+  std::atomic<bool> proxy_only_{false};
   
   // Service delegates
   std::unique_ptr<ProxyService> proxy_service_;

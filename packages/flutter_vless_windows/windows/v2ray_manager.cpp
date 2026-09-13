@@ -1,5 +1,6 @@
 #include "v2ray_manager.h"
 #include "diagnostics_log.h"
+#include "xray_config.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -71,7 +72,7 @@ V2rayManager::V2rayManager() {
 }
 
 V2rayManager::~V2rayManager() {
-  Stop();
+  Shutdown();
 }
 
 V2rayManager& V2rayManager::GetInstance() {
@@ -79,10 +80,8 @@ V2rayManager& V2rayManager::GetInstance() {
   return instance;
 }
 
-bool V2rayManager::Start(const std::string& config, bool proxy_only) {
-  if (is_running_.load()) {
-    Stop();
-  }
+bool V2rayManager::Start(const std::string& config, bool proxy_only) try {
+  if (is_running_.load() && (proxy_only || proxy_only_)) Stop();
 
   flutter_vless::DiagnosticsLog::Instance().Reset();
   flutter_vless::DiagnosticsLog::Instance().Append(
@@ -117,11 +116,12 @@ bool V2rayManager::Start(const std::string& config, bool proxy_only) {
   }
 }
 
-void V2rayManager::Stop() {
-  if (!is_running_.load()) {
-    return;
-  }
+catch (...) {
+  flutter_vless::DiagnosticsLog::Instance().Append("runtime", "Native configuration or startup rejected");
+  return false;
+}
 
+void V2rayManager::Stop() {
   is_running_.store(false);
   
   if (proxy_only_) {
@@ -133,6 +133,12 @@ void V2rayManager::Stop() {
       vpn_service_->Stop();
     }
   }
+}
+
+void V2rayManager::Shutdown() {
+  is_running_.store(false);
+  if (proxy_service_) proxy_service_->Stop();
+  if (vpn_service_) vpn_service_->Shutdown();
 }
 
 bool V2rayManager::IsRunning() const {
@@ -215,10 +221,12 @@ void V2rayManager::GetTrafficStats(int64_t& upload, int64_t& download) {
 }
 
 bool V2rayManager::ValidateConfig(const std::string& config) {
-  return json_utils::IsValidJson(config);
+  return flutter_vless::xray_config::Parse(config).is_object();
 }
 
 // Kept for reference but unused in VPN stub
 std::string V2rayManager::ModifyConfigForWindows(const std::string& config, bool proxy_only) {
   return config;
 }
+
+bool V2rayManager::IsProtecting() const { return !proxy_only_ && vpn_service_ && vpn_service_->IsProtecting(); }

@@ -19,6 +19,9 @@
 #include <vector>
 
 #include "v2ray_manager.h"
+#include "native_runtime.h"
+#include "xray_config.h"
+#include "native_task_queue.h"
 #include <iostream>
 
 namespace {
@@ -132,6 +135,7 @@ class FlutterVlessPlugin : public flutter::Plugin {
 
   // Mutex to serialize Start/Stop operations to prevent race conditions
   std::mutex lifecycle_mutex_;
+  NativeTaskQueue operations_;
 
   /**
    * @brief Schedules a callback to be executed on the UI thread.
@@ -344,8 +348,9 @@ FlutterVlessPlugin::FlutterVlessPlugin(flutter::PluginRegistrarWindows *registra
 }
 
 FlutterVlessPlugin::~FlutterVlessPlugin() {
+  operations_.Stop();
   StopStatusTimer();
-  V2rayManager::GetInstance().Stop();
+  V2rayManager::GetInstance().Shutdown();
   
   // Unregister window proc delegate
   if (registrar_ && window_proc_delegate_id_ != 0) {
@@ -363,9 +368,8 @@ void FlutterVlessPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue> &method_call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   if (method_call.method_name().compare("requestPermission") == 0) {
-    // On Windows, we typically don't need special VPN permissions
-    // but we might need admin rights for TUN/TAP interface
-    result->Success(flutter::EncodableValue(true));
+    // VPN requires elevation for Wintun and mandatory WFP containment.
+    result->Success(flutter::EncodableValue(flutter_vless::native::IsAdministrator()));
   } else if (method_call.method_name().compare("initializeVless") == 0) {
     const auto *arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
     if (arguments) {
@@ -394,26 +398,42 @@ void FlutterVlessPlugin::HandleMethodCall(
           }
         }
 
+        if (!proxy_only) {
+          std::vector<std::string> cidrs;
+          auto bypass = arguments->find(flutter::EncodableValue("bypass_subnets"));
+          if (bypass != arguments->end() && !bypass->second.IsNull()) {
+            const auto* values = std::get_if<flutter::EncodableList>(&bypass->second);
+            if (!values) { result->Error("INCOMPATIBLE_ROUTING", "bypassSubnets must be IPv4 CIDRs"); return; }
+            for (const auto& value : *values) {
+              const auto* cidr = std::get_if<std::string>(&value);
+              if (!cidr) { result->Error("INCOMPATIBLE_ROUTING", "bypassSubnets must be IPv4 CIDRs"); return; }
+              cidrs.push_back(*cidr);
+            }
+          }
+          const auto routed = flutter_vless::xray_config::ApplyBypass(config, cidrs);
+          if (!routed) { result->Error("INCOMPATIBLE_ROUTING", "Invalid VPN routing configuration or IPv4 bypass CIDRs"); return; }
+          config = *routed;
+        }
         // Convert unique_ptr to shared_ptr to allow capturing in std::function (which requires CopyConstructible)
         std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> shared_result = std::move(result);
         
-        std::thread([this, config, proxy_only, shared_result]() {
+        operations_.Submit([this, config, proxy_only, shared_result]() {
           std::lock_guard<std::mutex> lock(lifecycle_mutex_);
           LogMessage("Starting Xray...");
-          if (V2rayManager::GetInstance().Start(config, proxy_only)) {
-            LogMessage("Xray started successfully");
-            is_running_ = true;
+          const bool ready = V2rayManager::GetInstance().Start(config, proxy_only);
+          const bool protecting = V2rayManager::GetInstance().IsProtecting();
+          is_running_ = ready || protecting;
+          if (is_running_) {
             start_time_ = std::chrono::steady_clock::now();
             StartStatusTimer();
-          } else {
-            LogMessage("Xray failed to start");
           }
-          
-          // Return result on UI thread
-          RunOnUIThread([shared_result]() {
-            shared_result->Success(flutter::EncodableValue(nullptr));
+          RunOnUIThread([shared_result, ready, protecting]() {
+            if (ready) shared_result->Success(flutter::EncodableValue(nullptr));
+            else shared_result->Error("VPN_START_FAILED", protecting
+                ? "VPN forwarding is unavailable; traffic protection remains active. Check diagnostics, retry or explicitly stop."
+                : "VPN setup failed. Check configuration, administrator rights and bundled runtime files.");
           });
-        }).detach();
+        });
 
       } else {
         result->Error("INVALID_ARGUMENTS", "Missing remark or config");
@@ -428,7 +448,7 @@ void FlutterVlessPlugin::HandleMethodCall(
     // Convert unique_ptr to shared_ptr to allow capturing in std::function
     std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> shared_result = std::move(result);
 
-    std::thread([this, shared_result]() {
+    operations_.Submit([this, shared_result]() {
       std::lock_guard<std::mutex> lock(lifecycle_mutex_);
       
       StopStatusTimer();
@@ -454,7 +474,7 @@ void FlutterVlessPlugin::HandleMethodCall(
       RunOnUIThread([shared_result]() {
         shared_result->Success(flutter::EncodableValue(nullptr));
       });
-    }).detach();
+    });
 
   } else if (method_call.method_name().compare("getServerDelay") == 0) {
     const auto *arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
@@ -466,10 +486,11 @@ void FlutterVlessPlugin::HandleMethodCall(
         std::string config = std::get<std::string>(config_it->second);
         std::string url = std::get<std::string>(url_it->second);
         
-        std::thread([this, config, url, result = std::move(result)]() {
+        std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> shared_result = std::move(result);
+        operations_.Submit([this, config, url, shared_result]() {
           int delay = V2rayManager::GetInstance().GetServerDelay(config, url);
-          result->Success(flutter::EncodableValue(delay));
-        }).detach();
+          RunOnUIThread([shared_result, delay]() { shared_result->Success(flutter::EncodableValue(delay)); });
+        });
         return;
       }
     }
@@ -481,10 +502,11 @@ void FlutterVlessPlugin::HandleMethodCall(
       if (url_it != arguments->end()) {
         std::string url = std::get<std::string>(url_it->second);
         
-        std::thread([this, url, result = std::move(result)]() {
+        std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> shared_result = std::move(result);
+        operations_.Submit([this, url, shared_result]() {
           int delay = V2rayManager::GetInstance().GetConnectedServerDelay(url);
-          result->Success(flutter::EncodableValue(delay));
-        }).detach();
+          RunOnUIThread([shared_result, delay]() { shared_result->Success(flutter::EncodableValue(delay)); });
+        });
         return;
       }
     }
@@ -583,7 +605,9 @@ void FlutterVlessPlugin::UpdateStatus() {
   status.push_back(flutter::EncodableValue(std::to_string(download_speed_)));
   status.push_back(flutter::EncodableValue(std::to_string(total_upload_)));
   status.push_back(flutter::EncodableValue(std::to_string(total_download_)));
-  status.push_back(flutter::EncodableValue("CONNECTED"));
+  const auto& manager = V2rayManager::GetInstance();
+  status.push_back(flutter::EncodableValue(manager.IsRunning() ? "CONNECTED"
+      : (manager.IsProtecting() ? "CONNECTING" : "DISCONNECTED")));
 
   LogMessage("UpdateStatus: duration=" + std::to_string(duration) + " up=" + 
             std::to_string(upload_speed_) + " down=" + std::to_string(download_speed_));

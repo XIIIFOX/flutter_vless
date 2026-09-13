@@ -13,6 +13,7 @@
 #include <map>
 #include <vector>
 #include <cstdint>
+#include <condition_variable>
 
 namespace fs = std::filesystem;
 
@@ -107,6 +108,13 @@ class ProxyService {
 
   // Thread synchronization and state
   std::atomic<bool> is_running_{false};
+  std::atomic<bool> ready_{false};
+  std::mutex start_mutex_;
+  std::condition_variable start_changed_;
+  bool start_finished_ = false;
+  bool proxy_snapshot_ = false;
+  unsigned long saved_proxy_flags_ = 0;
+  std::wstring saved_proxy_server_, saved_proxy_bypass_, saved_proxy_pac_;
   std::thread v2ray_thread_;
   std::thread stats_thread_;
   std::string current_config_;
@@ -135,6 +143,7 @@ class ProxyService {
 
 // Process handle wrapper (moved from v2ray_manager.h)
 struct ProcessHandle {
+  std::uintptr_t hJob = 0;
   std::uintptr_t hProcess = 0;
   std::uintptr_t hThread = 0;
   std::uintptr_t hStdOutRead = 0;

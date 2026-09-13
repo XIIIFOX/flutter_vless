@@ -1,6 +1,7 @@
 #include "proxy_service.h"
 #include "diagnostics_log.h"
 #include "xray_config.h"
+#include "native_runtime.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -69,28 +70,16 @@ ProcessHandle::~ProcessHandle() {
 }
 
 void ProcessHandle::Close() {
-  if (hProcess != 0) {
-    HANDLE hp = reinterpret_cast<HANDLE>(hProcess);
-    if (hp != INVALID_HANDLE_VALUE) {
-      TerminateProcess(hp, 0);
-      CloseHandle(hp);
-    }
-    if (hThread != 0) {
-      HANDLE ht = reinterpret_cast<HANDLE>(hThread);
-      if (ht != INVALID_HANDLE_VALUE) CloseHandle(ht);
-    }
-    hProcess = 0;
-    hThread = 0;
+  if (hJob) { CloseHandle(reinterpret_cast<HANDLE>(hJob)); hJob = 0; }
+  if (hProcess) {
+    HANDLE process = reinterpret_cast<HANDLE>(hProcess);
+    if (IsRunning()) TerminateProcess(process, 0);
+    WaitForSingleObject(process, 3000);
+    CloseHandle(process); hProcess = 0;
   }
-  if (hStdOutRead != 0) {
-    HANDLE hr = reinterpret_cast<HANDLE>(hStdOutRead);
-    if (hr != INVALID_HANDLE_VALUE) CloseHandle(hr);
-    hStdOutRead = 0;
-  }
-  if (hStdErrRead != 0) {
-    HANDLE he = reinterpret_cast<HANDLE>(hStdErrRead);
-    if (he != INVALID_HANDLE_VALUE) CloseHandle(he);
-    hStdErrRead = 0;
+  for (auto* slot : {&hThread, &hStdOutRead, &hStdErrRead}) {
+    if (*slot && reinterpret_cast<HANDLE>(*slot) != INVALID_HANDLE_VALUE) CloseHandle(reinterpret_cast<HANDLE>(*slot));
+    *slot = 0;
   }
 }
 
@@ -128,38 +117,33 @@ ProxyService::~ProxyService() {
 }
 
 bool ProxyService::Start(const std::string& config) {
+  std::string prepared = config;
+  if (!flutter_vless::xray_config::PrepareProxy(prepared,
+      [this](uint16_t port) { return IsPortFree(port); }, [this] { return FindFreePort(); })) return false;
+  auto executable = FindXrayExecutable();
+  if (!executable) return false;
   Stop();
-
-  if (!ValidateConfig(config)) {
-    std::cerr << "Invalid Xray configuration JSON" << std::endl;
-    flutter_vless::DiagnosticsLog::Instance().Append(
-        "runtime", "Proxy service rejected invalid Xray configuration JSON");
-    return false;
-  }
-
-  current_config_ = config;
-  
-  if (xray_executable_path_.empty()) {
-    std::cerr << "Xray executable not found. Please ensure xray.exe is available." << std::endl;
-    flutter_vless::DiagnosticsLog::Instance().Append(
-        "runtime", "Xray executable not found for Windows proxy service");
-    return false;
-  }
-  
-  is_running_.store(true);
+  xray_executable_path_ = *executable;
+  current_config_ = prepared;
+  auto json = flutter_vless::xray_config::Parse(prepared);
+  api_address_ = json["api"]["listen"].get<std::string>();
+  ready_.store(false); is_running_.store(true);
+  { std::lock_guard<std::mutex> lock(start_mutex_); start_finished_ = false; }
   v2ray_thread_ = std::thread(&ProxyService::RunV2ray, this);
-  
-  return true;
+  std::unique_lock<std::mutex> lock(start_mutex_);
+  start_changed_.wait_for(lock, std::chrono::seconds(10), [this] { return start_finished_; });
+  return ready_.load();
 }
 
 void ProxyService::Stop() {
-  const bool had_session = is_running_.exchange(false) || v2ray_thread_.joinable();
+  is_running_.store(false);
+  ready_.store(false);
   // A failed worker still owns a joinable thread.
 
   
   if (v2ray_thread_.joinable()) v2ray_thread_.join();
   if (stats_thread_.joinable()) stats_thread_.join();
-  if (had_session) ClearSystemProxy();
+  if (proxy_snapshot_) ClearSystemProxy();
   
   StopXrayProcess();
   CleanupTempFiles();
@@ -172,254 +156,65 @@ void ProxyService::Stop() {
 }
 
 bool ProxyService::IsRunning() const {
-  return is_running_.load();
+  return ready_.load();
 }
 
-void ProxyService::RunV2ray() {
-  // Proxy mode: configuration remains unchanged
-  std::string modified_config = current_config_;
-  
-  fs::path config_path;
-  if (!WriteConfigToFile(modified_config, config_path)) {
-    std::cerr << "Failed to write Xray configuration file" << std::endl;
-    flutter_vless::DiagnosticsLog::Instance().Append(
-        "runtime", "Failed to write Windows proxy Xray configuration file");
-    is_running_.store(false);
-    return;
+void ProxyService::RunV2ray() try {
+  auto finish = [this](bool ready) {
+    ready_.store(ready);
+    { std::lock_guard<std::mutex> lock(start_mutex_); start_finished_ = true; }
+    start_changed_.notify_all();
+  };
+  if (!WriteConfigToFile(current_config_, temp_config_path_) || !StartXrayProcess(temp_config_path_.string())) {
+    is_running_.store(false); finish(false); CleanupTempFiles(); return;
   }
-  
-  temp_config_path_ = config_path;
-  
-  if (!StartXrayProcess(config_path.string())) {
-    std::cerr << "Failed to start Xray process" << std::endl;
-    flutter_vless::DiagnosticsLog::Instance().Append(
-        "runtime", "Failed to start Windows proxy Xray process");
-    is_running_.store(false);
-    CleanupTempFiles();
-    return;
-  }
-  
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  
-  {
-    std::string config_str;
-    std::ifstream config_in(config_path);
-    if (config_in.is_open()) {
-      std::stringstream buffer;
-      buffer << config_in.rdbuf();
-      config_str = buffer.str();
-    } else {
-      config_str = modified_config;
-      std::cerr << "Warning: Failed to read actual config file, using original" << std::endl;
-    }
-
-    const auto selected_port = flutter_vless::xray_config::SocksPort(config_str);
-    if (!selected_port) {
-      is_running_.store(false);
-      StopXrayProcess();
-      return;
-    }
-    const uint16_t socks_port = *selected_port;
-
-    if (!SetSystemProxy("localhost", socks_port)) {
-      std::cerr << "Warning: Failed to set system proxy. Proxy mode may not work correctly." << std::endl;
-    } else {
-      std::cerr << "System proxy set to localhost:" << socks_port << std::endl;
+  auto json = flutter_vless::xray_config::Parse(current_config_);
+  auto port = flutter_vless::xray_config::SocksPort(current_config_);
+  std::string user, password;
+  for (const auto& entry : json["inbounds"]) if (flutter_vless::xray_config::Port(entry) == port
+      && entry.contains("settings") && entry["settings"].is_object()) {
+    const auto& settings = entry["settings"];
+    if (settings.contains("auth") && settings["auth"] == "password" && settings.contains("accounts")
+        && settings["accounts"].is_array() && !settings["accounts"].empty()) {
+      const auto& account = settings["accounts"][0];
+      if (account.contains("user") && account["user"].is_string() && account.contains("pass") && account["pass"].is_string()) {
+        user = account["user"].get<std::string>(); password = account["pass"].get<std::string>();
+      }
     }
   }
-  
-  if (!InitializeApiClient()) {
-    std::cerr << "Warning: Failed to initialize Xray API client. Stats may not be available." << std::endl;
+  bool listening = false;
+  for (int i = 0; i < 50 && is_running_.load() && xray_process_->IsRunning(); ++i) {
+    if (port && flutter_vless::native::SocksReady(*port, user, password)) { listening = true; break; }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
-  
+  if (!listening || !SetSystemProxy("localhost", *port)) {
+    is_running_.store(false); finish(false); StopXrayProcess(); CleanupTempFiles(); return;
+  }
+  InitializeApiClient();
   start_time_ = std::chrono::steady_clock::now();
-  
-  stats_thread_ = std::thread([this]() {
-    while (is_running_.load()) {
-      UpdateTrafficStats();
-      std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
-  });
-  
-  while (is_running_.load()) {
-    if (xray_process_ && !xray_process_->IsRunning()) {
-      std::cerr << "Xray process terminated unexpectedly" << std::endl;
-      flutter_vless::DiagnosticsLog::Instance().Append(
-          "runtime", "Windows proxy Xray process terminated unexpectedly");
-      is_running_.store(false);
-      break;
-    }
+  finish(true);
+  CleanupTempFiles();
+  while (is_running_.load() && xray_process_->IsRunning()) {
+    UpdateTrafficStats();
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
   }
+  ready_.store(false); is_running_.store(false);
+  flutter_vless::DiagnosticsLog::Instance().Append("runtime", "Proxy forwarding stopped");
+  // Keep the proxy pointing at the unavailable listener until explicit stop;
+  // applications choosing this proxy must not silently fall back to direct.
+  StopXrayProcess();
+} catch (...) {
+  ready_.store(false); is_running_.store(false);
+  { std::lock_guard<std::mutex> lock(start_mutex_); start_finished_ = true; }
+  start_changed_.notify_all();
+  StopXrayProcess(); CleanupTempFiles();
+  flutter_vless::DiagnosticsLog::Instance().Append("runtime", "Native proxy operation failed");
 }
 
 bool ProxyService::StartXrayProcess(const std::string& config_path) {
-  if (xray_executable_path_.empty() || !fs::exists(xray_executable_path_)) {
-    flutter_vless::DiagnosticsLog::Instance().Append(
-        "runtime", "Windows proxy Xray executable is unavailable");
-    return false;
-  }
-
-  try {
-    if (!ReplacePortsInConfigFile(fs::path(config_path))) return false;
-    if (auto detected = DetectApiAddressInConfig(fs::path(config_path))) {
-      api_address_ = *detected;
-      std::cerr << "Detected Xray API address: " << api_address_ << std::endl;
-    }
-  } catch (...) { return false; }
-  
-  xray_process_ = std::make_unique<ProcessHandle>();
-  
-  STARTUPINFOA si = {};
-  si.cb = sizeof(si);
-  si.dwFlags = STARTF_USESTDHANDLES;
-
-  SECURITY_ATTRIBUTES saAttr;
-  saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
-  saAttr.bInheritHandle = TRUE;
-  saAttr.lpSecurityDescriptor = NULL;
-
-  HANDLE hChildStdOutRead = INVALID_HANDLE_VALUE;
-  HANDLE hChildStdOutWrite = INVALID_HANDLE_VALUE;
-  HANDLE hChildStdErrRead = INVALID_HANDLE_VALUE;
-  HANDLE hChildStdErrWrite = INVALID_HANDLE_VALUE;
-
-  if (!CreatePipe(&hChildStdOutRead, &hChildStdOutWrite, &saAttr, 0)) {
-    std::cerr << "Failed to create stdout pipe" << std::endl;
-    flutter_vless::DiagnosticsLog::Instance().Append(
-        "runtime", "Failed to create Windows proxy Xray stdout pipe");
-  } else {
-    SetHandleInformation(hChildStdOutRead, HANDLE_FLAG_INHERIT, 0);
-  }
-
-  if (!CreatePipe(&hChildStdErrRead, &hChildStdErrWrite, &saAttr, 0)) {
-    std::cerr << "Failed to create stderr pipe" << std::endl;
-    flutter_vless::DiagnosticsLog::Instance().Append(
-        "runtime", "Failed to create Windows proxy Xray stderr pipe");
-  } else {
-    SetHandleInformation(hChildStdErrRead, HANDLE_FLAG_INHERIT, 0);
-  }
-
-  si.hStdOutput = hChildStdOutWrite != INVALID_HANDLE_VALUE ? hChildStdOutWrite : GetStdHandle(STD_OUTPUT_HANDLE);
-  si.hStdError = hChildStdErrWrite != INVALID_HANDLE_VALUE ? hChildStdErrWrite : GetStdHandle(STD_ERROR_HANDLE);
-  si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-  
-  std::string command_line = "\"" + xray_executable_path_.string() + "\" -config \"" + config_path + "\"";
-  std::vector<char> cmd_buffer(command_line.begin(), command_line.end());
-  cmd_buffer.push_back('\0');
-  
-  PROCESS_INFORMATION pi = {};
-  
-  std::string working_dir = xray_executable_path_.parent_path().string();
-  
-  auto assets_dir = FindXrayAssets(xray_executable_path_);
-  if (assets_dir) {
-    std::cerr << "Found Xray assets at: " << *assets_dir << std::endl;
-    if (*assets_dir != xray_executable_path_.parent_path()) {
-      std::string assets_path_str = assets_dir->string();
-      SetEnvironmentVariableA("XRAY_LOCATION_ASSET", assets_path_str.c_str());
-    }
-  }
-  
-  BOOL success = CreateProcessA(
-    nullptr,
-    cmd_buffer.data(),
-    nullptr,
-    nullptr,
-    TRUE,
-    CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
-    nullptr,
-    working_dir.c_str(),
-    &si,
-    &pi
-  );
-  
-  if (!success) {
-    DWORD error = GetLastError();
-    std::cerr << "Failed to start Xray process. Error: " << error << std::endl;
-    flutter_vless::DiagnosticsLog::Instance().Append(
-        "runtime", "Failed to create Windows proxy Xray process (Win32 error " +
-                       std::to_string(error) + ")");
-    if (hChildStdOutRead != INVALID_HANDLE_VALUE) CloseHandle(hChildStdOutRead);
-    if (hChildStdOutWrite != INVALID_HANDLE_VALUE) CloseHandle(hChildStdOutWrite);
-    if (hChildStdErrRead != INVALID_HANDLE_VALUE) CloseHandle(hChildStdErrRead);
-    if (hChildStdErrWrite != INVALID_HANDLE_VALUE) CloseHandle(hChildStdErrWrite);
-    xray_process_.reset();
-    return false;
-  }
-  
-  if (hChildStdOutWrite != INVALID_HANDLE_VALUE) {
-    CloseHandle(hChildStdOutWrite);
-    hChildStdOutWrite = INVALID_HANDLE_VALUE;
-  }
-  if (hChildStdErrWrite != INVALID_HANDLE_VALUE) {
-    CloseHandle(hChildStdErrWrite);
-    hChildStdErrWrite = INVALID_HANDLE_VALUE;
-  }
-
-  xray_process_->hProcess = reinterpret_cast<std::uintptr_t>(pi.hProcess);
-  xray_process_->hThread = reinterpret_cast<std::uintptr_t>(pi.hThread);
-  xray_process_->hStdOutRead = reinterpret_cast<std::uintptr_t>(hChildStdOutRead);
-  xray_process_->hStdErrRead = reinterpret_cast<std::uintptr_t>(hChildStdErrRead);
-
-  const auto diagnostics_generation =
-      flutter_vless::DiagnosticsLog::Instance().CurrentGeneration();
-  auto reader = [diagnostics_generation](std::uintptr_t readHandlePtr,
-                                         const char* label) {
-    HANDLE readHandle = reinterpret_cast<HANDLE>(readHandlePtr);
-    if (readHandle == INVALID_HANDLE_VALUE || readHandle == nullptr) return;
-    const DWORD bufSize = 4096;
-    std::vector<char> buffer(bufSize);
-    std::string pending;
-    DWORD bytesRead = 0;
-    while (true) {
-      BOOL result = ReadFile(readHandle, buffer.data(), bufSize, &bytesRead, nullptr);
-      if (!result || bytesRead == 0) break;
-      const std::string chunk(buffer.data(), bytesRead);
-      std::cerr << "[Xray " << label << "] " << chunk;
-      pending.append(chunk);
-      std::size_t newline = std::string::npos;
-      while ((newline = pending.find('\n')) != std::string::npos) {
-        flutter_vless::DiagnosticsLog::Instance().Append(
-            diagnostics_generation, std::string("xray-") + label,
-            pending.substr(0, newline));
-        pending.erase(0, newline + 1);
-      }
-      if (pending.size() > 32 * 1024) {
-        std::size_t start = pending.size() - 16 * 1024;
-        while (start < pending.size() &&
-               (static_cast<unsigned char>(pending[start]) & 0xC0) == 0x80) {
-          ++start;
-        }
-        pending.erase(0, start);
-      }
-    }
-    if (!pending.empty()) {
-      flutter_vless::DiagnosticsLog::Instance().Append(
-          diagnostics_generation, std::string("xray-") + label, pending);
-    }
-    CloseHandle(readHandle);
-  };
-
-  if (xray_process_->hStdOutRead != 0) {
-    std::thread(reader, xray_process_->hStdOutRead, "stdout").detach();
-    xray_process_->hStdOutRead = 0;
-  }
-  if (xray_process_->hStdErrRead != 0) {
-    std::thread(reader, xray_process_->hStdErrRead, "stderr").detach();
-    xray_process_->hStdErrRead = 0;
-  }
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  if (!xray_process_->IsRunning()) {
-    flutter_vless::DiagnosticsLog::Instance().Append(
-        "runtime", "Windows proxy Xray process exited during startup");
-    xray_process_->Close();
-    xray_process_.reset();
-    return false;
-  }
-
-  return true;
+  xray_process_ = flutter_vless::native::Launch(xray_executable_path_,
+      {L"run", L"-config", fs::path(config_path).wstring()});
+  return xray_process_ != nullptr;
 }
 
 void ProxyService::StopXrayProcess() {
@@ -431,31 +226,7 @@ void ProxyService::StopXrayProcess() {
 }
 
 bool ProxyService::WriteConfigToFile(const std::string& config, fs::path& config_path) {
-  try {
-    fs::path temp_dir = fs::temp_directory_path() / "flutter_vless";
-    fs::create_directories(temp_dir);
-    
-    auto now = std::chrono::system_clock::now();
-    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-      now.time_since_epoch()).count();
-    
-    config_path = temp_dir / ("xray_config_" + std::to_string(timestamp) + ".json");
-    
-    std::ofstream file(config_path, std::ios::binary);
-    if (!file.is_open()) {
-      return false;
-    }
-    
-    file << config;
-    file.close();
-    
-    return true;
-  } catch (const std::exception& e) {
-    std::cerr << "Error writing config file: " << e.what() << std::endl;
-    flutter_vless::DiagnosticsLog::Instance().Append(
-        "runtime", "Failed to write Windows proxy Xray configuration file");
-    return false;
-  }
+  return flutter_vless::native::WritePrivateConfig(config, config_path);
 }
 
 bool ProxyService::InitializeApiClient() {
@@ -518,113 +289,36 @@ int ProxyService::GetServerDelay(const std::string& url) {
 }
 
 int ProxyService::MeasureDelayStateless(const std::string& config, const std::string& url) {
-  if (!ValidateConfig(config)) {
-    return -1;
-  }
-  
-  fs::path temp_config;
-  if (!WriteConfigToFile(config, temp_config)) {
-    return -1;
-  }
-  
-  auto temp_process = std::make_unique<ProcessHandle>();
-  STARTUPINFOA si = {};
-  si.cb = sizeof(si);
-  si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-  si.wShowWindow = SW_HIDE;
-  
-  std::string command_line = "\"" + xray_executable_path_.string() + "\" -config \"" + temp_config.string() + "\"";
-  
-  PROCESS_INFORMATION pi = {};
-  BOOL success = CreateProcessA(
-    nullptr,
-    const_cast<char*>(command_line.c_str()),
-    nullptr,
-    nullptr,
-    FALSE,
-    CREATE_NO_WINDOW,
-    nullptr,
-    nullptr,
-    &si,
-    &pi
-  );
-  
-  if (!success) {
-    fs::remove(temp_config);
-    return -1;
-  }
-  
-  temp_process->hProcess = reinterpret_cast<std::uintptr_t>(pi.hProcess);
-  temp_process->hThread = reinterpret_cast<std::uintptr_t>(pi.hThread);
-  
-  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-  
-  auto temp_api = std::make_unique<ApiClient>();
-  temp_api->service_ = this;
-  
-  // Need to detect the port from the config we just wrote
-  if (auto detected = DetectApiAddressInConfig(temp_config)) {
-      std::string addr = *detected;
-      size_t colon = addr.find(':');
-      if (colon != std::string::npos) {
-          temp_api->api_address_ = addr.substr(0, colon);
-          try {
-              temp_api->api_port_ = std::stoi(addr.substr(colon + 1));
-          } catch(...) { temp_api->api_port_ = 10085; }
-      } else {
-          temp_api->api_address_ = addr;
-          temp_api->api_port_ = 10085;
-      }
-  } else {
-      // Fallback to default
-      temp_api->api_address_ = "127.0.0.1";
-      temp_api->api_port_ = 10085;
-  }
-
-  auto start = std::chrono::steady_clock::now();
-  int delay = temp_api->MeasureDelay(url);
-  auto end = std::chrono::steady_clock::now();
-  
-  temp_process->Close();
-  fs::remove(temp_config);
-  
-  if (delay < 0) {
-    return -1;
-  }
-  
-  auto overhead_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-  return delay + static_cast<int>(overhead_ms);
+  (void)config; (void)url;
+  return -1;
 }
 
 std::string ProxyService::GetCoreVersion() {
-  if (api_client_) {
-    std::string version = api_client_->GetVersion();
-    if (!version.empty()) return version;
-  }
-  
-  if (!xray_executable_path_.empty() && fs::exists(xray_executable_path_)) {
-    std::string command = "\"" + xray_executable_path_.string() + "\" -version";
-    FILE* pipe = _popen(command.c_str(), "r");
-    if (pipe != nullptr) {
-      char buffer[128];
-      std::string result = "";
-      while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        result += buffer;
-      }
-      _pclose(pipe);
-      
-      std::regex version_pattern(R"(Xray\s+(\d+\.\d+\.\d+))");
-      std::smatch match;
-      if (std::regex_search(result, match, version_pattern)) {
-        return match[1].str();
-      }
-    }
-  }
-  return "Unknown";
+  const auto path = FindXrayExecutable();
+  std::string output;
+  if (!path || !flutter_vless::native::Command(*path, {L"version"}, output)) return "Unknown";
+  std::smatch match;
+  const std::regex version(R"(Xray\s+(\d+\.\d+\.\d+))");
+  return std::regex_search(output, match, version) ? match[1].str() : "Unknown";
 }
 
 bool ProxyService::SetSystemProxy(const std::string& proxy_address, uint16_t proxy_port) {
   try {
+    if (!proxy_snapshot_) {
+      INTERNET_PER_CONN_OPTIONW saved[4]{};
+      const DWORD keys[] = {INTERNET_PER_CONN_FLAGS, INTERNET_PER_CONN_PROXY_SERVER,
+          INTERNET_PER_CONN_PROXY_BYPASS, INTERNET_PER_CONN_AUTOCONFIG_URL};
+      for (int i=0; i<4; ++i) saved[i].dwOption=keys[i];
+      INTERNET_PER_CONN_OPTION_LISTW list{}; list.dwSize=sizeof(list); list.dwOptionCount=4; list.pOptions=saved;
+      DWORD size=sizeof(list);
+      if (!InternetQueryOptionW(nullptr, INTERNET_OPTION_PER_CONNECTION_OPTION, &list, &size)) return false;
+      saved_proxy_flags_=saved[0].Value.dwValue;
+      auto keep=[](LPWSTR value) { std::wstring result=value?value:L""; if(value) GlobalFree(value); return result; };
+      saved_proxy_server_=keep(saved[1].Value.pszValue);
+      saved_proxy_bypass_=keep(saved[2].Value.pszValue);
+      saved_proxy_pac_=keep(saved[3].Value.pszValue);
+      proxy_snapshot_=true;
+    }
     std::string proxy_string = "socks=" + proxy_address + ":" + std::to_string(proxy_port);
     std::wstring proxy_wstring = StringToWString(proxy_string);
     
@@ -644,7 +338,7 @@ bool ProxyService::SetSystemProxy(const std::string& proxy_address, uint16_t pro
     DWORD dwBufSize = sizeof(INTERNET_PER_CONN_OPTION_LISTW);
     
     options[0].dwOption = INTERNET_PER_CONN_FLAGS;
-    options[0].Value.dwValue = PROXY_TYPE_PROXY | PROXY_TYPE_DIRECT;
+    options[0].Value.dwValue = PROXY_TYPE_PROXY;
     
     options[1].dwOption = INTERNET_PER_CONN_PROXY_SERVER;
     options[1].Value.pszValue = reinterpret_cast<LPWSTR>(proxy_server_buf_.data());
@@ -672,114 +366,34 @@ bool ProxyService::SetSystemProxy(const std::string& proxy_address, uint16_t pro
 }
 
 bool ProxyService::ClearSystemProxy() {
-  try {
-    INTERNET_PER_CONN_OPTION_LISTW option_list;
-    INTERNET_PER_CONN_OPTIONW options[1];
-    DWORD dwBufSize = sizeof(INTERNET_PER_CONN_OPTION_LISTW);
-    
-    options[0].dwOption = INTERNET_PER_CONN_FLAGS;
-    options[0].Value.dwValue = PROXY_TYPE_DIRECT;
-    
-    option_list.dwSize = sizeof(INTERNET_PER_CONN_OPTION_LISTW);
-    option_list.pszConnection = nullptr;
-    option_list.dwOptionCount = 1;
-    option_list.dwOptionError = 0;
-    option_list.pOptions = options;
-    
-    if (!InternetSetOptionW(nullptr, INTERNET_OPTION_PER_CONNECTION_OPTION, &option_list, dwBufSize)) {
-      return false;
-    }
-    
-    InternetSetOptionW(nullptr, INTERNET_OPTION_SETTINGS_CHANGED, nullptr, 0);
-    InternetSetOptionW(nullptr, INTERNET_OPTION_REFRESH, nullptr, 0);
-    
-    return true;
-  } catch (...) {
-    return false;
-  }
+  if (!proxy_snapshot_) return true;
+  INTERNET_PER_CONN_OPTIONW options[4]{};
+  options[0].dwOption=INTERNET_PER_CONN_FLAGS; options[0].Value.dwValue=saved_proxy_flags_;
+  options[1].dwOption=INTERNET_PER_CONN_PROXY_SERVER; options[1].Value.pszValue=saved_proxy_server_.data();
+  options[2].dwOption=INTERNET_PER_CONN_PROXY_BYPASS; options[2].Value.pszValue=saved_proxy_bypass_.data();
+  options[3].dwOption=INTERNET_PER_CONN_AUTOCONFIG_URL; options[3].Value.pszValue=saved_proxy_pac_.data();
+  INTERNET_PER_CONN_OPTION_LISTW list{}; list.dwSize=sizeof(list); list.dwOptionCount=4; list.pOptions=options;
+  if (!InternetSetOptionW(nullptr, INTERNET_OPTION_PER_CONNECTION_OPTION, &list, sizeof(list))) return false;
+  InternetSetOptionW(nullptr, INTERNET_OPTION_SETTINGS_CHANGED, nullptr, 0);
+  InternetSetOptionW(nullptr, INTERNET_OPTION_REFRESH, nullptr, 0);
+  proxy_snapshot_=false; return true;
 }
 
 std::optional<fs::path> ProxyService::FindXrayExecutable() {
-  std::vector<fs::path> search_paths = {
-    fs::current_path() / "xray.exe",
-    fs::current_path() / "xray" / "xray.exe",
-    fs::current_path() / "windows" / "xray" / "xray.exe",
-    fs::current_path() / "example" / "windows" / "xray" / "xray.exe",
-    fs::current_path().parent_path() / "xray.exe",
-    fs::current_path().parent_path() / "xray" / "xray.exe",
-    fs::current_path().parent_path() / "windows" / "xray" / "xray.exe",
-  };
-  
-  char appdata_path[MAX_PATH];
-  if (SHGetFolderPathA(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, appdata_path) == S_OK) {
-    search_paths.push_back(fs::path(appdata_path) / "flutter_vless" / "xray.exe");
-  }
-  
-  char program_files[MAX_PATH];
-  if (SHGetFolderPathA(nullptr, CSIDL_PROGRAM_FILES, nullptr, SHGFP_TYPE_CURRENT, program_files) == S_OK) {
-    search_paths.push_back(fs::path(program_files) / "Xray" / "xray.exe");
-  }
-  
-  char exe_path[MAX_PATH];
-  if (GetModuleFileNameA(nullptr, exe_path, MAX_PATH) > 0) {
-    fs::path exe_dir = fs::path(exe_path).parent_path();
-    search_paths.push_back(exe_dir / "xray.exe");
-    search_paths.push_back(exe_dir / "xray" / "xray.exe");
-    search_paths.push_back(exe_dir / "data" / "flutter_assets" / "xray.exe");
-    search_paths.push_back(exe_dir / "data" / "flutter_assets" / "xray" / "xray.exe");
-    search_paths.push_back(exe_dir / "data" / "flutter_assets" / "assets" / "xray.exe");
-    search_paths.push_back(exe_dir / "data" / "flutter_assets" / "assets" / "xray" / "xray.exe");
-    search_paths.push_back(exe_dir / "data" / "flutter_assets" / "windows" / "xray" / "xray.exe");
-    search_paths.push_back(exe_dir / "data" / "flutter_assets" / "windows" / "runner" / "xray" / "xray.exe");
-    search_paths.push_back(exe_dir / "windows" / "xray" / "xray.exe");
-  }
-  
-  for (const auto& path : search_paths) {
-    if (fs::exists(path) && fs::is_regular_file(path)) {
-      std::cerr << "Found Xray executable: " << path << std::endl;
-      return path;
-    }
-  }
-  
-  return std::nullopt;
+  return flutter_vless::native::FindBundledFile(L"xray.exe");
 }
 
 std::optional<fs::path> ProxyService::FindXrayAssets(const fs::path& executable_path) {
-  const std::string geoip = "geoip.dat";
-  
-  fs::path exe_dir = executable_path.parent_path();
-  if (fs::exists(exe_dir / geoip)) {
-    return exe_dir;
-  }
-  
-  if (fs::exists(fs::current_path() / geoip)) {
-    return fs::current_path();
-  }
-  
-  char app_path_buffer[MAX_PATH];
-  if (GetModuleFileNameA(nullptr, app_path_buffer, MAX_PATH) > 0) {
-    fs::path app_dir = fs::path(app_path_buffer).parent_path();
-    fs::path assets_dir = app_dir / "data" / "flutter_assets";
-    if (fs::exists(assets_dir / geoip)) return assets_dir;
-    if (fs::exists(assets_dir / "assets" / geoip)) return assets_dir / "assets";
-    if (fs::exists(assets_dir / "xray" / geoip)) return assets_dir / "xray";
-    if (fs::exists(assets_dir / "assets" / "xray" / geoip)) return assets_dir / "assets" / "xray";
-    if (fs::exists(assets_dir / "windows" / "xray" / geoip)) return assets_dir / "windows" / "xray";
-  }
-  
-  return std::nullopt;
+  auto directory = executable_path.parent_path();
+  return fs::is_regular_file(directory / "geoip.dat") ? std::optional<fs::path>(directory) : std::nullopt;
 }
 
 bool ProxyService::ValidateConfig(const std::string& config) {
-  return json_utils::IsValidJson(config);
+  return flutter_vless::xray_config::Parse(config).is_object();
 }
 
 void ProxyService::CleanupTempFiles() {
-  try {
-    if (!temp_config_path_.empty() && fs::exists(temp_config_path_)) {
-      fs::remove(temp_config_path_);
-    }
-  } catch (...) {}
+  flutter_vless::native::RemovePrivateConfig(temp_config_path_);
 }
 
 bool ProxyService::IsPortFree(uint16_t port) {
@@ -1036,123 +650,8 @@ std::string ApiClient::GetVersion() {
  * @return true if command executed successfully, false on error or timeout.
  */
 bool ApiClient::RunXrayApiCommand(const std::string& args, std::string& output) {
-  if (!service_) {
-    // std::cerr << "RunXrayApiCommand failed: service is null" << std::endl;
-    return false;
-  }
-  
-  fs::path xray_path = service_->xray_executable_path_;
-  if (xray_path.empty() || !fs::exists(xray_path)) {
-    // std::cerr << "RunXrayApiCommand failed: xray path invalid: " << xray_path << std::endl;
-    return false;
-  }
-
-  std::string command_line = "\"" + xray_path.string() + "\" " + args;
-  
-  // Create pipe for stdout
-  HANDLE hRead, hWrite;
-  SECURITY_ATTRIBUTES sa;
-  sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-  sa.bInheritHandle = TRUE;
-  sa.lpSecurityDescriptor = NULL;
-
-  if (!CreatePipe(&hRead, &hWrite, &sa, 0)) {
-    // std::cerr << "RunXrayApiCommand failed: CreatePipe error " << GetLastError() << std::endl;
-    return false;
-  }
-  SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
-
-  STARTUPINFOA si = {};
-  si.cb = sizeof(si);
-  si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-  si.hStdOutput = hWrite;
-  si.hStdError = hWrite; // Capture stderr too
-  si.wShowWindow = SW_HIDE; // Hide the console window
-
-  PROCESS_INFORMATION pi = {};
-  
-  std::vector<char> cmd_buffer(command_line.begin(), command_line.end());
-  cmd_buffer.push_back('\0');
-
-  // We need to set working directory to where xray is, just in case
-  std::string working_dir = xray_path.parent_path().string();
-
-  // Log start of command (Debug only)
-  // std::cerr << "RunXrayApiCommand: Starting command " << args << std::endl;
-
-  if (!CreateProcessA(NULL, cmd_buffer.data(), NULL, NULL, TRUE, 0, NULL, working_dir.c_str(), &si, &pi)) {
-    // std::cerr << "RunXrayApiCommand failed: CreateProcess error " << GetLastError() << std::endl;
-    CloseHandle(hRead);
-    CloseHandle(hWrite);
-    return false;
-  }
-
-  // Close write end in parent
-  CloseHandle(hWrite);
-
-  // Read output with timeout
-  char buffer[4096];
-  DWORD bytesRead;
-  std::stringstream ss;
-  
-  auto start_time = std::chrono::steady_clock::now();
-  // 3 second timeout for API commands
-  const auto timeout = std::chrono::seconds(3); 
-  
-  while (true) {
-    // Check for timeout
-    if (std::chrono::steady_clock::now() - start_time > timeout) {
-      std::cerr << "RunXrayApiCommand: Timeout waiting for command: " << args << std::endl;
-      TerminateProcess(pi.hProcess, 1);
-      break;
-    }
-    
-    DWORD bytesAvailable = 0;
-    // std::cerr << "RunXrayApiCommand: Peeking pipe..." << std::endl;
-    BOOL peekResult = PeekNamedPipe(hRead, NULL, 0, NULL, &bytesAvailable, NULL);
-    
-    if (peekResult && bytesAvailable > 0) {
-      // Data is available, read it
-      // std::cerr << "RunXrayApiCommand: Data available: " << bytesAvailable << std::endl;
-      
-      // Read only what is available to avoid blocking
-      DWORD toRead = std::min((DWORD)(sizeof(buffer) - 1), bytesAvailable);
-      
-      if (ReadFile(hRead, buffer, toRead, &bytesRead, NULL) && bytesRead > 0) {
-        buffer[bytesRead] = '\0';
-        ss << buffer;
-        // std::cerr << "RunXrayApiCommand: Read " << bytesRead << " bytes" << std::endl;
-      }
-    } else {
-      // No data available right now
-      // Check if process has exited
-      if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) {
-        // Process exited.
-        // std::cerr << "RunXrayApiCommand: Process exited" << std::endl;
-        // Check one last time for any remaining data in the pipe
-        while (PeekNamedPipe(hRead, NULL, 0, NULL, &bytesAvailable, NULL) && bytesAvailable > 0) {
-           DWORD toRead = std::min((DWORD)(sizeof(buffer) - 1), bytesAvailable);
-           if (ReadFile(hRead, buffer, toRead, &bytesRead, NULL) && bytesRead > 0) {
-             buffer[bytesRead] = '\0';
-             ss << buffer;
-           } else {
-             break;
-           }
-        }
-        break;
-      }
-      
-      // Process still running and no data, sleep briefly
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-  }
-  
-  // std::cerr << "RunXrayApiCommand: Finished command " << args << std::endl;
-  
-  CloseHandle(pi.hProcess);
-  CloseHandle(pi.hThread);
-  CloseHandle(hRead);
-
-  output = ss.str();
-  return true;
+  (void)args;
+  if (!service_) return false;
+  return flutter_vless::native::Command(service_->xray_executable_path_,
+      {L"api", L"statsquery", L"-server=" + flutter_vless::native::Wide(service_->api_address_)}, output);
 }

@@ -110,6 +110,7 @@ bool VpnService::Start(const std::string& config) {
   socks_port_ = *xray_config::SocksPort(current_config_);
   // WFP must exist before native workers, resolver configuration or capture.
   if (!protection_.Install(xray_executable_path_)) { Event(("Could not install mandatory Windows traffic protection, code=" + std::to_string(protection_.Error())).c_str()); return false; }
+  Event("Mandatory Windows traffic protection installed");
   requested_.store(true); ready_.store(false);
   { std::lock_guard<std::mutex> lock(state_mutex_); first_attempt_finished_ = false; }
   vpn_thread_ = std::thread(&VpnService::RunVpn, this);
@@ -153,43 +154,49 @@ void VpnService::RunVpn() {
 }
 bool VpnService::StartWorkers() {
   using namespace flutter_vless;
+  auto fail = [](const char* stage) { Event(stage); return false; };
   auto underlay = Underlay();
-  if (!underlay) return false;
+  if (!underlay) return fail("No usable underlay for native recovery");
   auto config = xray_config::Parse(current_config_);
   for (auto& outbound : config["outbounds"]) Rebind(outbound, *underlay);
   packet_probe_ = std::make_unique<PacketPathProbe>();
-  if (!packet_probe_->Start() || !packet_probe_->Configure(config)) return false;
-  if (!private_runtime_ || !private_runtime_->WriteConfig(config.dump(), temp_config_path_)) return false;
+  if (!packet_probe_->Start() || !packet_probe_->Configure(config)) return fail("Cannot prepare the local packet-path probe");
+  if (!private_runtime_ || !private_runtime_->WriteConfig(config.dump(), temp_config_path_)) return fail("Cannot write the private Xray configuration");
   xray_process_ = native::Launch(xray_executable_path_, {L"run", L"-config", temp_config_path_.wstring()});
-  if (!xray_process_) return false;
+  if (!xray_process_) return fail("Cannot launch the protected Xray process");
   bool listening = false;
   for (int i = 0; i < 60 && requested_.load() && xray_process_->IsRunning(); ++i) {
     if (native::SocksReady(socks_port_, username_, password_)) { listening = true; break; }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
-  if (!listening) return false;
+  if (!listening) {
+    DWORD code = 0; GetExitCodeProcess(reinterpret_cast<HANDLE>(xray_process_->hProcess), &code);
+    Event(("Authenticated Xray listener unavailable, process code=" + std::to_string(code)).c_str());
+    return false;
+  }
+  Event("Authenticated Xray listener ready");
   // Credentials live only in a private file, never in the process command line.
   std::string tun = "device: wintun://flutter_vless_tun\nproxy: socks5://" + username_ + ":" + password_
       + "@127.0.0.1:" + std::to_string(socks_port_) + "\nloglevel: silent\nmtu: 1500\n";
-  if (!private_runtime_->WriteConfig(tun, tun_config_path_)) return false;
+  if (!private_runtime_->WriteConfig(tun, tun_config_path_)) return fail("Cannot write the private tun2socks configuration");
   tun2socks_process_ = native::Launch(tun2socks_executable_path_, {L"-config", tun_config_path_.wstring()});
-  if (!tun2socks_process_) return false;
+  if (!tun2socks_process_) return fail("Cannot launch tun2socks");
   NET_LUID luid{};
   for (int i = 0; i < 100 && requested_.load(); ++i) {
     if (ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &luid) == NO_ERROR) break;
-    if (!tun2socks_process_->IsRunning()) return false;
+    if (!tun2socks_process_->IsRunning()) return fail("tun2socks exited before creating its adapter");
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
-  if (!luid.Value || !requested_.load()) return false;
+  if (!luid.Value || !requested_.load()) return fail("Wintun adapter unavailable or startup cancelled");
   if (!native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"address",
-      L"name=flutter_vless_tun", L"source=static", L"address=10.0.85.2", L"mask=255.255.255.0", L"gateway=none"})) return false;
+      L"name=flutter_vless_tun", L"source=static", L"address=10.0.85.2", L"mask=255.255.255.0", L"gateway=none"})) return fail("Cannot configure the Wintun IPv4 address");
   bool addressed = false;
   for (int i = 0; i < 150 && requested_.load(); ++i) {
     if (TunnelReady(luid)) { addressed = true; break; }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
   if (!addressed || !native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"dnsservers",
-      L"name=flutter_vless_tun", L"source=static", L"address=198.18.0.2", L"validate=no"})) return false;
+      L"name=flutter_vless_tun", L"source=static", L"address=198.18.0.2", L"validate=no"})) return fail("Wintun address or virtual DNS did not become ready");
   for (auto prefix : {std::pair<const char*, UINT8>{"0.0.0.0", UINT8{1}}, {"128.0.0.0", UINT8{1}}, {xray_config::kVirtualDns, UINT8{32}}}) {
     MIB_IPFORWARD_ROW2 row{}; InitializeIpForwardEntry(&row);
     row.InterfaceLuid = luid; row.DestinationPrefix.Prefix.Ipv4.sin_family = AF_INET;
@@ -199,17 +206,19 @@ bool VpnService::StartWorkers() {
     InetPtonA(AF_INET, "10.0.85.1", &row.NextHop.Ipv4.sin_addr);
     row.Metric = 0; row.Protocol = static_cast<NL_ROUTE_PROTOCOL>(MIB_IPPROTO_NETMGMT);
     // Never delete or claim an existing administrator/other-session route.
-    if (CreateIpForwardEntry2(&row) != NO_ERROR) return false;
+    const auto status = CreateIpForwardEntry2(&row);
+    if (status != NO_ERROR) { Event(("Cannot install an owned capture route, code=" + std::to_string(status)).c_str()); return false; }
     capture_routes_.push_back(row);
   }
-  if (!protection_.Install(xray_executable_path_, &luid)) return false;
+  if (!protection_.Install(xray_executable_path_, &luid)) { Event(("Cannot authorize the Wintun interface, code=" + std::to_string(protection_.Error())).c_str()); return false; }
+  Event("Wintun capture and virtual DNS ready; checking packet forwarding");
   native::RemovePrivateConfig(temp_config_path_);
   native::RemovePrivateConfig(tun_config_path_);
   for (int i = 0; i < 10 && requested_.load() && xray_process_->IsRunning() && tun2socks_process_->IsRunning(); ++i) {
     if (packet_probe_->Check()) return true;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
-  return false;
+  return fail("Private packet-path challenge did not complete");
 }
 void VpnService::StopWorkers() {
   // The separate WFP barrier remains installed, including during route removal.

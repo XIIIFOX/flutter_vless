@@ -151,7 +151,7 @@ int main(int argc,char** argv) {
   if(vpn && !isolated)return 20;
   auto& manager=V2rayManager::GetInstance();
   bool started=manager.Start(config,!vpn);std::cout<<"START_RETURN="<<started<<std::endl;
-  if(!started){std::cout<<manager.GetProviderDebugSnapshot()<<std::endl;manager.Stop();return 3;}
+  if(!started){manager.Stop();std::cout<<manager.GetProviderDebugSnapshot()<<std::endl;return 3;}
   int seconds=argc>3?std::stoi(argv[3]):20;
   const std::filesystem::path stop_file = arguments.size() > 4 ? arguments[4] : L"";
   const std::filesystem::path state_file = arguments.size() > 5 ? arguments[5] : L"";

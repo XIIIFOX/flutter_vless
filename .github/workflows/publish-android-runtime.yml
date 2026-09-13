@@ -6,7 +6,7 @@ on:
       xray_runtime_version:
         description: Xray runtime Maven artifact version
         required: true
-        default: "26.7.28-protect1"
+        default: "26.9.9-protect1"
       existing_deployment_id:
         description: Existing Central Portal deployment ID to publish instead of uploading a new bundle
         required: false
@@ -45,6 +45,16 @@ jobs:
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
           SIGNING_IN_MEMORY_KEY: ${{ secrets.SIGNING_IN_MEMORY_KEY }}
           SIGNING_IN_MEMORY_KEY_PASSWORD: ${{ secrets.SIGNING_IN_MEMORY_KEY_PASSWORD }}
+      - name: Preserve the exact signed Maven artifacts
+        if: ${{ inputs.existing_deployment_id == '' && success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: xray-android-${{ inputs.xray_runtime_version }}-maven
+          path: |
+            android_runtime/xray_android/build/repo/dev/tfox/fluttervless/xray-android/${{ inputs.xray_runtime_version }}/
+            android_runtime/xray_android/build/xray-android-${{ inputs.xray_runtime_version }}-central-bundle.zip
+          if-no-files-found: error
+          retention-days: 30
       - name: Publish existing Maven Central deployment
         if: ${{ inputs.existing_deployment_id != '' }}
         env:

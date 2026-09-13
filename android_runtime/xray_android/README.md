@@ -21,7 +21,7 @@ The published 26.6.1 device-only artifact and 26.6.1.1 all-ABI artifact are
 immutable. The current runtime revision that includes all Android ABIs is:
 
 ```text
-dev.tfox.fluttervless:xray-android:26.7.28-protect1
+dev.tfox.fluttervless:xray-android:26.9.9-protect1
 ```
 
 This revision requires the matching Android socket broker;

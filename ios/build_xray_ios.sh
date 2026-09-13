@@ -1,11 +1,12 @@
 #!/bin/bash
 set -euo pipefail
+export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 XRAY_MOBILE_DIR="${XRAY_MOBILE_DIR:-$REPO_ROOT/third_party/xray-mobile}"
-XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.7.28}"
-XRAY_CORE_REF="${XRAY_CORE_REF:-5ca6f4b7d4dc20a881d4330e498892697627ec0c}"
+XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.9.9}"
+XRAY_CORE_REF="${XRAY_CORE_REF:-52a412d9e2f5c2a5142b1b4e2ab3771dacb8b120}"
 IOS_VERSION="${IOS_VERSION:-15.0}"
 BUILD_DIR="${BUILD_DIR:-$SCRIPT_DIR/build_xray_ios}"
 OUTPUT_XCFRAMEWORK="${OUTPUT_XCFRAMEWORK:-$SCRIPT_DIR/XRay.xcframework}"
@@ -26,14 +27,6 @@ if [ "$GO_MAJOR" -lt 1 ] || { [ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -lt 27 ]; }
     echo "Error: Go 1.27 or newer is required for the stdlib http2 layout used by the H2BUF patch."
     echo "Your Go version: $(go version)"
     exit 1
-fi
-
-if ! command -v gomobile >/dev/null 2>&1; then
-    echo "gomobile not found, installing it with go install..."
-    go install golang.org/x/mobile/cmd/gomobile@latest
-    go install golang.org/x/mobile/cmd/gobind@latest
-    export PATH="$HOME/go/bin:$PATH"
-    gomobile init
 fi
 
 if ! xcrun --sdk iphoneos --show-sdk-path >/dev/null 2>&1; then
@@ -57,7 +50,12 @@ echo "Using vendored xray-mobile source from $XRAY_MOBILE_DIR"
 # Xray-core uses calendar release tags but keeps the original module path.
 # Pin by the release commit so Go resolves it to the matching v1.YYMMDD.0 module version.
 go get "github.com/xtls/xray-core@$XRAY_CORE_REF"
-go get -tool golang.org/x/mobile/cmd/gobind
+MOBILE_VERSION="$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
+go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
+mkdir -p "$BUILD_DIR/tools"
+GOBIN="$BUILD_DIR/tools" go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_VERSION"
+GOBIN="$BUILD_DIR/tools" go install "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
+export PATH="$BUILD_DIR/tools:$PATH"
 go mod tidy
 
 # ---------------------------------------------------------------------------

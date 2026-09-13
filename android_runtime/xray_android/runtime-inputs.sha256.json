@@ -1,12 +1,12 @@
 {
-  "assets/geoip.dat": "1b0c33f5e123fc3f21702f44002882dfb8b08499e4d34c7cba7050a7dc3fb383",
-  "assets/geosite.dat": "b185214faba704083686e23bd82a89fde8a037b11166c93bf93e8a9cca542414",
+  "assets/geoip.dat": "4149e607530f91da697bad4696f8c59f0a475af38e69405e4124438c9886c721",
+  "assets/geosite.dat": "2064a1a4074e145d5022ac49f2c30341e7b7cb6c7948da4fdca973b3fa8411b2",
   "jniLibs/arm64-v8a/libtun2socks.so": "5c34e81ee984ea655622f9cf19b54af826f461cd0e27fb4d0b4d18ce9edf309a",
-  "jniLibs/arm64-v8a/libxray.so": "e697990df7060355e2e7fa6b459d06c480e4cd51a49de832dc4df3c093e50af6",
+  "jniLibs/arm64-v8a/libxray.so": "40658a7123e28d839a61af077b6e9c35bf327ff3be2e054360325852921a6c88",
   "jniLibs/armeabi-v7a/libtun2socks.so": "feed4b1c33b9ed9f3c81b508f561ae117d63703062ca4e47539f4680b035be6a",
-  "jniLibs/armeabi-v7a/libxray.so": "aade114a753da0c435c001cd62b801dff23f280cafc1f1f0810c6f544297f850",
+  "jniLibs/armeabi-v7a/libxray.so": "2b6337d488035725a43d0148ac27dabd416a8b67db50388a59cccc047bce6592",
   "jniLibs/x86/libtun2socks.so": "b72a8d85ae3bc07712555d2647ddcc68e2eb20be051712182d0bb237e2840320",
-  "jniLibs/x86/libxray.so": "b58a8406e205751c073391bf936d79c0f77647fb8c194b3dd057153adb859955",
+  "jniLibs/x86/libxray.so": "47e93d12b770e008c8b63185d6a4bfce8c1b035610ab7a239ab80efa26cedddc",
   "jniLibs/x86_64/libtun2socks.so": "7026c524eab8e7fbd8930b955dda5de854f83ae38d3803af0eae18f18ce55931",
-  "jniLibs/x86_64/libxray.so": "784bb775d400e622985f07563d84b39fed98ce1f736fb7ace6f5ac20167dfb41"
+  "jniLibs/x86_64/libxray.so": "0cfde156b82ce3b1deb4ebec4aeebd0eb2c74126a25c5fecaa9a5de45164d016"
 }

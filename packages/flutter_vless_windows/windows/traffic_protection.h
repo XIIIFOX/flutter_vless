@@ -1,6 +1,7 @@
 #ifndef FLUTTER_VLESS_TRAFFIC_PROTECTION_H_
 #define FLUTTER_VLESS_TRAFFIC_PROTECTION_H_
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <iphlpapi.h>
 #include <filesystem>

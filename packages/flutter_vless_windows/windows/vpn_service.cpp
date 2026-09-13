@@ -190,7 +190,7 @@ bool VpnService::StartWorkers() {
   }
   if (!addressed || !native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"dnsservers",
       L"name=flutter_vless_tun", L"source=static", L"address=198.18.0.2", L"validate=no"})) return false;
-  for (auto prefix : {std::pair<const char*, UINT8>{"0.0.0.0", 1}, {"128.0.0.0", 1}, {xray_config::kVirtualDns, 32}}) {
+  for (auto prefix : {std::pair<const char*, UINT8>{"0.0.0.0", UINT8{1}}, {"128.0.0.0", UINT8{1}}, {xray_config::kVirtualDns, UINT8{32}}}) {
     MIB_IPFORWARD_ROW2 row{}; InitializeIpForwardEntry(&row);
     row.InterfaceLuid = luid; row.DestinationPrefix.Prefix.Ipv4.sin_family = AF_INET;
     row.DestinationPrefix.PrefixLength = prefix.second;

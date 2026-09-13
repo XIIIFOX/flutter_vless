@@ -57,6 +57,7 @@ endif()
 # Add preprocessor definitions for the build.
 target_compile_definitions(${PLUGIN_NAME}_plugin PRIVATE "FLUTTER_PLUGIN_IMPL")
 target_compile_definitions(${PLUGIN_NAME}_plugin PRIVATE "NOMINMAX")
+target_compile_definitions(${PLUGIN_NAME}_plugin PRIVATE "WIN32_LEAN_AND_MEAN")
 
 # Add include directories for the plugin.
 target_include_directories(${PLUGIN_NAME}_plugin INTERFACE

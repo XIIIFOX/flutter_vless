@@ -51,7 +51,10 @@ class _HomePageState extends State<HomePage> {
   bool proxyOnly = false;
   List<String> bypassSubnets = [];
   List<String> blockedApps = [];
-  List<String> blockedDomains = [];
+
+  /// Domains routed directly, bypassing the VPN.
+  /// Use https://tfox.dev/ip/ to check the IP address of the direct connection.
+  List<String> blockedDomains = ['tfox.dev'];
   String? coreVersion;
   String remark = 'Example Remark';
 

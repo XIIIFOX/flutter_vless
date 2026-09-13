@@ -135,14 +135,33 @@ if [ ! -f "$APK_PATH" ]; then
 fi
 
 python3 - "$AAR_PATH" "$APK_PATH" <<'PYVERIFY'
-import sys, zipfile
+import os, subprocess, sys, tempfile, zipfile
+from pathlib import Path
+# AGP runs the Android NDK stripper even for already-stripped libraries, which
+# can rewrite non-runtime ELF string tables. Require exact published bytes or
+# reproduce that transformation; never accept a version-string-only match.
+ndk = Path(os.environ["ANDROID_HOME"]) / "ndk"
+strippers = sorted(p for p in ndk.glob("*/toolchains/llvm/prebuilt/*/bin/llvm-strip*")
+                   if p.name in ("llvm-strip", "llvm-strip.exe"))
+def matches_packaged(source, packaged):
+    if source == packaged:
+        return True
+    with tempfile.TemporaryDirectory(prefix="xray-strip-verification-") as directory:
+        raw, stripped = Path(directory) / "source.so", Path(directory) / "stripped.so"
+        raw.write_bytes(source)
+        for tool in strippers:
+            result = subprocess.run([str(tool), "--strip-unneeded", "-o", str(stripped), str(raw)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if result.returncode == 0 and stripped.read_bytes() == packaged:
+                return True
+    return False
 with zipfile.ZipFile(sys.argv[1]) as aar, zipfile.ZipFile(sys.argv[2]) as apk:
     for abi in ['arm64-v8a', 'armeabi-v7a', 'x86_64']:
         for library in ['libxray.so', 'libtun2socks.so']:
-            assert apk.read(f'lib/{abi}/{library}') == aar.read(f'jni/{abi}/{library}'), f'Packaged runtime differs: {abi}/{library}'
+            assert matches_packaged(aar.read(f'jni/{abi}/{library}'), apk.read(f'lib/{abi}/{library}')), f'Packaged runtime differs from published bytes/NDK strip output: {abi}/{library}'
     for asset in ['geoip.dat', 'geosite.dat']:
         assert apk.read(f'assets/{asset}') == aar.read(f'assets/{asset}'), f'Packaged geodata differs: {asset}'
-print('PASS: APK native libraries and geodata match the published Maven AAR byte for byte')
+print('PASS: APK runtime matches published Maven bytes or their exact NDK strip output; geodata matches byte for byte')
 PYVERIFY
 
 for entry in \

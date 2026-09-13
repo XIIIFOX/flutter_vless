@@ -2,7 +2,7 @@
 #define FLUTTER_VLESS_TRAFFIC_PROTECTION_H_
 #include <winsock2.h>
 #include <windows.h>
-#include <netioapi.h>
+#include <iphlpapi.h>
 #include <filesystem>
 #include <atomic>
 #include <functional>

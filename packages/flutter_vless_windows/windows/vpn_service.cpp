@@ -7,7 +7,7 @@
 
 namespace {
 void Event(const char* message) { flutter_vless::DiagnosticsLog::Instance().Append("vpn", message); }
-std::optional<std::string> Underlay() {
+std::optional<std::string> Underlay(UINT64* identity = nullptr) {
   // Select a usable default without allowing our own more-specific capture
   // routes to become the next transport's underlay. Include adapter metrics.
   MIB_IPFORWARD_TABLE2* routes = nullptr;
@@ -30,6 +30,7 @@ std::optional<std::string> Underlay() {
     std::string name(size, 0);
     WideCharToMultiByte(CP_UTF8, 0, row.Alias, -1, name.data(), size, nullptr, nullptr);
     name.pop_back(); result = name; best = metric;
+    if (identity) *identity = row.InterfaceLuid.Value;
   }
   FreeMibTable(routes);
   return result;
@@ -141,6 +142,12 @@ void VpnService::RunVpn() {
     if (started) Event("Protected VPN forwarding ready");
     unsigned ticks = 0;
     while (ready_.load() && requested_.load()) {
+      UINT64 identity = 0;
+      const auto current_interface = Underlay(&identity);
+      if (!current_interface || *current_interface != underlay_name_ || identity != underlay_luid_) {
+        Event("Outbound interface changed; rebuilding the protected VPN path");
+        break;
+      }
       if (!xray_process_->IsRunning() || !tun2socks_process_->IsRunning()
           || !packet_probe_ || !packet_probe_->Check()) break;
       if (++ticks % 2 == 0) UpdateTrafficStats();
@@ -155,8 +162,9 @@ void VpnService::RunVpn() {
 bool VpnService::StartWorkers() {
   using namespace flutter_vless;
   auto fail = [](const char* stage) { Event(stage); return false; };
-  auto underlay = Underlay();
+  auto underlay = Underlay(&underlay_luid_);
   if (!underlay) return fail("No usable underlay for native recovery");
+  underlay_name_ = *underlay;
   auto config = xray_config::Parse(current_config_);
   for (auto& outbound : config["outbounds"]) Rebind(outbound, *underlay);
   packet_probe_ = std::make_unique<PacketPathProbe>();

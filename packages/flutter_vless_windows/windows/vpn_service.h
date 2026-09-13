@@ -103,6 +103,10 @@ class VpnService {
   std::string current_config_;
   std::map<std::string, std::string> bootstrap_cache_;
   std::string username_, password_;
+  // Used only by the VPN worker to detect an underlay change independently of
+  // the local TUN probe, which remains healthy when a physical adapter changes.
+  std::string underlay_name_;
+  UINT64 underlay_luid_ = 0;
   uint16_t socks_port_ = 0;
   flutter_vless::TrafficProtection protection_;
   std::unique_ptr<flutter_vless::native::ProtectedRuntime> private_runtime_;

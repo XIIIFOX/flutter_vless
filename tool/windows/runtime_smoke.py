@@ -466,6 +466,20 @@ def main():
                         print(json.dumps(row), flush=True)
                         if not reverse and ending == "stop":
                             results.append(dict(mode=label, check="ordinary Windows DNS resolver", actual=system_dns(), passed=True))
+                            # A new localized adapter name invalidates an Xray
+                            # binding even though the local TUN probe still works.
+                            # This disposable VM keeps its addresses and routes.
+                            index = source_interface(direct_address)
+                            subprocess.run(["powershell", "-NoProfile", "-Command",
+                                f"Get-NetAdapter -InterfaceIndex {index} | Rename-NetAdapter -NewName 'Vless Underlay Ω' -ErrorAction Stop"],
+                                check=True, timeout=15, stdout=subprocess.DEVNULL)
+                            await_state(state_file, False)
+                            actual = physical_denied(external_address, direct_address, 443)
+                            results.append(dict(mode=label, check="underlay rename remains protected", actual=actual, passed=True))
+                            await_state(state_file, True, timeout=60)
+                            assert request("myip.com", True) == "PROXY-FIXTURE"
+                            assert system_dns()
+                            results.append(dict(mode=label, check="Unicode underlay rename recovers routing and system DNS", passed=True))
                             for worker in ("xray.exe", "tun2socks.exe"):
                                 kill_worker(process.pid, worker)
                                 await_state(state_file, False)

@@ -53,6 +53,7 @@ for marker in ['LOCAL_ACCESS_PROBE_DONE','BUILD_RESULT=false; ERROR=Xray startup
 for proxy in ['http','socks']:
     for generation in [0,1]:
         assert f'DNS_RUNTIME_PASS={proxy};GENERATION={generation}' in text
+        assert f'DNS_IPV4_ONLY_PASS={proxy};GENERATION={generation}' in text
     assert f'DNS_REFUSAL_NO_FALLBACK_PASS={proxy}' in text
 print('PASS macOS Xray runtime: privacy, 12 modes, local authentication, rotation, domain routing, DNS relay/refusal and delay')
 PY

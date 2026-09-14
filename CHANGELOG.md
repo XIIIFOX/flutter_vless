@@ -1,5 +1,7 @@
 ## 1.1.6
 
+**Security & Reliability Update**
+
 ### General
 
 * Distinguish manual system VPN disconnects from failures on Apple platforms, including when the containing app is closed. Keep automatic recovery for failures and restore it on the next connection.
@@ -12,6 +14,8 @@
 
 * Extend mandatory desktop VPN protection, private diagnostics and local proxy authentication to macOS and Windows. Keep domain-based direct routing and document platform-specific subnet behavior.
 
+* Align protected system DNS with IPv4-only VPN forwarding: return an empty successful AAAA response instead of advertising blocked IPv6 destinations, which could cause connection closures in dual-stack clients. Keep IPv4 DNS relay through the selected proxy.
+
 * iOS and Android: authenticate internal local proxies and their clients with native session credentials. VPN mode rejects incompatible extra proxy listeners; explicit proxy-only authentication/noauth remains separate.
 * Add explicit native capability checks for new security options, runtime checksum verification, and regression/runtime tests.
 * Native local authentication uses supported SOCKS/HTTP runtime features. macOS additionally requires the private-startup runtime bridge described below.
@@ -20,6 +24,8 @@
   with bounded native diagnostics available after stop or failure.
 
 ### iOS
+
+* Return AAAA NODATA from the packet tunnel's virtual DNS while IPv6 forwarding is blocked.
 
 * Disable saved On Demand rules from the packet tunnel provider on a user-initiated stop. Rearm recovery when reconnecting from system controls, and prevent late health checks from reasserting a stopping tunnel. Bound preference operations and reject changes to replacement profiles.
 

@@ -1,5 +1,7 @@
 ## 1.1.6
 
+* Return AAAA NODATA from protected system DNS to match the IPv4-only VPN policy and prevent clients from choosing blocked IPv6 destinations.
+
 * Chain protected DNS with `streamSettings.sockopt.dialerProxy`, replacing the `proxySettings` field removed in Xray-core v26.9.9.
 
 * Update the verified Windows workflow runtime to Xray-core `v26.9.9`.

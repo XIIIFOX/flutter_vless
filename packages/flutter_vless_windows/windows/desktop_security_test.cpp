@@ -38,6 +38,9 @@ int main() {
   Require(relay != config["outbounds"].end(), "missing DNS relay");
   Require(!relay->contains("proxySettings"), "removed proxySettings emitted");
   Require((*relay)["streamSettings"]["sockopt"]["dialerProxy"] == "proxy", "DNS relay chain missing");
+  Require((*relay)["settings"]["rules"] == Json::array({
+      {{"action", "return"}, {"qType", "28"}, {"rCode", 0}}, {{"action", "direct"}}}),
+      "IPv4-only DNS must return AAAA NODATA before relaying other query types");
   Require(rules[3] == source["routing"]["rules"][0] && rules[4] == source["routing"]["rules"][1], "domain bypass rules reordered or removed");
   Require(config["outbounds"][1]["streamSettings"]["sockopt"]["interface"] == "Ethernet", "direct sockets reenter capture");
   for (const auto& key : {"FakeDNS", "fakedns", "fakeDnS"}) {

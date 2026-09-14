@@ -52,6 +52,7 @@ assert 'DOMAIN_ROUTING_PASS=0' in text and 'DOMAIN_ROUTING_PASS=1' in text
 for proxy in ['http', 'socks']:
  for generation in [0, 1]:
   assert f'DNS_RUNTIME_PASS={proxy};GENERATION={generation}' in text
+  assert f'DNS_IPV4_ONLY_PASS={proxy};GENERATION={generation}' in text
  assert f'DNS_REFUSAL_NO_FALLBACK_PASS={proxy}' in text
 print('PASS: actual runtime stdout/callback, 12 preparation/runtime cases, proxy snapshot, standalone delay runner')
 PY

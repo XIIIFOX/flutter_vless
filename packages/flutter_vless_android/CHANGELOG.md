@@ -1,5 +1,7 @@
 ## 1.1.6
 
+* In protected proxy DNS mode, return AAAA NODATA to match the VPN service's IPv6 blocking. Preserve proxy transport endpoint resolution and IPv4 DNS relay.
+
 * Chain protected DNS with `streamSettings.sockopt.dialerProxy`, replacing the `proxySettings` field removed in Xray-core v26.9.9.
 
 * Show the VPN Diagnostics button in the Android example, including release builds.

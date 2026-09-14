@@ -68,9 +68,15 @@ public enum TunnelDNSPolicy {
             "protocol": "dns",
             "settings": [
                 "rewriteNetwork": "tcp", "rewriteAddress": "1.1.1.1", "rewritePort": 53,
-                // In DNS outbound vocabulary this means relay through its
-                // dialer, which dialerProxy below chains to the proxy.
-                "rules": [["action": "direct"]]
+                // queryStrategy only affects Xray's own lookups, not raw DNS
+                // relay. Do not advertise IPv6 that TunnelIPv6Policy blocks:
+                // a local TCP handshake can succeed before Xray closes it,
+                // preventing clients from falling back to IPv4 during TLS.
+                "rules": [
+                    ["action": "return", "qType": "28", "rCode": 0],
+                    // Relay all other query types through the proxy dialer.
+                    ["action": "direct"]
+                ]
             ],
             "streamSettings": ["sockopt": ["dialerProxy": selectedTag]]
         ])

@@ -125,19 +125,25 @@ private final class DNSControlledProxy: @unchecked Sendable {
         query[3] = mode == .servfail ? 0x82 : 0x80
         query[6] = 0; query[7] = mode == .servfail ? 0 : 1
         query[8] = 0; query[9] = 0; query[10] = 0; query[11] = 0
-        if mode == .answer { query += [0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 198, 51, 100, 73] }
+        if mode == .answer {
+            let type = Array(query.suffix(4).prefix(2))
+            let data: [UInt8] = type == [0, 28]
+                ? [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 73]
+                : [198, 51, 100, 73]
+            query += [0xc0, 0x0c] + type + [0, 1, 0, 0, 0, 60, 0, UInt8(data.count)] + data
+        }
         _ = LocalSOCKS5Client.sendAll(fd: client, bytes: [UInt8(query.count >> 8), UInt8(query.count & 255)] + query)
     }
 }
 
-private func dnsProbeQuery(id: UInt16) -> [UInt8] {
+private func dnsProbeQuery(id: UInt16, type: UInt16 = 1) -> [UInt8] {
     var bytes: [UInt8] = [UInt8(id >> 8), UInt8(id & 255), 1, 0, 0, 1, 0, 0, 0, 0, 0, 0]
     for label in ["dns-proof", "invalid"] { bytes += [UInt8(label.utf8.count)] + Array(label.utf8) }
-    return bytes + [0, 0, 1, 0, 1]
+    return bytes + [0, UInt8(type >> 8), UInt8(type & 255), 0, 1]
 }
 
-private func queryVirtualDNS(credentials: LocalProxyCredentials, udp: Bool, id: UInt16) throws -> [UInt8]? {
-    let query = dnsProbeQuery(id: id)
+private func queryVirtualDNS(credentials: LocalProxyCredentials, udp: Bool, id: UInt16, type: UInt16 = 1) throws -> [UInt8]? {
+    let query = dnsProbeQuery(id: id, type: type)
     if !udp {
         let fd = try LocalSOCKS5Client.openConnection(proxyPort: 18098, credentials: credentials, host: TunnelDNSPolicy.virtualServer, port: 53, timeout: 3)
         defer { close(fd) }
@@ -206,9 +212,22 @@ func runDNSRuntimeChecks() throws {
                 precondition(answer.prefix(2).elementsEqual([UInt8(id >> 8), UInt8(id & 255)]))
                 precondition(answer.suffix(4).elementsEqual([198, 51, 100, 73]))
                 precondition(trap.count() == 0)
+                // The OS-facing resolver must not advertise IPv6 destinations
+                // that the packet tunnel deliberately cannot forward. Use
+                // NODATA, not a timeout/NXDOMAIN that could also break A lookup.
+                let queriesBeforeAAAA = upstream.state().0
+                let ipv6ID = id + 0x100
+                let ipv6 = try queryVirtualDNS(credentials: credentials, udp: udp, id: ipv6ID, type: 28)
+                if ipv6 != dnsNoDataResponse(id: ipv6ID) {
+                    print("DNS_IPV4_ONLY_FAILED=\(proto);UDP=\(udp);answerCount=\(ipv6.map { Int($0[6]) * 256 + Int($0[7]) } ?? -1)")
+                    fflush(stdout)
+                }
+                precondition(ipv6 == dnsNoDataResponse(id: ipv6ID), "IPv4-only DNS must answer AAAA with NOERROR/NODATA")
+                precondition(upstream.state().0 == queriesBeforeAAAA, "AAAA must not reach the upstream resolver")
             }
             XRayStop()
             print("DNS_RUNTIME_PASS=\(proto);GENERATION=\(generation)")
+            print("DNS_IPV4_ONLY_PASS=\(proto);GENERATION=\(generation)")
         }
         var error: NSError?
         precondition(XRayStartPrivate(prepared.data, ProbeLogger(), &error))
@@ -227,4 +246,11 @@ func runDNSRuntimeChecks() throws {
         precondition(count == 6 && failure == nil && trap.count() == 0)
         print("DNS_REFUSAL_NO_FALLBACK_PASS=\(proto)")
     }
+}
+
+private func dnsNoDataResponse(id: UInt16) -> [UInt8] {
+    var response = dnsProbeQuery(id: id, type: 28)
+    response[2] = 0x85 // response, authoritative, recursion desired
+    response[3] = 0x80 // recursion available, NOERROR
+    return response
 }

@@ -1,5 +1,7 @@
 ## 1.1.6
 
+* Return AAAA NODATA from protected system DNS while IPv6 forwarding is blocked, avoiding unusable IPv6 destinations and early connection closures in dual-stack clients. Preserve proxied IPv4 DNS.
+
 * Honor manual system VPN disconnects in the packet tunnel provider, including with the containing app closed. Rearm On Demand on system reconnect, preserve recovery for failures, and prevent late health checks from reasserting a stopping tunnel. Bound preference operations and reject changes to replacement profiles.
 
 * Chain protected DNS with `streamSettings.sockopt.dialerProxy`, replacing the `proxySettings` field removed in Xray-core v26.9.9.

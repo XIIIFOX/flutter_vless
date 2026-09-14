@@ -147,7 +147,11 @@ internal object AndroidTunnelDnsPolicy {
         config.put("routing", routing)
         val relay = JSONObject().put("tag", RELAY_TAG).put("protocol", "dns")
             .put("settings", JSONObject().put("rewriteNetwork", "tcp").put("rewriteAddress", "1.1.1.1")
-                .put("rewritePort", 53).put("rules", JSONArray().put(JSONObject().put("action", "direct"))))
+                // The VPN service blocks IPv6. Raw DNS relay bypasses the
+                // internal queryStrategy, so answer AAAA with NOERROR/NODATA.
+                .put("rewritePort", 53).put("rules", JSONArray()
+                    .put(JSONObject().put("action", "return").put("qType", "28").put("rCode", 0))
+                    .put(JSONObject().put("action", "direct"))))
             .put("streamSettings", JSONObject().put("sockopt", JSONObject().put("dialerProxy", selectedTag)))
         config.put("outbounds", JSONArray(outbounds).put(relay))
         // Explicit proxy policy owns system DNS. No local/+local/OS fallback is retained.

@@ -120,9 +120,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func setForwardingReady(_ ready: Bool) {
         forwardingLock.lock()
-        forwardingReady = ready
+        forwardingReady = ready && !startupStopped
+        // A late health-check callback must not reassert a stopping tunnel.
+        reasserting = !ready && !startupStopped
         forwardingLock.unlock()
-        reasserting = !ready
     }
 
     private func isForwardingReady() -> Bool {
@@ -157,6 +158,22 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         beginStartup()
         setForwardingReady(false)
         rememberTunnelLog("Starting Xray packet tunnel")
+        // A system-initiated Connect after a manual Stop must rearm crash
+        // recovery even when the containing application is not running.
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            TunnelOnDemandPolicy.enableForStart(configuration: configuration,
+                isCancelled: { self.isStartupStopped() }) { result in
+                switch result {
+                case .success:
+                    rememberTunnelLog("On-demand recovery armed for tunnel session")
+                    continuation.resume()
+                case .failure:
+                    rememberTunnelLog("Unable to arm on-demand recovery for tunnel session")
+                    continuation.resume(throwing: self.tunnelError("Unable to enable VPN recovery; reconnect from the app"))
+                }
+            }
+        }
+        guard !isStartupStopped() else { throw CancellationError() }
         // Endpoint bootstrap precedes virtual DNS installation. Reuse the
         // prepared endpoints when restarting workers within this same tunnel.
         let credentials = try LocalProxyCredentials.generate()
@@ -211,10 +228,29 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         rememberTunnelLog("Stopping Xray packet tunnel, reason=\(reason.rawValue)")
         setForwardingReady(false)
         stopTunnelWatchdog()
+        let teardown = DispatchGroup()
+        teardown.enter()
+        if let configuration = protocolConfiguration as? NETunnelProviderProtocol {
+            TunnelOnDemandPolicy.disableForUserStop(reason: reason, configuration: configuration) { result in
+                switch result {
+                case .success(.preservedForRecovery):
+                    rememberTunnelLog("System stop preserves on-demand recovery")
+                case .success:
+                    rememberTunnelLog("User stop: on-demand recovery disabled")
+                case .failure:
+                    rememberTunnelLog("User stop: unable to disable on-demand recovery; use Disconnect in the app")
+                }
+                teardown.leave()
+            }
+        } else {
+            teardown.leave()
+        }
+        teardown.enter()
         runtimeQueue.async {
             _ = self.stopNativeRuntime()
-            completionHandler()
+            teardown.leave()
         }
+        teardown.notify(queue: .main, execute: completionHandler)
     }
 
     private func setStartupPreparation(_ task: Task<TunnelPreparedConfig, Error>?) {
@@ -222,6 +258,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         if startupStopped { task?.cancel() }
         startupPreparation = task
         forwardingLock.unlock()
+    }
+
+    private func isStartupStopped() -> Bool {
+        forwardingLock.lock()
+        defer { forwardingLock.unlock() }
+        return startupStopped
     }
 
     private func beginStartup() {
@@ -603,13 +645,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         setForwardingReady(success)
         if success {
             tunnelLog.info("Tunnel watchdog \(trigger, privacy: .public) passed")
-            reasserting = false
             recoveryCheck?.cancel()
             recoveryCheck = nil
             rememberTunnelLog("Protected tunnel forwarding restored")
         } else {
             tunnelLog.warning("Tunnel watchdog \(trigger, privacy: .public) failed")
-            reasserting = true
             scheduleRecoveryCheck()
         }
 

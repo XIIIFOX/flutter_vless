@@ -35,6 +35,12 @@ public enum NativeLogPrivacy {
     /// Closed callback vocabulary: never infer that arbitrary runtime text is safe.
     public static func runtimeEvent(_ raw: String) -> NativeDiagnosticMessage {
         switch raw {
+        case "System proxy authorization failed": return "System proxy authorization failed"
+        case "System proxy authorization or preferences lock failed": return "System proxy authorization or preferences lock failed"
+        case "System proxy has no network services": return "System proxy has no network services"
+        case "System proxy configuration failed": return "System proxy configuration failed"
+        case "System proxy preferences commit failed": return "System proxy preferences commit failed"
+        case "System proxy preferences apply failed": return "System proxy preferences apply failed"
         case "Xray startup failed: privacy configuration": return "Xray startup failed: privacy configuration"
         case "Xray startup failed: decode configuration": return "Xray startup failed: decode configuration"
         case "Xray startup failed: build configuration": return "Xray startup failed: build configuration"

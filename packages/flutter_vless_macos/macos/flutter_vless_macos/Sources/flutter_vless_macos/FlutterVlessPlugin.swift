@@ -5,6 +5,7 @@ import Foundation
 import FlutterMacOS
 import AppKit
 import SystemConfiguration
+import Security
 import NetworkExtension
 import Combine
 
@@ -237,20 +238,61 @@ private struct SystemProxyHelper {
     private static let lock = NSLock()
     private static var previous: [String: [String: Any]] = [:]
     private static var installed: [String: [String: Any]] = [:]
+    // Keep the authorization for restoration as well as installation. Creating
+    // an ordinary SCPreferences session fails with permission denied for a
+    // normal desktop user, even outside App Sandbox.
+    private static var authorization: AuthorizationRef?
+
+    private static func failure(_ message: NativeDiagnosticMessage, code: Int) -> NSError {
+        NSError(domain: "flutter_vless.proxy", code: code,
+                userInfo: [NSLocalizedDescriptionKey: message.text])
+    }
+
     private static func preferences() throws -> SCPreferences {
-        guard let preferences = SCPreferencesCreate(nil, "flutter_vless" as CFString, nil), SCPreferencesLock(preferences, true) else {
-            throw NSError(domain: "flutter_vless.proxy", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unable to lock system proxy preferences"])
+        if authorization == nil {
+            guard AuthorizationCreate(nil, nil, [], &authorization) == errAuthorizationSuccess,
+                  authorization != nil else {
+                throw failure("System proxy authorization failed", code: 1)
+            }
+        }
+        // SystemConfiguration requests the required rights through the macOS
+        // authorization dialog. Never run the app or a shell command as root.
+        guard let preferences = SCPreferencesCreateWithAuthorization(nil, "flutter_vless" as CFString, nil, authorization),
+              SCPreferencesLock(preferences, true) else {
+            throw failure("System proxy authorization or preferences lock failed", code: 1)
         }
         return preferences
     }
+
+    private static func releaseUnusedAuthorization() {
+        guard installed.isEmpty else { return }
+        previous.removeAll()
+        if let authorization { AuthorizationFree(authorization, []) }
+        authorization = nil
+    }
+
     static func setSystemProxy(config: String) throws {
         guard let data = config.data(using: .utf8),
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw LocalProxyAccessError.malformedConfiguration }
-        lock.lock(); defer { lock.unlock() }
+        // Match the primary listener used by connected-delay probes. A second
+        // SOCKS inbound may deliberately route direct; it must not replace the
+        // primary proxy just because it is the last inbound in an import.
+        guard let inbound = (json["inbounds"] as? [[String: Any]])?.first(where: {
+            ["socks", "http"].contains($0["protocol"] as? String ?? "")
+        }), let port = inbound["port"] as? Int, (1...65535).contains(port) else {
+            throw LocalProxyAccessError.incompatibleInbounds
+        }
+        let keys = inbound["protocol"] as? String == "socks" ? ["SOCKS"] : ["HTTP", "HTTPS"]
+        let host = inbound["listen"] as? String ?? "127.0.0.1"
+        guard ["127.0.0.1", "::1", "localhost"].contains(host) else {
+            throw LocalProxyAccessError.incompatibleInbounds
+        }
+        lock.lock(); defer { releaseUnusedAuthorization(); lock.unlock() }
         let prefs = try preferences(); defer { SCPreferencesUnlock(prefs) }
         guard let set = SCNetworkSetCopyCurrent(prefs), let services = SCNetworkSetCopyServices(set) as? [SCNetworkService] else {
-            throw NSError(domain: "flutter_vless.proxy", code: 2, userInfo: [NSLocalizedDescriptionKey: "No network services available"])
+            throw failure("System proxy has no network services", code: 2)
         }
+        var originals: [String: [String: Any]] = [:]
         var changes: [String: [String: Any]] = [:]
         for service in services {
             guard let proto = SCNetworkServiceCopyProtocol(service, kSCNetworkProtocolTypeProxies),
@@ -259,29 +301,27 @@ private struct SystemProxyHelper {
             var next = current
             next["ProxyAutoConfigEnable"] = 0; next["ProxyAutoDiscoveryEnable"] = 0
             next["HTTPEnable"] = 0; next["HTTPSEnable"] = 0; next["SOCKSEnable"] = 0
-            var hasProxy = false
-            for inbound in json["inbounds"] as? [[String: Any]] ?? [] {
-                guard let port = inbound["port"] as? Int, (1...65535).contains(port),
-                      let kind = inbound["protocol"] as? String else { continue }
-                let keys = kind == "socks" ? ["SOCKS"] : (kind == "http" ? ["HTTP", "HTTPS"] : [])
-                for key in keys { next[key + "Enable"] = 1; next[key + "Proxy"] = "127.0.0.1"; next[key + "Port"] = port; hasProxy = true }
-            }
-            guard hasProxy else { throw LocalProxyAccessError.incompatibleInbounds }
-            if previous[id] == nil { previous[id] = current }
+            for key in keys { next[key + "Enable"] = 1; next[key + "Proxy"] = host; next[key + "Port"] = port }
+            originals[id] = current
             guard SCNetworkProtocolSetConfiguration(proto, next as CFDictionary) else {
-                throw NSError(domain: "flutter_vless.proxy", code: 3, userInfo: [NSLocalizedDescriptionKey: "Unable to configure system proxy"])
+                throw failure("System proxy configuration failed", code: 3)
             }
             changes[id] = next
         }
-        guard !changes.isEmpty, SCPreferencesCommitChanges(prefs), SCPreferencesApplyChanges(prefs) else {
-            // Keep ownership information if commit succeeded but apply failed.
-            installed.merge(changes) { _, new in new }
-            throw NSError(domain: "flutter_vless.proxy", code: 4, userInfo: [NSLocalizedDescriptionKey: "Unable to apply system proxy preferences"])
+        guard !changes.isEmpty, SCPreferencesCommitChanges(prefs) else {
+            throw failure("System proxy preferences commit failed", code: 4)
         }
+        // Take ownership only after commit; a failed staging transaction must
+        // not leave a stale snapshot that overwrites later user changes.
+        previous.merge(originals) { old, _ in old }
         installed.merge(changes) { _, new in new }
+        guard SCPreferencesApplyChanges(prefs) else {
+            throw failure("System proxy preferences apply failed", code: 5)
+        }
     }
+
     static func clearSystemProxy() {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock(); defer { releaseUnusedAuthorization(); lock.unlock() }
         guard !installed.isEmpty, let prefs = try? preferences() else { return }
         defer { SCPreferencesUnlock(prefs) }
         guard let services = SCNetworkServiceCopyAll(prefs) as? [SCNetworkService] else { return }
@@ -297,7 +337,11 @@ private struct SystemProxyHelper {
             }
             if SCNetworkProtocolSetConfiguration(proto, original as CFDictionary) { restored.append(id) }
         }
-        guard SCPreferencesCommitChanges(prefs), SCPreferencesApplyChanges(prefs) else { return }
+        guard !restored.isEmpty, SCPreferencesCommitChanges(prefs) else { return }
+        // If apply fails after commit, the next cleanup still owns the saved
+        // values and must retry applying them to the live network configuration.
+        for id in restored { installed[id] = previous[id] }
+        guard SCPreferencesApplyChanges(prefs) else { return }
         for id in restored { installed.removeValue(forKey: id); previous.removeValue(forKey: id) }
     }
 }
@@ -506,7 +550,7 @@ private final class ProxyOnlyRunner {
             connectedDate = Date()
             pluginLog.info("Started XRay proxy-only mode configBytes=\(preparedConfig.count, privacy: .public)")
         } catch {
-            logger.record(source: "runtime", message: "Proxy-only start failed: \(NativeLogPrivacy.operationError(error).localizedDescription)")
+            logger.record(source: "runtime", message: "Proxy-only start failed: \(NativeLogPrivacy.runtimeEvent(NativeLogPrivacy.operationError(error).localizedDescription))")
             throw NativeLogPrivacy.operationError(error)
         }
     }
@@ -1068,7 +1112,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 self.refreshRuntimePolling(reason: "startVless-success")
                 result(nil)
             } catch {
-                pluginLog.error("Failed to start runtime: \(NativeLogPrivacy.operationError(error).localizedDescription, privacy: .public)")
+                pluginLog.error("Failed to start runtime: \(NativeLogPrivacy.runtimeEvent(NativeLogPrivacy.operationError(error).localizedDescription))")
                 result(FlutterError(code: error is TunnelSecretError ? "VPN_KEYCHAIN_ERROR" : (proxyOnly ? "PROXY_ONLY_ERROR" : "VPN_ERROR"),
                     message: error is TunnelSecretError || error is DesktopTunnelError ? error.localizedDescription : NativeLogPrivacy.operationError(error).localizedDescription,
                     details: nil))

@@ -2,6 +2,8 @@
 
 ### General
 
+* Distinguish manual system VPN disconnects from failures on Apple platforms, including when the containing app is closed. Keep automatic recovery for failures and restore it on the next connection.
+
 * Chain protected DNS with `streamSettings.sockopt.dialerProxy`, replacing the `proxySettings` field removed in Xray-core v26.9.9.
 
 * Update native Xray-core to `v26.9.9` with pinned source revisions and verified release artifacts.
@@ -18,6 +20,8 @@
   with bounded native diagnostics available after stop or failure.
 
 ### iOS
+
+* Disable saved On Demand rules from the packet tunnel provider on a user-initiated stop. Rearm recovery when reconnecting from system controls, and prevent late health checks from reasserting a stopping tunnel. Bound preference operations and reject changes to replacement profiles.
 
 * Ignore status notifications from temporary or unrelated iOS VPN connections to prevent recursive preference reads and repeated events.
 * Match native Unicode JSON field aliases before enforcing local authentication; reject ambiguous aliases without changing remote credentials.
@@ -75,6 +79,8 @@
 * Added bounded cross-process Xray/tun2socks diagnostics.
 
 ### macOS
+
+* Honor manual system VPN disconnects in the packet tunnel provider while preserving crash recovery. Rearm On Demand on system reconnect, and keep teardown out of the reasserting state even when health checks finish late.
 
 * Bound and cancel transport endpoint DNS lookups during startup. If system DNS is unavailable, bootstrap public endpoint names over certificate-validated HTTPS before installing virtual DNS; keep tunnel traffic protection enabled.
 * Make Packet Tunnel traffic protection mandatory and retain capture routes and virtual DNS while native workers recover. Report `CONNECTED` only after provider forwarding is ready.

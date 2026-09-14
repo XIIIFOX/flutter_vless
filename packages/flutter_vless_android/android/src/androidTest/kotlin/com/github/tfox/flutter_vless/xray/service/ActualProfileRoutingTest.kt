@@ -110,6 +110,33 @@ class ActualProfileRoutingTest {
         assertEquals("Proxy domain must not transfer payload through direct", afterDirect.getValue("direct"), afterProxy.getValue("direct"))
         // Public control egress and aggregate counts only; never print input configurations/credentials.
     }
+    @Test fun suppliedProfileProxyOnlyTransfersHttpsThroughSeparateInbounds() {
+        val name = InstrumentationRegistry.getArguments().getString("actualProfile")
+        org.junit.Assume.assumeTrue("Private profile was not supplied", name != null)
+        require(name!!.matches(Regex("profile-[12]")))
+        val original = File(context.noBackupFilesDir, "$name.json").readText()
+        try {
+            stop()
+            assertTrue(start(original, proxyOnly = true))
+            await("proxy-only ready") { !captured() && snapshot().lineSequence().any { it == "CONNECTED" } }
+            val before = traffic()
+            get("https://api.ipify.org/", 10820)
+            var direct = traffic()
+            val settled = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (direct.getValue("direct_down") <= before.getValue("direct_down") && System.nanoTime() < settled) {
+                Thread.sleep(100); direct = traffic()
+            }
+            assertTrue("Wait for the completed direct response before probing the primary listener", direct.getValue("direct_down") > before.getValue("direct_down"))
+            assertTrue("Secondary inbound must transfer through direct outbound", direct.getValue("direct") > before.getValue("direct"))
+            get("https://api.ipify.org/", 10808)
+            Thread.sleep(500)
+            val proxy = traffic()
+            assertTrue("Primary inbound must transfer through proxy outbound", proxy.getValue("proxy") > direct.getValue("proxy"))
+            assertEquals("Primary inbound must not fall back to direct", direct.getValue("direct"), proxy.getValue("direct"))
+            assertFalse(captured())
+        } finally { stop() }
+    }
+
     @Test fun suppliedProfileSeparatesDomainRoutesAndPreservesThemAfterRecovery() {
         val name = InstrumentationRegistry.getArguments().getString("actualProfile")
         org.junit.Assume.assumeTrue("Private profile was not supplied", name != null)

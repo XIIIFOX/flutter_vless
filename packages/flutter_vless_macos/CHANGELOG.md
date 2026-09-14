@@ -1,5 +1,7 @@
 ## 1.1.6 (Unreleased)
 
+* Honor manual system VPN disconnects in the packet tunnel provider, including with the containing app closed. Rearm On Demand on system reconnect, preserve recovery for failures, and prevent late health checks from reasserting a stopping tunnel. Bound preference operations and reject changes to replacement profiles.
+
 * Chain protected DNS with `streamSettings.sockopt.dialerProxy`, replacing the `proxySettings` field removed in Xray-core v26.9.9.
 
 * Bound and cancel transport endpoint DNS lookups during startup. If system DNS is unavailable, bootstrap public endpoint names over certificate-validated HTTPS before installing virtual DNS; keep tunnel traffic protection enabled.

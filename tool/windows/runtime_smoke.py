@@ -96,8 +96,8 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-def request(host, vpn, loopback=False):
-    destination = ("127.0.0.1", PORTS["direct"]) if loopback else (("203.0.113.10", PORTS["direct"]) if vpn else ("127.0.0.1", PORTS["inbound"]))
+def request(host, vpn, loopback=False, proxy_port=None):
+    destination = ("127.0.0.1", PORTS["direct"]) if loopback else (("203.0.113.10", PORTS["direct"]) if vpn else ("127.0.0.1", proxy_port or PORTS["inbound"]))
     with socket.create_connection(destination, timeout=4) as sock:
         sock.settimeout(4)
         if vpn:
@@ -373,7 +373,15 @@ def main():
         for reverse, ending in cases:
             label = ("vpn" if args.vpn else "proxy") + ("-reverse" if reverse else "") + ("-" + ending if ending != "stop" else "")
             profile = directory / (label + ".json")
-            profile.write_text(json.dumps(config(reverse, external_address, direct_address)))
+            prepared = config(reverse, external_address, direct_address)
+            if not args.vpn:
+                with socket.socket() as candidate:
+                    candidate.bind(("127.0.0.1", 0))
+                    secondary_port = candidate.getsockname()[1]
+                prepared["inbounds"].append({"listen": "127.0.0.1", "port": secondary_port,
+                    "protocol": "socks", "tag": "socks-direct", "settings": {"auth": "noauth"}})
+                prepared["routing"]["rules"].insert(0, {"type": "field", "inboundTag": ["socks-direct"], "outboundTag": "direct"})
+            profile.write_text(json.dumps(prepared))
             stop_file = directory / (label + ".stop")
             stop_file.unlink(missing_ok=True)
             state_file = directory / (label + ".state.json")
@@ -423,6 +431,11 @@ def main():
                         row = dict(mode=label, host=host, expected=expected, actual=actual, passed=actual == expected)
                         results.append(row)
                         print(json.dumps(row), flush=True)
+                    if not args.vpn:
+                        for host in ("2ip.ru", "myip.com"):
+                            actual = request(host, False, proxy_port=secondary_port)
+                            results.append(dict(mode=label, check="secondary direct inbound", host=host,
+                                                actual=actual, passed=actual == "DIRECT-FIXTURE"))
                     if args.vpn:
                         for subnet in (2, 3):
                             for ipv6 in (False, True):

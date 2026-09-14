@@ -122,9 +122,16 @@ with tempfile.TemporaryDirectory(prefix="flutter-vless-private-routing-") as dir
             profile.setdefault("policy", {}).setdefault("system", {}).update(
                 statsOutboundUplink=True, statsOutboundDownlink=True)
             start(profile, "original")
+            before = counters()
             direct = observed_ip(DIRECT_URL, DIRECT_PORT)
+            after_direct = counters()
+            assert after_direct[0] > before[0], "Direct listener did not transfer through direct outbound"
             proxy = observed_ip(DIRECT_URL, PORT)
-            assert direct != proxy, "Direct/proxy controls must have distinguishable egress"
+            after_proxy = counters()
+            assert after_proxy[1] > after_direct[1], "Primary listener did not transfer through proxy outbound"
+            assert after_proxy[0] == after_direct[0], "Primary listener also transferred through direct outbound"
+            # The Mac's existing VPN may use the same exit as the tested server.
+            # Native per-outbound counters distinguish routing even in that case.
             proxy_other_domain = observed_ip(PROXY_URL, PORT)
             print(f"PASS profile {index}: original proxyOnly inbound routing and VPN rejection", flush=True)
             profile["inbounds"] = profile["inbounds"][:1]
@@ -141,10 +148,11 @@ with tempfile.TemporaryDirectory(prefix="flutter-vless-private-routing-") as dir
                 after_proxy = counters()
                 assert after_proxy[1] > after_direct[1], "Proxy domain did not increase the native proxy counter"
                 assert after_proxy[0] == after_direct[0], "Proxy domain also produced direct traffic"
-                assert routed_proxy != routed_direct, "Controlled domains must have distinguishable egress"
+                # Exit pools may rotate addresses between connections. Egress
+                # equality is recorded below; path acceptance uses native counters.
                 print(f"PASS profile {index}: protected domain routing, runtime generation {generation}", flush=True)
             summary["profiles"].append({"index": index, "original_proxy_only_routing": True,
-                "original_vpn_rejected": True, "distinct_egress": True, "protected_domain_routing_generations": 2,
+                "original_vpn_rejected": True, "distinct_egress": direct != proxy, "protected_domain_routing_generations": 2,
                 "native_outbound_counter_routing": True, "direct_baseline_matches": routed_direct == direct,
                 "proxy_same_domain_baseline_matches": routed_proxy == proxy_other_domain})
         summary["passed"] = True

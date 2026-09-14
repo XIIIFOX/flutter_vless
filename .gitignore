@@ -73,3 +73,7 @@ Temporary Items
 ### macOS Patch ###
 # iCloud generated files
 *.icloud
+# Widget Preview related
+.widget_preview/
+doc/video_storyboard_rezero_style.md
+doc/video_assets/*

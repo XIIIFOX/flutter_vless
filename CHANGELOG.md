@@ -1,4 +1,4 @@
-## 1.1.6 (Unreleased)
+## 1.1.6
 
 ### General
 

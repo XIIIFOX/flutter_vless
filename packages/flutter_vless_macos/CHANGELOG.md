@@ -1,4 +1,4 @@
-## 1.1.6 (Unreleased)
+## 1.1.6
 
 * Honor manual system VPN disconnects in the packet tunnel provider, including with the containing app closed. Rearm On Demand on system reconnect, preserve recovery for failures, and prevent late health checks from reasserting a stopping tunnel. Bound preference operations and reject changes to replacement profiles.
 

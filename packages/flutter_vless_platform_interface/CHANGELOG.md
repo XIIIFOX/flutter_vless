@@ -1,4 +1,4 @@
-## 1.1.2 (Unreleased)
+## 1.1.2
 
 * Add optional `keychainAccessGroup`, `AndroidDnsPolicy` and DNS outbound selection.
 * Check native capabilities before requesting new security guarantees; older/unsupported native backends fail explicitly.

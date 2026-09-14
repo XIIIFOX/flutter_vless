@@ -4,6 +4,16 @@ build/
 output/
 **/.build/
 **/__pycache__/
+*.log
+artifacts/
+
+# Internal security work and device validation are not package documentation.
+doc/security-backlog/
+doc/security-validation-*/
+doc/*security-remediation-*.md
+doc/ios-device-validation-*.md
+doc/android-security-emulator.md
+doc/api/
 
 # IDE / OS
 .idea/

@@ -2,7 +2,7 @@
 
 A common platform interface for the [`flutter_vless`](https://pub.dev/packages/flutter_vless) plugin.
 
-This package defines the platform interface that platform implementations (like `flutter_vless_android` and `flutter_vless_ios`) must implement.
+This package defines the platform interface used by the Android, macOS, and Windows implementations and the iOS implementation in the main package.
 
 ## Usage
 

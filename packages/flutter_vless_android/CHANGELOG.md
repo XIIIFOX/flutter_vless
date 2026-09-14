@@ -1,4 +1,4 @@
-## 1.1.6 (Unreleased)
+## 1.1.6
 
 * Chain protected DNS with `streamSettings.sockopt.dialerProxy`, replacing the `proxySettings` field removed in Xray-core v26.9.9.
 

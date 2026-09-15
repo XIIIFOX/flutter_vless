@@ -1,4 +1,4 @@
-![flutter_vless — Xray/V2Ray VPN plugin for Flutter](doc/assets/flutter-vless-hero.png)
+![flutter_vless — Xray/V2Ray VPN plugin for Flutter](doc/assets/flutter-vless-hero-1.1.6.png)
 
 # flutter_vless — Xray/V2Ray VPN plugin for Flutter
 [![Pub Publisher](https://img.shields.io/pub/publisher/flutter_vless)](https://pub.dev/publishers/tfox.dev/packages)

@@ -31,7 +31,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
       - name: Install Android SDK platform
         if: ${{ inputs.existing_deployment_id == '' }}
         run: sdkmanager "platforms;android-36"

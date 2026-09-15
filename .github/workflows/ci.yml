@@ -94,7 +94,10 @@ jobs:
           channel: stable
           cache: true
       - name: Install Android SDK platform
-        run: sdkmanager "platforms;android-36"
+        run: |
+          sdk_manager_path="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)"
+          test -n "$sdk_manager_path"
+          "$sdk_manager_path" "platforms;android-36"
       - name: Build Android runtime local Maven repo
         run: tool/build_android_runtime_maven.sh
       - name: Generate Flutter Android project files

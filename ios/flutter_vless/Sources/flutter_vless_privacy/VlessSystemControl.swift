@@ -73,6 +73,10 @@ public enum VlessSystemControl {
             guard let options = options(group: group), options.quickAccessEnabled,
                   options.quickAccessAction == "toggle" else { throw Failure.unavailable }
             let manager = try await matching(group: group, provider: provider, requireAuthorization: connected)
+            // A preceding provider's stop callback must finish before rearming
+            // the same immutable profile from a rapid off/on control sequence.
+            try await waitForDisconnectIfStopping(manager)
+            if connected && isActive(manager.connection.status) { return }
             guard let configuration = manager.protocolConfiguration as? NETunnelProviderProtocol,
                   let reference = configuration.providerConfiguration?["xrayConfigReference"] as? Data else { throw Failure.profileMissing }
             // The app has already validated and saved this immutable Keychain revision.
@@ -100,13 +104,28 @@ public enum VlessSystemControl {
                   (!connected || UserDefaults(suiteName: group)?.dictionary(forKey: metadataKey)?["reference"] as? Data == reference) else { throw Failure.unavailable }
             if connected {
                 if !isActive(manager.connection.status) { try manager.connection.startVPNTunnel() }
-            } else { manager.connection.stopVPNTunnel() }
+            } else {
+                manager.connection.stopVPNTunnel()
+                let deadline = Date().addingTimeInterval(8)
+                while manager.connection.status != .disconnected && manager.connection.status != .invalid {
+                    guard Date() < deadline else { throw Failure.verificationFailed }
+                    try await Task.sleep(nanoseconds: 50_000_000)
+                }
+            }
             reloadControls()
         }
     }
 
     public static func isActive(_ status: NEVPNStatus) -> Bool {
         [.connecting, .connected, .reasserting].contains(status)
+    }
+
+    private static func waitForDisconnectIfStopping(_ manager: NETunnelProviderManager) async throws {
+        let deadline = Date().addingTimeInterval(8)
+        while manager.connection.status == .disconnecting {
+            guard Date() < deadline else { throw Failure.verificationFailed }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
     }
 
     private static func matching(group: String, provider: String, requireAuthorization: Bool = true) async throws -> NETunnelProviderManager {

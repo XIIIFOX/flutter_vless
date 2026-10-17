@@ -16,11 +16,16 @@ import Foundation
         precondition(manager.connection.status == .connecting && manager.isOnDemandEnabled)
         let active = await VlessSystemControl.isConnected(group:group,provider:provider)
         precondition(active)
+        let savesBeforeIdempotent = SDK.saves
+        try await VlessSystemControl.setConnected(true,group:group,provider:provider)
+        precondition(SDK.saves == savesBeforeIdempotent, "An active connection keeps its policy snapshot")
+        SDK.delayedStop = true
         SDK.failNextSave = true
         do { try await VlessSystemControl.setConnected(false,group:group,provider:provider); fatalError("Expected failed disarm") } catch {}
         precondition(SDK.stopCalls == 0, "Do not stop before confirmed disarm")
         try await VlessSystemControl.setConnected(false,group:group,provider:provider)
         precondition(SDK.stopCalls == 1 && !manager.isOnDemandEnabled && manager.onDemandRules == nil)
+        precondition(manager.connection.status == .disconnected, "Stop must wait for provider teardown before a queued reconnect")
         precondition(configuration.includeAllNetworks && !configuration.excludeLocalNetworks)
         precondition(configuration.providerConfiguration?["xrayConfigReference"] as? Data == Data([1,2,3]))
         VlessSystemControl.clear(group:group)

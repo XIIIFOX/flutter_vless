@@ -140,7 +140,6 @@ class _HomePageState extends State<HomePage> {
       proxyOnly: proxyOnly,
       bypassSubnets: bypassSubnets,
       blockedApps: blockedApps,
-      notificationDisconnectButtonName: 'DISCONNECT',
     );
   }
 
@@ -346,10 +345,23 @@ class _HomePageState extends State<HomePage> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () async {
-          if (_canStop(vlessStatus.value)) {
-            await _disconnect();
-          } else {
-            await _connect();
+          try {
+            if (_canStop(vlessStatus.value)) {
+              await _disconnect();
+            } else {
+              await _connect();
+            }
+          } on PlatformException catch (error) {
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(error.message ??
+                  'The system could not change the VPN connection.'),
+            ));
+          } on ArgumentError {
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Check the JSON configuration before connecting.'),
+            ));
           }
         },
         backgroundColor: Theme.of(context).colorScheme.primary,

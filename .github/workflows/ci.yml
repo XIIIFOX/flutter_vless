@@ -140,6 +140,9 @@ jobs:
           profile: pixel_6
           disable-linux-hw-accel: false
           script: |
+            adb -s emulator-5554 emu gsm data home
+            adb -s emulator-5554 shell svc data enable
+            adb -s emulator-5554 shell settings put global mobile_data_always_on 1
             (cd example && flutter pub get)
             python3 tool/test_android_flutter_smoke.py --serial emulator-5554
             ANDROID_SERIAL=emulator-5554 tool/test_android_security_emulator.sh

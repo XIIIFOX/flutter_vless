@@ -452,6 +452,9 @@ while time.monotonic() < deadline:
 else:
     raise SystemExit('Emulator Wi-Fi remained active; physical capture would be incomplete.')
 PY
+  # The modem becomes available asynchronously after virtual Wi-Fi disconnects.
+  # Require a real cellular transport before starting a WAN-only packet capture.
+  instrument capture-transport "$HOST_CLASS#emulatorCellularCaptureTransportReady" 1 0
   start_capture
 fi
 instrument system-dns "$CLASS_PREFIX.ProtectedSystemDnsTest" 4 0

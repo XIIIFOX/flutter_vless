@@ -119,6 +119,13 @@ class ProtectedHostTrafficTest {
                 if (physical(android.net.NetworkCapabilities.TRANSPORT_WIFI)) Thread.sleep(200)
             }
             assertFalse(physical(android.net.NetworkCapabilities.TRANSPORT_WIFI))
+            // Wi-Fi disconnection is announced before the cellular network is
+            // available. Do not mistake that asynchronous handover for a
+            // missing emulator modem.
+            val cellularDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+            while (!physical(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) && System.nanoTime() < cellularDeadline) {
+                Thread.sleep(200)
+            }
             org.junit.Assume.assumeTrue("Cellular network unavailable", physical(android.net.NetworkCapabilities.TRANSPORT_CELLULAR))
             assertTrue(awaitRequest().contains(marker))
         } finally {
@@ -133,6 +140,19 @@ class ProtectedHostTrafficTest {
         }
         assertTrue(physical(android.net.NetworkCapabilities.TRANSPORT_WIFI))
         assertTrue(awaitRequest().contains(marker))
+    }
+
+    @Test fun emulatorCellularCaptureTransportReady() {
+        val manager = context.getSystemService(android.net.ConnectivityManager::class.java)
+        fun cellular() = manager.allNetworks.any {
+            val caps = manager.getNetworkCapabilities(it)
+            caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) == true &&
+                !caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) &&
+                caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+        while (!cellular() && System.nanoTime() < deadline) Thread.sleep(200)
+        assertTrue("Physical DNS capture needs an available emulator cellular network", cellular())
     }
 
     @Test fun refusedProtectionStopsRuntimeBeforeVPN() {

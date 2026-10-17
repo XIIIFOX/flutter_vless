@@ -1011,29 +1011,35 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
     }
 
+    private func configuredDiagnosticsSnapshot(_ snapshot: String) -> String {
+        boundedNativeDiagnosticsSnapshot(snapshot,
+            maxBytes: min(64 * 1024, nativeOptions.diagnosticsMaxBytes),
+            maxLines: nativeOptions.diagnosticsMaxLines)
+    }
+
     private func getProviderDebugSnapshot(result: @escaping FlutterResult) {
         guard nativeOptions.diagnosticsEnabled else { result(""); return }
         Task {
             let proxySnapshot = proxyOnlyRunner.debugSnapshot()
             if !proxySnapshot.isEmpty {
-                result(boundedNativeDiagnosticsSnapshot(
+                result(configuredDiagnosticsSnapshot(
                     "--- macOS app-process Xray diagnostics ---\n\(proxySnapshot)"
                 ))
                 return
             }
             do {
                 guard let response = try await packetTunnelManager?.sendProviderMessage(data: Data(NativeLogPrivacy.snapshotCommand.utf8)) else {
-                    result(boundedNativeDiagnosticsSnapshot(
+                    result(configuredDiagnosticsSnapshot(
                         packetTunnelManager?.readSharedDebugLog() ?? ""
                     ))
                     return
                 }
-                result(boundedNativeDiagnosticsSnapshot(
+                result(configuredDiagnosticsSnapshot(
                     String(decoding: response, as: UTF8.self)
                 ))
             } catch {
                 pluginLog.error("Provider debug snapshot request failed: \(error.localizedDescription, privacy: .public)")
-                result(boundedNativeDiagnosticsSnapshot(
+                result(configuredDiagnosticsSnapshot(
                     packetTunnelManager?.readSharedDebugLog() ?? ""
                 ))
             }

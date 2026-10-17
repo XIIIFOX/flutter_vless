@@ -38,6 +38,26 @@ struct BoundedNativeLogStoreTest {
         precondition(boundedUnicode.utf8.count <= 64 * 1024)
         precondition(!boundedUnicode.contains("�"))
 
+        let assembled = "provider started\nforwarding ready\ntraffic bytes=1234\nHEV diagnostic file bytes=637; raw contents omitted"
+        let configured = DiagnosticsBoundaryProbe(options: try! VlessNativeOptions([
+            "diagnostics": ["maxBytes": 4096, "maxLines": 3]
+        ])).configuredDiagnosticsSnapshot(assembled)
+        precondition(configured.split(separator: "\n").count == 3)
+        precondition(!configured.contains("provider started") && configured.contains("traffic bytes=1234"))
+        for lineLimit in [1, 3, 300] {
+            let probe = DiagnosticsBoundaryProbe(options: try! VlessNativeOptions([
+                "diagnostics": ["maxBytes": 4096, "maxLines": lineLimit]
+            ]))
+            for value in [assembled, combined, unicode] {
+                let result = probe.configuredDiagnosticsSnapshot(value)
+                precondition(result.utf8.count <= 4096 && result.components(separatedBy: "\n").count <= lineLimit)
+                precondition(!result.contains("�"))
+            }
+        }
+        precondition(boundedNativeDiagnosticsSnapshot(unicode, maxBytes: 8, maxLines: 1).utf8.count <= 8)
+        precondition(boundedNativeDiagnosticsSnapshot(assembled, maxBytes: 0).isEmpty)
+        precondition(boundedNativeDiagnosticsSnapshot(assembled, maxLines: 0).isEmpty)
+
         store.append(source: "unicode", message: unicode)
         let unicodeSnapshot = store.snapshot()
         precondition(unicodeSnapshot.utf8.count < 64 * 1024)

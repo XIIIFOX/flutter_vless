@@ -517,30 +517,36 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     /// This is not traffic data for UI counters; it is a structured escape hatch
     /// from the extension sandbox so XHTTP and TCP/Reality can be compared from
     /// the same Xcode session.
+    private func configuredDiagnosticsSnapshot(_ snapshot: String) -> String {
+        boundedNativeDiagnosticsSnapshot(snapshot,
+            maxBytes: min(64 * 1024, nativeOptions.diagnosticsMaxBytes),
+            maxLines: nativeOptions.diagnosticsMaxLines)
+    }
+
     private func getProviderDebugSnapshot(result: @escaping FlutterResult) {
         guard nativeOptions.diagnosticsEnabled else { result(""); return }
         Task {
             let proxySnapshot = proxyOnlyRunner.debugSnapshot()
             if !proxySnapshot.isEmpty {
-                result(boundedNativeDiagnosticsSnapshot(
+                result(configuredDiagnosticsSnapshot(
                     "--- iOS app-process Xray diagnostics ---\n\(proxySnapshot)"
                 ))
                 return
             }
             do {
                 guard let response = try await packetTunnelManager?.sendProviderMessage(data: NativeLogPrivacy.snapshotCommand.data(using: .utf8)!) else {
-                    result(boundedNativeDiagnosticsSnapshot(
+                    result(configuredDiagnosticsSnapshot(
                         packetTunnelManager?.sharedProviderDebugSnapshot() ?? ""
                     ))
                     return
                 }
-                result(boundedNativeDiagnosticsSnapshot(
+                result(configuredDiagnosticsSnapshot(
                     String(decoding: response, as: UTF8.self)
                 ))
             } catch {
                 pluginLog.error("Provider debug snapshot request failed: \(NativeLogPrivacy.operationError(error).localizedDescription, privacy: .public)")
                 let persisted = packetTunnelManager?.sharedProviderDebugSnapshot() ?? ""
-                result(boundedNativeDiagnosticsSnapshot(persisted))
+                result(configuredDiagnosticsSnapshot(persisted))
             }
         }
     }

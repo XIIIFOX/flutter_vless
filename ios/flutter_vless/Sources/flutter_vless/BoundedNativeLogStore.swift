@@ -13,20 +13,28 @@ private func boundedNativeUTF8Tail(_ value: String, maxBytes: Int) -> String {
 
 func boundedNativeDiagnosticsSnapshot(
     _ snapshot: String,
-    maxBytes: Int = 64 * 1024
+    maxBytes: Int = 64 * 1024,
+    maxLines: Int = Int.max
 ) -> String {
-    let bytes = Array(snapshot.utf8)
-    guard bytes.count > maxBytes else {
-        return snapshot
+    guard maxBytes > 0, maxLines > 0 else { return "" }
+    var result = snapshot
+    if snapshot.utf8.count > maxBytes {
+        let marker = "--- Earlier diagnostics truncated ---\n"
+        if marker.utf8.count >= maxBytes {
+            result = boundedNativeUTF8Tail(snapshot, maxBytes: maxBytes)
+        } else {
+            let budget = maxBytes - marker.utf8.count
+            var tail = boundedNativeUTF8Tail(snapshot, maxBytes: budget)
+            if let newline = tail.firstIndex(of: "\n"), tail.index(after: newline) < tail.endIndex {
+                tail.removeSubrange(tail.startIndex...newline)
+            }
+            result = marker + tail
+        }
     }
-
-    let marker = "--- Earlier diagnostics truncated ---\n"
-    let budget = max(0, maxBytes - marker.utf8.count)
-    var tail = boundedNativeUTF8Tail(snapshot, maxBytes: budget)
-    if let newline = tail.firstIndex(of: "\n"), tail.index(after: newline) < tail.endIndex {
-        tail.removeSubrange(tail.startIndex...newline)
-    }
-    return marker + tail
+    // Apply this after assembling/truncating the complete response: provider
+    // metadata and the truncation marker also consume the caller's line budget.
+    let lines = result.split(separator: "\n", omittingEmptySubsequences: false)
+    return lines.count > maxLines ? lines.suffix(maxLines).joined(separator: "\n") : result
 }
 
 /// Thread-safe, bounded in-memory output from an app-process Xray runtime.

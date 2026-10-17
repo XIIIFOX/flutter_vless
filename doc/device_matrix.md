@@ -75,3 +75,53 @@ The local test suite uses controlled simulator/emulator peers and keeps the
 development computer's VPN enabled. Those tests do not establish the
 physical-device/OS guarantees above; record them separately rather than inferring
 success from an icon, CONNECTED, or upload counters.
+
+## iPhone acceptance, 2026-10-18 (1.1.7 / Core 26.10.17)
+
+Physical iPhone 13 Pro Max over USB, iOS 27.0.1, signed Profile build of the
+ordinary example with Flutter Driver enabled. The development Mac VPN stayed
+enabled throughout. Supplied profiles and device screenshots remain outside Git.
+
+* All three original full JSON profiles imported through the example. Both
+  original SOCKS inputs and their routing rules were retained. Fresh Safari
+  requests to `tfox.dev/ip/` and `2ip.ru` (redirecting to `2ip.io`) showed proxy
+  exits distinct from the ordinary phone connection.
+* The first two exits were reported as Japan and Poland. The third profile's
+  Sweden remark disagreed with the site's United States geolocation. Both sites
+  showed the same third exit; this discrepancy remains an observation to review,
+  not proof of its physical location or a successful Sweden-country check.
+* Domain routing was checked in both directions: tfox direct / 2ip proxy, then
+  tfox proxy / both 2ip domains direct, with fresh browser requests each time.
+* The added Control Center control opened the app, started a working tunnel,
+  and stopped it through its native toggle. Its custom shield symbol was visible.
+  The label persisted in options; its display on the compact native control was
+  not established.
+* Diagnostics disabled returned an empty snapshot; the example disabled Copy.
+  A physical test exposed an extra metadata line exceeding a three-line budget.
+  After correction the copied complete response contained three lines / 224
+  bytes with a 3-line / 4096-byte setting. Zero lines was rejected in the example.
+* With a deliberately unreachable endpoint and On Demand disabled, Safari failed
+  to reach a fresh page while the protected tunnel remained active. App Stop
+  completed and ordinary Safari internet returned. This tests blocked forwarding
+  and explicit recovery, not a native worker crash or its retry schedule.
+* With On Demand enabled, real Safari traffic worked and system Settings reported
+  connection on demand. Explicitly switching VPN off in Settings disabled that
+  automatic connection; fresh Safari traffic used the ordinary connection.
+  Reconnecting and stopping from the app also completed. On Demand cannot promise
+  to override an explicit system disconnect.
+* Reconnect disabled / On Demand disabled was exercised with working traffic;
+  reconnect enabled with 100/200 ms delays and two retries was accepted. Actual
+  native-worker failure timing and exhaustion still require device evidence.
+* Unlock-before-action displayed Apple's authentication UI. Failed recognition
+  followed by Cancel left VPN disconnected and no provider running. Successful
+  device-owner authentication remains a manual acceptance step.
+
+Before each development reinstall, app Stop is awaited, disabled recovery/profile
+preferences are read back, provider termination is checked, and a fresh Safari
+page must show ordinary connectivity. Never reinstall while the test VPN remains
+active. The initial reinstall incident required the owner to reboot the phone;
+subsequent stop/reinstall gates and normal-network checks passed.
+
+This is a partial acceptance record. Quick-profile forgetting/disable, successful
+owner authentication, worker-fault retry limits and the broader compatibility
+corpus are not implied by the successful cases above.

@@ -161,7 +161,9 @@ class _HomePageState extends State<HomePage> {
       if (!mounted) return;
 
       final content = snapshot.trim().isEmpty
-          ? 'No provider diagnostics have been recorded yet. Connect the VPN first, then retry after a failure.'
+          ? !pluginOptions.diagnostics.enabled
+              ? 'Diagnostics are disabled in Plugin options.'
+              : 'No provider diagnostics have been recorded yet.'
           : snapshot;
       await showDialog<void>(
         context: context,

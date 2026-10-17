@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Enforce Apple diagnostic byte and line limits on the complete response, including provider metadata and truncation markers. Explain disabled diagnostics in the example instead of asking the user to connect.
 * Disable and verify the Apple VPN profile on explicit Control Center Stop as well as app Stop. Report the actual On Demand policy in provider diagnostics when recovery is disabled.
 * Await Apple tunnel teardown after disabling and reading back recovery preferences before returning from Stop. Reject live configuration/options replacement and verify forwarding independently of On Demand, including when reconnect is disabled.
 * Deliver native status events on the Flutter platform thread on iOS, macOS and Windows. Keep Apple traffic polling on the main actor and route Windows callbacks through the top-level window; add real queue/thread regression checks.

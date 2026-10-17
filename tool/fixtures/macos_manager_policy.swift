@@ -55,6 +55,18 @@ import Security
         try await manager.stop(waitForDisconnect: true)
         try await manager.removeFromPreferences()
         precondition(SDK.profile == nil && keychain.records.isEmpty)
+        manager.nativeOptions = try VlessNativeOptions(["quickAccess":["enabled":true],"reconnect":["enabled":false]])
+        manager.bypassSubnets = []
+        manager.xrayConfig = Data(#"{"inbounds":[],"outbounds":[{"protocol":"freedom"}]}"#.utf8)
+        var notifiedReference: Data?
+        manager.didSaveQuickProfile = { notifiedReference = $0 }
+        try await manager.start()
+        precondition(SDK.profile!.isEnabled && !SDK.profile!.isOnDemandEnabled && SDK.profile!.onDemandRules == nil)
+        let optionMetadata = (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+        precondition((optionMetadata["options"] as? [String:Any])?["reconnect"] is [String:Any])
+        precondition(notifiedReference == optionMetadata["xrayConfigReference"] as? Data)
+        try await manager.stop(waitForDisconnect:true)
+        try await manager.removeFromPreferences()
         print("PASS macOS manager: mandatory policy, private persistence, readiness, live-config rejection, subnet policy, failed disarm, ordered stop and secret cleanup")
     }
 }

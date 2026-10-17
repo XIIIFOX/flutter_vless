@@ -197,11 +197,13 @@ int main(int argc,char** argv) {
   }
   if(argc<3)return 2;
   std::ifstream input{std::filesystem::path(arguments[2])};std::string config((std::istreambuf_iterator<char>(input)),{});
-  bool vpn=action=="run-vpn";
+  const bool no_reconnect = action == "run-vpn-no-reconnect";
+  bool vpn=action=="run-vpn" || no_reconnect;
   if(!vpn && action!="run-proxy")return 2;
   if(vpn && !isolated)return 20;
   auto& manager=V2rayManager::GetInstance();
-  bool started=manager.Start(config,!vpn);std::cout<<"START_RETURN="<<started<<std::endl;
+  flutter_vless::NativeOptions options; options.reconnect_enabled = !no_reconnect;
+  bool started=manager.Start(config,!vpn,options);std::cout<<"START_RETURN="<<started<<std::endl;
   if(!started){manager.Stop();std::cout<<manager.GetProviderDebugSnapshot()<<std::endl;return 3;}
   int seconds=argc>3?std::stoi(argv[3]):20;
   const std::filesystem::path stop_file = arguments.size() > 4 ? arguments[4] : L"";
@@ -222,5 +224,5 @@ int main(int argc,char** argv) {
   if (control == "shutdown") { manager.Shutdown(); std::cout << "SHUTDOWN_PROTECTING=" << manager.IsProtecting() << std::endl; return 0; }
   manager.Stop();std::cout<<"STOPPED="<<!manager.IsRunning()<<std::endl;
   std::cout<<manager.GetProviderDebugSnapshot()<<std::endl;
-  return healthy?0:4;
+  return (healthy || no_reconnect)?0:4;
 }

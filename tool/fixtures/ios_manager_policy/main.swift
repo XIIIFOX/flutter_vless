@@ -128,6 +128,18 @@ import Security
         precondition(provider.reachedBootstrap, "Obsolete metadata cannot disable the required OS protection")
         try await verifyStatusNotificationScope(manager)
         try await verifySecretTransactions()
+        manager.nativeOptions = try VlessNativeOptions(["quickAccess":["enabled":true],"reconnect":["enabled":false]])
+        manager.bypassSubnets = []
+        manager.xrayConfig = Data(#"{"inbounds":[],"outbounds":[{"protocol":"freedom"}]}"#.utf8)
+        var notifiedReference: Data?
+        manager.didSaveQuickProfile = { notifiedReference = $0 }
+        try await manager.start()
+        precondition(SDK.profile!.isEnabled && !SDK.profile!.isOnDemandEnabled && SDK.profile!.onDemandRules == nil)
+        let optionMetadata = (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+        precondition((optionMetadata["options"] as? [String:Any])?["reconnect"] is [String:Any])
+        precondition(notifiedReference == optionMetadata["xrayConfigReference"] as? Data)
+        try await manager.stop(waitForDisconnect:true)
+        try await manager.removeFromPreferences()
         print("PASS: preference-load errors; transactional Keychain rollback/migration/cleanup; permission privacy; cold-start secret denial; traffic protection and proxy-switch teardown")
     }
 }

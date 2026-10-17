@@ -1177,6 +1177,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
         let parsed: VlessNativeOptions
         do {
+            if let raw = arguments["options"], !(raw is [String: Any]) { throw VlessNativeOptions.Failure.invalid("options") }
             parsed = try VlessNativeOptions(arguments["options"] as? [String: Any])
             try parsed.validateApple(isMac: true, controlCenterAvailable: controlCenterAvailable, extensionConfigured: controlsConfigured)
         } catch let error as VlessNativeOptions.Failure {

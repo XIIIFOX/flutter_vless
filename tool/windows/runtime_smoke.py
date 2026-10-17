@@ -252,7 +252,7 @@ def await_state(path, running, timeout=30):
         try:
             state = json.loads(path.read_text())
             if state["running"] == running and state["protecting"]:
-                return
+                return state
         except (OSError, ValueError, KeyError):
             pass
         time.sleep(0.2)
@@ -369,7 +369,7 @@ def main():
             threading.Thread(target=server.serve_forever, daemon=True).start()
         cases = [(False, "stop"), (True, "stop")]
         if args.vpn:
-            cases.extend([(False, "crash"), (False, "shutdown")])
+            cases.extend([(False, "crash"), (False, "shutdown"), (False, "no-reconnect")])
         for reverse, ending in cases:
             label = ("vpn" if args.vpn else "proxy") + ("-reverse" if reverse else "") + ("-" + ending if ending != "stop" else "")
             profile = directory / (label + ".json")
@@ -393,7 +393,7 @@ def main():
                 windows_path = lambda path: "Z:" + str(path).replace("/", "\\") if args.wine_bottle else str(path)
                 command = (["/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine",
                             "--bottle", args.wine_bottle] if args.wine_bottle else [])
-                command += [str(probe), "run-vpn" if args.vpn else "run-proxy", windows_path(profile), "240", windows_path(stop_file), windows_path(state_file)]
+                command += [str(probe), ("run-vpn-no-reconnect" if ending == "no-reconnect" else "run-vpn") if args.vpn else "run-proxy", windows_path(profile), "240", windows_path(stop_file), windows_path(state_file)]
                 process = subprocess.Popen(command, cwd=directory, stdout=log, stderr=log)
                 if args.vpn:
                     guard = subprocess.Popen([str(probe), "guard", str(process.pid), "240", str(guard_stop)],
@@ -501,6 +501,17 @@ def main():
                                 await_state(state_file, True, timeout=60)
                                 assert request("myip.com", True) == "PROXY-FIXTURE"
                                 results.append(dict(mode=label, check=worker + " forwarding recovers", passed=True))
+                    if args.vpn and ending == "no-reconnect":
+                        kill_worker(process.pid, "xray.exe")
+                        await_state(state_file, False)
+                        time.sleep(2)
+                        state = await_state(state_file, False)
+                        assert not state["running"] and state["protecting"]
+                        remaining_workers = subprocess.check_output(["powershell", "-NoProfile", "-Command",
+                            f"@(Get-CimInstance Win32_Process | Where-Object {{ $_.ParentProcessId -eq {process.pid} -and $_.Name -eq 'xray.exe' }}).Count"], text=True, timeout=25)
+                        assert remaining_workers.strip() == "0", "Disabled recovery restarted Xray"
+                        actual = physical_denied(external_address, direct_address, 443)
+                        results.append(dict(mode=label, check="disabled Auto Reconnect retains WFP and leaves failed workers stopped", actual=actual, passed=True))
                     if ending == "crash":
                         process.kill()
                     elif ending == "shutdown":
@@ -509,7 +520,7 @@ def main():
                         stop_file.touch()
                     code = process.wait(timeout=25)
                     if args.vpn:
-                        if ending != "stop":
+                        if ending in ("crash", "shutdown"):
                             assert int(native(probe, "policy-count")) >= 10
                             actual = physical_denied(external_address, direct_address, 443)
                             results.append(dict(mode=label, check="application exit retains native WFP block", actual=actual, passed=True))

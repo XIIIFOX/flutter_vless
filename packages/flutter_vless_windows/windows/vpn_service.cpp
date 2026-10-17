@@ -122,7 +122,12 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   return ready_.load();
 }
 void VpnService::StopSession(bool release) {
-  requested_.store(false); ready_.store(false);
+  {
+    // Pair the predicate change with the worker's wait lock: even an exhausted
+    // retry policy must never miss Stop's notification and hang during join.
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    requested_.store(false); ready_.store(false);
+  }
   state_changed_.notify_all();
   if (vpn_thread_.joinable()) vpn_thread_.join();
   StopWorkers();

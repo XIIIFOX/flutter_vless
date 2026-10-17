@@ -11,6 +11,7 @@ import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -28,10 +29,17 @@ class SessionRecoveryDeviceTest {
     private fun snapshot() = XrayCoreManager.getProviderDebugSnapshot(context)
     private fun profile() = XrayConfig(REMARK = "Recovery test", V2RAY_FULL_JSON_CONFIG =
         """{"inbounds":[],"outbounds":[{"tag":"proxy","protocol":"socks","settings":{"address":"10.0.2.2","port":18080}}]}""")
-    private fun start(value: XrayConfig = profile()) {
+    private fun start(value: XrayConfig = profile(), expectedCode: Int = 0) {
         assertNull(VpnService.prepare(context))
+        val acknowledgement = java.util.concurrent.CountDownLatch(1)
+        var result = -1
         context.startForegroundService(Intent(context, XrayVPNService::class.java)
+            .putExtra("start_receiver", object : android.os.ResultReceiver(android.os.Handler(android.os.Looper.getMainLooper())) {
+                override fun onReceiveResult(code: Int, data: android.os.Bundle?) { result = code; acknowledgement.countDown() }
+            })
             .putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE).putExtra("V2RAY_CONFIG", value))
+        assertTrue("Native start acknowledgement", acknowledgement.await(15, TimeUnit.SECONDS))
+        assertEquals("Native start result", expectedCode, result)
     }
     private fun await(description: String, predicate: () -> Boolean) {
         val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(45)
@@ -45,9 +53,18 @@ class SessionRecoveryDeviceTest {
         it.getInputStream().bufferedReader().readText()
     }
     @After fun stop() {
-        context.startService(Intent(context, XrayVPNService::class.java).putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.STOP_SERVICE))
-        Thread.sleep(500)
+        val acknowledgement = java.util.concurrent.CountDownLatch(1)
+        var result = -1
+        context.startService(Intent(context, XrayVPNService::class.java)
+            .putExtra("stop_receiver", object : android.os.ResultReceiver(android.os.Handler(android.os.Looper.getMainLooper())) {
+                override fun onReceiveResult(code: Int, data: android.os.Bundle?) { result = code; acknowledgement.countDown() }
+            })
+            .putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.STOP_SERVICE))
+        assertTrue("Native stop acknowledgement", acknowledgement.await(15, TimeUnit.SECONDS))
+        assertEquals("Native stop result", 0, result)
+        await("Prior session fully stopped") { !captured() }
     }
+    @Before fun stopPreviousSession() = stop()
     @Test fun bothNativeWorkerCrashesRetainTunAndNeverExposeTheDirectControl() {
         start(); await("initial ready") { snapshot().contains("CONNECTED") && captured() }
         assertTrue(directProbe().contains("flutter-vless-protected-host"))
@@ -71,7 +88,7 @@ class SessionRecoveryDeviceTest {
     }
     @Test fun invalidReplacementPreservesActiveSessionAndStopDisarmsSystemRestore() {
         start(profile().apply { BLOCKED_APPS.add("com.fluttervless.uninstalled.exclusion") }); await("initial ready") { snapshot().contains("CONNECTED") && captured() }
-        start(profile().apply { V2RAY_FULL_JSON_CONFIG = """{"inbounds":[],"outbounds":[{"protocol":"unsupported-canary"}]}""" })
+        start(profile().apply { V2RAY_FULL_JSON_CONFIG = """{"inbounds":[],"outbounds":[{"protocol":"unsupported-canary"}]}""" }, expectedCode = 1)
         await("replacement rejection") { snapshot().contains("CONFIG_REJECTED") }
         assertTrue(captured()); assertTrue(directProbe().contains("flutter-vless-protected-host"))
         stop(); await("explicit stop") { !captured() }

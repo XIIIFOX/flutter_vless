@@ -66,7 +66,7 @@ class SessionSystemPolicyDeviceTest {
         assertNull("Use a dedicated emulator with no prior always-on profile", policy.alwaysOn())
         try {
                 stop(); await("initial stop") { !captured() }
-                assertTrue("Direct control must be reachable before lockdown", otherUidProbe().getBoolean("success"))
+                await("Direct control must be reachable before lockdown") { otherUidProbe().getBoolean("success") }
                 start(); await("initial session ready", ::ready)
                 policy.enableLockdown()
                 assertEquals(context.packageName, policy.alwaysOn()); assertTrue(policy.locked())
@@ -102,7 +102,7 @@ class SessionSystemPolicyDeviceTest {
             policy.clearLockdown()
             stop(); await("policy cleanup") { !captured() }
         }
-        assertTrue("Direct control must recover after lockdown is removed", otherUidProbe().getBoolean("success"))
+        await("Direct control must recover after lockdown is removed") { otherUidProbe().getBoolean("success") }
     }
 
     @Test fun lostKeystoreKeyCannotRestoreAnArbitraryProfileOrEscapeLockdown() {

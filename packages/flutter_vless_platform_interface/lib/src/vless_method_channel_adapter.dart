@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'vless_platform.dart';
 import 'vless_status.dart';
 import 'android_dns_policy.dart';
+import 'vless_options.dart';
 
 class VlessMethodChannelAdapter extends VlessPlatform {
   VlessMethodChannelAdapter({
@@ -29,7 +30,16 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     required String providerBundleIdentifier,
     required String groupIdentifier,
     String? keychainAccessGroup,
+    VlessOptions? options,
   }) async {
+    options?.validate();
+    if (options != null && !options.isDefault) {
+      final capabilities = await getCapabilities();
+      if (capabilities.optionsVersion < 1) {
+        throw UnsupportedError(
+            'The native backend does not support VlessOptions.');
+      }
+    }
     if (keychainAccessGroup != null) {
       if (keychainAccessGroup.trim().isEmpty) {
         throw ArgumentError.value(keychainAccessGroup, 'keychainAccessGroup');
@@ -51,17 +61,55 @@ class VlessMethodChannelAdapter extends VlessPlatform {
       debugPrint('VLESS status stream error: $error');
     });
 
-    await methodChannel.invokeMethod(
-      'initializeVless',
-      {
-        'notificationIconResourceType': notificationIconResourceType,
-        'notificationIconResourceName': notificationIconResourceName,
-        'providerBundleIdentifier': providerBundleIdentifier,
-        'groupIdentifier': groupIdentifier,
-        if (keychainAccessGroup != null)
-          'keychainAccessGroup': keychainAccessGroup,
-      },
-    );
+    try {
+      await methodChannel.invokeMethod(
+        'initializeVless',
+        {
+          'notificationIconResourceType': notificationIconResourceType,
+          'notificationIconResourceName': notificationIconResourceName,
+          'providerBundleIdentifier': providerBundleIdentifier,
+          'groupIdentifier': groupIdentifier,
+          if (keychainAccessGroup != null)
+            'keychainAccessGroup': keychainAccessGroup,
+          if (options != null && !options.isDefault) 'options': options.toMap(),
+        },
+      );
+    } catch (_) {
+      await _statusSubscription?.cancel();
+      _statusSubscription = null;
+      rethrow;
+    }
+  }
+
+  @override
+  Future<VlessCapabilities> getCapabilities() async {
+    try {
+      final result = await methodChannel
+          .invokeMapMethod<Object?, Object?>('getCapabilities');
+      return VlessCapabilities.fromMap(result ?? const {});
+    } on MissingPluginException {
+      return const VlessCapabilities();
+    }
+  }
+
+  @override
+  Future<QuickTileAddResult> requestAddQuickTile() async {
+    if (!(await getCapabilities()).requestAddQuickTile) {
+      return QuickTileAddResult.unsupported;
+    }
+    final name =
+        await methodChannel.invokeMethod<String>('requestAddQuickTile');
+    return QuickTileAddResult.values.firstWhere((value) => value.name == name,
+        orElse: () => QuickTileAddResult.unsupported);
+  }
+
+  @override
+  Future<void> clearQuickAccessProfile() async {
+    if ((await getCapabilities()).optionsVersion < 1) {
+      throw UnsupportedError(
+          'The native backend has no quick-access profile storage.');
+    }
+    await methodChannel.invokeMethod<void>('clearQuickAccessProfile');
   }
 
   @override

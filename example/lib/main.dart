@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_vless/flutter_vless.dart';
 import 'package:flutter_vless_example/routing.dart';
+import 'options.dart';
 
 void main() {
   runApp(const MyApp());
@@ -41,7 +42,8 @@ class _HomePageState extends State<HomePage> {
   final ValueNotifier<VlessStatus> vlessStatus =
       ValueNotifier<VlessStatus>(VlessStatus());
 
-  late final FlutterVless flutterVless = FlutterVless(
+  VlessOptions pluginOptions = const VlessOptions();
+  late FlutterVless flutterVless = FlutterVless(
     onStatusChanged: (status) {
       vlessStatus.value = status;
     },
@@ -62,18 +64,50 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
 
-    // Plugin initialization
-    flutterVless
-        .initializeVless(
-      notificationIconResourceType: 'mipmap',
-      notificationIconResourceName: 'ic_launcher',
-      providerBundleIdentifier: 'dev.tfox.flutterXrayExample',
-      groupIdentifier: 'group.dev.tfox.flutterXray',
-    )
-        .then((_) async {
-      coreVersion = await flutterVless.getCoreVersion();
-      setState(() {});
-    });
+    _initializePlugin(flutterVless);
+  }
+
+  Future<void> _initializePlugin(FlutterVless plugin) async {
+    try {
+      await plugin.initializeVless(
+          providerBundleIdentifier: 'dev.tfox.flutterXrayExample',
+          groupIdentifier: 'group.dev.tfox.flutterXray');
+      final version = await plugin.getCoreVersion();
+      if (mounted) setState(() => coreVersion = version);
+    } catch (error) {
+      if (mounted) setState(() => coreVersion = 'Unavailable: $error');
+    }
+  }
+
+  Future<void> _showOptions() async {
+    try {
+      final capabilities = await flutterVless.getCapabilities();
+      if (!mounted) return;
+      await Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => PluginOptionsPage(
+                initial: pluginOptions,
+                capabilities: capabilities,
+                onAddTile: () => flutterVless.requestAddQuickTile(),
+                onClearProfile: () => flutterVless.clearQuickAccessProfile(),
+                onApply: (options) async {
+                  final replacement = FlutterVless(
+                      options: options,
+                      onStatusChanged: (status) {
+                        if (mounted) vlessStatus.value = status;
+                      });
+                  await replacement.initializeVless(
+                      providerBundleIdentifier: 'dev.tfox.flutterXrayExample',
+                      groupIdentifier: 'group.dev.tfox.flutterXray');
+                  flutterVless = replacement;
+                  pluginOptions = options;
+                },
+              )));
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Options unavailable: $error')));
+      }
+    }
   }
 
   @override
@@ -265,6 +299,10 @@ class _HomePageState extends State<HomePage> {
       appBar: AppBar(
         title: const Text('Flutter Vless — Example'),
         actions: [
+          IconButton(
+              icon: const Icon(Icons.tune),
+              onPressed: _showOptions,
+              tooltip: 'Plugin options'),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: () => Navigator.of(context).push(

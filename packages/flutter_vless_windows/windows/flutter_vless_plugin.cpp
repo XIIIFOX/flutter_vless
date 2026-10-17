@@ -22,9 +22,27 @@
 #include "native_runtime.h"
 #include "xray_config.h"
 #include "native_task_queue.h"
+#include "native_options.h"
+#include "diagnostics_log.h"
+#include "system_tray.h"
 #include <iostream>
 
 namespace {
+flutter_vless::NativeOptions::Json OptionJson(const flutter::EncodableValue& value) {
+  using Json = flutter_vless::NativeOptions::Json;
+  if (value.IsNull()) return nullptr;
+  if (const auto* v = std::get_if<bool>(&value)) return *v;
+  if (const auto* v = std::get_if<int32_t>(&value)) return *v;
+  if (const auto* v = std::get_if<int64_t>(&value)) return *v;
+  if (const auto* v = std::get_if<double>(&value)) return *v;
+  if (const auto* v = std::get_if<std::string>(&value)) return *v;
+  if (const auto* v = std::get_if<flutter::EncodableMap>(&value)) {
+    auto out = Json::object();
+    for (const auto& entry : *v) { const auto* key = std::get_if<std::string>(&entry.first); if (!key) throw std::invalid_argument("Option key"); out[*key] = OptionJson(entry.second); }
+    return out;
+  }
+  throw std::invalid_argument("Option type");
+}
 
 /**
  * @brief Helper function to log messages to console and Windows debug output.
@@ -136,6 +154,35 @@ class FlutterVlessPlugin : public flutter::Plugin {
   // Mutex to serialize Start/Stop operations to prevent race conditions
   std::mutex lifecycle_mutex_;
   NativeTaskQueue operations_;
+  flutter_vless::NativeOptions native_options_;
+  std::unique_ptr<flutter_vless::SystemTray> tray_;
+  std::optional<std::string> quick_profile_; // Access only on operations_. Never persisted in plaintext.
+  std::atomic<unsigned> options_generation_{0};
+  std::atomic<int> last_tray_state_{-1};
+  bool tray_pending_ = false;
+  void OpenApp() { if (main_window_handle_) { ShowWindow(main_window_handle_, SW_RESTORE); SetForegroundWindow(main_window_handle_); } }
+  void RefreshTray() { const auto& manager = V2rayManager::GetInstance(); if (tray_) tray_->Refresh((manager.IsRunning() && !manager.IsProxyOnly()) || manager.IsProtecting(), tray_pending_); }
+  void ToggleFromTray() {
+    if (tray_pending_ || !native_options_.quick_enabled) return;
+    if (V2rayManager::GetInstance().IsProxyOnly() && V2rayManager::GetInstance().IsRunning()) { OpenApp(); return; }
+    tray_pending_ = true; RefreshTray();
+    const auto options = native_options_; const auto generation = options_generation_.load();
+    operations_.Submit([this, options, generation] {
+      std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+      bool available = generation == options_generation_.load() && !(V2rayManager::GetInstance().IsProxyOnly() && V2rayManager::GetInstance().IsRunning());
+      if (available && (V2rayManager::GetInstance().IsRunning() || V2rayManager::GetInstance().IsProtecting())) {
+        StopStatusTimer(); V2rayManager::GetInstance().Stop(); is_running_ = false;
+        SendStatusToUI(flutter::EncodableList{flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("DISCONNECTED")});
+      } else if (available && quick_profile_) {
+        const bool ready = V2rayManager::GetInstance().Start(*quick_profile_, false, options);
+        is_running_ = ready || V2rayManager::GetInstance().IsProtecting();
+        if (is_running_) { start_time_ = std::chrono::steady_clock::now(); StartStatusTimer(); }
+        available = is_running_.load();
+      } else { available = false; }
+      RunOnUIThread([this, available] { tray_pending_ = false; RefreshTray(); UpdateStatus(); if (!available) OpenApp(); });
+    });
+  }
+
 
   /**
    * @brief Schedules a callback to be executed on the UI thread.
@@ -316,6 +363,7 @@ FlutterVlessPlugin::FlutterVlessPlugin(flutter::PluginRegistrarWindows *registra
     window_proc_delegate_id_ = registrar_->RegisterTopLevelWindowProcDelegate(
         [this](HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
             -> std::optional<LRESULT> {
+          if (tray_ && tray_->Handle(message, lparam)) return std::optional<LRESULT>(0);
           if (message == ui_callback_message_id_) {
             std::vector<std::function<void()>> tasks;
             {
@@ -349,6 +397,7 @@ FlutterVlessPlugin::FlutterVlessPlugin(flutter::PluginRegistrarWindows *registra
 
 FlutterVlessPlugin::~FlutterVlessPlugin() {
   operations_.Stop();
+  tray_.reset();
   StopStatusTimer();
   V2rayManager::GetInstance().Shutdown();
   
@@ -367,15 +416,35 @@ FlutterVlessPlugin::~FlutterVlessPlugin() {
 void FlutterVlessPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue> &method_call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
-  if (method_call.method_name().compare("requestPermission") == 0) {
+  if (method_call.method_name() == "getCapabilities") {
+    result->Success(flutter::EncodableValue(flutter::EncodableMap{
+      {flutter::EncodableValue("optionsVersion"), flutter::EncodableValue(1)},
+      {flutter::EncodableValue("quickAccessSurfaces"), flutter::EncodableValue(flutter::EncodableList{flutter::EncodableValue("systemTray")})},
+      {flutter::EncodableValue("customReconnectBackoff"), flutter::EncodableValue(true)},
+      {flutter::EncodableValue("killSwitch"), flutter::EncodableValue(true)}}));
+  } else if (method_call.method_name() == "requestAddQuickTile") {
+    result->Success(flutter::EncodableValue("unsupported"));
+  } else if (method_call.method_name() == "clearQuickAccessProfile") {
+    std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> reply = std::move(result);
+    operations_.Submit([this, reply] { quick_profile_.reset(); RunOnUIThread([reply] { reply->Success(); }); });
+  } else if (method_call.method_name().compare("requestPermission") == 0) {
     // VPN requires elevation for Wintun and mandatory WFP containment.
     result->Success(flutter::EncodableValue(flutter_vless::native::IsAdministrator()));
   } else if (method_call.method_name().compare("initializeVless") == 0) {
     const auto *arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
     if (arguments) {
       LogMessage("initializeVless called");
-      // Just initialize and return - EventChannel will send initial status
-      result->Success(flutter::EncodableValue(nullptr));
+      try {
+        const auto found = arguments->find(flutter::EncodableValue("options"));
+        auto parsed = flutter_vless::NativeOptions::Parse(found == arguments->end() ? flutter_vless::NativeOptions::Json::object() : OptionJson(found->second));
+        parsed.ValidateWindows();
+        if (!tray_) tray_ = std::make_unique<flutter_vless::SystemTray>(main_window_handle_, [this] { ToggleFromTray(); }, [this] { OpenApp(); });
+        if (!tray_->Configure(parsed)) { result->Error("QUICK_ACCESS_UNAVAILABLE", "Cannot create the system tray icon; check the .ico path and desktop session"); return; }
+        native_options_ = parsed; ++options_generation_;
+        flutter_vless::DiagnosticsLog::Instance().Configure(parsed.diagnostics_enabled, parsed.diagnostics_bytes, parsed.diagnostics_lines);
+        if (!parsed.quick_enabled) operations_.Submit([this] { quick_profile_.reset(); });
+        RefreshTray(); result->Success(flutter::EncodableValue(nullptr));
+      } catch (const std::exception&) { result->Error("INVALID_OPTIONS", "Unsupported or invalid Windows options"); }
     } else {
       result->Error("INVALID_ARGUMENTS", "Invalid arguments for initializeVless");
     }
@@ -417,17 +486,22 @@ void FlutterVlessPlugin::HandleMethodCall(
         // Convert unique_ptr to shared_ptr to allow capturing in std::function (which requires CopyConstructible)
         std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> shared_result = std::move(result);
         
-        operations_.Submit([this, config, proxy_only, shared_result]() {
+        const auto options = native_options_;
+        const auto generation = options_generation_.load();
+        operations_.Submit([this, config, proxy_only, shared_result, options, generation]() {
           std::lock_guard<std::mutex> lock(lifecycle_mutex_);
           LogMessage("Starting Xray...");
-          const bool ready = V2rayManager::GetInstance().Start(config, proxy_only);
+          const bool ready = V2rayManager::GetInstance().Start(config, proxy_only, options);
           const bool protecting = V2rayManager::GetInstance().IsProtecting();
           is_running_ = ready || protecting;
+          if (proxy_only) quick_profile_.reset();
+          if (!proxy_only && is_running_ && options.quick_enabled && generation == options_generation_.load()) quick_profile_ = config;
           if (is_running_) {
             start_time_ = std::chrono::steady_clock::now();
             StartStatusTimer();
           }
-          RunOnUIThread([shared_result, ready, protecting]() {
+          RunOnUIThread([this, shared_result, ready, protecting]() {
+            RefreshTray();
             if (ready) shared_result->Success(flutter::EncodableValue(nullptr));
             else shared_result->Error("VPN_START_FAILED", protecting
                 ? "VPN forwarding is unavailable; traffic protection remains active. Check diagnostics, retry or explicitly stop."
@@ -471,7 +545,8 @@ void FlutterVlessPlugin::HandleMethodCall(
       SendStatusToUI(status);
       
       // Return result on UI thread
-      RunOnUIThread([shared_result]() {
+      RunOnUIThread([this, shared_result]() {
+        RefreshTray();
         shared_result->Success(flutter::EncodableValue(nullptr));
       });
     });
@@ -576,6 +651,9 @@ void FlutterVlessPlugin::StopStatusTimer() {
  * thread), but SendStatusToUI() handles thread-safe EventSink operations.
  */
 void FlutterVlessPlugin::UpdateStatus() {
+  const int state = V2rayManager::GetInstance().IsRunning() ? 2 : (V2rayManager::GetInstance().IsProtecting() ? 1 : 0);
+  if (last_tray_state_.exchange(state) != state) RunOnUIThread([this] { RefreshTray(); });
+
   {
     std::lock_guard<std::mutex> sink_lock(sink_mutex_);
     if (!status_sink_ || !is_running_) {

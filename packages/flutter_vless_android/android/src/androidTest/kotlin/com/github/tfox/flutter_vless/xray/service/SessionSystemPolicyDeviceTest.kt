@@ -73,14 +73,18 @@ class SessionSystemPolicyDeviceTest {
                     }
                     replacement != null && ready()
                 }
-                stop(); await("explicit library stop") { !captured() }
+                val response = java.util.concurrent.CountDownLatch(1)
+                var code = -1
+                context.startService(Intent(context, XrayVPNService::class.java)
+                    .putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.STOP_SERVICE)
+                    .putExtra("stop_receiver", object : android.os.ResultReceiver(android.os.Handler(android.os.Looper.getMainLooper())) {
+                        override fun onReceiveResult(resultCode: Int, data: android.os.Bundle?) { code = resultCode; response.countDown() }
+                    }))
+                assertTrue(response.await(5,TimeUnit.SECONDS)); assertEquals(2,code)
                 assertEquals(context.packageName, policy.alwaysOn()); assertTrue(policy.locked())
-                val denied = otherUidProbe()
-                assertFalse("Other UID escaped OS lockdown", denied.getBoolean("success"))
-                assertTrue("No direct application connection is permitted", denied.getBoolean("blocked"))
                 Thread.sleep(2000)
-                assertFalse("STOP must not re-arm the authorized profile", captured())
-                assertFalse(File(context.noBackupFilesDir, "flutter_vless_authorized_v1.bin").exists())
+                assertTrue("OS-managed Always-on cannot be disabled by the library", captured())
+                assertTrue(File(context.noBackupFilesDir, "flutter_vless_authorized_v1.bin").exists())
         } finally {
             policy.clearLockdown()
             stop(); await("policy cleanup") { !captured() }

@@ -6,6 +6,7 @@
 //
 
 import NetworkExtension
+import flutter_vless_privacy
 import Network
 import XRay
 import Tun2SocksKit
@@ -31,47 +32,41 @@ private final class TunnelDebugStore {
     static let shared = TunnelDebugStore()
     private let lock = NSLock()
     private var lines: [String] = []
-    private let maxLines = 120
+    private var options = try! VlessNativeOptions()
+    private var group: String?
     private var fileURL: URL?
 
-    func configure(groupIdentifier: String?) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let groupIdentifier,
-              !groupIdentifier.isEmpty,
-              let containerURL = FileManager.default.containerURL(
-                forSecurityApplicationGroupIdentifier: groupIdentifier
-              ) else {
-            fileURL = nil
-            return
-        }
-        NativeLogPrivacy.removeLegacyProviderLog(in: containerURL)
-        fileURL = containerURL.appendingPathComponent(NativeLogPrivacy.providerLogFilename)
+    func configure(groupIdentifier: String?, options: VlessNativeOptions) {
+        lock.lock(); defer { lock.unlock() }
+        self.options = options; self.group = groupIdentifier
+        lines.removeAll()
+        guard let groupIdentifier, !groupIdentifier.isEmpty,
+              let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupIdentifier) else { fileURL = nil; return }
+        NativeLogPrivacy.removeLegacyProviderLog(in: directory)
+        fileURL = directory.appendingPathComponent(NativeLogPrivacy.providerLogFilename)
+        if !options.diagnosticsEnabled, let fileURL { try? FileManager.default.removeItem(at: fileURL) }
+    }
+
+    private func currentOptions() -> VlessNativeOptions {
+        group.flatMap { VlessSystemControl.options(group: $0) } ?? options
     }
 
     func append(_ message: NativeDiagnosticMessage) {
-        lock.lock()
-        defer { lock.unlock() }
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let line = "\(timestamp) \(message.text)"
-        lines.append(line)
-        if lines.count > maxLines {
-            lines.removeFirst(lines.count - maxLines)
+        lock.lock(); defer { lock.unlock() }
+        let options = currentOptions()
+        guard options.diagnosticsEnabled else {
+            lines.removeAll(); if let fileURL { try? FileManager.default.removeItem(at: fileURL) }; return
         }
-        if let fileURL {
-            try? TunnelFileLog.append(line, to: fileURL)
-        }
+        lines.append("\(ISO8601DateFormatter().string(from: Date())) \(message.text)")
+        while !lines.isEmpty && (lines.count > options.diagnosticsMaxLines || lines.reduce(0, { $0 + $1.utf8.count + 1 }) > options.diagnosticsMaxBytes) { lines.removeFirst() }
+        if let fileURL { try? lines.joined(separator: "\n").write(to: fileURL, atomically: true, encoding: .utf8) }
     }
 
     func snapshot() -> String {
-        lock.lock()
-        defer { lock.unlock() }
-        if let fileURL,
-           let persisted = try? TunnelFileLog.tail(of: fileURL),
-           !persisted.isEmpty {
-            return persisted
-        }
-        return lines.joined(separator: "\n")
+        lock.lock(); defer { lock.unlock() }
+        let options = currentOptions()
+        guard options.diagnosticsEnabled else { return "" }
+        return lines.suffix(options.diagnosticsMaxLines).joined(separator: "\n")
     }
 
     func logDirectoryURL() -> URL? {
@@ -107,6 +102,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var startupStopped = false
     private var runtimeSpec: RuntimeSpec?
     private var runtimeRecoveryInFlight = false
+    private var nativeOptions = try! VlessNativeOptions()
+    private var recoveryFailures = 0
+    private var recoveryExhausted = false
+    private var initialRuntimeAttempted = false
     // Accessed only on runtimeQueue.
     private var hasStartedHEV = false
     private var hevStopSignal: DispatchGroup?
@@ -154,7 +153,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // fallback; opening the app performs its transactional migration.
         let config = try TunnelSecretProfile.load(providerConfiguration,
             providerBundleIdentifier: configuration.providerBundleIdentifier ?? "")
-        TunnelDebugStore.shared.configure(groupIdentifier: providerConfiguration["groupIdentifier"] as? String)
+        nativeOptions = try VlessNativeOptions(providerConfiguration["options"] as? [String: Any])
+        recoveryFailures = 0; recoveryExhausted = false; initialRuntimeAttempted = false
+        TunnelDebugStore.shared.configure(groupIdentifier: providerConfiguration["groupIdentifier"] as? String, options: nativeOptions)
         beginStartup()
         setForwardingReady(false)
         rememberTunnelLog("Starting Xray packet tunnel")
@@ -297,10 +298,20 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func scheduleNativeRecovery(after delay: TimeInterval) {
         guard !watchdogSuspended, !runtimeRecoveryInFlight,
               let spec = runtimeSpec else { return }
+        let isInitialLaunch = !initialRuntimeAttempted
+        initialRuntimeAttempted = true
+        guard isInitialLaunch || (!recoveryExhausted && nativeOptions.mayRetry(failures: recoveryFailures)) else {
+            recoveryExhausted = true
+            setForwardingReady(false)
+            rememberTunnelLog("Native retry limit reached; protected traffic remains blocked")
+            return
+        }
+        let retryDelay = isInitialLaunch ? 0 : nativeOptions.retryDelay(failures: recoveryFailures)
+        if !isInitialLaunch { recoveryFailures += 1 }
         runtimeRecoveryInFlight = true
         setForwardingReady(false)
         let generation = watchdogGeneration
-        runtimeQueue.asyncAfter(deadline: .now() + delay) {
+        runtimeQueue.asyncAfter(deadline: .now() + retryDelay) {
             guard self.watchdogQueue.sync(execute: {
                 guard self.watchdogGeneration == generation else { return false }
                 if self.watchdogSuspended {
@@ -644,6 +655,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         )
         setForwardingReady(success)
         if success {
+            recoveryFailures = 0
             tunnelLog.info("Tunnel watchdog \(trigger, privacy: .public) passed")
             recoveryCheck?.cancel()
             recoveryCheck = nil

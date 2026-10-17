@@ -15,7 +15,7 @@ s=(root/'example/ios/XrayTunnel/PacketTunnelProvider.swift').read_text()
 a=s.index('    override func startTunnel(options:')
 b=s.index('        TunnelDebugStore.shared.configure',a)
 entry=s[a:b].replace('override func','func').replace('configuration.providerBundleIdentifier ?? ""', 'configuration.providerBundleIdentifier ?? "", client: keychain')
-(out/'Provider.swift').write_text('import Foundation\nfinal class ProviderEntryProbe {\n var protocolConfiguration: NEVPNProtocol?\n var keychain = FixtureKeychain()\n var reachedBootstrap = false\n func tunnelError(_ message: String) -> NSError { NSError(domain: "fixture.provider", code: 1) }\n'+entry+'        reachedBootstrap = true\n    }\n}\n')
+(out/'Provider.swift').write_text('import Foundation\nfinal class ProviderEntryProbe {\n var protocolConfiguration: NEVPNProtocol?\n var keychain = FixtureKeychain()\n var reachedBootstrap = false\n var nativeOptions = try! VlessNativeOptions()\n var recoveryFailures = 0\n var recoveryExhausted = false\n var initialRuntimeAttempted = false\n func tunnelError(_ message: String) -> NSError { NSError(domain: "fixture.provider", code: 1) }\n'+entry+'        reachedBootstrap = true\n    }\n}\n')
 s=(root/'ios/flutter_vless/Sources/flutter_vless/FlutterVlessPlugin.swift').read_text()
 helper_start=s.index('    fileprivate static func buildProxyOnlyConfigData')
 helper_end=s.index('\n    }\n',helper_start)+6
@@ -28,6 +28,7 @@ b=s.index('        let operation = commands.submit',a)
 
 PYTHON
 xcrun swiftc -O -parse-as-library \
+  "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/VlessNativeOptions.swift" \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/TunnelSecretStore.swift" \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/LocalProxyAccessPolicy.swift" \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/XrayPrivacyConfig.swift" \

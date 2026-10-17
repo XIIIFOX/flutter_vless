@@ -35,6 +35,22 @@ func boundedNativeDiagnosticsSnapshot(
 /// a different process. This store covers proxy-only Xray callbacks and keeps
 /// the most recent failed/stopped session available to MethodChannel callers.
 final class BoundedNativeLogStore {
+    private static let policyLock = NSLock()
+    private static var policy = (enabled: true, bytes: 131072, lines: 300, revision: 0)
+    private var policyRevision = -1
+    static func configure(enabled: Bool, maxBytes: Int, maxLines: Int) {
+        precondition((4096...131072).contains(maxBytes) && (1...300).contains(maxLines))
+        policyLock.lock(); defer { policyLock.unlock() }
+        policy = (enabled, maxBytes, maxLines, policy.revision + 1)
+    }
+    private func applyPolicy() -> (enabled: Bool, bytes: Int, lines: Int) {
+        Self.policyLock.lock(); let policy = Self.policy; Self.policyLock.unlock()
+        if policyRevision != policy.revision {
+            lines.removeAll(keepingCapacity: true); storedBytes = 0; policyRevision = policy.revision
+        }
+        return (policy.enabled, policy.bytes, policy.lines)
+    }
+
     private let maxStoredBytes: Int
     private let maxSnapshotBytes: Int
     private let maxSnapshotLines: Int
@@ -84,11 +100,13 @@ final class BoundedNativeLogStore {
 
         lock.lock()
         defer { lock.unlock() }
+        let policy = applyPolicy()
+        guard policy.enabled else { return }
         for line in newLines {
             lines.append(line)
             storedBytes += line.utf8.count + 1
         }
-        while !lines.isEmpty && storedBytes > maxStoredBytes {
+        while !lines.isEmpty && (storedBytes > min(maxStoredBytes, policy.bytes) || lines.count > policy.lines) {
             storedBytes -= lines.removeFirst().utf8.count + 1
         }
     }
@@ -96,7 +114,8 @@ final class BoundedNativeLogStore {
     func snapshot() -> String {
         lock.lock()
         defer { lock.unlock() }
-        guard !lines.isEmpty else {
+        let policy = applyPolicy()
+        guard policy.enabled, !lines.isEmpty else {
             return ""
         }
 
@@ -105,8 +124,8 @@ final class BoundedNativeLogStore {
         for line in lines.reversed() {
             let lineBytes = line.utf8.count + 1
             if !selected.isEmpty &&
-                (selected.count >= maxSnapshotLines ||
-                 selectedBytes + lineBytes > maxSnapshotBytes) {
+                (selected.count >= min(maxSnapshotLines, policy.lines) ||
+                 selectedBytes + lineBytes > min(maxSnapshotBytes, policy.bytes)) {
                 break
             }
             selected.append(line)

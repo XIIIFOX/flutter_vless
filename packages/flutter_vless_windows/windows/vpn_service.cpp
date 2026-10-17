@@ -65,7 +65,7 @@ bool TunnelReady(NET_LUID& luid) {
 }
 VpnService::VpnService() = default;
 VpnService::~VpnService() { Shutdown(); }
-bool VpnService::Start(const std::string& config) {
+bool VpnService::Start(const std::string& config, const flutter_vless::NativeOptions& options) {
   using namespace flutter_vless;
   // Validate before retiring an existing session. No setup failure is reported
   // as connected, and reconnect never releases the independent WFP barrier.
@@ -108,6 +108,7 @@ bool VpnService::Start(const std::string& config) {
   bootstrap_cache_ = std::move(cache);
   private_runtime_ = std::move(runtime);
   xray_executable_path_ = private_runtime_->Executable(); tun2socks_executable_path_ = *tun;
+  options_ = options;
   current_config_ = *prepared; username_ = user; password_ = password;
   socks_port_ = *xray_config::SocksPort(current_config_);
   // WFP must exist before native workers, resolver configuration or capture.
@@ -122,6 +123,7 @@ bool VpnService::Start(const std::string& config) {
 }
 void VpnService::StopSession(bool release) {
   requested_.store(false); ready_.store(false);
+  state_changed_.notify_all();
   if (vpn_thread_.joinable()) vpn_thread_.join();
   StopWorkers();
   private_runtime_.reset();
@@ -134,13 +136,14 @@ void VpnService::Stop() { StopSession(true); }
 void VpnService::Shutdown() { StopSession(false); }
 bool VpnService::IsRunning() const { return ready_.load(); }
 void VpnService::RunVpn() {
+  int failures = 0;
   while (requested_.load()) {
     bool started = false;
     try { started = StartWorkers(); } catch (...) { Event("Native VPN setup failed"); }
     ready_.store(started && requested_.load());
     { std::lock_guard<std::mutex> lock(state_mutex_); first_attempt_finished_ = true; }
     state_changed_.notify_all();
-    if (started) Event("Protected VPN forwarding ready");
+    if (started) { failures = 0; Event("Protected VPN forwarding ready"); }
     unsigned ticks = 0;
     while (ready_.load() && requested_.load()) {
       UINT64 identity = 0;
@@ -157,7 +160,14 @@ void VpnService::RunVpn() {
     ready_.store(false);
     StopWorkers();
     if (requested_.load()) Event("VPN forwarding unavailable; traffic remains blocked during recovery");
-    for (int i = 0; i < 30 && requested_.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::unique_lock<std::mutex> lock(state_mutex_);
+    if (!options_.MayRetry(failures)) {
+      Event("Native retry limit reached; traffic protection remains active until explicit Stop");
+      state_changed_.wait(lock, [this] { return !requested_.load(); });
+    } else {
+      const auto delay = options_.RetryDelay(failures++);
+      state_changed_.wait_for(lock, std::chrono::milliseconds(delay), [this] { return !requested_.load(); });
+    }
   }
 }
 bool VpnService::StartWorkers() {

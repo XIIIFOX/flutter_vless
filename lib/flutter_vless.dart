@@ -35,7 +35,11 @@ class FlutterVless {
   ///
   /// Call [initializeVless] before starting a connection so the platform
   /// implementation can attach its method channel and status event stream.
-  FlutterVless({required this.onStatusChanged});
+  FlutterVless(
+      {required this.onStatusChanged, this.options = const VlessOptions()});
+
+  /// Native presentation, quick controls, recovery and protection preferences.
+  final VlessOptions options;
 
   static const XrayConfigValidator _configValidator = XrayConfigValidator();
 
@@ -78,19 +82,38 @@ class FlutterVless {
   /// Call this once during app startup, before [startVless],
   /// [getConnectedServerDelay], or [getCoreVersion].
   Future<void> initializeVless({
-    String notificationIconResourceType = "mipmap",
-    String notificationIconResourceName = "ic_launcher",
+    String? notificationIconResourceType,
+    String? notificationIconResourceName,
     String providerBundleIdentifier = "",
     String groupIdentifier = "",
     String? keychainAccessGroup,
   }) async {
+    options.validate();
+    final effectiveOptions = VlessOptions(
+      notification: NotificationOptions(
+        iconResourceType: notificationIconResourceType ??
+            options.notification.iconResourceType,
+        iconResourceName: notificationIconResourceName ??
+            options.notification.iconResourceName,
+        buttonLabel: options.notification.buttonLabel,
+        action: options.notification.action,
+      ),
+      quickAccess: options.quickAccess,
+      reconnect: options.reconnect,
+      protection: options.protection,
+      diagnostics: options.diagnostics,
+    );
+    effectiveOptions.validate();
     await VlessPlatform.instance.initializeVless(
       onStatusChanged: onStatusChanged,
-      notificationIconResourceType: notificationIconResourceType,
-      notificationIconResourceName: notificationIconResourceName,
+      notificationIconResourceType:
+          notificationIconResourceType ?? options.notification.iconResourceType,
+      notificationIconResourceName:
+          notificationIconResourceName ?? options.notification.iconResourceName,
       providerBundleIdentifier: providerBundleIdentifier,
       groupIdentifier: groupIdentifier,
       keychainAccessGroup: keychainAccessGroup,
+      options: options.isDefault ? null : effectiveOptions,
     );
   }
 
@@ -136,7 +159,7 @@ class FlutterVless {
     String? geoAssetsDirectory,
     AndroidDnsPolicy androidDnsPolicy = AndroidDnsPolicy.config,
     String? androidDnsProxyOutboundTag,
-    String notificationDisconnectButtonName = "DISCONNECT",
+    String? notificationDisconnectButtonName,
   }) async {
     final normalizedConfig = _normalizeConfigString(config);
 
@@ -149,9 +172,23 @@ class FlutterVless {
       geoAssetsDirectory: geoAssetsDirectory,
       androidDnsPolicy: androidDnsPolicy,
       androidDnsProxyOutboundTag: androidDnsProxyOutboundTag,
-      notificationDisconnectButtonName: notificationDisconnectButtonName,
+      notificationDisconnectButtonName:
+          notificationDisconnectButtonName ?? options.notification.buttonLabel,
     );
   }
+
+  /// Native capabilities and system-managed always-on/lockdown state.
+  Future<VlessCapabilities> getCapabilities() =>
+      VlessPlatform.instance.getCapabilities();
+
+  /// Asks Android 13+ to show its user-controlled Add Tile dialog.
+  Future<QuickTileAddResult> requestAddQuickTile() =>
+      VlessPlatform.instance.requestAddQuickTile();
+
+  /// Forgets the retained quick-control profile, for example on account logout.
+  /// The currently running session is stopped separately with stopVless().
+  Future<void> clearQuickAccessProfile() =>
+      VlessPlatform.instance.clearQuickAccessProfile();
 
   /// Stops the active proxy or VPN/tunnel session.
   ///

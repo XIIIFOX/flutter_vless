@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <sstream>
 #include <vector>
+#include <stdexcept>
 
 namespace flutter_vless {
 
@@ -68,6 +69,13 @@ DiagnosticsLog &DiagnosticsLog::Instance() {
   return instance;
 }
 
+void DiagnosticsLog::Configure(bool enabled, std::size_t max_bytes, std::size_t max_lines) {
+  if (max_bytes < 4096 || max_bytes > kMaxStoredBytes || max_lines < 1 || max_lines > kMaxSnapshotLines) throw std::invalid_argument("diagnostics limits");
+  std::lock_guard<std::mutex> lock(mutex_);
+  enabled_ = enabled; max_bytes_ = max_bytes; max_lines_ = max_lines;
+  lines_.clear(); stored_bytes_ = 0; ++generation_;
+}
+
 DiagnosticsLog::Generation DiagnosticsLog::Reset() {
   std::lock_guard<std::mutex> lock(mutex_);
   lines_.clear();
@@ -114,7 +122,7 @@ void DiagnosticsLog::Append(Generation generation, const std::string &source,
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  if (generation != generation_) {
+  if (!enabled_ || generation != generation_) {
     return;
   }
   for (std::string &line : new_lines) {
@@ -134,7 +142,7 @@ void DiagnosticsLog::Append(Generation generation, const std::string &source,
     stored_bytes_ += line.size() + 1;
     lines_.push_back(std::move(line));
   }
-  while (!lines_.empty() && stored_bytes_ > kMaxStoredBytes) {
+  while (!lines_.empty() && (stored_bytes_ > max_bytes_ || lines_.size() > max_lines_)) {
     stored_bytes_ -= lines_.front().size() + 1;
     lines_.pop_front();
   }
@@ -142,7 +150,7 @@ void DiagnosticsLog::Append(Generation generation, const std::string &source,
 
 std::string DiagnosticsLog::Snapshot() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (lines_.empty()) {
+  if (!enabled_ || lines_.empty()) {
     return {};
   }
 
@@ -151,8 +159,8 @@ std::string DiagnosticsLog::Snapshot() const {
   for (auto iterator = lines_.rbegin(); iterator != lines_.rend(); ++iterator) {
     const std::size_t line_bytes = iterator->size() + 1;
     if (!selected.empty() &&
-        (selected.size() >= kMaxSnapshotLines ||
-         selected_bytes + line_bytes > kMaxSnapshotBytes)) {
+        (selected.size() >= max_lines_ ||
+         selected_bytes + line_bytes > std::min(kMaxSnapshotBytes, max_bytes_ - 64))) {
       break;
     }
     selected.push_back(*iterator);

@@ -1,5 +1,9 @@
 ## 1.1.7
 
+* Add native menu-bar controls, optional macOS 26+ Control Center integration, validated typed options and native capability reporting.
+* Configure native worker retry limits, Apple On Demand and bounded private diagnostics while preserving protected VPN policy and Keychain references.
+* Add isolated options/control tests and an idempotent host WidgetKit setup generator in the main package.
+
 * Update the universal arm64/x86_64 Xray runtime to `v26.10.17` (upstream pre-release), pinned to commit `92ccc939aaf4f8965f369cf0b142e005aeaa11d5`.
 * Update SwiftPM and CocoaPods to the matching verified `xray-macos-v26.10.17` XCFramework.
 * Preserve private startup, asset selection, authenticated local proxies and the 128 KiB HTTP/2 upload scratch cap.

@@ -29,6 +29,7 @@ let package = Package(
         .iOS("15.0")
     ],
     products: [
+        .library(name: "flutter-vless-controls", targets: ["flutter_vless_privacy"]),
         .library(name: "flutter-vless", targets: ["flutter_vless"]),
         .library(name: "flutter-vless-tunnel-support", targets: ["flutter_vless_tunnel_support"])
     ],

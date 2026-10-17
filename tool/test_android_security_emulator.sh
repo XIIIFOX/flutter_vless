@@ -422,6 +422,8 @@ PY
   ADVERSARY_INSTALLED=1
 }
 
+instrument native-options "$CLASS_PREFIX.NativeOptionsDeviceTest" 2 0
+instrument native-quick-tile "$CLASS_PREFIX.NativeQuickTileDeviceTest" 2 0
 instrument native-authorization "$CLASS_PREFIX.NativeLocalAuthorizationTest" 2 0
 instrument session-recovery "$CLASS_PREFIX.SessionRecoveryDeviceTest" 3 0
 instrument session-replacement "$CLASS_PREFIX.SessionReplacementDeviceTest" 1 0

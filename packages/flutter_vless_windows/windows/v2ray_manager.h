@@ -22,11 +22,12 @@ class V2rayManager {
  public:
   static V2rayManager& GetInstance();
 
-  bool Start(const std::string& config, bool proxy_only);
+  bool Start(const std::string& config, bool proxy_only, const flutter_vless::NativeOptions& options = {});
   void Stop();
   void Shutdown();
   bool IsRunning() const;
   bool IsProtecting() const;
+  bool IsProxyOnly() const { return proxy_only_.load(); }
 
   // Stats
   void GetTrafficStats(int64_t& upload, int64_t& download);

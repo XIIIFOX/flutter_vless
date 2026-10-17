@@ -4,6 +4,7 @@
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'vless_status.dart';
 import 'android_dns_policy.dart';
+import 'vless_options.dart';
 import 'method_channel_vless_platform.dart';
 
 /// Contract implemented by every federated `flutter_vless` platform package.
@@ -45,8 +46,20 @@ abstract class VlessPlatform extends PlatformInterface {
     required String providerBundleIdentifier,
     required String groupIdentifier,
     String? keychainAccessGroup,
+    VlessOptions? options,
   }) {
     throw UnimplementedError('initializeVless() has not been implemented.');
+  }
+
+  Future<VlessCapabilities> getCapabilities() async =>
+      const VlessCapabilities();
+
+  Future<QuickTileAddResult> requestAddQuickTile() async =>
+      QuickTileAddResult.unsupported;
+
+  Future<void> clearQuickAccessProfile() {
+    throw UnimplementedError(
+        'clearQuickAccessProfile() has not been implemented.');
   }
 
   /// Starts a proxy-only or VPN/tunnel session with a JSON Xray config.

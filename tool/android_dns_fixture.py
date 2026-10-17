@@ -166,7 +166,16 @@ class Handler(socketserver.BaseRequestHandler):
 class Status(socketserver.BaseRequestHandler):
     def handle(self):
         self.request.settimeout(5)
-        request = self.request.recv(4096)
+        request = b""
+        # Consume all headers before closing. Closing with unread request bytes
+        # can reset an otherwise successful response on the VPN's TCP relay.
+        while b"\r\n\r\n" not in request:
+            chunk = self.request.recv(4096)
+            if not chunk:
+                return
+            request += chunk
+            if len(request) > 16384:
+                return
         try:
             path = request.split(b" ", 2)[1].decode("ascii")
             query = parse_qs(urlsplit(path).query)

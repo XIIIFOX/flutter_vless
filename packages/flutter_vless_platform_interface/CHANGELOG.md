@@ -1,3 +1,8 @@
+## 1.1.7
+
+* Add all five typed Options blocks, quick-action/protection enums, validation, wire versioning and backward-compatible optional initialization.
+* Add native capabilities, add-tile result and clear-quick-profile contracts; refuse unsupported custom options before subscribing to status and clean up failed initialization.
+
 ## 1.1.2
 
 * Add optional `keychainAccessGroup`, `AndroidDnsPolicy` and DNS outbound selection.

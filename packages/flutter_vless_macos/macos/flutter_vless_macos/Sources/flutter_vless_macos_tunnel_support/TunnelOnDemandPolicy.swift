@@ -1,5 +1,6 @@
 import Foundation
 import NetworkExtension
+import flutter_vless_macos_privacy
 
 /// Changes recovery policy from the provider process, including when its app
 /// is suspended or terminated. Only an explicit user stop disarms recovery.
@@ -15,7 +16,10 @@ public enum TunnelOnDemandPolicy {
     public static func enableForStart(configuration: NETunnelProviderProtocol,
                                       isCancelled: @escaping () -> Bool = { false },
                                       completion: @escaping (Result<Outcome, Error>) -> Void) {
-        apply(enabled: true, configuration: configuration, isCancelled: isCancelled, completion: completion)
+        do {
+            let options = try VlessNativeOptions(configuration.providerConfiguration?["options"] as? [String: Any])
+            apply(enabled: options.enableOnDemand, configuration: configuration, isCancelled: isCancelled, completion: completion)
+        } catch { completion(.failure(error)) }
     }
 
     public static func disableForUserStop(reason: NEProviderStopReason,

@@ -20,6 +20,10 @@ import androidx.core.app.ActivityCompat
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.service.XrayVPNService
+import com.github.tfox.flutter_vless.xray.service.NativeOptionsStore
+import com.github.tfox.flutter_vless.xray.service.NativeVlessOptions
+import com.github.tfox.flutter_vless.xray.core.XrayDiagnosticsStore
+import com.google.gson.Gson
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
@@ -83,10 +87,35 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "getCapabilities" -> {
+                val handler = Handler(Looper.getMainLooper())
+                var completed = false
+                fun respond() { if (!completed) { completed = true; result.success(NativeQuickAccess.capabilities()) } }
+                val intent = Intent(context,XrayVPNService::class.java).setAction(XrayVPNService.ACTION_QUERY_SYSTEM_STATE)
+                    .putExtra("receiver",object : ResultReceiver(handler) {
+                        override fun onReceiveResult(code: Int, data: Bundle?) {
+                            AppConfigs.ALWAYS_ON_ENABLED = data?.getBoolean("alwaysOn") == true
+                            AppConfigs.LOCKDOWN_ENABLED = data?.getBoolean("lockdown") == true
+                            respond()
+                        }
+                    })
+                try { context.startService(intent); handler.postDelayed({ respond() },2000) }
+                catch (_: Exception) { respond() }
+            }
+            "requestAddQuickTile" -> NativeQuickAccess.addTile(context,activity,result)
+            "clearQuickAccessProfile" -> {
+                val intent = Intent(context,XrayVPNService::class.java).setAction(XrayVPNService.ACTION_CLEAR_QUICK_ACCESS)
+                    .putExtra("receiver",object : ResultReceiver(Handler(Looper.getMainLooper())) {
+                        override fun onReceiveResult(code: Int, data: Bundle?) { result.success(null) }
+                    })
+                try { context.startService(intent) }
+                catch (_: Exception) { result.error("QUICK_ACCESS_UNAVAILABLE","Cannot clear the retained profile in the background",null) }
+            }
             "getSecurityCapabilities" -> result.success(mapOf("androidProxyDns" to true, "iosKeychainReference" to false))
             "startVless" -> {
                 // 1. Parse configuration from Flutter
                 val config = XrayConfig()
+                config.PLUGIN_OPTIONS_JSON = Gson().toJson(NativeOptionsStore(context).read())
                 config.REMARK = call.argument("remark") ?: ""
                 config.ANDROID_DNS_POLICY = call.argument("android_dns_policy") ?: "config"
                 config.ANDROID_DNS_PROXY_OUTBOUND_TAG = call.argument("android_dns_proxy_outbound_tag")
@@ -164,10 +193,36 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
             "stopVless" -> {
                 val intent = Intent(context, XrayVPNService::class.java)
                 intent.putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.STOP_SERVICE)
+                intent.putExtra("stop_receiver",object : ResultReceiver(Handler(Looper.getMainLooper())) {
+                    override fun onReceiveResult(code: Int,data: Bundle?) {
+                        if (code == 0) result.success(null)
+                        else result.error("ALWAYS_ON_MANAGED","Disable system Always-on VPN before stopping this session",null)
+                    }
+                })
                 context.startService(intent)
-                result.success(null)
             }
             "initializeVless" -> {
+                val options = try {
+                    NativeVlessOptions.parse(call.argument<Map<*, *>>("options")).also { it.validateAndroid(Build.VERSION.SDK_INT) }
+                } catch (_: Exception) {
+                    result.error("INVALID_OPTIONS","Invalid or unsupported native options",null)
+                    return
+                }
+                val store = NativeOptionsStore(context)
+                val previous = store.read()
+                try {
+                    store.write(options)
+                    XrayDiagnosticsStore.configure(context.filesDir,options.diagnostics)
+                } catch (_: Exception) {
+                    runCatching { store.write(previous); XrayDiagnosticsStore.configure(context.filesDir,previous.diagnostics) }
+                    result.error("OPTIONS_SAVE_FAILED","Could not save native options",null); return
+                }
+                if (!options.quickAccess.enabled) {
+                    NativeQuickAccess.profile(context).disarm()
+                    // Serialize a second clear after any already-running daemon save.
+                    runCatching { context.startService(Intent(context, XrayVPNService::class.java).setAction(XrayVPNService.ACTION_CLEAR_QUICK_ACCESS)) }
+                }
+                NativeQuickAccess.refresh(context)
                 // Store notification icon settings globally
                 val iconResourceName = call.argument<String>("notificationIconResourceName")
                 val iconResourceType = call.argument<String>("notificationIconResourceType")

@@ -14,6 +14,7 @@ manager=source[source.index('final class PacketTunnelManager:'):source.index('pr
 (out/'Manager.swift').write_text((root/'tool/fixtures/ios_manager_policy/SDK.swift').read_text()+manager)
 PY
 xcrun swiftc -O -parse-as-library \
+  "$SOURCE/flutter_vless_macos_privacy/VlessNativeOptions.swift" \
   "$SOURCE/flutter_vless_macos_privacy/TunnelSecretStore.swift" \
   "$SOURCE/flutter_vless_macos_privacy/LocalProxyAccessPolicy.swift" \
   "$SOURCE/flutter_vless_macos_privacy/DesktopBypassPolicy.swift" \

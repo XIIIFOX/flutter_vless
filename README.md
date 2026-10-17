@@ -234,3 +234,7 @@ attribution and brand-use notes.
 ## License
 
 [MIT License](LICENSE)
+
+### Options and system controls (1.1.7)
+
+Use typed Notification, Quick Access, Reconnect, Protection and Diagnostics options. Native controls include Android Quick Tile, macOS menu bar, Windows tray and optional Apple Control Center host extensions. See [setup, capability matrix and examples](doc/options-and-system-controls.md).

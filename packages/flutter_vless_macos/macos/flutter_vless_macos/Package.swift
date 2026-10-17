@@ -29,6 +29,7 @@ let package = Package(
         .macOS(.v13)
     ],
     products: [
+        .library(name: "flutter-vless-controls", targets: ["flutter_vless_macos_privacy"]),
         .library(name: "flutter-vless-macos", targets: ["flutter_vless_macos"]),
         .library(name: "flutter-vless-macos-tunnel-support", targets: ["flutter_vless_macos_tunnel_support"])
     ],

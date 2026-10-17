@@ -35,6 +35,22 @@ class XrayDiagnosticsStoreTest {
         val file = File(directory, "tail.log").apply { writeText("first-line\nsecond-line\nthird-line\n") }
         assertEquals("third-line", XrayDiagnosticsStore.readTail(file, 25, 1))
     }
+    @Test fun optionsDisableEraseAndBoundCollectionWithoutEnablingRawOutput() = withDirectory { directory ->
+        val small = com.github.tfox.flutter_vless.xray.service.NativeVlessOptions.Diagnostics(true,4096,3)
+        XrayDiagnosticsStore.configure(directory,small)
+        repeat(1000) { XrayDiagnosticsStore.event(directory,XrayDiagnosticsStore.Event.RECOVERING,value=it.toLong()) }
+        assertEquals(3,XrayDiagnosticsStore.snapshot(directory).lines().size)
+        assertTrue(File(directory,"flutter_vless_events_v2.log").length()<=4096)
+        XrayDiagnosticsStore.configure(directory,small.copy(enabled=false))
+        XrayDiagnosticsStore.event(directory,XrayDiagnosticsStore.Event.CONNECTED)
+        assertEquals("",XrayDiagnosticsStore.snapshot(directory))
+        assertEquals(0L,File(directory,"flutter_vless_events_v2.log").length())
+        XrayDiagnosticsStore.configure(directory,small)
+        assertEquals("",XrayDiagnosticsStore.snapshot(directory))
+        File(directory,"flutter_vless_diagnostics_policy_v1.txt").writeText("corrupt")
+        XrayDiagnosticsStore.event(directory,XrayDiagnosticsStore.Event.CONNECTED)
+        assertEquals("",XrayDiagnosticsStore.snapshot(directory))
+    }
     private fun withDirectory(block: (File) -> Unit) {
         val directory = Files.createTempDirectory("flutter-vless-events").toFile()
         try { block(directory) } finally { directory.deleteRecursively() }

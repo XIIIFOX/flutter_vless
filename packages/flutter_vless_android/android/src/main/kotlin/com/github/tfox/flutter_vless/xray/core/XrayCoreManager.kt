@@ -268,7 +268,9 @@ object XrayCoreManager {
     fun getProviderDebugSnapshot(context: Context) = XrayDiagnosticsStore.snapshot(context.filesDir)
 
     internal fun publishState(context: Context, state: AppConfigs.V2RAY_STATES, seconds: Long = 0) {
+        val changed = AppConfigs.V2RAY_STATE != state
         AppConfigs.V2RAY_STATE = state
+        if (changed) com.github.tfox.flutter_vless.NativeQuickAccess.refresh(context)
         val traffic = if (state == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED) getV2rayTraffic(context) else longArrayOf(0, 0, 0, 0)
         context.sendBroadcast(Intent(AppConfigs.V2RAY_CONNECTION_INFO).setPackage(context.packageName)
             .putExtra("STATE", state).putExtra("DURATION", seconds.toString())

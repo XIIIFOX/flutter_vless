@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <string>
+#include <stdexcept>
 
 int main() {
   auto &log = flutter_vless::DiagnosticsLog::Instance();
@@ -48,5 +49,15 @@ int main() {
   snapshot = log.Snapshot();
   assert(snapshot.find("beforeafter") != std::string::npos);
   assert(snapshot.find(static_cast<char>(0xFF)) == std::string::npos);
+  log.Configure(false,4096,3);
+  log.Append("xray","disabled"); assert(log.Snapshot().empty());
+  log.Configure(true,4096,3);
+  log.Append(third_generation,"stale","must not return after re-enable");
+  assert(log.Snapshot().empty());
+  for(int i=0;i<20;++i) log.Append("runtime","line-"+std::to_string(i));
+  snapshot=log.Snapshot(); assert(snapshot.find("line-19")!=std::string::npos);
+  assert(snapshot.find("line-16")==std::string::npos && snapshot.size()<=4096);
+  bool invalid=false; try { log.Configure(true,4095,3); } catch(const std::invalid_argument&) { invalid=true; }
+  assert(invalid && log.Snapshot()==snapshot);
   return 0;
 }

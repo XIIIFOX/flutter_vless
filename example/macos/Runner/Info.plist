@@ -22,6 +22,12 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>FlutterVlessControlGroupIdentifier</key>
+	<string>group.dev.tfox.flutterXray</string>
+	<key>FlutterVlessControlProviderIdentifier</key>
+	<string>dev.tfox.flutterXrayExample.XrayTunnel</string>
+	<key>FlutterVlessControlsConfigured</key>
+	<true/>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSHighResolutionCapable</key>
@@ -34,4 +40,3 @@
 	<string>NSApplication</string>
 </dict>
 </plist>
-

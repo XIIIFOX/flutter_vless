@@ -45,4 +45,6 @@ object AppConfigs {
     // Stores the resource name and type for the custom notification icon
     var NOTIFICATION_ICON_RESOURCE_NAME: String = ""
     var NOTIFICATION_ICON_RESOURCE_TYPE: String = ""
+    @Volatile var ALWAYS_ON_ENABLED = false
+    @Volatile var LOCKDOWN_ENABLED = false
 }

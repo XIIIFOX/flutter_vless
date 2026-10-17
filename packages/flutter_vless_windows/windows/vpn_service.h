@@ -13,6 +13,7 @@
 
 #include <condition_variable>
 #include "traffic_protection.h"
+#include "native_options.h"
 #include "protected_runtime.h"
 #include "packet_path_probe.h"
 #include "proxy_service.h" // For ProcessHandle and helper functions
@@ -52,7 +53,7 @@ class VpnService {
    * 4. Starts Tun2Socks pointing to that SOCKS port.
    * 5. Configures the OS network interface and routes.
    */
-  bool Start(const std::string& config);
+  bool Start(const std::string& config, const flutter_vless::NativeOptions& options = {});
 
   /**
    * @brief Stops the VPN service and cleans up resources.
@@ -101,6 +102,7 @@ class VpnService {
   fs::path temp_config_path_;
   fs::path tun_config_path_;
   std::string current_config_;
+  flutter_vless::NativeOptions options_;
   std::map<std::string, std::string> bootstrap_cache_;
   std::string username_, password_;
   // Used only by the VPN worker to detect an underlay change independently of

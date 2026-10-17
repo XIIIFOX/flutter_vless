@@ -57,50 +57,47 @@ private final class PluginDebugStore {
 
     private let lock = NSLock()
     private var fileURL: URL?
+    private var groupIdentifier: String?
+    private func readTail(_ file: URL, maxBytes: Int) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom:file) else { return nil }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd() else { return nil }
+        try? handle.seek(toOffset: size > UInt64(maxBytes) ? size - UInt64(maxBytes) : 0)
+        guard let data = try? handle.readToEnd() else { return nil }
+        return String(decoding:data,as:UTF8.self)
+    }
+    private var options: VlessNativeOptions { groupIdentifier.flatMap { VlessSystemControl.options(group: $0) } ?? (try! VlessNativeOptions()) }
 
     func configure(groupIdentifier: String?) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let groupIdentifier,
-              !groupIdentifier.isEmpty,
-              let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupIdentifier) else {
-            fileURL = nil
-            return
-        }
-        try? FileManager.default.removeItem(at: containerURL.appendingPathComponent("flutter_vless_app_debug.log"))
-        fileURL = containerURL.appendingPathComponent("flutter_vless_app_private_v2.log")
-        try? "FlutterVless app debug log\n".write(to: fileURL!, atomically: true, encoding: .utf8)
+        lock.lock(); defer { lock.unlock() }
+        self.groupIdentifier = groupIdentifier
+        guard let groupIdentifier, !groupIdentifier.isEmpty,
+              let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupIdentifier) else { fileURL = nil; return }
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent("flutter_vless_app_debug.log"))
+        fileURL = directory.appendingPathComponent("flutter_vless_app_private_v2.log")
+        if let fileURL { try? "".write(to:fileURL,atomically:true,encoding:.utf8) }
     }
 
     func append(_ message: String) {
-        let line = "\(ISO8601DateFormatter().string(from: Date())) \(message)"
-        lock.lock()
-        defer { lock.unlock() }
-        guard let fileURL else {
-            return
-        }
-        if let handle = try? FileHandle(forWritingTo: fileURL) {
-            defer { try? handle.close() }
-            if let size = try? handle.seekToEnd(), size > 128 * 1024 {
-                try? handle.truncate(atOffset: 0)
-                try? handle.seek(toOffset: 0)
-            }
-            if let data = "\(line)\n".data(using: .utf8) {
-                try? handle.write(contentsOf: data)
-            }
-        }
+        lock.lock(); defer { lock.unlock() }
+        guard let fileURL else { return }
+        let options = self.options
+        guard options.diagnosticsEnabled else { try? FileManager.default.removeItem(at:fileURL); return }
+        var text = readTail(fileURL, maxBytes: options.diagnosticsMaxBytes) ?? ""
+        text += "\n\(ISO8601DateFormatter().string(from:Date())) \(message)"
+        text = text.split(separator:"\n").suffix(options.diagnosticsMaxLines).joined(separator:"\n")
+        text = boundedNativeDiagnosticsSnapshot(text,maxBytes:options.diagnosticsMaxBytes)
+        try? text.write(to:fileURL,atomically:true,encoding:.utf8)
     }
 
     func snapshot(maxLines: Int = 220) -> String {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let fileURL,
-              let data = try? Data(contentsOf: fileURL),
-              let content = String(data: data, encoding: .utf8) else {
-            return ""
-        }
-        return content.split(separator: "\n").suffix(maxLines).joined(separator: "\n")
+        lock.lock(); defer { lock.unlock() }
+        let options = self.options
+        guard options.diagnosticsEnabled, let fileURL,
+              let content = readTail(fileURL,maxBytes:options.diagnosticsMaxBytes) else { return "" }
+        return content.split(separator:"\n").suffix(min(maxLines,options.diagnosticsMaxLines)).joined(separator:"\n")
     }
+
 }
 
 private func pluginDebug(_ message: NativeDiagnosticMessage) {
@@ -653,6 +650,25 @@ private final class ProxyOnlyRunner {
 }
 
 public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
+    private var menuBarControl: VlessMenuBarControl?
+    private var nativeOptions = try! VlessNativeOptions()
+    private var controlGroup: String?
+    private var controlProvider: String?
+    private var controlCenterAvailable: Bool {
+        #if compiler(>=6.2)
+        if #available(macOS 26, *) { return true }
+        #endif
+        return false
+    }
+    private var controlsConfigured: Bool { Bundle.main.object(forInfoDictionaryKey: "FlutterVlessControlsConfigured") as? Bool == true }
+    private func capabilities() -> [String: Any] {
+        var surfaces: [String] = ["menuBar"]
+        if controlCenterAvailable { surfaces.append("controlCenter") }
+        return ["optionsVersion": 1, "quickAccessSurfaces": surfaces, "requestAddQuickTile": false,
+            "controlCenterExtensionConfigured": controlsConfigured, "customReconnectBackoff": true,
+            "onDemand": true, "alwaysOn": false, "alwaysOnEnabled": false, "lockdownEnabled": false, "killSwitch": true]
+    }
+
 
     private var packetTunnelManager: PacketTunnelManager? = nil
     private let serverDelayRunner = ServerDelayRunner()
@@ -1005,6 +1021,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     }
 
     private func getProviderDebugSnapshot(result: @escaping FlutterResult) {
+        guard nativeOptions.diagnosticsEnabled else { result(""); return }
         Task {
             let proxySnapshot = proxyOnlyRunner.debugSnapshot()
             if !proxySnapshot.isEmpty {
@@ -1091,6 +1108,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             if proxyOnly {
                 // Switching modes is an explicit request to release the system VPN.
                 try await self.packetTunnelManager?.stop(waitForDisconnect: true)
+                if let group = self.controlGroup { VlessSystemControl.clear(group: group) }
                 try self.proxyOnlyRunner.start(configData: configData, geoAssetsDirectory: geoAssetsDirectory)
             } else {
                 guard let manager = self.packetTunnelManager else {
@@ -1157,11 +1175,33 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             result(FlutterError(code: "INVALID_ARGUMENTS", message: "Invalid arguments for initializeVless.", details: nil))
             return
         }
+        let parsed: VlessNativeOptions
+        do {
+            parsed = try VlessNativeOptions(arguments["options"] as? [String: Any])
+            try parsed.validateApple(isMac: true, controlCenterAvailable: controlCenterAvailable, extensionConfigured: controlsConfigured)
+        } catch let error as VlessNativeOptions.Failure {
+            let code: String
+            switch error { case .invalid: code = "INVALID_OPTIONS"; case .unsupported: code = "UNSUPPORTED_OPTION"; case .setupRequired: code = "CONTROL_EXTENSION_REQUIRED" }
+            result(FlutterError(code: code, message: "Unsupported or invalid native options: \(error)", details: nil)); return
+        } catch { result(FlutterError(code: "INVALID_OPTIONS", message: "Invalid native options", details: nil)); return }
+        nativeOptions = parsed
+        BoundedNativeLogStore.configure(enabled: parsed.diagnosticsEnabled, maxBytes: parsed.diagnosticsMaxBytes, maxLines: parsed.diagnosticsMaxLines)
+        controlGroup = groupIdentifier; controlProvider = "\(providerBundleIdentifier).XrayTunnel"
+        VlessSystemControl.configure(group: groupIdentifier, provider: controlProvider!, options: parsed)
         PluginDebugStore.shared.configure(groupIdentifier: groupIdentifier)
         pluginDebug("initializeVless providerBundleIdentifier=\(providerBundleIdentifier) groupIdentifier=\(groupIdentifier)")
         self.packetTunnelManager = PacketTunnelManager(providerBundleIdentifier: "\(providerBundleIdentifier).XrayTunnel", groupIdentifier: groupIdentifier, keychainAccessGroup: arguments["keychainAccessGroup"] as? String)
+        menuBarControl = nil
+        if parsed.quickAccessEnabled && ["platformDefault", "menuBar"].contains(parsed.quickAccessSurface) {
+            menuBarControl = VlessMenuBarControl(group: groupIdentifier, provider: controlProvider!, options: parsed)
+        }
+        self.packetTunnelManager?.didSaveQuickProfile = { reference in
+            VlessSystemControl.authorizeProfile(group: groupIdentifier, provider: "\(providerBundleIdentifier).XrayTunnel", reference: reference)
+        }
+        self.packetTunnelManager?.nativeOptions = parsed
         self.packetTunnelManager?.statusDidChange = { [weak self] status in
             guard let self else { return }
+            VlessSystemControl.reloadControls()
             pluginDebug("PacketTunnelManager status callback raw=\(status?.rawValue ?? -1) timerRunning=\(self.timer != nil) proxyOnly=\(self.proxyOnlyRunner.isRunning)")
             switch status {
             case .connecting, .connected, .reasserting:
@@ -1204,6 +1244,8 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 /// therefore reloads on `NEVPNConfigurationChange`, listens to
 /// `NEVPNStatusDidChange`, and logs every status transition with raw values.
 final class PacketTunnelManager: ObservableObject {
+    var didSaveQuickProfile: ((Data) -> Void)?
+    var nativeOptions = try! VlessNativeOptions()
     var providerBundleIdentifier: String?
     var groupIdentifier: String?
     let keychainAccessGroup: String?
@@ -1366,6 +1408,7 @@ final class PacketTunnelManager: ObservableObject {
             "groupIdentifier": old?["groupIdentifier"] as? String ?? groupIdentifier ?? "",
             "bypassSubnets": old?["bypassSubnets"] as? [String] ?? bypassSubnets,
             "proxyOnly": old?["proxyOnly"] as? Bool ?? proxyOnly]
+        result["options"] = old == nil ? nativeOptions.dictionary : ((try? VlessNativeOptions(old?["options"] as? [String: Any]))?.dictionary ?? nativeOptions.dictionary)
         if let directory = old?["geoAssetsDirectory"] as? String ?? geoAssetsDirectory {
             result["geoAssetsDirectory"] = directory
         }
@@ -1394,7 +1437,7 @@ final class PacketTunnelManager: ObservableObject {
         manager.localizedDescription = remark
         if !preserveRecoveryPolicy {
             manager.isEnabled = activate
-            if activate {
+            if activate && nativeOptions.enableOnDemand {
                 let rule = NEOnDemandRuleConnect()
                 rule.interfaceTypeMatch = .any
                 manager.onDemandRules = [rule]
@@ -1437,6 +1480,7 @@ final class PacketTunnelManager: ObservableObject {
             throw error
         }
         self.manager = manager
+        if activate && !preserveRecoveryPolicy { didSaveQuickProfile?(reference) }
         try await cleanupUnusedSecrets()
         pluginLog.info("VPN preferences saved with Keychain reference active=\(activate, privacy: .public)")
     }

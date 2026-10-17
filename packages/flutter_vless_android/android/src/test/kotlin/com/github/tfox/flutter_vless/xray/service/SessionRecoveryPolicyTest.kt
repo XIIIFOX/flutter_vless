@@ -14,6 +14,14 @@ class SessionRecoveryPolicyTest {
         policy.disarm()
         assertFalse(policy.owns(replacement)); assertFalse(policy.authorized)
     }
+    @Test fun customAttemptLimitsAboveThirtyAreEnforced() {
+        val policy=SessionRecoveryPolicy()
+        policy.options=NativeVlessOptions.Reconnect(maxAttempts=50)
+        policy.activate()
+        repeat(50) { assertTrue(policy.mayRetry()); policy.nextDelayMillis() }
+        assertFalse(policy.mayRetry()); assertTrue(policy.authorized)
+        policy.recovered(); assertTrue(policy.mayRetry())
+    }
     @Test fun persistentFailuresStayAuthorizedWithCappedBackoff() {
         val policy = SessionRecoveryPolicy()
         policy.activate()

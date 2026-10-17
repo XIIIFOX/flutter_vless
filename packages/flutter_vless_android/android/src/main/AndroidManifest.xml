@@ -13,6 +13,24 @@
 
     <application>
         <service
+            android:name="com.github.tfox.flutter_vless.VlessTileService"
+            android:enabled="true"
+            android:exported="true"
+            android:process=":RunSoLibXrayDaemon"
+            android:icon="@drawable/flutter_vless_ic_quick_tile"
+            android:label="@string/flutter_vless_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+            <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="true" />
+            <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="true" />
+        </service>
+        <activity
+            android:name="com.github.tfox.flutter_vless.VlessTilePermissionActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <service
             android:name="com.github.tfox.flutter_vless.xray.service.XrayVPNService"
             android:enabled="true"
             android:exported="false"

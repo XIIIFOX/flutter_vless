@@ -55,6 +55,14 @@ struct BoundedNativeLogStoreTest {
         precondition(concurrentSnapshot.utf8.count < 64 * 1024)
         precondition(!concurrentSnapshot.contains("�"))
 
+        BoundedNativeLogStore.configure(enabled:false,maxBytes:4096,maxLines:3)
+        precondition(store.snapshot().isEmpty)
+        store.append(source:"runtime",message:"disabled")
+        BoundedNativeLogStore.configure(enabled:true,maxBytes:4096,maxLines:3)
+        precondition(store.snapshot().isEmpty)
+        for index in 0..<20 { store.append(source:"runtime",message:"line-\(index)") }
+        let limited=store.snapshot()
+        precondition(limited.contains("line-19") && !limited.contains("line-16") && limited.utf8.count<=4096)
         store.reset()
         precondition(store.snapshot().isEmpty)
     }

@@ -1,5 +1,9 @@
 ## 1.1.7
 
+* Add native Quick Settings Tile and Android 13+ add-tile dialog with encrypted no-backup quick profiles and independent automatic-restart authorization.
+* Implement notification actions/icons/labels, capped retry policy, diagnostics controls and OS Always-on/lockdown capability checks. Preserve active capture when retries stop; reject library Stop while system-managed policy requires VPN.
+* Test every option block and SystemUI tile stop/cold reconnect without a Flutter engine.
+
 * Update the runtime to `dev.tfox.fluttervless:xray-android:26.10.17-protect1`, based on Xray-core `v26.10.17` (upstream pre-release).
 * Rebuild armeabi-v7a, arm64-v8a, x86 and x86_64 binaries with 16 KiB page alignment.
 * Adapt the socket-protection overlay to upstream dialer changes, preserving protected DNS, fallback sockets and failure propagation.

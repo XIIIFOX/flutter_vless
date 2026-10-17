@@ -8,23 +8,37 @@
 
 /* Begin PBXBuildFile section */
 		1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */ = {isa = PBXBuildFile; fileRef = 1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */; };
+		24F350D7E0187BB7F49910AA /* VlessControlIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2D12A9FB58BDA066C847AB0 /* VlessControlIntent.swift */; };
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
+		365A34E2D991B02BAA851858 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A6932977DB816F7A52AC4025 /* Foundation.framework */; };
 		3879606A2CEB611D00D7FB87 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 387960692CEB611D00D7FB87 /* NetworkExtension.framework */; };
 		387960722CEB611D00D7FB87 /* XrayTunnel.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 387960682CEB611D00D7FB87 /* XrayTunnel.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		387960792CEB611D00D7FB87 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3879607A2CEB611D00D7FB87 /* PacketTunnelProvider.swift */; };
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
+		60B5A00A04581CF0EC381DA4 /* flutter-vless-controls in Frameworks */ = {isa = PBXBuildFile; productRef = 05349992472FA2DFC7155F23 /* flutter-vless-controls */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
 		78F1B1002E6D000000000001 /* flutter-vless-tunnel-support in Frameworks */ = {isa = PBXBuildFile; productRef = 78F1B1022E6D000000000001 /* flutter-vless-tunnel-support */; };
 		7C749573B7608B767CA8DCE7 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 88533641F6A3C96F19BFEC09 /* Pods_Runner.framework */; };
+		803B422C3F067D40FB7317C9 /* VlessControls.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A84AF5E2947B6065ADA8E8E0 /* VlessControls.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		954684B7695CC9067019118C /* VlessControlIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2D12A9FB58BDA066C847AB0 /* VlessControlIntent.swift */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
-		C218416B11392E56BB735363 /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1FD868DCF83D9184FAF85B0 /* Pods_RunnerTests.framework */; };
 		B1E6C0012F01000000000001 /* TunnelSecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E6C0022F01000000000001 /* TunnelSecretStore.swift */; };
+		C218416B11392E56BB735363 /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1FD868DCF83D9184FAF85B0 /* Pods_RunnerTests.framework */; };
+		C24A18FBF75587C5B40169D5 /* VlessControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2FE5E08FF6DB04B2EAECAAA /* VlessControls.swift */; };
+		FAA3E3BC8C93E6D9D98D80B3 /* flutter-vless-controls in Frameworks */ = {isa = PBXBuildFile; productRef = 73FE7AFA84A5B13349FFC931 /* flutter-vless-controls */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		0F65AC20EB0CB43C6649E2BB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 97C146E61CF9000F007C117D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C27BA6AE56210A74796D03A2;
+			remoteInfo = VlessControls;
+		};
 		331C8085294A63A400263BE5 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 97C146E61CF9000F007C117D /* Project object */;
@@ -49,6 +63,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				387960722CEB611D00D7FB87 /* XrayTunnel.appex in Embed Foundation Extensions */,
+				803B422C3F067D40FB7317C9 /* VlessControls.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -88,8 +103,12 @@
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		98D62A55281B3C267226D0AB /* Pods-Runner.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.profile.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.profile.xcconfig"; sourceTree = "<group>"; };
 		A2D2E145031791DCC72512B4 /* Pods-RunnerTests.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.profile.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.profile.xcconfig"; sourceTree = "<group>"; };
-		C1FD868DCF83D9184FAF85B0 /* Pods_RunnerTests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_RunnerTests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		A6932977DB816F7A52AC4025 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		A84AF5E2947B6065ADA8E8E0 /* VlessControls.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VlessControls.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		B1E6C0022F01000000000001 /* TunnelSecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../ios/flutter_vless/Sources/flutter_vless_privacy/TunnelSecretStore.swift; sourceTree = SOURCE_ROOT; };
+		B2D12A9FB58BDA066C847AB0 /* VlessControlIntent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VlessControlIntent.swift; sourceTree = "<group>"; };
+		C1FD868DCF83D9184FAF85B0 /* Pods_RunnerTests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_RunnerTests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		C2FE5E08FF6DB04B2EAECAAA /* VlessControls.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VlessControls.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -99,6 +118,15 @@
 			files = (
 				3879606A2CEB611D00D7FB87 /* NetworkExtension.framework in Frameworks */,
 				78F1B1002E6D000000000001 /* flutter-vless-tunnel-support in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		44AEFCE747DD473AD6DA0548 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				365A34E2D991B02BAA851858 /* Foundation.framework in Frameworks */,
+				60B5A00A04581CF0EC381DA4 /* flutter-vless-controls in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -116,6 +144,7 @@
 			files = (
 				78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */,
 				7C749573B7608B767CA8DCE7 /* Pods_Runner.framework in Frameworks */,
+				FAA3E3BC8C93E6D9D98D80B3 /* flutter-vless-controls in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -135,6 +164,14 @@
 			path = Pods;
 			sourceTree = "<group>";
 		};
+		0EC288ACA8FDC8E34D3105AF /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				A6932977DB816F7A52AC4025 /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
 		25CA1F311DA6CA0C8F24C4F1 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -142,6 +179,7 @@
 				88533641F6A3C96F19BFEC09 /* Pods_Runner.framework */,
 				C1FD868DCF83D9184FAF85B0 /* Pods_RunnerTests.framework */,
 				387960692CEB611D00D7FB87 /* NetworkExtension.framework */,
+				0EC288ACA8FDC8E34D3105AF /* iOS */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -163,6 +201,16 @@
 				3879607C2CEB611D00D7FB87 /* XrayTunnel.entitlements */,
 			);
 			path = XrayTunnel;
+			sourceTree = "<group>";
+		};
+		67EE92842959A336786CE572 /* VlessControls */ = {
+			isa = PBXGroup;
+			children = (
+				B2D12A9FB58BDA066C847AB0 /* VlessControlIntent.swift */,
+				C2FE5E08FF6DB04B2EAECAAA /* VlessControls.swift */,
+			);
+			name = VlessControls;
+			path = VlessControls;
 			sourceTree = "<group>";
 		};
 		9740EEB11CF90186004384FC /* Flutter */ = {
@@ -189,6 +237,7 @@
 				331C8082294A63A400263BE5 /* RunnerTests */,
 				04AB7E743C1186ECC1366CC9 /* Pods */,
 				25CA1F311DA6CA0C8F24C4F1 /* Frameworks */,
+				67EE92842959A336786CE572 /* VlessControls */,
 			);
 			sourceTree = "<group>";
 		};
@@ -198,6 +247,7 @@
 				97C146EE1CF9000F007C117D /* Runner.app */,
 				331C8081294A63A400263BE5 /* RunnerTests.xctest */,
 				387960682CEB611D00D7FB87 /* XrayTunnel.appex */,
+				A84AF5E2947B6065ADA8E8E0 /* VlessControls.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -277,14 +327,36 @@
 			);
 			dependencies = (
 				387960712CEB611D00D7FB87 /* PBXTargetDependency */,
+				957CD86E03D66F1A15AB2301 /* PBXTargetDependency */,
 			);
 			name = Runner;
 			packageProductDependencies = (
 				78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */,
+				73FE7AFA84A5B13349FFC931 /* flutter-vless-controls */,
 			);
 			productName = Runner;
 			productReference = 97C146EE1CF9000F007C117D /* Runner.app */;
 			productType = "com.apple.product-type.application";
+		};
+		C27BA6AE56210A74796D03A2 /* VlessControls */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 93A9FA67BDF14B897AF558D5 /* Build configuration list for PBXNativeTarget "VlessControls" */;
+			buildPhases = (
+				153A83C01D9EA5481511105B /* Sources */,
+				44AEFCE747DD473AD6DA0548 /* Frameworks */,
+				E150AB153EE9C458FF65FCD1 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VlessControls;
+			packageProductDependencies = (
+				05349992472FA2DFC7155F23 /* flutter-vless-controls */,
+			);
+			productName = VlessControls;
+			productReference = A84AF5E2947B6065ADA8E8E0 /* VlessControls.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -330,8 +402,8 @@
 			);
 			mainGroup = 97C146E51CF9000F007C117D;
 			packageReferences = (
-				781AD8BC2B33823900A9FFBB /* XCLocalSwiftPackageReference "Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage" */,
-				78F1B1012E6D000000000001 /* XCLocalSwiftPackageReference "../../ios/flutter_vless" */,
+				781AD8BC2B33823900A9FFBB /* XCLocalSwiftPackageReference "FlutterGeneratedPluginSwiftPackage" */,
+				78F1B1012E6D000000000001 /* XCLocalSwiftPackageReference "flutter_vless" */,
 			);
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
 			projectDirPath = "";
@@ -340,6 +412,7 @@
 				97C146ED1CF9000F007C117D /* Runner */,
 				331C8080294A63A400263BE5 /* RunnerTests */,
 				387960672CEB611D00D7FB87 /* XrayTunnel */,
+				C27BA6AE56210A74796D03A2 /* VlessControls */,
 			);
 		};
 /* End PBXProject section */
@@ -370,6 +443,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E150AB153EE9C458FF65FCD1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
@@ -381,13 +461,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-frameworks-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -472,6 +548,15 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		153A83C01D9EA5481511105B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				954684B7695CC9067019118C /* VlessControlIntent.swift in Sources */,
+				C24A18FBF75587C5B40169D5 /* VlessControls.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		331C807D294A63A400263BE5 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -495,6 +580,7 @@
 			files = (
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
+				24F350D7E0187BB7F49910AA /* VlessControlIntent.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -510,6 +596,12 @@
 			isa = PBXTargetDependency;
 			target = 387960672CEB611D00D7FB87 /* XrayTunnel */;
 			targetProxy = 387960702CEB611D00D7FB87 /* PBXContainerItemProxy */;
+		};
+		957CD86E03D66F1A15AB2301 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = VlessControls;
+			target = C27BA6AE56210A74796D03A2 /* VlessControls */;
+			targetProxy = 0F65AC20EB0CB43C6649E2BB /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -942,6 +1034,74 @@
 			};
 			name = Release;
 		};
+		A08E274515B7B86C46CA10C5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = VlessControls/VlessControls.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 117;
+				DEVELOPMENT_TEAM = NY9Y536MJK;
+				INFOPLIST_FILE = VlessControls/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.1.7;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.tfox.flutterXrayExample.VlessControls;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) FLUTTER_VLESS_WIDGET_EXTENSION";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		A5757BF96805731B1F9210D9 /* Profile */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = VlessControls/VlessControls.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 117;
+				DEVELOPMENT_TEAM = NY9Y536MJK;
+				INFOPLIST_FILE = VlessControls/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.1.7;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.tfox.flutterXrayExample.VlessControls;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) FLUTTER_VLESS_WIDGET_EXTENSION";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Profile;
+		};
+		E24E030E84FBB813903A37DF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = VlessControls/VlessControls.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 117;
+				DEVELOPMENT_TEAM = NY9Y536MJK;
+				INFOPLIST_FILE = VlessControls/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.1.7;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.tfox.flutterXrayExample.VlessControls;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) FLUTTER_VLESS_WIDGET_EXTENSION";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -961,6 +1121,16 @@
 				387960752CEB611D00D7FB87 /* Debug */,
 				387960762CEB611D00D7FB87 /* Release */,
 				387960772CEB611D00D7FB87 /* Profile */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		93A9FA67BDF14B897AF558D5 /* Build configuration list for PBXNativeTarget "VlessControls" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A08E274515B7B86C46CA10C5 /* Release */,
+				E24E030E84FBB813903A37DF /* Debug */,
+				A5757BF96805731B1F9210D9 /* Profile */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -988,24 +1158,34 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		781AD8BC2B33823900A9FFBB /* XCLocalSwiftPackageReference "Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage" */ = {
+		781AD8BC2B33823900A9FFBB /* XCLocalSwiftPackageReference "FlutterGeneratedPluginSwiftPackage" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage;
 		};
-		78F1B1012E6D000000000001 /* XCLocalSwiftPackageReference "../../ios/flutter_vless" */ = {
+		78F1B1012E6D000000000001 /* XCLocalSwiftPackageReference "flutter_vless" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../ios/flutter_vless;
 		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		05349992472FA2DFC7155F23 /* flutter-vless-controls */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 78F1B1012E6D000000000001 /* XCLocalSwiftPackageReference "flutter_vless" */;
+			productName = "flutter-vless-controls";
+		};
+		73FE7AFA84A5B13349FFC931 /* flutter-vless-controls */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 78F1B1012E6D000000000001 /* XCLocalSwiftPackageReference "flutter_vless" */;
+			productName = "flutter-vless-controls";
+		};
 		78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = FlutterGeneratedPluginSwiftPackage;
 		};
 		78F1B1022E6D000000000001 /* flutter-vless-tunnel-support */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 78F1B1012E6D000000000001 /* XCLocalSwiftPackageReference "../../ios/flutter_vless" */;
+			package = 78F1B1012E6D000000000001 /* XCLocalSwiftPackageReference "flutter_vless" */;
 			productName = "flutter-vless-tunnel-support";
 		};
 /* End XCSwiftPackageProductDependency section */

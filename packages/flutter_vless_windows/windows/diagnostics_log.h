@@ -18,6 +18,7 @@ public:
 
   static DiagnosticsLog &Instance();
 
+  void Configure(bool enabled, std::size_t max_bytes, std::size_t max_lines);
   Generation Reset();
   Generation CurrentGeneration() const;
   void Append(const std::string &source, const std::string &message);
@@ -37,6 +38,8 @@ private:
   std::deque<std::string> lines_;
   std::size_t stored_bytes_ = 0;
   Generation generation_ = 0;
+  bool enabled_ = true;
+  std::size_t max_bytes_ = kMaxStoredBytes, max_lines_ = kMaxSnapshotLines;
 };
 
 } // namespace flutter_vless

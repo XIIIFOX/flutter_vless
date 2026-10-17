@@ -2,6 +2,7 @@ package com.github.tfox.flutter_vless.xray.service
 
 /** Pure ownership/backoff boundary, shared by every delayed worker callback. */
 internal class SessionRecoveryPolicy {
+    var options = NativeVlessOptions.Reconnect()
     @Volatile var generation = 0L; private set
     @Volatile var authorized = false; private set
     @Volatile var failures = 0; private set
@@ -11,8 +12,9 @@ internal class SessionRecoveryPolicy {
     @Synchronized fun restart(): Long { check(authorized); return ++generation }
     @Synchronized fun recovered() { failures = 0 }
     @Synchronized fun nextDelayMillis(): Long {
-        val delay = (1000L shl failures.coerceAtMost(6)).coerceAtMost(60_000)
-        failures = (failures + 1).coerceAtMost(30)
+        val delay = options.delay(failures)
+        failures = (failures + 1).coerceAtMost(1000)
         return delay
     }
+    @Synchronized fun mayRetry() = options.mayRetry(failures)
 }

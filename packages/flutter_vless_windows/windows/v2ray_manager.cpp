@@ -80,7 +80,7 @@ V2rayManager& V2rayManager::GetInstance() {
   return instance;
 }
 
-bool V2rayManager::Start(const std::string& config, bool proxy_only) try {
+bool V2rayManager::Start(const std::string& config, bool proxy_only, const flutter_vless::NativeOptions& options) try {
   if (is_running_.load() && (proxy_only || proxy_only_)) Stop();
 
   flutter_vless::DiagnosticsLog::Instance().Reset();
@@ -110,7 +110,7 @@ bool V2rayManager::Start(const std::string& config, bool proxy_only) try {
     std::cerr << "Starting VPN mode with Tun2Socks..." << std::endl;
     if (vpn_service_) {
       is_running_.store(true);
-      return vpn_service_->Start(config);
+      return vpn_service_->Start(config, options);
     }
     return false;
   }

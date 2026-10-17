@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>FlutterVlessKeychainAccessGroup</key>
-	<string>$(AppIdentifierPrefix)dev.tfox.flutterXray.shared</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
@@ -26,8 +24,18 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>FlutterVlessControlGroupIdentifier</key>
+	<string>group.dev.tfox.flutterXray</string>
+	<key>FlutterVlessControlProviderIdentifier</key>
+	<string>dev.tfox.flutterXrayExample.XrayTunnel</string>
+	<key>FlutterVlessControlsConfigured</key>
+	<true/>
+	<key>FlutterVlessKeychainAccessGroup</key>
+	<string>$(AppIdentifierPrefix)dev.tfox.flutterXray.shared</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Authenticate to change your VPN connection.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

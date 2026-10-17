@@ -49,8 +49,25 @@ int main() {
   for (const auto& key : {"Listen", "Li\xC5\xBFten"}) {
     auto bad = source; bad["inbounds"][0][key] = "0.0.0.0"; Require(!prepare(bad), "ambiguous listen accepted");
   }
-  auto bad = source; bad["inbounds"].push_back(bad["inbounds"][0]); Require(!prepare(bad), "extra listener accepted");
-  bad = source; bad["outbounds"][0]["tag"] = kDnsRelay; Require(!prepare(bad), "reserved tag accepted");
+  Require(config["inbounds"][1] == source["inbounds"][0], "user listener/auth/sniffing were rewritten");
+  Require(rules[0]["inboundTag"] == Json::array({kManagedInbound}), "IPv6 policy must scope to private adapter");
+  auto extra = source;
+  extra["inbounds"].push_back({{"tag", "socks-direct"}, {"protocol", "socks"}, {"listen", "127.0.0.1"}, {"port", 10820}, {"settings", {{"auth", "noauth"}}}});
+  extra["inbounds"].push_back({{"tag", "custom-http"}, {"protocol", "http"}, {"listen", "127.0.0.1"}, {"port", "10807-10810"}, {"settings", {{"accounts", Json::array({{{"user", "app"}, {"pass", "app-secret"}}})}}}});
+  extra["routing"]["rules"].insert(extra["routing"]["rules"].begin(), {{"inboundTag", Json::array({"socks-direct"})}, {"outboundTag", "direct"}});
+  auto multiple = prepare(extra); Require(multiple.has_value(), "full multi-listener profile rejected");
+  auto multi = Parse(*multiple);
+  Require(Port(multi["inbounds"][0]) == 10811, "private adapter collided with user port range");
+  for (size_t i = 0; i < extra["inbounds"].size(); ++i) Require(multi["inbounds"][i+1] == extra["inbounds"][i], "imported listener changed");
+  Require(multi["routing"]["rules"][3] == extra["routing"]["rules"][0], "socks-direct route lost");
+  extra["inbounds"].push_back({{"tag", "stats-port"}, {"protocol", "http"}, {"port", 10086}});
+  auto shifted_api = prepare(extra); Require(shifted_api && ApiPort(*shifted_api) == 10087, "stats port collided with caller listener");
+  extra["inbounds"][0]["tag"] = kManagedInbound;
+  auto collided = prepare(extra); Require(collided.has_value(), "private inbound tag collision rejected");
+  Require(Parse(*collided)["inbounds"][0]["tag"] == std::string(kManagedInbound) + "-1", "private inbound tag was not isolated");
+  auto bad = source; bad["outbounds"][0]["tag"] = kDnsRelay;
+  auto reserved = prepare(bad); Require(reserved.has_value(), "caller DNS tag rejected");
+  Require(Parse(*reserved)["outbounds"][2]["tag"] == std::string(kDnsRelay) + "-1", "DNS relay overwrote caller tag");
   bad = source; bad["outbounds"][0]["settings"]["vnext"][0]["address"] = "2001:db8::1"; Require(!prepare(bad), "unsupported IPv6 endpoint accepted");
   bad = source; bad["outbounds"][0]["streamSettings"]["sockopt"] = {{"addressPortStrategy", "srv"}}; Require(!prepare(bad), "system SRV resolver accepted");
   auto aliases = source;

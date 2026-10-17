@@ -8,7 +8,8 @@ Packet Tunnel traffic protection is mandatory. It retains capture and virtual DN
 while native workers recover; `CONNECTED` also requires the provider's forwarding
 readiness. Explicit stop disables on-demand recovery before stopping the tunnel.
 
-Use one loopback SOCKS inbound. The plugin provides private session credentials
+VPN mode preserves imported listeners and adds its own loopback SOCKS adapter
+with a free profile port and unique tag. The plugin provides private session credentials
 and removes imported management APIs. IPv6 is captured and blocked while the
 forwarding path is IPv4-only. System DNS uses the selected Xray proxy without a
 physical resolver fallback. Domain-based direct rules remain supported, and

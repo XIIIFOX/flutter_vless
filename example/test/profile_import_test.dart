@@ -1,0 +1,28 @@
+import 'dart:convert';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_vless_example/profile_import.dart';
+
+void main() {
+  test(
+    'Full JSON keeps all listeners, passwords, routing and unknown fields',
+    () {
+      const text =
+          '''{"remarks":"Full profile","inbounds":[{"protocol":"socks","port":10808,"settings":{"auth":"noauth"}},{"protocol":"http","port":10820,"settings":{"accounts":[{"user":"local","pass":"password"}]}}],"outbounds":[{"protocol":"freedom","tag":"direct"}],"routing":{"rules":[{"inboundTag":["second"],"outboundTag":"direct"}]},"futureField":{"value":true}}''';
+      final imported = importProfile('  $text  ');
+      expect(imported.config, text);
+      expect(imported.remark, 'Full profile');
+      expect(jsonDecode(imported.config)['inbounds'], hasLength(2));
+    },
+  );
+  test('Invalid JSON and non-object documents report import errors', () {
+    expect(() => importProfile('{invalid}'), throwsFormatException);
+    expect(() => importProfile('[]'), throwsFormatException);
+  });
+  test('Share links continue to use the protocol parser', () {
+    final imported = importProfile(
+      'vless://22222222-2222-4222-8222-222222222222@example.com:443?security=tls&type=tcp#Example',
+    );
+    expect(imported.remark, 'Example');
+    expect(jsonDecode(imported.config)['outbounds'][0]['protocol'], 'vless');
+  });
+}

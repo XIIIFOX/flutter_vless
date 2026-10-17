@@ -78,25 +78,21 @@ internal object LocalProxyAccessPolicy {
         error("Proxy-only SOCKS input is unavailable")
     }
 
-    /** Protect all managed loopback inputs, reject custom listeners before switching sessions. */
+    /** Authenticate only the private listener inserted by the VPN adapter.
+     * Imported listeners and their explicit authentication belong to the caller. */
     fun apply(inbounds: JSONArray, credentials: LocalProxyCredentials, managedPort: Int) {
-        for (i in 0 until inbounds.length()) {
-            val inbound = inbounds.getJSONObject(i)
-            normalizeInput(inbound)
-            val protocol = inbound.optString("protocol").lowercase()
-            if (protocol != "socks" && protocol != "http") continue
-            val listen = inbound.optString("listen")
-            require(listen in listOf("127.0.0.1", "::1", "localhost")) {
-                "VPN proxy inbounds must explicitly listen on loopback"
-            }
-            val tag = inbound.optString("tag")
-            val managed = (protocol == "socks" && inbound.optInt("port") == managedPort) ||
-                tag in setOf("socks", "socks-in", "http", "http-in")
-            require(managed) { "Custom proxy inbound is incompatible with VPN session authorization; use proxyOnly" }
-            val settings = inbound.optJSONObject("settings") ?: JSONObject()
-            settings.put("accounts", JSONArray().put(JSONObject().put("user", credentials.username).put("pass", credentials.password)))
-            if (protocol == "socks") settings.put("auth", "password")
-            inbound.put("settings", settings)
+        val matches = (0 until inbounds.length()).map(inbounds::getJSONObject).filter {
+            it.optString("protocol") == "socks" && it.optInt("port") == managedPort
         }
+        require(matches.size == 1 && matches[0].optString("listen") == "127.0.0.1") {
+            "Private VPN SOCKS listener is unavailable"
+        }
+        val inbound = matches.single()
+        val settings = inbound.optJSONObject("settings") ?: JSONObject()
+        settings.put("accounts", JSONArray().put(JSONObject().put("user", credentials.username).put("pass", credentials.password)))
+        settings.put("auth", "password")
+        settings.put("udp", true)
+        settings.put("ip", "127.0.0.1")
+        inbound.put("settings", settings)
     }
 }

@@ -21,11 +21,9 @@ object XrayCoreManager {
     private var lastProxyUplink = 0L
     private var lastProxyDownlink = 0L
     private fun nextFreePort(preferredPort: Int, usedPorts: Set<Int>): Int {
-        var port = preferredPort
-        while (usedPorts.contains(port)) {
-            port++
-        }
-        return port
+        require(preferredPort in 1..65535) { "Invalid private listener port" }
+        return ((preferredPort..65535).asSequence() + (1024 until preferredPort).asSequence())
+            .firstOrNull { it !in usedPorts } ?: error("No private listener port is available")
     }
 
     private fun uniqueInboundTag(inbounds: JSONArray, preferredTag: String): String {
@@ -146,15 +144,27 @@ object XrayCoreManager {
             val inbound = inbounds.getJSONObject(i)
             val port = inbound.optInt("port", -1)
             if (port > 0) used.add(port)
+            // Xray also accepts string port lists/ranges. Reserve every port
+            // before allocating the private VPN listener.
+            (inbound.opt("port") as? String)?.split(',')?.forEach { part ->
+                val limits = part.trim().split('-').map { it.toIntOrNull() }
+                val first = limits.firstOrNull()
+                val last = limits.lastOrNull()
+                if (first != null && last != null && first in 1..65535 && last in first..65535) {
+                    used.addAll(first..last)
+                }
+            }
             if (inbound.optString("protocol") == "socks" && port == config.LOCAL_SOCKS5_PORT) hasSocks = true
         }
-        if (!hasSocks) {
+        // A full Xray profile may contain several intentional SOCKS/HTTP or
+        // other listeners. Never reuse/rewrite them for the tunnel adapter.
+        if (!config.PROXY_ONLY || !hasSocks) {
             config.LOCAL_SOCKS5_PORT = nextFreePort(config.LOCAL_SOCKS5_PORT, used)
-            inbounds.put(JSONObject().put("tag", uniqueInboundTag(inbounds, "socks"))
+            inbounds.put(JSONObject().put("tag", uniqueInboundTag(inbounds, "flutter-vless-tun"))
                 .put("listen", "127.0.0.1").put("port", config.LOCAL_SOCKS5_PORT).put("protocol", "socks")
                 .put("settings", JSONObject().put("auth", "noauth").put("udp", true))
                 .put("sniffing", JSONObject().put("enabled", true).put("routeOnly", true)
-                    .put("destOverride", JSONArray().put("http").put("tls"))))
+                    .put("destOverride", JSONArray().put("http").put("tls").put("quic"))))
             used.add(config.LOCAL_SOCKS5_PORT)
         }
         if (!config.PROXY_ONLY) {
@@ -164,10 +174,12 @@ object XrayCoreManager {
             LocalProxyAccessPolicy.credentialsForProxyOnly(JSONObject().put("inbounds", inbounds), config.LOCAL_SOCKS5_PORT)
         }
         // Keep StatsService, but do not create an unsolicited HTTP proxy.
-        require((json.optJSONArray("outbounds") ?: JSONArray()).let { array ->
-            (0 until array.length()).none { array.getJSONObject(it).optString("tag") == "api" }
-        }) { "Reserved API outbound tag collision" }
-        json.put("api", JSONObject().put("tag", "api").put("services", JSONArray().put("StatsService")))
+        val tagOwners = JSONArray(inbounds.toString())
+        json.optJSONArray("outbounds")?.let { array ->
+            for (i in 0 until array.length()) tagOwners.put(array.getJSONObject(i))
+        }
+        val apiOutboundTag = uniqueInboundTag(tagOwners, "flutter-vless-stats")
+        json.put("api", JSONObject().put("tag", apiOutboundTag).put("services", JSONArray().put("StatsService")))
         json.put("stats", JSONObject())
         val policy = json.optJSONObject("policy") ?: JSONObject()
         val system = policy.optJSONObject("system") ?: JSONObject()
@@ -175,12 +187,12 @@ object XrayCoreManager {
         policy.put("system", system)
         json.put("policy", policy)
         config.LOCAL_API_PORT = nextFreePort(config.LOCAL_API_PORT, used)
-        val apiTag = uniqueInboundTag(inbounds, "api")
+        val apiTag = uniqueInboundTag(tagOwners, "flutter-vless-stats-in")
         inbounds.put(JSONObject().put("tag", apiTag).put("port", config.LOCAL_API_PORT).put("listen", "127.0.0.1")
             .put("protocol", "dokodemo-door").put("settings", JSONObject().put("address", "127.0.0.1")))
         json.put("inbounds", inbounds)
         val routing = json.optJSONObject("routing") ?: JSONObject()
-        val rules = JSONArray().put(JSONObject().put("type", "field").put("inboundTag", JSONArray().put(apiTag)).put("outboundTag", "api"))
+        val rules = JSONArray().put(JSONObject().put("type", "field").put("inboundTag", JSONArray().put(apiTag)).put("outboundTag", apiOutboundTag))
         routing.optJSONArray("rules")?.let { for (i in 0 until it.length()) rules.put(it.get(i)) }
         routing.put("rules", rules)
         json.put("routing", routing)

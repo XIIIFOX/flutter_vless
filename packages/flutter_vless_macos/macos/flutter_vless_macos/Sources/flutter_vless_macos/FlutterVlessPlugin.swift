@@ -452,22 +452,7 @@ private actor ServerDelayRunner {
             throw NSError(domain: "FlutterVless", code: 13, userInfo: [NSLocalizedDescriptionKey: "Invalid private Xray configuration"])
         }
 
-        // A probe owns one listener. Reject extra user proxy listeners before
-        // replacing the selected inbound, preserving its routing tag.
-        let inbounds = json["inbounds"] as? [[String: Any]] ?? []
-        let proxyInbounds = inbounds.filter {
-            ["http", "socks"].contains(($0["protocol"] as? String ?? "").lowercased())
-        }
-        guard proxyInbounds.count <= 1,
-              inbounds.count == proxyInbounds.count else {
-            throw NSError(domain: "FlutterVless", code: 14,
-                userInfo: [NSLocalizedDescriptionKey: "Delay probes require at most one local proxy inbound"])
-        }
-        json["inbounds"] = [[
-            "tag": proxyInbounds.first?["tag"] as? String ?? "in_proxy",
-            "port": proxyPort, "listen": "127.0.0.1", "protocol": "http",
-            "settings": ["accounts": [["user": credentials.username, "pass": credentials.password]]]
-        ]]
+        try LocalProxyAccessPolicy.applyDelayProbe(to: &json, port: proxyPort, credentials: credentials)
         return try JSONSerialization.data(withJSONObject: json, options: [])
     }
 
@@ -1101,7 +1086,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             }
         } catch {
             result(FlutterError(code: "INCOMPATIBLE_LOCAL_PROXY",
-                message: "VPN requires one supported loopback SOCKS inbound without extra proxy listeners.", details: nil))
+                message: "Unable to prepare the local adapter for this configuration.", details: nil))
             return
         }
         let operation = commands.submit {

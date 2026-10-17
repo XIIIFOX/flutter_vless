@@ -89,31 +89,17 @@ public enum TunnelXrayConfigPreparer {
             var messages: [String] = []
 
             try LocalProxyAccessPolicy.applyVPN(to: &configJSON, credentials: credentials)
+            guard let managedTag = (configJSON["inbounds"] as? [[String: Any]])?.first?["tag"] as? String else { return nil }
             messages.append("Applied session authentication to the managed loopback SOCKS inbound")
 
             guard XrayPrivacyConfig.apply(to: &configJSON) else { return nil }
             messages.append("Applied private Xray logging policy")
 
             if var routing = configJSON["routing"] as? [String: Any] {
-                routing["domainStrategy"] = "AsIs"
+                if routing["domainStrategy"] == nil { routing["domainStrategy"] = "AsIs" }
                 configJSON["routing"] = routing
             } else {
                 configJSON["routing"] = ["domainStrategy": "AsIs"]
-            }
-
-            if var inbounds = configJSON["inbounds"] as? [[String: Any]] {
-                for index in inbounds.indices {
-                    let protocolType = inbounds[index]["protocol"] as? String
-                    guard protocolType == "socks" || protocolType == "http" else {
-                        continue
-                    }
-                    inbounds[index]["sniffing"] = [
-                        "enabled": true,
-                        "destOverride": ["http", "tls", "quic"],
-                        "routeOnly": false
-                    ]
-                }
-                configJSON["inbounds"] = inbounds
             }
 
             var proxyUsesXhttp = false
@@ -137,7 +123,7 @@ public enum TunnelXrayConfigPreparer {
 
             if proxyUsesXhttp {
                 let blackholeTag = blackholeOutboundTag(configJSON: configJSON)
-                if ensureUdp443BlockRule(configJSON: &configJSON, outboundTag: blackholeTag) {
+                if ensureUdp443BlockRule(configJSON: &configJSON, outboundTag: blackholeTag, inboundTag: managedTag) {
                     messages.append("Added XHTTP UDP/443 block rule to force browser TCP fallback")
                 }
             }
@@ -146,7 +132,7 @@ public enum TunnelXrayConfigPreparer {
                 return nil
             }
             messages.append("Configured system DNS over TCP through the selected proxy")
-            guard TunnelIPv6Policy.apply(to: &configJSON) else { return nil }
+            guard TunnelIPv6Policy.apply(to: &configJSON, managedInboundTag: managedTag) else { return nil }
             messages.append("Captured IPv6 is blocked; IPv4 remains available")
             let data = try JSONSerialization.data(withJSONObject: configJSON, options: [])
             return TunnelPreparedConfig(data: data, logMessages: messages, proxyUsesXhttp: proxyUsesXhttp,
@@ -211,14 +197,15 @@ public enum TunnelXrayConfigPreparer {
         })?["tag"] as? String ?? "blackhole"
     }
 
-    private static func ensureUdp443BlockRule(configJSON: inout [String: Any], outboundTag: String) -> Bool {
+    private static func ensureUdp443BlockRule(configJSON: inout [String: Any], outboundTag: String, inboundTag: String) -> Bool {
         var routing = configJSON["routing"] as? [String: Any] ?? [:]
         var rules = routing["rules"] as? [[String: Any]] ?? []
         let alreadyExists = rules.contains { rule in
             (rule["type"] as? String) == "field" &&
             (rule["network"] as? String) == "udp" &&
             String(describing: rule["port"] ?? "") == "443" &&
-            (rule["outboundTag"] as? String) == outboundTag
+            (rule["outboundTag"] as? String) == outboundTag &&
+                (rule["inboundTag"] == nil || (rule["inboundTag"] as? [String]) == [inboundTag])
         }
         if alreadyExists {
             return false
@@ -227,6 +214,7 @@ public enum TunnelXrayConfigPreparer {
             "type": "field",
             "network": "udp",
             "port": "443",
+            "inboundTag": [inboundTag],
             "outboundTag": outboundTag
         ], at: 0)
         routing["rules"] = rules

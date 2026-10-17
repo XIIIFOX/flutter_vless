@@ -60,7 +60,7 @@ installed or during worker recovery.
 | Endpoint bootstrap | Resolve before installing virtual DNS and retain prepared endpoint mappings during worker recovery; endpoint route exclusions prevent transport loops |
 | System DNS | Publish `198.18.0.2` with `matchDomains = [""]`; relay TCP/UDP DNS through Xray as TCP DNS to `1.1.1.1` via the selected proxy |
 | DNS fallback | No physical DNS host-route exclusions or system-resolver fallback after setup |
-| Managed listener | Exactly one loopback SOCKS inbound with native session authentication; reject extra listeners |
+| Managed listener | Separate authenticated loopback SOCKS adapter; preserve imported listeners, credentials and tags |
 | Imported management API | Remove it before running Xray |
 | Domain routing | Preserve user rules and remote credentials; use sniffing with `routeOnly = true` so domain rules cannot bypass the literal IPv6 block |
 | Subnet bypass | Translate IPv4 CIDRs into Xray direct rules below mandatory DNS/IPv6 rules, rather than adding system route exclusions |

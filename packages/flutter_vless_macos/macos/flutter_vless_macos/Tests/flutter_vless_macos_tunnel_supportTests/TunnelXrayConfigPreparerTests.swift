@@ -78,7 +78,7 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
         XCTAssertEqual(log["loglevel"] as? String, "warning")
         XCTAssertEqual(log["dnsLog"] as? Bool, false)
         XCTAssertNotNil(output["dns"])
-        XCTAssertEqual(routing["domainStrategy"] as? String, "AsIs")
+        XCTAssertEqual(routing["domainStrategy"] as? String, "IPIfNonMatch")
         XCTAssertEqual(users[0]["encryption"] as? String, Self.vlessEncryption)
         XCTAssertEqual(vnext[0]["address"] as? String, "proxy.example.com")
         XCTAssertEqual(streamSettings["network"] as? String, "xhttp")

@@ -4,6 +4,7 @@ import 'package:flutter_vless/flutter_vless.dart';
 import 'package:flutter_vless_example/routing.dart';
 import 'options.dart';
 import 'options_storage.dart';
+import 'profile_import.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -218,9 +219,9 @@ class _HomePageState extends State<HomePage> {
       try {
         final text =
             (await Clipboard.getData('text/plain'))?.text?.trim() ?? '';
-        final FlutterVlessURL parsed = FlutterVless.parse(text);
-        remark = parsed.remark;
-        config.text = parsed.getFullConfiguration();
+        final imported = importProfile(text);
+        remark = imported.remark ?? 'Imported profile';
+        config.text = imported.config;
         if (!mounted) return;
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('Imported')));

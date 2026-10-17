@@ -21,7 +21,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-PORTS = {"inbound": 18580, "direct": 18581, "proxy": 18582}
+PORTS = {"inbound": 18580, "direct": 18581, "proxy": 18582, "extra": 18583}
 DNS_QUERIES = []
 PROBE = None
 REAL_DNS = False
@@ -194,6 +194,9 @@ def config(reverse, external_address=None, direct_address="127.0.0.1"):
     profile["routing"]["rules"].append({"type": "field", "domain":
         ["full:2ip.ru", "full:2ip.io"] if reverse else ["full:myip.com"], "outboundTag": "proxy"})
     if external_address:
+        profile["inbounds"].append({"port": PORTS["extra"], "protocol": "socks", "listen": "127.0.0.1", "tag": "socks-direct",
+                                    "settings": {"auth": "noauth", "udp": True}})
+        profile["routing"]["rules"].insert(0, {"type": "field", "inboundTag": ["socks-direct"], "outboundTag": "direct"})
         profile["outbounds"].append({"protocol": "freedom", "tag": "external-direct"})
         profile["dns"]["hosts"]["api.ipify.org"] = external_address
         profile["routing"]["rules"].append(
@@ -425,6 +428,9 @@ def main():
             servers.append(ThreadingHTTPServer(("127.0.0.1", PORTS["direct"]), Direct))
         for server in servers:
             threading.Thread(target=server.serve_forever, daemon=True).start()
+        with socket.socket() as candidate:
+            candidate.bind(("127.0.0.1", 0))
+            PORTS["extra"] = candidate.getsockname()[1]
         cases = [(False, "stop"), (True, "stop")]
         if args.vpn:
             cases.extend([(False, "crash"), (False, "shutdown"), (False, "no-reconnect")])
@@ -432,6 +438,8 @@ def main():
             label = ("vpn" if args.vpn else "proxy") + ("-reverse" if reverse else "") + ("-" + ending if ending != "stop" else "")
             profile = directory / (label + ".json")
             prepared = config(reverse, external_address, direct_address)
+            imported_ports = {entry["port"] for entry in prepared["inbounds"]}
+            managed_port = next(port for port in range(10807, 65536) if port not in imported_ports)
             if not args.vpn:
                 with socket.socket() as candidate:
                     candidate.bind(("127.0.0.1", 0))
@@ -499,10 +507,10 @@ def main():
                             for ipv6 in (False, True):
                                 actual = adapter_datagram(directory, subnet, ipv6, True)
                                 results.append(dict(mode=label, check=f"{'new' if subnet == 3 else 'existing'} adapter {'IPv6' if ipv6 else 'IPv4'} blocked", actual=actual, passed=True))
-                        with socket.create_connection(("127.0.0.1", PORTS["inbound"]), timeout=3) as denied:
+                        with socket.create_connection(("127.0.0.1", managed_port), timeout=3) as denied:
                             denied.sendall(b"\x05\x01\x00")
                             assert exact(denied, 2) == b"\x05\xff", "Managed VPN SOCKS accepted noauth"
-                        with socket.create_connection(("127.0.0.1", PORTS["inbound"]), timeout=3) as denied:
+                        with socket.create_connection(("127.0.0.1", managed_port), timeout=3) as denied:
                             denied.sendall(b"\x05\x01\x02")
                             assert exact(denied, 2) == b"\x05\x02"
                             denied.sendall(b"\x01\x05wrong\x05wrong")
@@ -515,6 +523,12 @@ def main():
                             except ConnectionResetError:
                                 pass
                         results.append(dict(mode=label, check="native SOCKS rejects noauth and incorrect credentials", passed=True))
+                        for host in ("2ip.ru", "myip.com"):
+                            expected = "DIRECT-FIXTURE" if ((host == "myip.com") == reverse) else "PROXY-FIXTURE"
+                            actual = request(host, False)
+                            results.append(dict(mode=label, check="imported SOCKS listener retains explicit noauth", host=host, actual=actual, passed=actual == expected))
+                            actual = request(host, False, proxy_port=PORTS["extra"])
+                            results.append(dict(mode=label, check="socks-direct inbound routing preserved", host=host, actual=actual, passed=actual == "DIRECT-FIXTURE"))
                         for udp in (False, True):
                             actual = physical_denied(external_address if not udp else "1.1.1.1", direct_address, 53 if udp else 443, udp, probe)
                             results.append(dict(mode=label, check="physical DNS denied" if udp else "physical TCP denied", actual=actual, passed=True))

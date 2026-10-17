@@ -7,16 +7,19 @@ final class DesktopListenerPolicyTests: XCTestCase {
         "inbounds": [["protocol": "socks", "listen": "127.0.0.1", "port": 10808]],
         "outbounds": [["protocol": "http", "tag": "proxy", "settings": ["address": "127.0.0.1", "port": 18090]]]
     ]
-    func testEveryAdditionalInboundIsRejectedBeforeAndDuringPreparation() throws {
+    func testAdditionalUserInboundsRemainIntactBesidePrivateAdapter() throws {
         let credentials = try LocalProxyCredentials(username: "test", password: "test-password")
-        for kind in ["dokodemo-door", "mixed", "http", "socks", "tun", "unknown"] {
+        for kind in ["dokodemo-door", "http", "socks", "vless", "vmess", "trojan"] {
             var json = base
             var listeners = json["inbounds"] as! [[String: Any]]
             listeners.append(["protocol": kind, "listen": "127.0.0.1", "port": 18081])
             json["inbounds"] = listeners
             let data = try JSONSerialization.data(withJSONObject: json)
-            XCTAssertThrowsError(try LocalProxyAccessPolicy.validateVPN(configData: data), kind)
-            XCTAssertNil(TunnelXrayConfigPreparer.prepare(jsonData: data, credentials: credentials), kind)
+            XCTAssertNoThrow(try LocalProxyAccessPolicy.validateVPN(configData: data), kind)
+            let result = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: data, credentials: credentials), kind)
+            let prepared = try JSONSerialization.jsonObject(with: result.data) as! [String: Any]
+            let imported = Array((prepared["inbounds"] as! [[String: Any]]).dropFirst())
+            XCTAssertEqual(imported as NSArray, listeners as NSArray)
         }
         XCTAssertNotNil(TunnelXrayConfigPreparer.prepare(jsonData: try JSONSerialization.data(withJSONObject: base), credentials: credentials))
     }

@@ -13,7 +13,7 @@ final class TunnelDNSPolicyTests: XCTestCase {
         XCTAssertEqual(attempts, 3)
         XCTAssertEqual(pauses, 2)
         XCTAssertEqual(prepared.bootstrapAddresses, ["203.0.113.7"])
-        XCTAssertEqual(TunnelXrayConfigPreparer.parseConfig(jsonData: prepared.data)?.inboundPort, 10808)
+        XCTAssertEqual(TunnelXrayConfigPreparer.parseConfig(jsonData: prepared.data)?.inboundPort, 10809)
         do {
             _ = try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: data, credentials: Self.credentials,
                 resolveIPv4: { _ in nil }, attempts: 2, retryDelay: {})

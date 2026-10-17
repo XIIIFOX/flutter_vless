@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Accept full VPN profiles with multiple or no imported listeners on Android, iOS, macOS and Windows. Add a separate authenticated VPN adapter with collision-safe service ports/tags; preserve imported authentication, sniffing and routing. Accept full JSON in the example clipboard importer and multi-listener Apple delay probes.
+
 * Add backward-compatible typed Notification, Quick Access/Quick Tile, Reconnect, Protection and Diagnostics options, native capability discovery and validated platform errors.
 * Add native Android Quick Tile, macOS menu bar, Windows tray and optional Apple Control Center host-extension templates/setup for iOS 18+ and macOS 26+; take the idea of PR #21 without merging its implementation.
 * Separate quick-profile reuse from automatic recovery authorization; add bounded worker retry policies, configurable Apple On Demand and explicit Android OS-managed Always-on handling while retaining mandatory VPN protection.

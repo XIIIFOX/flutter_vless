@@ -65,11 +65,12 @@ void PacketPathProbe::Serve() {
 }
 bool PacketPathProbe::Configure(xray_config::Json& config) const {
   if (!running_.load() || !config["outbounds"].is_array() || !config["routing"]["rules"].is_array()) return false;
-  config["outbounds"].push_back({{"tag", tag}, {"protocol", "freedom"},
+  const auto probe_tag = xray_config::UniqueTag(config, tag);
+  config["outbounds"].push_back({{"tag", probe_tag}, {"protocol", "freedom"},
       {"settings", {{"redirect", "127.0.0.1:" + std::to_string(port_)}, {"domainStrategy", "ForceIPv4"}}}});
   config["routing"]["rules"].insert(config["routing"]["rules"].begin(), xray_config::Json{
       {"type", "field"}, {"ip", xray_config::Json::array({std::string(address) + "/32"})},
-      {"port", std::to_string(port_)}, {"network", "tcp"}, {"outboundTag", tag}});
+      {"port", std::to_string(port_)}, {"network", "tcp"}, {"outboundTag", probe_tag}});
   return true;
 }
 bool PacketPathProbe::Check(const char* destination) const {

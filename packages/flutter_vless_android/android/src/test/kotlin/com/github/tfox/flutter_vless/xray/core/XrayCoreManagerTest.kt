@@ -117,8 +117,8 @@ class XrayCoreManagerTest {
 
         val output = XrayCoreManager.buildRuntimeConfigJson(config, File("build/test-files/android-conflicts"), credentials)
         val inbounds = output.getJSONArray("inbounds")
-        val socks = findInbound(inbounds, "socks_1")
-        val api = findInbound(inbounds, "api_1")
+        val socks = findInbound(inbounds, "flutter-vless-tun")
+        val api = findInbound(inbounds, "flutter-vless-stats-in")
         val routingRules = output.getJSONObject("routing").getJSONArray("rules")
         val apiRule = routingRules.getJSONObject(0)
 
@@ -129,12 +129,12 @@ class XrayCoreManagerTest {
         assertEquals(0, countInboundsByProtocol(inbounds, "http"))
         assertEquals("dokodemo-door", api.getString("protocol"))
         assertEquals(10811, api.getInt("port"))
-        assertEquals("api", apiRule.getString("outboundTag"))
-        assertEquals("api_1", apiRule.getJSONArray("inboundTag").getString(0))
+        assertEquals("flutter-vless-stats", apiRule.getString("outboundTag"))
+        assertEquals("flutter-vless-stats-in", apiRule.getJSONArray("inboundTag").getString(0))
     }
 
     @Test
-    fun buildRuntimeConfigJson_doesNotDuplicateExistingLocalSocksAndHttpInbounds() {
+    fun buildRuntimeConfigJson_preservesUserSocksAndHttpAndAddsPrivateAdapter() {
         val config = XrayConfig(
             LOCAL_SOCKS5_PORT = 10807,
             LOCAL_HTTP_PORT = 10808,
@@ -157,11 +157,14 @@ class XrayCoreManagerTest {
         val output = XrayCoreManager.buildRuntimeConfigJson(config, File("build/test-files/android-existing"), credentials)
         val inbounds = output.getJSONArray("inbounds")
 
-        assertEquals(3, inbounds.length())
-        assertEquals(1, countInboundsByProtocol(inbounds, "socks"))
+        assertEquals(4, inbounds.length())
+        assertEquals(2, countInboundsByProtocol(inbounds, "socks"))
         assertEquals(1, countInboundsByProtocol(inbounds, "http"))
         assertFalse(output.toString().contains("socks_1"))
         assertFalse(output.toString().contains("http_1"))
+        assertEquals(JSONObject(config.V2RAY_FULL_JSON_CONFIG).getJSONArray("inbounds").toString(),
+            JSONArray().put(inbounds.getJSONObject(0)).put(inbounds.getJSONObject(1)).toString())
+        assertEquals(10809, config.LOCAL_SOCKS5_PORT)
     }
 
     @Test
@@ -209,7 +212,7 @@ class XrayCoreManagerTest {
             credentials = credentials
         )
         val inbounds = output.getJSONArray("inbounds")
-        val delaySocks = findInbound(inbounds, "socks")
+        val delaySocks = findInbound(inbounds, "flutter-vless-tun")
         val user = output
             .getJSONArray("outbounds")
             .getJSONObject(0)

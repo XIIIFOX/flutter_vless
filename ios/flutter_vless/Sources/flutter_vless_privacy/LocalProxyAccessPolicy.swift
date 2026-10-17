@@ -39,7 +39,7 @@ public enum LocalProxyAccessError: Error, LocalizedError {
         switch self {
         case .malformedConfiguration: return "Invalid local proxy configuration"
         case .ambiguousField: return "Ambiguous local proxy configuration fields"
-        case .incompatibleInbounds: return "VPN mode requires one loopback SOCKS inbound; additional SOCKS/HTTP inbounds and non-loopback listeners are unsupported. Use proxyOnly for a custom local proxy."
+        case .incompatibleInbounds: return "No free port is available for the private VPN adapter."
         case .invalidCredentials: return "Local proxy credentials must contain 1–255 UTF-8 bytes without control characters"
         case .randomGenerationFailed: return "Unable to generate local proxy session credentials"
         }
@@ -56,60 +56,86 @@ public enum LocalProxyAccessPolicy {
         return object
     }
 
-    public static func validateVPN(configData: Data) throws {
-        var object = try normalizedConfig(configData: configData)
-        _ = try managedInbound(in: &object)
+    /// A latency probe starts an isolated core, so it must not bind imported listeners.
+    /// A fresh tag also avoids inheriting a user's inbound-specific direct route.
+    public static func applyDelayProbe(to config: inout [String: Any], port: Int,
+                                       credentials: LocalProxyCredentials) throws {
+        guard (1...65535).contains(port) else { throw LocalProxyAccessError.malformedConfiguration }
+        try normalizeLocalFields(&config)
+        let entries = (config["inbounds"] as? [[String: Any]] ?? []) + (config["outbounds"] as? [[String: Any]] ?? [])
+        let tags = Set(entries.compactMap { $0["tag"] as? String })
+        let prefix = "flutter-vless-delay"
+        var tag = prefix
+        var suffix = 0
+        while tags.contains(tag) { suffix += 1; tag = "\(prefix)-\(suffix)" }
+        config["inbounds"] = [["tag": tag, "listen": "127.0.0.1", "port": port, "protocol": "http",
+            "settings": ["accounts": [["user": credentials.username, "pass": credentials.password]]]]]
     }
 
+    public static let managedTagPrefix = "flutter-vless-tun"
+
+    public static func validateVPN(configData: Data) throws {
+        let object = try normalizedConfig(configData: configData)
+        _ = try privatePort(inbounds: object["inbounds"] as? [[String: Any]] ?? [])
+    }
+
+    /// Add a private authenticated adapter without changing imported listeners.
+    /// Always prepare the original profile; prepared session credentials are not
+    /// persisted or fed back into this function during recovery.
     @discardableResult
     public static func applyVPN(to config: inout [String: Any], credentials: LocalProxyCredentials) throws -> Int {
-        let (index, port) = try managedInbound(in: &config)
-        var inbounds = config["inbounds"] as! [[String: Any]]
-        var settings = inbounds[index]["settings"] as? [String: Any] ?? [:]
-        settings["auth"] = "password"
-        settings["accounts"] = [["user": credentials.username, "pass": credentials.password]]
-        settings["udp"] = true
-        // Xray advertises this address in UDP ASSOCIATE replies.
-        settings["ip"] = "127.0.0.1"
-        inbounds[index]["listen"] = "127.0.0.1"
-        inbounds[index]["settings"] = settings
-        config["inbounds"] = inbounds
+        try normalizeLocalFields(&config)
+        let imported = config["inbounds"] as? [[String: Any]] ?? []
+        let port = try privatePort(inbounds: imported)
+        let allEntries = imported + (config["outbounds"] as? [[String: Any]] ?? [])
+        let tags = Set(allEntries.compactMap { $0["tag"] as? String })
+        var tag = managedTagPrefix
+        var suffix = 0
+        while tags.contains(tag) { suffix += 1; tag = "\(managedTagPrefix)-\(suffix)" }
+        let managed: [String: Any] = [
+            "tag": tag, "listen": "127.0.0.1", "port": port, "protocol": "socks",
+            "settings": ["auth": "password", "accounts": [["user": credentials.username, "pass": credentials.password]],
+                         "udp": true, "ip": "127.0.0.1"],
+            "sniffing": ["enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": true]
+        ]
+        // Providers select the first local SOCKS port from the prepared config.
+        config["inbounds"] = [managed] + imported
         return port
     }
 
-    private static func managedInbound(in config: inout [String: Any]) throws -> (Int, Int) {
-        try normalizeLocalFields(&config)
-        guard let inbounds = config["inbounds"] as? [[String: Any]] else {
-            throw LocalProxyAccessError.malformedConfiguration
-        }
-        var candidates: [Int] = []
-        for index in inbounds.indices {
-            guard let proto = inbounds[index]["protocol"] as? String else {
+    private static func privatePort(inbounds: [[String: Any]]) throws -> Int {
+        var used = Set<Int>()
+        for inbound in inbounds {
+            guard let proto = inbound["protocol"] as? String, !proto.isEmpty else {
                 throw LocalProxyAccessError.malformedConfiguration
             }
-            guard ["socks", "http"].contains(proto.lowercased()) else { continue }
-            guard proto == "socks" else { throw LocalProxyAccessError.incompatibleInbounds }
-            let listen = inbounds[index]["listen"] as? String
-            guard inbounds[index]["listen"] == nil || listen == "127.0.0.1" || listen == "::1" || listen == "localhost" else {
-                throw LocalProxyAccessError.incompatibleInbounds
-            }
-            candidates.append(index)
+            guard let value = inbound["port"] else { continue } // Unix/listener-free inputs.
+            if let number = value as? NSNumber {
+                guard CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue == Double(number.intValue),
+                      (0...65535).contains(number.intValue) else { throw LocalProxyAccessError.malformedConfiguration }
+                used.insert(number.intValue)
+            } else if let text = value as? String {
+                for part in text.split(separator: ",", omittingEmptySubsequences: false) {
+                    let limits = part.trimmingCharacters(in: .whitespaces).split(separator: "-", omittingEmptySubsequences: false)
+                    guard (1...2).contains(limits.count), let first = Int(limits[0]), let last = Int(limits.last!),
+                          (0...65535).contains(first), (first...65535).contains(last) else {
+                        throw LocalProxyAccessError.malformedConfiguration
+                    }
+                    used.formUnion(first...last)
+                }
+            } else { throw LocalProxyAccessError.malformedConfiguration }
         }
-        guard candidates.count == 1, let index = candidates.first else { throw LocalProxyAccessError.incompatibleInbounds }
-        guard let number = inbounds[index]["port"] as? NSNumber,
-              CFGetTypeID(number) != CFBooleanGetTypeID(),
-              number.doubleValue == Double(number.intValue), (1...65535).contains(number.intValue) else {
-            throw LocalProxyAccessError.malformedConfiguration
+        guard let port = (10808...65535).first(where: { !used.contains($0) }) ?? (1024..<10808).first(where: { !used.contains($0) }) else {
+            throw LocalProxyAccessError.incompatibleInbounds
         }
-        config["inbounds"] = inbounds
-        return (index, number.intValue)
+        return port
     }
 
     private static func normalizeLocalFields(_ config: inout [String: Any]) throws {
         try normalize(&config, names: ["inbounds"])
         // Temporary delay/proxyOnly runners may insert their managed listener.
         // Absence is distinct from an explicitly malformed or null value; VPN
-        // validation still requires exactly one usable SOCKS inbound below.
+        // validation allocates a separate private SOCKS inbound.
         guard config["inbounds"] != nil else { return }
         guard var inbounds = config["inbounds"] as? [[String: Any]] else {
             throw LocalProxyAccessError.malformedConfiguration
@@ -118,10 +144,10 @@ public enum LocalProxyAccessPolicy {
             try normalize(&inbounds[index], names: ["protocol", "listen", "port", "settings", "tag"])
             let proto = (inbounds[index]["protocol"] as? String)?.lowercased()
             guard proto == "socks" || proto == "http" else { continue }
-            if let value = inbounds[index]["settings"], !(value is [String: Any]) {
+            guard let value = inbounds[index]["settings"] else { continue }
+            guard var settings = value as? [String: Any] else {
                 throw LocalProxyAccessError.malformedConfiguration
             }
-            var settings = inbounds[index]["settings"] as? [String: Any] ?? [:]
             try normalize(&settings, names: ["auth", "accounts", "udp", "ip", "users"])
             if var accounts = settings["accounts"] as? [[String: Any]] {
                 for account in accounts.indices { try normalize(&accounts[account], names: ["user", "pass"]) }

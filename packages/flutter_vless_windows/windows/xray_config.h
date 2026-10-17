@@ -7,6 +7,7 @@
 #include <string>
 #include <set>
 #include <algorithm>
+#include <cstdlib>
 #include "third_party/nlohmann/json.hpp"
 
 namespace flutter_vless::xray_config {
@@ -93,6 +94,7 @@ inline bool PrivateStream(Json& stream) {
 inline bool Normalize(Json& config) {
   if (!Fields(config, {"inbounds", "outbounds", "dns", "routing", "log", "api", "policy", "stats", "fakeDns", "fakedns"})) return false;
   for (const auto* key : {"inbounds", "outbounds"}) {
+    if (std::string(key) == "inbounds" && !config.contains(key)) config[key] = Json::array();
     if (!config.contains(key) || !config[key].is_array()) return false;
     for (auto& entry : config[key]) {
       if (!Fields(entry, {"protocol", "tag", "port", "listen", "settings", "streamSettings", "sniffing", "proxySettings"})) return false;
@@ -220,6 +222,76 @@ inline constexpr const char* kVirtualDns = "198.18.0.2";
 inline constexpr const char* kDnsRelay = "flutter-vless-system-dns";
 inline constexpr const char* kDnsUpstream = "flutter-vless-dns-upstream";
 inline constexpr const char* kIpv6Block = "flutter-vless-ipv6-block";
+inline constexpr const char* kManagedInbound = "flutter-vless-tun";
+
+inline std::string UniqueTag(const Json& config, const std::string& preferred) {
+  std::set<std::string> tags;
+  for (const auto* key : {"inbounds", "outbounds"}) if (config.contains(key) && config[key].is_array()) {
+    for (const auto& entry : config[key]) if (entry.contains("tag") && entry["tag"].is_string()) tags.insert(entry["tag"].get<std::string>());
+  }
+  auto tag = preferred;
+  for (unsigned suffix = 1; tags.count(tag); ++suffix) tag = preferred + "-" + std::to_string(suffix);
+  return tag;
+}
+
+inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t preferred) {
+  std::set<unsigned> occupied;
+  if (config.contains("inbounds") && config["inbounds"].is_array()) for (const auto& inbound : config["inbounds"]) {
+    if (!inbound.contains("port")) continue;
+    const auto& value = inbound["port"];
+    if (value.is_number_integer()) {
+      auto number = value.get<int64_t>(); if (number >= 0 && number <= 65535) occupied.insert(static_cast<unsigned>(number));
+      continue;
+    }
+    if (!value.is_string()) return std::nullopt;
+    auto text = value.get<std::string>();
+    if (text.rfind("env:", 0) == 0) {
+#ifdef _WIN32
+        char* environment_value = nullptr;
+        size_t environment_size = 0;
+        if (_dupenv_s(&environment_value, &environment_size, text.substr(4).c_str()) != 0 || !environment_value) return std::nullopt;
+        text = environment_value;
+        std::free(environment_value);
+#else
+        const auto* environment_value = std::getenv(text.substr(4).c_str());
+        if (!environment_value) return std::nullopt;
+        text = environment_value;
+#endif
+    }
+    size_t offset = 0;
+    while (offset < text.size()) {
+      auto comma = text.find(',', offset);
+      auto part = text.substr(offset, comma == std::string::npos ? comma : comma - offset);
+      part.erase(std::remove_if(part.begin(), part.end(), [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }), part.end());
+      auto dash = part.find('-');
+      auto number = [](const std::string& digits) -> std::optional<unsigned> {
+        if (digits.empty() || digits.size() > 5 || digits.find_first_not_of("0123456789") != std::string::npos) return std::nullopt;
+        auto result = static_cast<unsigned>(std::stoul(digits)); return result <= 65535 ? std::optional<unsigned>{result} : std::nullopt;
+      };
+      auto first = number(part.substr(0, dash));
+      auto last = dash == std::string::npos ? first : number(part.substr(dash + 1));
+      if (!part.empty()) {
+        if (!first || !last || *first > *last) return std::nullopt;
+        for (unsigned port = *first; port <= *last; ++port) occupied.insert(port);
+      }
+      if (comma == std::string::npos) break;
+      offset = comma + 1;
+    }
+  }
+  for (unsigned port = preferred; port <= 65535; ++port) if (!occupied.count(port)) return static_cast<uint16_t>(port);
+  for (unsigned port = 1024; port < preferred; ++port) if (!occupied.count(port)) return static_cast<uint16_t>(port);
+  return std::nullopt;
+}
+
+inline std::optional<uint16_t> ApiPort(const std::string& text) {
+  auto config = Parse(text);
+  if (!config.is_object() || !config.contains("api") || !config["api"].is_object() || !config["api"].contains("listen") || !config["api"]["listen"].is_string()) return std::nullopt;
+  auto listen = config["api"]["listen"].get<std::string>();
+  if (listen.rfind("127.0.0.1:", 0) != 0) return std::nullopt;
+  auto value = listen.substr(10);
+  if (value.empty() || value.size() > 5 || value.find_first_not_of("0123456789") != std::string::npos) return std::nullopt;
+  return Port(Json{{"port", std::stoi(value)}});
+}
 
 inline bool Literal4(const std::string& value) {
   size_t start = 0;
@@ -272,25 +344,18 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   if (username.empty() || password.empty() || username.size() > 255 || password.size() > 255 || interface_name.empty()
       || !Normalize(config) || config.contains("fakeDns") || config.contains("fakedns")) return std::nullopt;
   auto& inbounds = config["inbounds"];
-  // The managed listener is private to tun2socks. Extra/custom listeners remain
-  // a proxyOnly feature; silently leaving one unauthenticated bypasses protection.
-  if (inbounds.size() != 1 || inbounds[0]["protocol"] != "socks" || !Port(inbounds[0])) return std::nullopt;
-  auto& inbound = inbounds[0];
-  if (inbound.contains("listen") && inbound["listen"] != "127.0.0.1" && inbound["listen"] != "::1"
-      && inbound["listen"] != "[::1]" && inbound["listen"] != "localhost") return std::nullopt;
-  inbound["listen"] = "127.0.0.1";
-  inbound["settings"] = {{"auth", "password"}, {"accounts", Json::array({{{"user", username}, {"pass", password}}})},
-      {"udp", true}, {"ip", "127.0.0.1"}};
-  if (!Object(inbound, "sniffing") || !Fields(inbound["sniffing"], {"routeOnly"})) return std::nullopt;
-  inbound["sniffing"]["routeOnly"] = true;
-  std::set<std::string> tags;
-  for (const auto* list : {"inbounds", "outbounds"}) for (const auto& entry : config[list]) {
-    if (!entry.contains("tag")) continue;
-    if (!entry["tag"].is_string()) return std::nullopt;
-    auto tag = entry["tag"].get<std::string>();
-    if (!tags.insert(tag).second || tag == kDnsRelay || tag == kDnsUpstream || tag == kIpv6Block
-        || tag == "flutter-vless-packet-probe") return std::nullopt;
-  }
+  // Keep every imported listener intact. tun2socks gets a separate loopback
+  // listener with native session authentication, never a caller's public input.
+  auto port = AvailablePort(config, 10807);
+  if (!port) return std::nullopt;
+  auto managed_tag = UniqueTag(config, kManagedInbound);
+  Json inbound = {{"tag", managed_tag}, {"protocol", "socks"}, {"listen", "127.0.0.1"}, {"port", *port},
+      {"settings", {{"auth", "password"}, {"accounts", Json::array({{{"user", username}, {"pass", password}}})}, {"udp", true}, {"ip", "127.0.0.1"}}},
+      {"sniffing", {{"enabled", true}, {"routeOnly", true}, {"destOverride", Json::array({"http", "tls", "quic"})}}}};
+  inbounds.insert(inbounds.begin(), inbound);
+  const auto relay_tag = UniqueTag(config, kDnsRelay);
+  const auto upstream_tag = UniqueTag(config, kDnsUpstream);
+  const auto ipv6_tag = UniqueTag(config, kIpv6Block);
   std::string proxy;
   Json hosts = Json::object();
   for (auto& outbound : config["outbounds"]) {
@@ -305,9 +370,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
     }
     if (!std::set<std::string>{"vless","vmess","trojan","shadowsocks","socks","http","hysteria","wireguard"}.count(protocol)) return std::nullopt;
     if (!outbound.contains("tag") || outbound["tag"] == "") {
-      std::string tag = "flutter-vless-proxy";
-      while (tags.count(tag)) tag += "-";
-      tags.insert(tag); outbound["tag"] = tag;
+      outbound["tag"] = UniqueTag(config, "flutter-vless-proxy");
     }
     if (proxy.empty() || outbound["tag"] == "proxy") proxy = outbound["tag"].get<std::string>();
     if (!Object(outbound, "settings") || !Fields(outbound["settings"], {"address", "vnext", "servers", "peers"})) return std::nullopt;
@@ -338,29 +401,31 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
     }
   }
   if (proxy.empty()) return std::nullopt;
-  config["outbounds"].push_back({{"tag", kDnsRelay}, {"protocol", "dns"},
+  config["outbounds"].push_back({{"tag", relay_tag}, {"protocol", "dns"},
       {"settings", {{"rewriteNetwork", "tcp"}, {"rewriteAddress", "1.1.1.1"}, {"rewritePort", 53},
           // Raw relay ignores dns.queryStrategy. Return AAAA NODATA so clients
           // do not choose IPv6 destinations blocked by the VPN policy.
           {"rules", Json::array({{{"action", "return"}, {"qType", "28"}, {"rCode", 0}},
                                 {{"action", "direct"}}})}}}, {"streamSettings", {{"sockopt", {{"dialerProxy", proxy}}}}}});
-  config["outbounds"].push_back({{"tag", kIpv6Block}, {"protocol", "blackhole"}});
-  config["dns"] = {{"hosts", hosts}, {"servers", Json::array({"tcp://1.1.1.1"})}, {"tag", kDnsUpstream},
+  config["outbounds"].push_back({{"tag", ipv6_tag}, {"protocol", "blackhole"}});
+  config["dns"] = {{"hosts", hosts}, {"servers", Json::array({"tcp://1.1.1.1"})}, {"tag", upstream_tag},
       {"queryStrategy", "UseIPv4"}, {"disableFallback", true}};
   if (!Object(config, "routing") || !Fields(config["routing"], {"rules", "domainStrategy"})) return std::nullopt;
   auto& routing = config["routing"];
   if (!routing.contains("rules")) routing["rules"] = Json::array();
   if (!routing["rules"].is_array()) return std::nullopt;
   Json rules = Json::array({
-      {{"type", "field"}, {"ip", Json::array({"::/0"})}, {"outboundTag", kIpv6Block}},
-      {{"type", "field"}, {"inboundTag", Json::array({kDnsUpstream})}, {"outboundTag", proxy}},
-      {{"type", "field"}, {"ip", Json::array({std::string(kVirtualDns) + "/32"})}, {"port", "53"}, {"network", "tcp,udp"}, {"outboundTag", kDnsRelay}}
+      {{"type", "field"}, {"inboundTag", Json::array({managed_tag})}, {"ip", Json::array({"::/0"})}, {"outboundTag", ipv6_tag}},
+      {{"type", "field"}, {"inboundTag", Json::array({upstream_tag})}, {"outboundTag", proxy}},
+      {{"type", "field"}, {"inboundTag", Json::array({managed_tag})}, {"ip", Json::array({std::string(kVirtualDns) + "/32"})}, {"port", "53"}, {"network", "tcp,udp"}, {"outboundTag", relay_tag}}
   });
   for (const auto& rule : routing["rules"]) rules.push_back(rule);
   routing["rules"] = rules;
   // Replace imported API listeners; only statistics are exposed on loopback.
   config.erase("api");
-  if (!AddApi(config, 10086)) return std::nullopt;
+  auto api_port = AvailablePort(config, 10086);
+  if (!api_port || !AddApi(config, *api_port)) return std::nullopt;
+  config["api"]["tag"] = UniqueTag(config, "flutter-vless-stats");
   return config.dump();
 }
 

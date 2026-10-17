@@ -126,9 +126,10 @@ continuous blocking across process death requires Android's **Always-on VPN**
 with **Block connections without VPN**. The library cannot disable administrator
 or user OS policy. Permission revocation terminates the session.
 
-VPN sessions authenticate the managed loopback SOCKS with fresh native
-credentials and do not insert an HTTP listener. StatsService remains on loopback.
-Additional incompatible SOCKS/HTTP listeners are rejected before session mutation.
+VPN sessions add a private loopback SOCKS adapter with fresh native credentials.
+Imported listeners, their authentication, sniffing and inbound routing tags remain
+intact. Private SOCKS and StatsService ports/tags avoid collisions with profile
+listeners, including numeric ranges. StatsService remains on loopback.
 Connected delay executes in the owning service process; no global Java
 Authenticator or shared plaintext password is used. Xray and tun2socks configs
 are private no-backup session files; argv contains only config paths.

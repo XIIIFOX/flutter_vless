@@ -25,9 +25,10 @@ PATH or AppData for runtime executables. Keep `wintun.dll` beside tun2socks.
 
 ## VPN behavior
 
-Use one loopback SOCKS inbound in the VPN profile. The plugin supplies private
-session authentication, virtual DNS and traffic protection. Extra listeners,
-ambiguous configuration fields and unsupported IPv6 endpoints are rejected.
+VPN mode adds a separate authenticated loopback SOCKS adapter, virtual DNS and
+traffic protection. Imported listeners and their authentication/routing remain
+intact. Service ports and tags avoid collisions within the profile. Ambiguous
+configuration fields and unsupported IPv6 endpoints are rejected.
 
 IPv6 is blocked while VPN forwarding is IPv4-only. DNS travels through the
 selected proxy without a physical resolver fallback. Xray domain rules remain

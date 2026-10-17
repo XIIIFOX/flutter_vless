@@ -100,6 +100,11 @@ int main(int argc, char** argv) {
     assert(probe.Configure(config));
     assert(config["routing"]["rules"][0]["ip"][0] == "198.18.0.3/32");
     assert(config["outbounds"][0]["settings"]["redirect"].get<std::string>().rfind("127.0.0.1:", 0) == 0);
+    auto collision = flutter_vless::xray_config::Parse(R"({"outbounds":[{"protocol":"blackhole","tag":"flutter-vless-packet-probe"}],"routing":{"rules":[]}})");
+    assert(probe.Configure(collision));
+    assert(collision["outbounds"][0]["protocol"] == "blackhole");
+    assert(collision["outbounds"][1]["tag"] == "flutter-vless-packet-probe-1");
+    assert(collision["routing"]["rules"][0]["outboundTag"] == "flutter-vless-packet-probe-1");
     assert(probe.Check("127.0.0.1"));
     std::cout << "PASS local challenge-response and virtual-path probe configuration (TUN acceptance separate)\n";
   }

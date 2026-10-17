@@ -110,7 +110,8 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   xray_executable_path_ = private_runtime_->Executable(); tun2socks_executable_path_ = *tun;
   options_ = options;
   current_config_ = *prepared; username_ = user; password_ = password;
-  socks_port_ = *xray_config::SocksPort(current_config_);
+  socks_port_ = *xray_config::Port(xray_config::Parse(current_config_)["inbounds"][0]);
+  api_port_ = *xray_config::ApiPort(current_config_);
   // WFP must exist before native workers, resolver configuration or capture.
   if (!protection_.Install(xray_executable_path_)) { Event(("Could not install mandatory Windows traffic protection, code=" + std::to_string(protection_.Error())).c_str()); return false; }
   Event("Mandatory Windows traffic protection installed");
@@ -268,7 +269,7 @@ void VpnService::StopWorkers() {
 }
 void VpnService::UpdateTrafficStats() {
   std::string output;
-  if (!flutter_vless::native::Command(xray_executable_path_, {L"api", L"statsquery", L"-server=127.0.0.1:10086"}, output)) return;
+  if (!flutter_vless::native::Command(xray_executable_path_, {L"api", L"statsquery", L"-server=127.0.0.1:" + std::to_wstring(api_port_)}, output)) return;
   auto stats = flutter_vless::xray_config::Parse(output);
   if (!stats.is_object() || !stats.contains("stat") || !stats["stat"].is_array()) return;
   int64_t up = 0, down = 0;

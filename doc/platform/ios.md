@@ -217,12 +217,12 @@ and the SwiftPM plugin/tunnel-support products include the shared security modul
 
 ## Local proxy access and DNS
 
-VPN mode requires one loopback SOCKS inbound. Native runtime credentials are
-random per provider session, remain consistent across internal worker restarts,
-and are passed to Xray, HEV and every readiness/delay client. Extra SOCKS/HTTP
-listeners and incompatible managed listeners are rejected before changing the
-profile. The SOCKS port's embedded HTTP handler also requires authentication.
-Credentials are not inserted into exported subscription/config snapshots.
+VPN mode adds its own loopback SOCKS adapter with random native session
+credentials. Imported listeners, their authentication and inbound routing tags
+are preserved. The private adapter uses an available profile port and a unique
+tag; its SOCKS and embedded HTTP handlers both require authentication. HEV and
+readiness clients use this adapter, while isolated delay probes create only
+their own authenticated HTTP input. Session credentials are never exported.
 
 `proxyOnly: true` preserves the explicitly configured local proxy access policy.
 An intentional `auth: noauth` proxy can be used by other local applications;

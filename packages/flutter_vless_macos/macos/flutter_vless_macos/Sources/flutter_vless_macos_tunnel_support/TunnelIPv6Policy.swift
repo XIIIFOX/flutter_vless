@@ -19,7 +19,7 @@ public enum TunnelIPv6Policy {
         return settings
     }
 
-    static func apply(to config: inout [String: Any]) -> Bool {
+    static func apply(to config: inout [String: Any], managedInboundTag: String? = nil) -> Bool {
         // FakeDNS can replace Target even with routeOnly enabled. Its virtual
         // address pools are incompatible with this literal-IP block policy.
         guard !config.keys.contains(where: { XrayJSONField.matches($0, "fakeDns") }) else { return false }
@@ -29,7 +29,9 @@ public enum TunnelIPv6Policy {
         config["outbounds"] = outbounds
         var routing = config["routing"] as? [String: Any] ?? [:]
         var rules = routing["rules"] as? [[String: Any]] ?? []
-        rules.insert(["type": "field", "ip": ["::/0"], "outboundTag": blockTag], at: 0)
+        var block: [String: Any] = ["type": "field", "ip": ["::/0"], "outboundTag": blockTag]
+        if let managedInboundTag { block["inboundTag"] = [managedInboundTag] }
+        rules.insert(block, at: 0)
         routing["rules"] = rules
         config["routing"] = routing
         // Xray's IP matcher reads Target; with routeOnly=false sniffing replaces
@@ -37,6 +39,7 @@ public enum TunnelIPv6Policy {
         // still carries the sniffed name for existing domain routing rules.
         if var inbounds = config["inbounds"] as? [[String: Any]] {
             for index in inbounds.indices {
+                if let managedInboundTag, inbounds[index]["tag"] as? String != managedInboundTag { continue }
                 let proto = (inbounds[index]["protocol"] as? String ?? "").lowercased()
                 guard proto == "socks" || proto == "http" else { continue }
                 var sniffing = inbounds[index]["sniffing"] as? [String: Any] ?? [:]

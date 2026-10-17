@@ -9,10 +9,11 @@ import java.io.File
 
 class LocalProxyAccessPolicyTest {
     private val secret = LocalProxyCredentials("native-user", "native-password")
-    @Test fun securesAllManagedInputsWithoutChangingRemoteCredentialsOrCreatingHttp() {
+    @Test fun securesOnlyPrivateAdapterAndPreservesImportedAuthentication() {
         val raw = """{"inbounds":[{"tag":"socks","protocol":"socks","listen":"127.0.0.1","port":10807,"settings":{"auth":"noauth","udp":true}}],"outbounds":[{"tag":"proxy","protocol":"socks","settings":{"servers":[{"address":"proxy.example","port":1080,"users":[{"user":"remote-user","pass":"remote-password"}]}]}}]}"""
         val output = XrayCoreManager.buildRuntimeConfigJson(XrayConfig(V2RAY_FULL_JSON_CONFIG = raw), File("."), secret)
-        val inbound = output.getJSONArray("inbounds").getJSONObject(0)
+        val inbound = output.getJSONArray("inbounds").getJSONObject(1)
+        assertEquals(JSONObject(raw).getJSONArray("inbounds").getJSONObject(0).toString(), output.getJSONArray("inbounds").getJSONObject(0).toString())
         assertEquals("password", inbound.getJSONObject("settings").getString("auth"))
         assertEquals("native-password", inbound.getJSONObject("settings").getJSONArray("accounts").getJSONObject(0).getString("pass"))
         assertEquals(JSONObject(raw).getJSONArray("outbounds").toString(), output.getJSONArray("outbounds").toString())
@@ -47,11 +48,13 @@ class LocalProxyAccessPolicyTest {
         assertThrows(IllegalArgumentException::class.java) { XrayCoreManager.validateConfiguration(XrayConfig(V2RAY_FULL_JSON_CONFIG = raw, PROXY_ONLY = true)) }
     }
 
-    @Test fun nativeCaseAliasesCannotOpenSecondaryUnauthenticatedListeners() {
+    @Test fun nativeAliasesPreserveUserHttpWhilePrivateAdapterRemainsAuthenticated() {
         val raw = """{"Inbounds":[{"tag":"http","Protocol":"http","Listen":"127.0.0.1","Port":18081,"Settings":{}}],"Outbounds":[{"protocol":"freedom"}],"Log":{"loglevel":"debug"}}"""
         val json = XrayCoreManager.buildRuntimeConfigJson(XrayConfig(V2RAY_FULL_JSON_CONFIG = raw), File("."), secret)
         val http = json.getJSONArray("inbounds").getJSONObject(0)
-        assertEquals("native-password", http.getJSONObject("settings").getJSONArray("accounts").getJSONObject(0).getString("pass"))
+        assertEquals("{}", http.getJSONObject("settings").toString())
+        val managed = json.getJSONArray("inbounds").getJSONObject(1)
+        assertEquals("native-password", managed.getJSONObject("settings").getJSONArray("accounts").getJSONObject(0).getString("pass"))
         assertEquals("none", json.getJSONObject("log").getString("loglevel"))
         for (rawDuplicate in listOf(
             """{"inboundſ":[],"outbounds":[{"protocol":"freedom"}]}""",

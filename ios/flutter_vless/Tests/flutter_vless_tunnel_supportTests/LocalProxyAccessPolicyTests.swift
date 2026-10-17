@@ -18,11 +18,13 @@ final class LocalProxyAccessPolicyTests: XCTestCase {
         let original = try JSONSerialization.data(withJSONObject: config, options: .sortedKeys)
         try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: one)
         let first = try JSONSerialization.data(withJSONObject: config, options: .sortedKeys)
+        config = try JSONSerialization.jsonObject(with: original) as! [String: Any]
         try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: one)
         XCTAssertEqual(first, try JSONSerialization.data(withJSONObject: config, options: .sortedKeys))
         XCTAssertEqual((config["outbounds"] as! NSArray), [remote] as NSArray)
         XCTAssertFalse(String(decoding: original, as: UTF8.self).contains(one.password))
         XCTAssertFalse(String(reflecting: one).contains(one.password))
+        config = try JSONSerialization.jsonObject(with: original) as! [String: Any]
         try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: two)
         let serialized = String(decoding: try JSONSerialization.data(withJSONObject: config), as: UTF8.self)
         XCTAssertFalse(serialized.contains(one.password))
@@ -70,11 +72,11 @@ final class LocalProxyAccessPolicyTests: XCTestCase {
                        try JSONSerialization.jsonObject(with: arbitrary) as? NSDictionary)
     }
 
-    func testAmbiguousFieldsAndIncompatibleExtraListenersRejectBeforeMutation() throws {
+    func testAdditionalListenersArePreservedAndAmbiguousFieldsStillReject() throws {
         let socks: [String: Any] = ["protocol": "socks", "port": 1080, "listen": "127.0.0.1"]
         for extra in [["protocol": "socks", "port": 1081], ["protocol": "http", "port": 8080]] as [[String: Any]] {
             let config: [String: Any] = ["inbounds": [socks, extra]]
-            XCTAssertThrowsError(try LocalProxyAccessPolicy.validateVPN(configData: JSONSerialization.data(withJSONObject: config)))
+            XCTAssertNoThrow(try LocalProxyAccessPolicy.validateVPN(configData: JSONSerialization.data(withJSONObject: config)))
         }
         for field in ["listen", "port", "protocol", "settings"] {
             var ambiguous = socks
@@ -90,9 +92,9 @@ final class LocalProxyAccessPolicyTests: XCTestCase {
         for listen in ["0.0.0.0", "::", "192.168.1.1", "/tmp/custom.sock"] {
             var inbound = socks
             inbound["listen"] = listen
-            XCTAssertThrowsError(try LocalProxyAccessPolicy.validateVPN(configData: JSONSerialization.data(withJSONObject: ["inbounds": [inbound]])))
+            XCTAssertNoThrow(try LocalProxyAccessPolicy.validateVPN(configData: JSONSerialization.data(withJSONObject: ["inbounds": [inbound]])))
         }
-        for port: Any in [true, 0, 65536, 1080.5, "1080"] {
+        for port: Any in [true, -1, 65536, 1080.5, "invalid-port"] {
             var inbound = socks
             inbound["port"] = port
             XCTAssertThrowsError(try LocalProxyAccessPolicy.validateVPN(configData: JSONSerialization.data(withJSONObject: ["inbounds": [inbound]])))
@@ -107,18 +109,18 @@ final class LocalProxyAccessPolicyTests: XCTestCase {
         XCTAssertEqual(Array(credentials.socksAuthenticationRequest).prefix(2), [1, 12])
     }
 
-    func testMissingInboundsMayBeInsertedByProxyRunnersButVPNStillRejects() throws {
+    func testMissingAndEmptyInboundsReceivePrivateVpnAdapter() throws {
         let input = Data("{\"outbounds\":[{\"protocol\":\"freedom\"}]}".utf8)
         let normalized = try LocalProxyAccessPolicy.normalizedConfig(configData: input)
         XCTAssertNil(normalized["inbounds"])
-        XCTAssertThrowsError(try LocalProxyAccessPolicy.validateVPN(configData: input))
+        XCTAssertNoThrow(try LocalProxyAccessPolicy.validateVPN(configData: input))
         for value: Any in [NSNull(), "bad", 1, ["protocol": "socks"], ["not-an-object"]] {
             let malformed = try JSONSerialization.data(withJSONObject: ["Inbounds": value])
             XCTAssertThrowsError(try LocalProxyAccessPolicy.normalizedConfig(configData: malformed))
         }
         let empty = try LocalProxyAccessPolicy.normalizedConfig(configData: Data("{\"Inbounds\":[]}".utf8))
         XCTAssertEqual((empty["inbounds"] as? [[String: Any]])?.count, 0)
-        XCTAssertThrowsError(try LocalProxyAccessPolicy.validateVPN(configData: Data("{\"inbounds\":[]}".utf8)))
+        XCTAssertNoThrow(try LocalProxyAccessPolicy.validateVPN(configData: Data("{\"inbounds\":[]}".utf8)))
     }
 
     func testSOCKSRequiresExactMethodAndAuthenticationResponses() throws {

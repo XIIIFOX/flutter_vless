@@ -110,6 +110,7 @@ class VpnService {
   std::string underlay_name_;
   UINT64 underlay_luid_ = 0;
   uint16_t socks_port_ = 0;
+  uint16_t api_port_ = 10086;
   flutter_vless::TrafficProtection protection_;
   std::unique_ptr<flutter_vless::native::ProtectedRuntime> private_runtime_;
   std::unique_ptr<flutter_vless::PacketPathProbe> packet_probe_;

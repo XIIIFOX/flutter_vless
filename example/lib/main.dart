@@ -3,13 +3,17 @@ import 'package:flutter/services.dart';
 import 'package:flutter_vless/flutter_vless.dart';
 import 'package:flutter_vless_example/routing.dart';
 import 'options.dart';
+import 'options_storage.dart';
 
-void main() {
-  runApp(const MyApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final options = await ExampleOptionsStorage.load();
+  runApp(MyApp(options: options));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  const MyApp({super.key, this.options = const VlessOptions()});
+  final VlessOptions options;
 
   @override
   Widget build(BuildContext context) {
@@ -26,13 +30,14 @@ class MyApp extends StatelessWidget {
           border: OutlineInputBorder(),
         ),
       ),
-      home: const HomePage(),
+      home: HomePage(options: options),
     );
   }
 }
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+  const HomePage({super.key, this.options = const VlessOptions()});
+  final VlessOptions options;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -42,8 +47,9 @@ class _HomePageState extends State<HomePage> {
   final ValueNotifier<VlessStatus> vlessStatus =
       ValueNotifier<VlessStatus>(VlessStatus());
 
-  VlessOptions pluginOptions = const VlessOptions();
+  late VlessOptions pluginOptions = widget.options;
   late FlutterVless flutterVless = FlutterVless(
+    options: pluginOptions,
     onStatusChanged: (status) {
       vlessStatus.value = status;
     },
@@ -100,6 +106,7 @@ class _HomePageState extends State<HomePage> {
                       groupIdentifier: 'group.dev.tfox.flutterXray');
                   flutterVless = replacement;
                   pluginOptions = options;
+                  await ExampleOptionsStorage.save(options);
                 },
               )));
     } catch (error) {

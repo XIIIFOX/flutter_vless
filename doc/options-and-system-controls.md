@@ -1,6 +1,6 @@
 # Options and system controls (1.1.7)
 
-Construct `FlutterVless(options: ...)`, then initialize it. Existing callers remain compatible. Native options require the matching 1.1.7 source packages; older backends reject custom options explicitly. This development revision does not publish Dart packages. Use the repository's local dependency overrides when testing it.
+Construct `FlutterVless(options: ...)`, then initialize it. `VlessOptions.fromMap(options.toMap())` restores validated non-secret settings for application-owned persistence. Existing callers remain compatible. Native options require the matching 1.1.7 source packages; older backends reject custom options explicitly. This development revision does not publish Dart packages. Use the repository's local dependency overrides when testing it.
 
 ```dart
 final vpn = FlutterVless(
@@ -49,7 +49,7 @@ Bundle any referenced Android resource before using this sample. `NotificationOp
 | macOS 26+ | Control Center WidgetKit control | Optional `controlCenter` surface, host extension and Xcode 26+ required. Current template opens the app. |
 | Windows | Notification area/system tray | Requires the app process. Last accepted VPN configuration remains in memory only. |
 
-`getCapabilities()` reports the loaded backend's implementation, available surfaces, extension setup, custom native retry support, On Demand, Kill Switch and Android's current Always-on/lockdown state. Proxy-only sessions do not become quick VPN profiles. Unsupported surfaces and required protection features fail initialization instead of silently degrading.
+`getCapabilities()` reports the loaded backend's implementation, available surfaces, extension setup, custom native retry support, On Demand, Kill Switch and Android's current Always-on/lockdown state. Proxy-only sessions do not become quick VPN profiles. Unsupported surfaces and required protection features fail initialization or connection explicitly instead of silently degrading.
 
 `requireUnlock` asks Android to unlock before the action. The Apple Control Widget uses LocalAuthentication before changing the VPN when enabled; cancellation performs no action. Opening an app can itself require the OS to unlock even when this option is false. Desktop menu/tray interaction already requires an accessible desktop session.
 
@@ -59,7 +59,7 @@ Bundle any referenced Android resource before using this sample. `NotificationOp
 
 `ReconnectOptions` governs the plugin's native worker recovery. Delay doubles after consecutive failed attempts, bounded by `maxDelay`; a healthy connection resets it. `initialDelay` is at least 100 ms; `maxDelay` is between the initial delay and 10 minutes; attempts are 0–1000. Disabling retries or exhausting them retains the active capture/protection until explicit Stop. It does not disable Xray's own per-connection transport retry behavior.
 
-Session recovery/protection settings are snapshots: apply them with the next explicit connection. Notification/quick-control presentation and diagnostics can be configured again during initialization. Apple owns scheduling after termination of the complete Network Extension; the custom schedule governs workers inside a surviving extension.
+Session recovery/protection and Android notification settings are snapshots: apply them with the next explicit connection. Quick-control presentation and diagnostics can be configured again during initialization. Apple owns scheduling after termination of the complete Network Extension; the custom schedule governs workers inside a surviving extension.
 
 `KillSwitchPolicy.required` and `platformDefault` both preserve mandatory protection in VPN mode. There is no option to silently weaken it. Proxy-only mode does not capture system traffic. Ordinary Android VPN capture cannot survive the death of the entire VPN process by itself; enable OS Always-on with “Block connections without VPN” for that OS-level guarantee. Apple cannot promise continuous capture after the entire provider is terminated. Windows retains its owned WFP barrier until explicit Stop, including after a crash.
 
@@ -82,6 +82,8 @@ dart run flutter_vless:setup_apple_controls \
 ```
 
 Requires macOS and the Ruby `xcodeproj` gem (included with CocoaPods; otherwise `gem install xcodeproj`). The idempotent generator creates `VlessControls`, embeds it in Runner, adds the shared intent source to both targets, and configures App Group/signing metadata and Face ID usage text. Its deployment minimum is iOS 18/macOS 26; the main app may keep its earlier minimum. Enable App Groups and Network Extensions for the controls App ID in your developer signing configuration too. Add the control from the system's Control Center editor; an app cannot silently insert it. `controlCenterExtensionConfigured` reports the generated host declaration, not a successful physical-device signing/install check.
+
+The example uses Flutter 3.44+ and saves all five Options blocks in application preferences and restores them before its first plugin initialization. This matters because a Control Center intent can cold-launch the app. VPN links/configuration are excluded from these preferences.
 
 The templates are under `templates/apple_controls`; generated examples are in `example/ios/VlessControls` and `example/macos/VlessControls`. Keep both target memberships and the extension's `FLUTTER_VLESS_WIDGET_EXTENSION` compilation condition. The extension never changes VPN preferences itself: the intent executes in Runner, verifies the saved profile identity/reference and confirms On Demand persistence before disconnecting.
 

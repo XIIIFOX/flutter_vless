@@ -109,11 +109,55 @@ void main() {
   test('native initialization failure removes the status subscription',
       () async {
     nativeFailure = PlatformException(code: 'CONTROL_EXTENSION_REQUIRED');
+    final adapter = VlessMethodChannelAdapter(
+        methodChannel: channel,
+        eventChannel: const EventChannel('flutter_vless/status'));
     await expectLater(
-        FlutterVless(onStatusChanged: (_) {}, options: options)
-            .initializeVless(),
+        adapter.initializeVless(
+            onStatusChanged: (_) {},
+            notificationIconResourceType: 'mipmap',
+            notificationIconResourceName: 'ic_launcher',
+            providerBundleIdentifier: 'app',
+            groupIdentifier: 'group.app',
+            options: options),
         throwsA(isA<PlatformException>()));
     expect(subscriptions.last, 'cancel');
+  });
+  test('failed native reconfiguration preserves the current status listener',
+      () async {
+    final adapter = VlessMethodChannelAdapter(
+        methodChannel: channel,
+        eventChannel: const EventChannel('flutter_vless/status'));
+    final oldStates = <VlessConnectionState>[];
+    final newStates = <VlessConnectionState>[];
+    Future<void> initialize(void Function(VlessStatus) callback) =>
+        adapter.initializeVless(
+            onStatusChanged: callback,
+            notificationIconResourceType: 'mipmap',
+            notificationIconResourceName: 'ic_launcher',
+            providerBundleIdentifier: 'app',
+            groupIdentifier: 'group.app',
+            options: options);
+    Future<void> emit(String state) async {
+      await messenger.handlePlatformMessage(
+          status.name,
+          const StandardMethodCodec()
+              .encodeSuccessEnvelope(['0', '0', '0', '0', '0', state]),
+          (_) {});
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    await initialize((status) => oldStates.add(status.connectionState));
+    await emit('DISCONNECTED');
+    nativeFailure = PlatformException(code: 'CONTROL_EXTENSION_REQUIRED');
+    await expectLater(
+        initialize((status) => newStates.add(status.connectionState)),
+        throwsA(isA<PlatformException>()));
+    await emit('CONNECTED');
+    expect(oldStates,
+        [VlessConnectionState.disconnected, VlessConnectionState.connected]);
+    expect(newStates, isEmpty);
+    expect(subscriptions, ['listen']);
   });
   test('tile result maps every response and refuses an unsupported OS',
       () async {

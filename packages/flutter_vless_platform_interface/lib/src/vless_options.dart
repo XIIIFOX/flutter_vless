@@ -172,6 +172,92 @@ class VlessOptions {
     this.diagnostics = const DiagnosticsOptions(),
   });
 
+  /// Restores non-secret settings saved with [toMap]. Unknown fields are ignored;
+  /// malformed values and unsupported schema versions fail before native calls.
+  factory VlessOptions.fromMap(Map<String, Object?> map) {
+    Never invalid(String key) =>
+        throw ArgumentError.value(key, 'options', 'Invalid saved option');
+    Map<String, Object?> section(String key) {
+      if (!map.containsKey(key)) return const {};
+      final value = map[key];
+      if (value is! Map) invalid(key);
+      return Map<String, Object?>.from(value);
+    }
+
+    String text(Map<String, Object?> values, String key, String fallback) {
+      if (!values.containsKey(key)) return fallback;
+      final value = values[key];
+      if (value is! String) invalid(key);
+      return value;
+    }
+
+    bool flag(Map<String, Object?> values, String key, bool fallback) {
+      if (!values.containsKey(key)) return fallback;
+      final value = values[key];
+      if (value is! bool) invalid(key);
+      return value;
+    }
+
+    int number(Map<String, Object?> values, String key, int fallback) {
+      if (!values.containsKey(key)) return fallback;
+      final value = values[key];
+      if (value is! num ||
+          !value.isFinite ||
+          value < -1000000000 ||
+          value > 1000000000 ||
+          value != value.toInt()) {
+        invalid(key);
+      }
+      return value.toInt();
+    }
+
+    if (number(map, 'version', 1) != 1) invalid('version');
+    final n = section('notification'),
+        q = section('quickAccess'),
+        r = section('reconnect'),
+        p = section('protection'),
+        d = section('diagnostics');
+    final path = q['windowsIconPath'];
+    if (path != null && path is! String) invalid('windowsIconPath');
+    final result = VlessOptions(
+      notification: NotificationOptions(
+          iconResourceType: text(n, 'iconResourceType', 'mipmap'),
+          iconResourceName: text(n, 'iconResourceName', 'ic_launcher'),
+          buttonLabel: text(n, 'buttonLabel', 'DISCONNECT'),
+          action: VlessNotificationAction.values
+              .byName(text(n, 'action', 'disconnect'))),
+      quickAccess: QuickAccessOptions(
+          enabled: flag(q, 'enabled', false),
+          surface: QuickAccessSurface.values
+              .byName(text(q, 'surface', 'platformDefault')),
+          label: text(q, 'label', 'VPN'),
+          action: VlessSystemAction.values.byName(text(q, 'action', 'toggle')),
+          requireUnlock: flag(q, 'requireUnlock', true),
+          androidIconResourceName:
+              text(q, 'androidIconResourceName', 'flutter_vless_ic_quick_tile'),
+          appleSymbol: text(q, 'appleSymbol', 'network'),
+          windowsIconPath: path as String?),
+      reconnect: ReconnectOptions(
+          enabled: flag(r, 'enabled', true),
+          initialDelay:
+              Duration(milliseconds: number(r, 'initialDelayMs', 1000)),
+          maxDelay: Duration(milliseconds: number(r, 'maxDelayMs', 60000)),
+          maxAttempts: number(r, 'maxAttempts', 0)),
+      protection: ProtectionOptions(
+          killSwitch:
+              KillSwitchPolicy.values.byName(text(p, 'killSwitch', 'required')),
+          onDemand: OnDemandMode.values
+              .byName(text(p, 'onDemand', 'platformDefault')),
+          alwaysOn: AlwaysOnMode.values.byName(text(p, 'alwaysOn', 'system'))),
+      diagnostics: DiagnosticsOptions(
+          enabled: flag(d, 'enabled', true),
+          maxBytes: number(d, 'maxBytes', 131072),
+          maxLines: number(d, 'maxLines', 300)),
+    );
+    result.validate();
+    return result;
+  }
+
   final NotificationOptions notification;
   final QuickAccessOptions quickAccess;
   final ReconnectOptions reconnect;

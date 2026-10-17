@@ -182,13 +182,17 @@ class _PluginOptionsPageState extends State<PluginOptionsPage> {
           SwitchListTile(
               title: const Text('Enable system control'),
               value: quick,
-              onChanged: caps.quickAccessSurfaces.isEmpty
+              onChanged: caps.quickAccessSurfaces.isEmpty && !quick
                   ? null
                   : (v) => setState(() => quick = v)),
           choice(
               'System control',
               surface,
-              [QuickAccessSurface.platformDefault, ...caps.quickAccessSurfaces],
+              {
+                QuickAccessSurface.platformDefault,
+                ...caps.quickAccessSurfaces,
+                surface
+              }.toList(),
               (v) => surface = v),
           field('Control label', label),
           choice('Control action', action, VlessSystemAction.values,
@@ -234,10 +238,10 @@ class _PluginOptionsPageState extends State<PluginOptionsPage> {
               title: Text('Kill Switch'),
               subtitle: Text(
                   'Required for VPN mode. Failed forwarding keeps traffic protected until explicit Stop.')),
-          if (caps.onDemand)
+          if (caps.onDemand || onDemand != OnDemandMode.platformDefault)
             choice('Apple On Demand', onDemand, OnDemandMode.values,
                 (v) => onDemand = v),
-          if (caps.alwaysOn) ...[
+          if (caps.alwaysOn || alwaysOn != AlwaysOnMode.system) ...[
             choice('Android Always On', alwaysOn, AlwaysOnMode.values,
                 (v) => alwaysOn = v),
             Text(

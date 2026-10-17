@@ -40,6 +40,7 @@ void main() {
           DiagnosticsOptions(enabled: false, maxBytes: 8192, maxLines: 20),
     );
     expect(value.isDefault, isFalse);
+    expect(VlessOptions.fromMap(value.toMap()).toMap(), value.toMap());
     expect(value.toMap(), {
       'version': 1,
       'notification': {
@@ -71,6 +72,50 @@ void main() {
       },
       'diagnostics': {'enabled': false, 'maxBytes': 8192, 'maxLines': 20},
     });
+  });
+  test('saved defaults and optional fields normalize to the current schema',
+      () {
+    expect(VlessOptions.fromMap({}).isDefault, isTrue);
+    expect(VlessOptions.fromMap({'future': 42}).toMap(),
+        const VlessOptions().toMap());
+    expect(
+        VlessOptions.fromMap({
+          'reconnect': {'initialDelayMs': 1000.0}
+        }).reconnect.initialDelay,
+        const Duration(seconds: 1));
+  });
+  test('saved settings reject malformed values in every block', () {
+    for (final value in <Map<String, Object?>>[
+      {'version': 2},
+      {'version': true},
+      {'notification': 'bad'},
+      {
+        'notification': {'buttonLabel': 3}
+      },
+      {
+        'quickAccess': {'enabled': 1}
+      },
+      {
+        'quickAccess': {'surface': 'unknown'}
+      },
+      {
+        'quickAccess': {'windowsIconPath': 4}
+      },
+      {
+        'reconnect': {'maxAttempts': 1.5}
+      },
+      {
+        'reconnect': {'initialDelayMs': double.infinity}
+      },
+      {
+        'protection': {'onDemand': 'unknown'}
+      },
+      {
+        'diagnostics': {'maxLines': 0}
+      },
+    ]) {
+      expect(() => VlessOptions.fromMap(value), throwsArgumentError);
+    }
   });
   test('all actions and placements retain stable wire names', () {
     for (final action in VlessNotificationAction.values) {

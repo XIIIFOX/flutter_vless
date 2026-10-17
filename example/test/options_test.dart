@@ -85,4 +85,28 @@ void main() {
     expect(find.text('Plugin options'), findsOneWidget);
     expect(find.textContaining('Diagnostics limits'), findsOneWidget);
   });
+  testWidgets(
+      'a restored unavailable control can be disabled without a dropdown failure',
+      (tester) async {
+    VlessOptions? applied;
+    await tester.pumpWidget(MaterialApp(
+        home: PluginOptionsPage(
+            initial: const VlessOptions(
+                quickAccess: QuickAccessOptions(
+                    enabled: true, surface: QuickAccessSurface.controlCenter)),
+            capabilities: const VlessCapabilities(optionsVersion: 1),
+            onApply: (value) async {
+              applied = value;
+            },
+            onAddTile: () async => QuickTileAddResult.unsupported,
+            onClearProfile: () async {})));
+    await tester.scrollUntilVisible(find.text('Enable system control'), 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('Enable system control'));
+    await tester.pump();
+    await tester.tap(find.text('Apply options'));
+    await tester.pumpAndSettle();
+    expect(applied?.quickAccess.enabled, isFalse);
+    expect(tester.takeException(), isNull);
+  });
 }

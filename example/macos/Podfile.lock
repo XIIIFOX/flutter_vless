@@ -2,20 +2,27 @@ PODS:
   - flutter_vless_macos (1.1.7):
     - FlutterMacOS
   - FlutterMacOS (1.0.0)
+  - shared_preferences_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
 
 DEPENDENCIES:
   - flutter_vless_macos (from `Flutter/ephemeral/.symlinks/plugins/flutter_vless_macos/macos`)
   - FlutterMacOS (from `Flutter/ephemeral`)
+  - shared_preferences_foundation (from `Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/darwin`)
 
 EXTERNAL SOURCES:
   flutter_vless_macos:
     :path: Flutter/ephemeral/.symlinks/plugins/flutter_vless_macos/macos
   FlutterMacOS:
     :path: Flutter/ephemeral
+  shared_preferences_foundation:
+    :path: Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/darwin
 
 SPEC CHECKSUMS:
   flutter_vless_macos: cbf95f727d46bd1f43c3192f3425f86323b89d1a
   FlutterMacOS: c232990155153907050900a2e175c7773903ba4e
+  shared_preferences_foundation: a7c3904f2dedb3701dd1903cb152ef5e7df92422
 
 PODFILE CHECKSUM: 72a145d68bd940d5270f2b51d39e5183b43f0d31
 

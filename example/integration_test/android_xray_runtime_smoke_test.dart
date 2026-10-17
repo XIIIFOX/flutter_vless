@@ -5,6 +5,8 @@ import 'dart:io' show Platform;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_vless/flutter_vless.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:flutter_vless_example/options_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -24,6 +26,27 @@ void main() {
     expect(version, contains('26.10.17'));
     expect(version.toLowerCase(), isNot(contains('not found')));
     expect(version.toLowerCase(), isNot(startsWith('error:')));
+  });
+
+  testWidgets('Example options survive a native preferences reload',
+      (tester) async {
+    if (!Platform.isAndroid) return;
+    final original = await ExampleOptionsStorage.load();
+    const saved = VlessOptions(
+        quickAccess:
+            QuickAccessOptions(enabled: true, label: 'Storage fixture'),
+        notification: NotificationOptions(
+            buttonLabel: 'Open app', action: VlessNotificationAction.openApp),
+        reconnect: ReconnectOptions(maxAttempts: 3),
+        protection: ProtectionOptions(onDemand: OnDemandMode.disabled),
+        diagnostics: DiagnosticsOptions(maxBytes: 4096, maxLines: 7));
+    try {
+      await ExampleOptionsStorage.save(saved);
+      await (await SharedPreferences.getInstance()).reload();
+      expect((await ExampleOptionsStorage.load()).toMap(), saved.toMap());
+    } finally {
+      await ExampleOptionsStorage.save(original);
+    }
   });
 
   testWidgets('Android Xray starts with packaged geo assets', (tester) async {

@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Add validated `VlessOptions.fromMap` for application-owned settings persistence.
+* Preserve the active status listener when native option reconfiguration is rejected.
 * Add all five typed Options blocks, quick-action/protection enums, validation, wire versioning and backward-compatible optional initialization.
 * Add native capabilities, add-tile result and clear-quick-profile contracts; refuse unsupported custom options before subscribing to status and clean up failed initialization.
 

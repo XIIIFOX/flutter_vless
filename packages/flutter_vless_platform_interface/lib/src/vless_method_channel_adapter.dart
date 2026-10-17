@@ -46,20 +46,12 @@ class VlessMethodChannelAdapter extends VlessPlatform {
       }
       await _requireSecurityCapability('iosKeychainReference');
     }
-    await _statusSubscription?.cancel();
-    _statusSubscription = eventChannel
-        .receiveBroadcastStream()
-        .distinct()
-        .listen((Object? event) {
-      final status = VlessStatus.tryParse(event);
-      if (status != null) {
-        onStatusChanged(status);
-      } else {
-        debugPrint('Ignoring malformed VLESS status payload: $event');
-      }
-    }, onError: (Object error, StackTrace stackTrace) {
-      debugPrint('VLESS status stream error: $error');
-    });
+    final previous = _statusSubscription;
+    // Keep the active listener until native reconfiguration succeeds. A rejected
+    // option must not leave a still-running VPN without status updates.
+    if (previous == null) {
+      _statusSubscription = _listenToStatus(onStatusChanged);
+    }
 
     try {
       await methodChannel.invokeMethod(
@@ -75,10 +67,31 @@ class VlessMethodChannelAdapter extends VlessPlatform {
         },
       );
     } catch (_) {
-      await _statusSubscription?.cancel();
-      _statusSubscription = null;
+      if (previous == null) {
+        await _statusSubscription?.cancel();
+        _statusSubscription = null;
+      }
       rethrow;
     }
+    if (previous != null) {
+      await previous.cancel();
+      _statusSubscription = _listenToStatus(onStatusChanged);
+    }
+  }
+
+  StreamSubscription<dynamic> _listenToStatus(
+      void Function(VlessStatus) onStatusChanged) {
+    return eventChannel.receiveBroadcastStream().distinct().listen(
+        (Object? event) {
+      final status = VlessStatus.tryParse(event);
+      if (status != null) {
+        onStatusChanged(status);
+      } else {
+        debugPrint('Ignoring malformed VLESS status payload: $event');
+      }
+    }, onError: (Object error, StackTrace stackTrace) {
+      debugPrint('VLESS status stream error: $error');
+    });
   }
 
   @override

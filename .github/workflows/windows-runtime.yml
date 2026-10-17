@@ -25,6 +25,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Check routing fixture isolation
+        run: python tool/windows/test_runtime_fixtures.py
       - name: Record toolchain and operating system
         shell: pwsh
         run: |

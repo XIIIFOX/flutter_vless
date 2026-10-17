@@ -5,6 +5,7 @@ ordinary TCP to a documentation IP; HTTP sniffing selects a domain rule and
 Xray delivers to a local underlay HTTP server or a loopback SOCKS server. No server secrets.
 """
 import argparse
+import http.client
 import json
 import os
 from pathlib import Path
@@ -23,15 +24,50 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORTS = {"inbound": 18580, "direct": 18581, "proxy": 18582}
 DNS_QUERIES = []
 PROBE = None
+REAL_DNS = False
+
+
+def dns_question(query):
+    offset = 12
+    labels = []
+    while offset < len(query) and query[offset]:
+        size = query[offset]
+        if size > 63 or offset + size + 1 > len(query):
+            raise ValueError("Malformed fixture DNS question")
+        labels.append(query[offset + 1:offset + size + 1].decode("ascii"))
+        offset += size + 1
+    if offset + 5 > len(query):
+        raise ValueError("Truncated fixture DNS question")
+    return ".".join(labels).lower(), offset + 5
+
+
+def real_dns_response(query):
+    # The ordinary socket is captured by TUN and forwarded by Xray's explicit
+    # external-direct outbound. No physical DNS exception or host resolver is
+    # used: the numeric HTTPS endpoint also avoids recursive name resolution.
+    connection = http.client.HTTPSConnection("1.1.1.1", timeout=5,
+                                             context=ssl.create_default_context())
+    try:
+        connection.request("POST", "/dns-query", body=query, headers={
+            "Content-Type": "application/dns-message", "Accept": "application/dns-message"})
+        response = connection.getresponse()
+        body = response.read(65536)
+        if response.status != 200 or response.getheader("Content-Type", "").split(";")[0] != "application/dns-message":
+            raise ValueError("Controlled DoH request failed")
+        if not 12 <= len(body) <= 65535 or body[:2] != query[:2] or not body[2] & 0x80:
+            raise ValueError("Invalid controlled DoH response")
+        return body
+    finally:
+        connection.close()
 
 
 def dns_response(query):
-    # Echo one well-formed synthetic question and return a documentation IPv4.
-    offset = 12
-    while query[offset]:
-        offset += query[offset] + 1
-    offset += 5
+    name, offset = dns_question(query)
     DNS_QUERIES.append(query[12:offset].hex())
+    # Keep synthetic answers scoped to the test names. The runner itself must
+    # retain working DNS/HTTPS while its traffic is captured by the VPN.
+    if REAL_DNS and name != "invalid" and not name.endswith(".invalid"):
+        return real_dns_response(query)
     return query[:2] + b"\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00" + query[12:offset] + \
         b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x00\x00\x04\xc6\x33\x64\x07"
 
@@ -87,7 +123,7 @@ class Socks(socketserver.BaseRequestHandler):
             body = b"PROXY-FIXTURE"
             sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: " +
                          str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
-        except (EOFError, OSError, KeyError):
+        except (EOFError, OSError, KeyError, ValueError, http.client.HTTPException):
             pass
 
 
@@ -155,11 +191,15 @@ def config(reverse, external_address=None, direct_address="127.0.0.1"):
         "routing": {"domainStrategy": "AsIs", "rules": [
             {"type": "field", "domain": ["domain:myip.com"] if reverse else ["domain:ru", "domain:io"],
              "outboundTag": "direct"}]}}
+    profile["routing"]["rules"].append({"type": "field", "domain":
+        ["full:2ip.ru", "full:2ip.io"] if reverse else ["full:myip.com"], "outboundTag": "proxy"})
     if external_address:
         profile["outbounds"].append({"protocol": "freedom", "tag": "external-direct"})
         profile["dns"]["hosts"]["api.ipify.org"] = external_address
         profile["routing"]["rules"].append(
             {"type": "field", "domain": ["full:api.ipify.org"], "outboundTag": "external-direct"})
+        profile["routing"]["rules"].append(
+            {"type": "field", "network": "tcp,udp", "outboundTag": "external-direct"})
     return profile
 
 
@@ -177,6 +217,23 @@ def protected_dns(tcp):
     assert response[:2] == query[:2] and response[-4:] == b"\xc6\x33\x64\x07"
     assert len(DNS_QUERIES) > before and question.hex() in DNS_QUERIES
     return "DNS reply through selected proxy"
+
+
+def relayed_dns():
+    # An uncached question sent straight to the protected resolver verifies
+    # that real runner names are not replaced with the synthetic test address.
+    name = "api.github.com"
+    question = b"".join(bytes([len(part)]) + part.encode() for part in name.split(".")) + b"\x00\x00\x01\x00\x01"
+    query = b"\x56\x78\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00" + question
+    before = len(DNS_QUERIES)
+    with socket.create_connection(("198.18.0.2", 53), timeout=6) as sock:
+        assert sock.getsockname()[0] == "10.0.85.2", "Real DNS bypassed the TUN"
+        sock.sendall(len(query).to_bytes(2, "big") + query)
+        response = exact(sock, int.from_bytes(exact(sock, 2), "big"))
+    assert response[:2] == query[:2] and response[3] & 15 == 0
+    assert int.from_bytes(response[6:8], "big") > 0 and b"\xc6\x33\x64\x07" not in response
+    assert len(DNS_QUERIES) > before and question.hex() in DNS_QUERIES
+    return "Real DNS through protected proxy and verified HTTPS relay"
 
 
 def system_dns():
@@ -321,7 +378,7 @@ def adapter_datagram(directory, subnet, ipv6, denied):
 
 
 def main():
-    global PROBE
+    global PROBE, REAL_DNS
     parser = argparse.ArgumentParser()
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--vpn", action="store_true")
@@ -329,6 +386,7 @@ def main():
     args = parser.parse_args()
     if args.vpn and (os.name != "nt" or os.environ.get("GITHUB_ACTIONS") != "true"):
         raise SystemExit("Full VPN tests require a disposable GitHub Windows runner")
+    REAL_DNS = args.vpn
     directory = args.directory.resolve()
     probe = directory / "runtime_probe.exe"
     PROBE = probe
@@ -463,6 +521,7 @@ def main():
                         for tcp in (False, True):
                             actual = protected_dns(tcp)
                             results.append(dict(mode=label, check="protected TCP DNS" if tcp else "protected UDP DNS", actual=actual, passed=True))
+                        results.append(dict(mode=label, check="real runner DNS through VPN", actual=relayed_dns(), passed=True))
                         try:
                             actual = request("localhost", True, loopback=True)
                         except Exception as error:

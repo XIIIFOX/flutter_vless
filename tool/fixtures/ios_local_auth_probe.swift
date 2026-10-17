@@ -85,7 +85,7 @@ func runLocalAuthRuntimeChecks() async throws {
     ]
     let source = try JSONSerialization.data(withJSONObject: raw)
     var protected = raw
-    try LocalProxyAccessPolicy.applyVPN(to: &protected, credentials: credentials)
+    let managedPort = try LocalProxyAccessPolicy.applyVPN(to: &protected, credentials: credentials)
     precondition(XrayPrivacyConfig.apply(to: &protected))
     let prepared = try JSONSerialization.data(withJSONObject: protected)
     let logger = ProbeLogger()
@@ -94,36 +94,36 @@ func runLocalAuthRuntimeChecks() async throws {
         precondition(XRayStartPrivate(prepared, logger, &error))
         defer { XRayStop() }
         for secret in [nil, wrong] as [LocalProxyCredentials?] {
-            let fd = openLoopback(18095)
+            let fd = openLoopback(managedPort)
             precondition(!LocalSOCKS5Client.authenticate(fd: fd, credentials: secret))
             close(fd)
         }
         // Xray multiplexes HTTP onto the SOCKS listener; verify that path too.
-        let http = openLoopback(18095)
+        let http = openLoopback(managedPort)
         _ = LocalSOCKS5Client.sendAll(fd: http, bytes: Array("GET http://probe.invalid/ HTTP/1.1\r\nHost: probe.invalid\r\n\r\n".utf8))
         let response = LocalSOCKS5Client.receiveExactly(fd: http, count: 12) ?? []
         precondition(String(decoding: response, as: UTF8.self).contains("407"))
         close(http)
-        let fd = try LocalSOCKS5Client.openConnection(proxyPort: 18095, credentials: credentials, host: "probe.invalid", port: 80)
+        let fd = try LocalSOCKS5Client.openConnection(proxyPort: managedPort, credentials: credentials, host: "probe.invalid", port: 80)
         _ = LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("GET / HTTP/1.1\r\nHost: probe.invalid\r\n\r\n".utf8))
         precondition(String(decoding: LocalSOCKS5Client.receiveExactly(fd: fd, count: 12) ?? [], as: UTF8.self).contains("204"))
         close(fd)
         let delay = await withCheckedContinuation { continuation in
-            LocalProxyDelayClient.measure(url: URL(string: "http://probe.invalid/")!, port: 18095, credentials: credentials) {
+            LocalProxyDelayClient.measure(url: URL(string: "http://probe.invalid/")!, port: managedPort, credentials: credentials) {
                 continuation.resume(returning: $0)
             }
         }
         print("SOCKS_DELAY_RESULT=\(delay)")
         precondition(delay >= 0, "Authenticated SOCKS URL client did not reach controlled origin")
-        let httpDelay = try await LocalHTTPProxyClient(port: 18095, credentials: credentials).measure(url: URL(string: "http://probe.invalid/")!)
+        let httpDelay = try await LocalHTTPProxyClient(port: managedPort, credentials: credentials).measure(url: URL(string: "http://probe.invalid/")!)
         precondition(httpDelay >= 0)
         let wrongDelay = await withCheckedContinuation { continuation in
-            LocalProxyDelayClient.measure(url: URL(string: "http://probe.invalid/")!, port: 18095, credentials: wrong) {
+            LocalProxyDelayClient.measure(url: URL(string: "http://probe.invalid/")!, port: managedPort, credentials: wrong) {
                 continuation.resume(returning: $0)
             }
         }
         precondition(wrongDelay == -1)
-        let wrongHTTP = try? await LocalHTTPProxyClient(port: 18095, credentials: wrong).measure(url: URL(string: "http://probe.invalid/")!)
+        let wrongHTTP = try? await LocalHTTPProxyClient(port: managedPort, credentials: wrong).measure(url: URL(string: "http://probe.invalid/")!)
         precondition(wrongHTTP == nil)
         XRayStop()
         print("AUTH_RUNTIME_PASS=\(generation)")
@@ -139,10 +139,10 @@ func runLocalAuthRuntimeChecks() async throws {
     var rotationError: NSError?
     let rotatedData = try JSONSerialization.data(withJSONObject: rotated)
     precondition(XRayStartPrivate(rotatedData, logger, &rotationError))
-    let oldClient = openLoopback(18095)
+    let oldClient = openLoopback(managedPort)
     precondition(!LocalSOCKS5Client.authenticate(fd: oldClient, credentials: credentials))
     close(oldClient)
-    let newClient = try LocalSOCKS5Client.openConnection(proxyPort: 18095, credentials: nextCredentials, host: "probe.invalid", port: 80)
+    let newClient = try LocalSOCKS5Client.openConnection(proxyPort: managedPort, credentials: nextCredentials, host: "probe.invalid", port: 80)
     _ = LocalSOCKS5Client.sendAll(fd: newClient, bytes: Array("GET / HTTP/1.1\r\nHost: probe.invalid\r\n\r\n".utf8))
     precondition(String(decoding: LocalSOCKS5Client.receiveExactly(fd: newClient, count: 12) ?? [], as: UTF8.self).contains("204"))
     close(newClient)
@@ -160,7 +160,9 @@ func runLocalAuthRuntimeChecks() async throws {
     let defaultConnected = await proxyOnly.measureConnectedDelay(url: "http://probe.invalid/")
     precondition(defaultConnected >= 0)
     proxyOnly.stop()
-    try proxyOnly.start(configData: prepared, geoAssetsDirectory: nil)
+    var explicitProxy = protected
+    explicitProxy["inbounds"] = [(protected["inbounds"] as! [[String: Any]])[0]]
+    try proxyOnly.start(configData: JSONSerialization.data(withJSONObject: explicitProxy), geoAssetsDirectory: nil)
     let authorizedConnected = await proxyOnly.measureConnectedDelay(url: "http://probe.invalid/")
     precondition(authorizedConnected >= 0)
     proxyOnly.stop()
@@ -185,7 +187,7 @@ func runDomainRoutingChecks() throws {
             ["type": "field", "domain": ["full:direct-site.invalid"], "outboundTag": "direct"],
             ["type": "field", "domain": ["full:proxy-site.invalid"], "outboundTag": "proxy"]]]
     ]
-    try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: credentials)
+    let managedPort = try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: credentials)
     precondition(XrayPrivacyConfig.apply(to: &config))
     let data = try JSONSerialization.data(withJSONObject: config)
     let logger = ProbeLogger()
@@ -194,7 +196,7 @@ func runDomainRoutingChecks() throws {
         precondition(XRayStartPrivate(data, logger, &error))
         for host in ["direct-site.invalid", "proxy-site.invalid"] {
             let beforeDirect = directOrigin.state().0, beforeProxy = proxyOrigin.state().0
-            let fd = try LocalSOCKS5Client.openConnection(proxyPort: 18095, credentials: credentials, host: host, port: 80)
+            let fd = try LocalSOCKS5Client.openConnection(proxyPort: managedPort, credentials: credentials, host: host, port: 80)
             defer { close(fd) }
             precondition(LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("GET / HTTP/1.1\r\nHost: \(host)\r\n\r\n".utf8)))
             precondition(String(decoding: LocalSOCKS5Client.receiveExactly(fd: fd, count: 12) ?? [], as: UTF8.self).contains("204"))

@@ -142,16 +142,16 @@ private func dnsProbeQuery(id: UInt16, type: UInt16 = 1) -> [UInt8] {
     return bytes + [0, UInt8(type >> 8), UInt8(type & 255), 0, 1]
 }
 
-private func queryVirtualDNS(credentials: LocalProxyCredentials, udp: Bool, id: UInt16, type: UInt16 = 1) throws -> [UInt8]? {
+private func queryVirtualDNS(proxyPort: Int, credentials: LocalProxyCredentials, udp: Bool, id: UInt16, type: UInt16 = 1) throws -> [UInt8]? {
     let query = dnsProbeQuery(id: id, type: type)
     if !udp {
-        let fd = try LocalSOCKS5Client.openConnection(proxyPort: 18098, credentials: credentials, host: TunnelDNSPolicy.virtualServer, port: 53, timeout: 3)
+        let fd = try LocalSOCKS5Client.openConnection(proxyPort: proxyPort, credentials: credentials, host: TunnelDNSPolicy.virtualServer, port: 53, timeout: 3)
         defer { close(fd) }
         _ = LocalSOCKS5Client.sendAll(fd: fd, bytes: [0, UInt8(query.count)] + query)
         guard let size = LocalSOCKS5Client.receiveExactly(fd: fd, count: 2) else { return nil }
         return LocalSOCKS5Client.receiveExactly(fd: fd, count: Int(size[0]) * 256 + Int(size[1]))
     }
-    let control = openLoopback(18098)
+    let control = openLoopback(proxyPort)
     defer { close(control) }
     precondition(LocalSOCKS5Client.authenticate(fd: control, credentials: credentials))
     _ = LocalSOCKS5Client.sendAll(fd: control, bytes: [5, 3, 0, 1, 0, 0, 0, 0, 0, 0])
@@ -198,6 +198,7 @@ func runDNSRuntimeChecks() throws {
         guard let prepared = TunnelXrayConfigPreparer.prepare(jsonData: try JSONSerialization.data(withJSONObject: raw), credentials: credentials) else {
             preconditionFailure("DNS fixture preparation failed")
         }
+        let managedPort = TunnelXrayConfigPreparer.parseConfig(jsonData: prepared.data)!.inboundPort
         for generation in 0..<2 {
             upstream.mode(.answer)
             var error: NSError?
@@ -205,7 +206,7 @@ func runDNSRuntimeChecks() throws {
             defer { XRayStop() }
             for udp in [false, true] {
                 let id = UInt16(0x4300 + generation * 2 + (udp ? 1 : 0))
-                guard let answer = try queryVirtualDNS(credentials: credentials, udp: udp, id: id) else {
+                guard let answer = try queryVirtualDNS(proxyPort: managedPort, credentials: credentials, udp: udp, id: id) else {
                     print("DNS_QUERY_FAILED proto=\(proto) udp=\(udp) fixture=\(upstream.state().1 ?? "none")")
                     preconditionFailure("Virtual DNS did not return controlled answer")
                 }
@@ -217,7 +218,7 @@ func runDNSRuntimeChecks() throws {
                 // NODATA, not a timeout/NXDOMAIN that could also break A lookup.
                 let queriesBeforeAAAA = upstream.state().0
                 let ipv6ID = id + 0x100
-                let ipv6 = try queryVirtualDNS(credentials: credentials, udp: udp, id: ipv6ID, type: 28)
+                let ipv6 = try queryVirtualDNS(proxyPort: managedPort, credentials: credentials, udp: udp, id: ipv6ID, type: 28)
                 if ipv6 != dnsNoDataResponse(id: ipv6ID) {
                     print("DNS_IPV4_ONLY_FAILED=\(proto);UDP=\(udp);answerCount=\(ipv6.map { Int($0[6]) * 256 + Int($0[7]) } ?? -1)")
                     fflush(stdout)
@@ -233,12 +234,12 @@ func runDNSRuntimeChecks() throws {
         precondition(XRayStartPrivate(prepared.data, ProbeLogger(), &error))
         upstream.mode(.servfail)
         for udp in [false, true] {
-            let answer = try queryVirtualDNS(credentials: credentials, udp: udp, id: udp ? 0x4501 : 0x4500)
+            let answer = try queryVirtualDNS(proxyPort: managedPort, credentials: credentials, udp: udp, id: udp ? 0x4501 : 0x4500)
             precondition(answer != nil && answer![3] & 15 == 2, "DNS SERVFAIL must not switch to another resolver")
         }
         upstream.mode(.refuseConnection)
         for udp in [false, true] {
-            let answer = try? queryVirtualDNS(credentials: credentials, udp: udp, id: udp ? 0x4601 : 0x4600)
+            let answer = try? queryVirtualDNS(proxyPort: managedPort, credentials: credentials, udp: udp, id: udp ? 0x4601 : 0x4600)
             precondition(answer == nil, "Proxy refusal must not fall back to a direct resolver")
         }
         XRayStop()

@@ -24,7 +24,7 @@ class NativeLocalAuthorizationTest {
         val port = ServerSocket(0).use { it.localPort }
         val secret = LocalProxyCredentials.generate()
         val config = XrayConfig(LOCAL_SOCKS5_PORT = port, LOCAL_API_PORT = port + 1,
-            V2RAY_FULL_JSON_CONFIG = """{"Inbounds":[{"tag":"http","Protocol":"http","Listen":"127.0.0.1","Port":${port + 2},"Settings":{}}],"outbounds":[{"tag":"proxy","protocol":"freedom"}]}""")
+            V2RAY_FULL_JSON_CONFIG = """{"Inbounds":[{"tag":"http","Protocol":"http","Listen":"127.0.0.1","Port":${port + 2},"Settings":{"accounts":[{"user":"imported-user","pass":"imported-password"}]}}],"outbounds":[{"tag":"proxy","protocol":"freedom"}]}""")
         val json = XrayCoreManager.buildRuntimeConfigJson(config, context.noBackupFilesDir, secret)
         val file = File(context.noBackupFilesDir, "test-auth-${UUID.randomUUID()}.json")
         file.writeText(json.toString())
@@ -39,7 +39,7 @@ class NativeLocalAuthorizationTest {
                 socket.soTimeout = 2000
                 socket.getOutputStream().write("GET http://127.0.0.1:9/ HTTP/1.1\r\nHost: target.test\r\nConnection: close\r\n\r\n".toByteArray())
                 val response = socket.getInputStream().bufferedReader().readText()
-                assertTrue("Mixed-case HTTP input must demand local credentials", response.contains(" 407 "))
+                assertTrue("Imported HTTP input must keep its explicit authentication", response.contains(" 407 "))
             }
             Socket("127.0.0.1", port).use { socket ->
                 socket.soTimeout = 2000

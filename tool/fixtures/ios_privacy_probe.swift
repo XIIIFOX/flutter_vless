@@ -60,7 +60,8 @@ func runModes() async {
                 if !XRayStartPrivate(prepared,logger,&error) { print("START_FAILURE mode=\(mode) error=\(error?.localizedDescription ?? "nil")");exit(1) }
                 let fd = socket(AF_INET, SOCK_STREAM, 0)
                 var address = sockaddr_in(); address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-                address.sin_family = sa_family_t(AF_INET);address.sin_port = UInt16(18095).bigEndian
+                let port = (decoded["inbounds"] as! [[String: Any]])[0]["port"] as! Int
+                address.sin_family = sa_family_t(AF_INET);address.sin_port = UInt16(port).bigEndian
                 inet_pton(AF_INET,"127.0.0.1",&address.sin_addr)
                 let connected = withUnsafePointer(to:&address) { $0.withMemoryRebound(to:sockaddr.self,capacity:1) { connect(fd,$0,socklen_t(MemoryLayout<sockaddr_in>.size)) } }
                 precondition(connected == 0)

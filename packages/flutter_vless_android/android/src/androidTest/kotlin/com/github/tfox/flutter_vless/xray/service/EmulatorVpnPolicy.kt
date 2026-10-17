@@ -38,7 +38,8 @@ internal class EmulatorVpnPolicy {
         check(node.isEnabled && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { "OS VPN control was unavailable" }
     }
     private fun open() {
-        shell("am start -a android.settings.VPN_SETTINGS")
+        // Reopening Settings may otherwise retain another app's VPN detail page.
+        shell("am start -f 0x14000000 -a android.settings.VPN_SETTINGS")
         fun alreadyOpen() = row("Always-on VPN") != null && find {
             it.contentDescription?.toString() == XrayVPNService::class.java.name
         } != null

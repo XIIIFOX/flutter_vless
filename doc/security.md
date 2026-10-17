@@ -158,10 +158,11 @@ and [`includeAllNetworks`](https://developer.apple.com/documentation/networkexte
 
 See the platform guides for the 1.1.6 contracts: [iOS](platform/ios.md#keychain-profile-migration-116)
 and [Android](platform/android.md#session-protection-and-local-proxy-access-116).
-Runtime listener credentials are native session state; the exported configuration
-remains deterministic and contains no generated session password. Local accounts
-and remote outbound credentials are separate. Explicit proxy-only noauth is an
-intentional shared-proxy mode, outside VPN listener isolation.
+In 1.1.7, VPN adapter credentials are native session state; the exported
+configuration remains deterministic and contains no generated session password.
+Imported listeners keep their own explicit accounts/noauth policy in either
+mode. Private adapter authentication does not change those imported access
+policies. Local accounts and remote outbound credentials are separate.
 
 The Android service retains TUN across internal worker recovery, but OS lockdown
 is needed for blocking across whole-service death. System DNS protection on

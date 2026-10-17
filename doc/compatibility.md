@@ -133,9 +133,11 @@ These are implementation and acceptance tasks, not supported-feature claims.
    protection and bootstrap behavior are established for that path.
 4. **Finish full-document passthrough.** Preserve imported API/services/stats
    alongside private statistics (Android/Windows currently replace API settings),
-   and isolate all injected DNS/probe rules to their own adapter. Test tag
-   references, inbound-dependent rules and profiles whose first outbound is not
-   the intended VPN default. Preserve user fields outside the documented privacy
+   and isolate all injected DNS/probe rules to their own adapter. Define which
+   imported input backs VPN traffic and carry its `inboundTag` routing context
+   into the private adapter; retaining the original rules alone does not make
+   input-specific rules apply to that new adapter. Test profiles whose first
+   outbound is not the intended VPN default. Preserve user fields outside the documented privacy
    overrides for logs and native protection.
 5. **Unify port/address handling.** Accept upstream string port lists, ranges,
    `env:` references, port zero and Unix sockets where supported. Align Dart and

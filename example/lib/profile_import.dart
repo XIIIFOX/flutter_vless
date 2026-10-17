@@ -6,17 +6,19 @@ import 'package:flutter_vless/flutter_vless.dart';
   final text = input.trim();
   if (text.startsWith('{') || text.startsWith('[')) {
     final decoded = jsonDecode(text);
-    if (decoded is! Map<String, dynamic>) {
+    if (decoded is Map<String, dynamic>) {
+      final titles = ['remarks', 'remark', 'ps']
+          .map((key) => decoded[key])
+          .whereType<String>()
+          .where((value) => value.isNotEmpty);
+      return (config: text, remark: titles.firstOrNull);
+    }
+    if (decoded is! List || decoded.isEmpty) {
       throw const FormatException(
         'An Xray configuration must be a JSON object',
       );
     }
-    return (
-      config: text,
-      remark: decoded['remarks'] is String
-          ? decoded['remarks'] as String
-          : null,
-    );
+    // Subscription arrays keep the existing parser's first-profile behavior.
   }
   final parsed = FlutterVless.parse(text);
   return (config: parsed.getFullConfiguration(), remark: parsed.remark);

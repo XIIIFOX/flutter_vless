@@ -3,6 +3,39 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_vless_example/profile_import.dart';
 
 void main() {
+  test('Raw JSON retains existing remark aliases', () {
+    for (final key in ['remarks', 'remark', 'ps']) {
+      final input = jsonEncode({
+        key: 'Profile title',
+        'outbounds': [
+          {'protocol': 'freedom'},
+        ],
+      });
+      expect(importProfile(input).remark, 'Profile title');
+    }
+  });
+  test(
+    'Subscription arrays still import their first supported full profile',
+    () {
+      final profile = {
+        'remarks': 'First profile',
+        'outbounds': [
+          {'protocol': 'freedom'},
+        ],
+      };
+      final imported = importProfile(
+        jsonEncode([
+          profile,
+          {...profile, 'remarks': 'Second profile'},
+        ]),
+      );
+      expect(imported.remark, 'First profile');
+      expect(
+        jsonDecode(imported.config)['outbounds'][0]['protocol'],
+        'freedom',
+      );
+    },
+  );
   test(
     'Full JSON keeps all listeners, passwords, routing and unknown fields',
     () {

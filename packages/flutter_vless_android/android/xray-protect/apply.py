@@ -14,9 +14,11 @@ def replace(path, old, new, count=1):
         raise SystemExit(f"Unexpected Xray source in {path}; review overlay before building")
     target.write_text(text.replace(old, new))
 
-replace("transport/internet/system_dialer.go",
-        'errors.LogInfoInner(ctx, err, "failed to apply external controller")',
-        'return err', 2)
+# v26.10.17 propagates controller failures in both upstream dial paths.
+# Keep a strict source check so an upstream regression cannot bypass protection.
+dialer_source = (root / "transport/internet/system_dialer.go").read_text()
+if dialer_source.count('return errors.New("failed to apply external controller").Base(err)') != 2:
+    raise SystemExit("Unexpected Xray dialer failure propagation; review overlay before building")
 old = '''\t\treturn c.Control(func(fd uintptr) {
 \t\t\tfor _, controller := range controllers {
 \t\t\t\tif err := controller(network, address, c); err != nil {

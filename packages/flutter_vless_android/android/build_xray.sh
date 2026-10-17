@@ -5,13 +5,13 @@ export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.0}"
 # Build the pinned source plus the reviewed Android FD-protection overlay.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-CORE_MODULE_VERSION="v1.260327.1-0.20260908222543-52a412d9e2f5"
-XRAY_VERSION="${XRAY_VERSION:-v26.9.9}"
+CORE_MODULE_VERSION="v1.260327.1-0.20261017152356-92ccc939aaf4"
+XRAY_VERSION="${XRAY_VERSION:-v26.10.17}"
 TARGET_DIR="${TARGET_DIR:-../../../android_runtime/xray_android/src/main/jniLibs}"
 mkdir -p "$TARGET_DIR"
 TARGET_DIR="$(cd "$TARGET_DIR" && pwd)"
-if [ "$XRAY_VERSION" != "v26.9.9" ]; then
-    echo "The protection overlay requires Xray v26.9.9; review before changing core versions." >&2
+if [ "$XRAY_VERSION" != "v26.10.17" ]; then
+    echo "The protection overlay requires Xray v26.10.17; review before changing core versions." >&2
     exit 1
 fi
 NDK_PATH="${ANDROID_NDK_HOME:-$HOME/Library/Android/sdk/ndk/28.2.13676358}"

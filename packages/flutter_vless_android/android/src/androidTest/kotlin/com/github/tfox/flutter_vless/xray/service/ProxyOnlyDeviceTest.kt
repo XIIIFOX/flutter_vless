@@ -72,7 +72,7 @@ class ProxyOnlyDeviceTest {
     @Test fun socksHttpAndSecondaryDirectListenerRouteIndependentlyAcrossRestarts() {
         val executable = File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath
         val version = ProcessBuilder(executable, "version").redirectErrorStream(true).start()
-        assertTrue(version.inputStream.bufferedReader().readText().contains("26.9.9"))
+        assertTrue(version.inputStream.bufferedReader().readText().contains("26.10.17"))
         assertTrue(version.waitFor(5, TimeUnit.SECONDS)); assertEquals(0, version.exitValue())
         val reserved = List(4) { ServerSocket(0) }
         val ports = reserved.map { it.localPort }; reserved.forEach { it.close() }

@@ -34,9 +34,9 @@ jobs:
       - name: Download and verify the pinned Windows runtime
         shell: pwsh
         run: |
-          $url = 'https://github.com/XTLS/Xray-core/releases/download/v26.9.9/Xray-windows-64.zip'
+          $url = 'https://github.com/XTLS/Xray-core/releases/download/v26.10.17/Xray-windows-64.zip'
           Invoke-WebRequest $url -OutFile build/xray-windows.zip
-          if ((Get-FileHash build/xray-windows.zip -Algorithm SHA256).Hash.ToLower() -ne '244deaba2098c2964e49bba90df3707777e5f5f428a82d2f29604015f24beec2') { throw 'Xray checksum mismatch' }
+          if ((Get-FileHash build/xray-windows.zip -Algorithm SHA256).Hash.ToLower() -ne 'c10a532a9271964f2aa2f4b4c0757605ff529222cb1d5d7ab88f8ecc52e67fb0') { throw 'Xray checksum mismatch' }
           Expand-Archive build/xray-windows.zip build/windows-runtime -Force
           Copy-Item example/windows/xray/tun2socks.exe,example/windows/xray/wintun.dll build/windows-runtime
           Get-FileHash build/windows-runtime/*.exe,build/windows-runtime/*.dll | Format-Table | Out-File build/windows-runtime/binary-checksums.log
@@ -142,7 +142,7 @@ jobs:
           Copy-Item "$($crt.FullName)/*.dll" $bundle
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-example-1.1.6-${{ matrix.os }}
+          name: windows-example-1.1.7-${{ matrix.os }}
           path: example/build/windows/x64/runner/Release
           retention-days: 7
 

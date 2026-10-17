@@ -8,8 +8,9 @@ This plugin requires Xray-core version 25.10.15 or later to be available on the 
 
 ### 1. Download Xray-core
 
-Download the latest Xray-core for Windows (minimum version 25.10.15) from:
-- Official releases: https://github.com/XTLS/Xray-core/releases
+For flutter_vless 1.1.7, use Xray-core **v26.10.17** (upstream pre-release):
+- [Official v26.10.17 release](https://github.com/XTLS/Xray-core/releases/tag/v26.10.17)
+- [Windows x64 archive](https://github.com/XTLS/Xray-core/releases/download/v26.10.17/Xray-windows-64.zip)
 - Look for `Xray-windows-64.zip` or `Xray-windows-32.zip` depending on your system
 
 ### 2. Extract Xray Executable

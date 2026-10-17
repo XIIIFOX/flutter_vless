@@ -74,6 +74,7 @@ example/ios/XRay.xcframework/
 ios/Pods/
 ios/Flutter/ephemeral/
 ios/XRay.xcframework/
+ios/build_xray_ios/
 ios/flutter_vless/XRay.xcframework/
 ios/XRay.xcframework.zip
 

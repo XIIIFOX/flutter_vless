@@ -2,13 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-XRAY_RUNTIME_VERSION="${XRAY_RUNTIME_VERSION:-26.9.9-protect1}"
-if [ "$XRAY_RUNTIME_VERSION" != "26.9.9-protect1" ] || [ -n "${FLUTTER_VLESS_ANDROID_RUNTIME_REPO:-}" ] || [ -n "${ORG_GRADLE_PROJECT_flutterVlessAndroidRuntimeRepo:-}" ] ||
-   { [ -n "${ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion:-}" ] && [ "$ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion" != "26.9.9-protect1" ]; }; then
+XRAY_RUNTIME_VERSION="${XRAY_RUNTIME_VERSION:-26.10.17-protect1}"
+if [ "$XRAY_RUNTIME_VERSION" != "26.10.17-protect1" ] || [ -n "${FLUTTER_VLESS_ANDROID_RUNTIME_REPO:-}" ] || [ -n "${ORG_GRADLE_PROJECT_flutterVlessAndroidRuntimeRepo:-}" ] ||
+   { [ -n "${ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion:-}" ] && [ "$ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion" != "26.10.17-protect1" ]; }; then
   echo "Official runtime verification rejects repository/version overrides" >&2
   exit 1
 fi
-XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-26.9.9}"
+XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-26.10.17}"
 MAVEN_BASE_URL="https://repo1.maven.org/maven2/dev/tfox/fluttervless/xray-android/$XRAY_RUNTIME_VERSION"
 MAVEN_CENTRAL_RETRY_SECONDS="${MAVEN_CENTRAL_RETRY_SECONDS:-600}"
 TMP_DIR="$(mktemp -d)"

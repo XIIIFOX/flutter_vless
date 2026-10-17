@@ -1,3 +1,9 @@
+## 1.1.7
+
+* Update the runtime to `dev.tfox.fluttervless:xray-android:26.10.17-protect1`, based on Xray-core `v26.10.17` (upstream pre-release).
+* Rebuild armeabi-v7a, arm64-v8a, x86 and x86_64 binaries with 16 KiB page alignment.
+* Adapt the socket-protection overlay to upstream dialer changes, preserving protected DNS, fallback sockets and failure propagation.
+
 ## 1.1.6
 
 * In protected proxy DNS mode, return AAAA NODATA to match the VPN service's IPv6 blocking. Preserve proxy transport endpoint resolution and IPv4 DNS relay.

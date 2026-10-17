@@ -1,6 +1,6 @@
 # Xray-core Setup for macOS
 
-The plugin runs Xray-core `v26.9.9` through `XRay.xcframework`. Both the app and
+The plugin runs Xray-core `v26.10.17` through `XRay.xcframework`. Both the app and
 Packet Tunnel link the native library; a standalone `xray` executable is not
 required for normal plugin operation.
 
@@ -8,7 +8,7 @@ required for normal plugin operation.
 
 The universal framework supports Apple Silicon and Intel on macOS 13 or newer.
 SwiftPM and CocoaPods use the bundled framework when present, otherwise they
-download the pinned [macOS native release](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-macos-v26.9.9)
+download the pinned [macOS native release](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-macos-v26.10.17)
 and verify its SHA-256 checksum. Keep the release tag and checksum in
 `flutter_vless_macos/Package.swift` and `flutter_vless_macos.podspec` together.
 
@@ -36,8 +36,8 @@ checks. It is separate from the framework used by the plugin:
 
 ```bash
 ./example/macos/Runner/xray/xray version
-# Xray 26.9.9 ... 52a412d
+# Xray 26.10.17 ... 92ccc93
 ```
 
 For an Intel standalone executable, use the matching archive from the
-[upstream v26.9.9 release](https://github.com/XTLS/Xray-core/releases/tag/v26.9.9).
+[upstream v26.10.17 release](https://github.com/XTLS/Xray-core/releases/tag/v26.10.17).

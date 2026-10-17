@@ -1,3 +1,9 @@
+## 1.1.7
+
+* Update the universal arm64/x86_64 Xray runtime to `v26.10.17` (upstream pre-release), pinned to commit `92ccc939aaf4f8965f369cf0b142e005aeaa11d5`.
+* Update SwiftPM and CocoaPods to the matching verified `xray-macos-v26.10.17` XCFramework.
+* Preserve private startup, asset selection, authenticated local proxies and the 128 KiB HTTP/2 upload scratch cap.
+
 ## 1.1.6
 
 * Return AAAA NODATA from protected system DNS while IPv6 forwarding is blocked, avoiding unusable IPv6 destinations and early connection closures in dual-stack clients. Preserve proxied IPv4 DNS.

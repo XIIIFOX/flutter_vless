@@ -1,3 +1,8 @@
+## 1.1.7
+
+* Update the Windows runtime validation workflow and example runtime to Xray-core `v26.10.17` (upstream pre-release).
+* Pin the setup guide to the matching official Windows release archive.
+
 ## 1.1.6
 
 * Return AAAA NODATA from protected system DNS to match the IPv4-only VPN policy and prevent clients from choosing blocked IPv6 destinations.

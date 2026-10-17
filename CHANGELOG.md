@@ -1,3 +1,10 @@
+## 1.1.7
+
+* Update Xray-core on Android, iOS, macOS and the Windows runtime workflow to `v26.10.17` (upstream pre-release), pinned to commit `92ccc939aaf4f8965f369cf0b142e005aeaa11d5`.
+* Rebuild Android runtimes for all four ABIs and Apple XCFrameworks; update hosted runtime URLs, source pins and artifact checksums.
+* Adapt the Android socket-protection overlay to upstream controller failure propagation while preserving protected DNS and fallback dialers.
+* Refresh example desktop runtimes and geodata from verified upstream release archives.
+
 ## 1.1.6
 
 **Security & Reliability Update**

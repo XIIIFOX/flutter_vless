@@ -109,6 +109,7 @@ jobs:
         run: |
           python3 tool/test_verify_android_dns_capture.py
           python3 tool/test_android_dns_fixture.py
+          python3 tool/test_android_flutter_smoke_retry.py
       - name: Verify Maven Central Android runtime resolution
         run: tool/test_android_maven_runtime.sh
 
@@ -139,7 +140,8 @@ jobs:
           profile: pixel_6
           disable-linux-hw-accel: false
           script: |
-            (cd example && flutter pub get && flutter test integration_test/android_xray_runtime_smoke_test.dart -d emulator-5554)
+            (cd example && flutter pub get)
+            python3 tool/test_android_flutter_smoke.py --serial emulator-5554
             ANDROID_SERIAL=emulator-5554 tool/test_android_security_emulator.sh
             python3 tool/test_android_separate_uid.py --serial emulator-5554 --output build/android-separate-uid-results.json
       - name: Preserve Android security test evidence
@@ -149,6 +151,7 @@ jobs:
           name: android-security-emulator
           path: |
             build/android-security-emulator.*/
+            build/android-flutter-smoke/
             build/android-separate-uid-results.json
           if-no-files-found: ignore
 

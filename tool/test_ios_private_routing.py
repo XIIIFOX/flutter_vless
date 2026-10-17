@@ -91,8 +91,12 @@ with tempfile.TemporaryDirectory(prefix="flutter-vless-private-routing-") as dir
             text = (work / "runtime.log").read_text(errors="replace")
             if "ROUTING_READY" in text:
                 if mode == "original":
-                    assert "ROUTING_ORIGINAL_VPN_REJECT_PASS" in text
-                return
+                    assert "ROUTING_ORIGINAL_VPN_ACCEPT_PASS" in text
+                if mode == "vpn":
+                    matches = re.findall(r"ROUTING_MANAGED_PORT=(\d+)", text)
+                    assert matches, "Missing private adapter port"
+                    return int(matches[-1])
+                return None
             if process.poll() is not None:
                 raise RuntimeError("Private native probe stopped before readiness (native details withheld)")
             time.sleep(.1)
@@ -133,18 +137,18 @@ with tempfile.TemporaryDirectory(prefix="flutter-vless-private-routing-") as dir
             # The Mac's existing VPN may use the same exit as the tested server.
             # Native per-outbound counters distinguish routing even in that case.
             proxy_other_domain = observed_ip(PROXY_URL, PORT)
-            print(f"PASS profile {index}: original proxyOnly inbound routing and VPN rejection", flush=True)
-            profile["inbounds"] = profile["inbounds"][:1]
+            print(f"PASS profile {index}: original proxyOnly inbound routing and VPN acceptance", flush=True)
+            imported_rules = profile["routing"]["rules"]
             profile["routing"]["rules"] = [
                 {"type": "field", "domain": ["full:api.ipify.org"], "outboundTag": "direct"},
-                {"type": "field", "domain": ["full:api4.ipify.org"], "outboundTag": "proxy"}]
+                {"type": "field", "domain": ["full:api4.ipify.org"], "outboundTag": "proxy"}, *imported_rules]
             for generation in range(2):
-                start(profile, "vpn")
+                managed_port = start(profile, "vpn")
                 before = counters()
-                routed_direct = observed_ip(DIRECT_URL, PORT, True)
+                routed_direct = observed_ip(DIRECT_URL, managed_port, True)
                 after_direct = counters()
                 assert after_direct[0] > before[0], "Direct domain did not increase the native direct counter"
-                routed_proxy = observed_ip(PROXY_URL, PORT, True)
+                routed_proxy = observed_ip(PROXY_URL, managed_port, True)
                 after_proxy = counters()
                 assert after_proxy[1] > after_direct[1], "Proxy domain did not increase the native proxy counter"
                 assert after_proxy[0] == after_direct[0], "Proxy domain also produced direct traffic"
@@ -152,7 +156,7 @@ with tempfile.TemporaryDirectory(prefix="flutter-vless-private-routing-") as dir
                 # equality is recorded below; path acceptance uses native counters.
                 print(f"PASS profile {index}: protected domain routing, runtime generation {generation}", flush=True)
             summary["profiles"].append({"index": index, "original_proxy_only_routing": True,
-                "original_vpn_rejected": True, "distinct_egress": direct != proxy, "protected_domain_routing_generations": 2,
+                "original_vpn_accepted": True, "distinct_egress": direct != proxy, "protected_domain_routing_generations": 2,
                 "native_outbound_counter_routing": True, "direct_baseline_matches": routed_direct == direct,
                 "proxy_same_domain_baseline_matches": routed_proxy == proxy_other_domain})
         summary["passed"] = True

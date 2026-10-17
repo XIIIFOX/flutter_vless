@@ -438,6 +438,12 @@ if [ "$CAPTURE_DNS" -eq 1 ]; then
   # The emulator console capture covers its cellular Ethernet backend. Modern
   # virtual Wi-Fi can bypass that capture, so exercise DNS on cellular and demand
   # positive proxy observations. Handover above independently covers Wi-Fi.
+  # Reassert the modem's data registration after handover. Some emulator
+  # images drop the cellular data call while Wi-Fi is preferred. The following
+  # native transport assertion still fails if registration does not recover.
+  bounded 20 "$OUT_DIR/capture-cellular-register.log" "$ADB" -s "$SERIAL" emu gsm data home
+  bounded 20 "$OUT_DIR/capture-cellular-enable.log" "$ADB" -s "$SERIAL" shell svc data enable
+  bounded 20 "$OUT_DIR/capture-cellular-retain.log" "$ADB" -s "$SERIAL" shell settings put global mobile_data_always_on 1
   CAPTURE_WIFI_DISABLED=1
   bounded 20 "$OUT_DIR/capture-wifi-disable.log" "$ADB" -s "$SERIAL" shell svc wifi disable
   python3 - "$ADB" "$SERIAL" <<'PY'

@@ -27,8 +27,8 @@ func runPrivateRouting() async {
         let proxy = ProxyOnlyRunner()
         let logger = RoutingLogger()
         if mode == "original" {
-            do { try LocalProxyAccessPolicy.validateVPN(configData: profile); print("ROUTING_UNSAFE_ACCEPT"); exit(1) }
-            catch LocalProxyAccessError.incompatibleInbounds { print("ROUTING_ORIGINAL_VPN_REJECT_PASS") }
+            try LocalProxyAccessPolicy.validateVPN(configData: profile)
+            print("ROUTING_ORIGINAL_VPN_ACCEPT_PASS")
             try proxy.start(configData: profile, geoAssetsDirectory: nil)
         } else {
             let credentials = try LocalProxyCredentials(username: "routing-fixture-user", password: "routing-fixture-password")
@@ -36,6 +36,8 @@ func runPrivateRouting() async {
                                                                   resolveIPv4: routingIPv4) else {
                 print("ROUTING_PREPARATION_FAILED"); exit(1)
             }
+            let managedPort = TunnelXrayConfigPreparer.parseConfig(jsonData: prepared.data)!.inboundPort
+            print("ROUTING_MANAGED_PORT=\(managedPort)")
             var error: NSError?
             guard XRayStartPrivate(prepared.data, logger, &error) else { print("ROUTING_NATIVE_START_FAILED"); exit(1) }
         }

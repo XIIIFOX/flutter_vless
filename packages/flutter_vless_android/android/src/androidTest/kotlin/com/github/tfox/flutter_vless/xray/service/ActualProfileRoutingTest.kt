@@ -113,7 +113,7 @@ class ActualProfileRoutingTest {
     @Test fun suppliedProfileProxyOnlyTransfersHttpsThroughSeparateInbounds() {
         val name = InstrumentationRegistry.getArguments().getString("actualProfile")
         org.junit.Assume.assumeTrue("Private profile was not supplied", name != null)
-        require(name!!.matches(Regex("profile-[12]")))
+        require(name!!.matches(Regex("profile-[123]")))
         val original = File(context.noBackupFilesDir, "$name.json").readText()
         try {
             stop()
@@ -140,9 +140,17 @@ class ActualProfileRoutingTest {
     @Test fun suppliedProfileSeparatesDomainRoutesAndPreservesThemAfterRecovery() {
         val name = InstrumentationRegistry.getArguments().getString("actualProfile")
         org.junit.Assume.assumeTrue("Private profile was not supplied", name != null)
-        require(name!!.matches(Regex("profile-[12]"))) { "Unexpected private test input name" }
+        require(name!!.matches(Regex("profile-[123]"))) { "Unexpected private test input name" }
         val original = File(context.noBackupFilesDir, "$name.json").readText()
-        val vpn = File(context.noBackupFilesDir, "$name-vpn.json").readText()
+        // Add only domain test rules; keep the full original listener topology.
+        val routed = JSONObject(original)
+        val routing = routed.optJSONObject("routing") ?: JSONObject()
+        val rules = org.json.JSONArray()
+            .put(JSONObject().put("type", "field").put("domain", org.json.JSONArray().put("full:api.ipify.org")).put("outboundTag", "direct"))
+            .put(JSONObject().put("type", "field").put("domain", org.json.JSONArray().put("full:api4.ipify.org")).put("outboundTag", "proxy"))
+        routing.optJSONArray("rules")?.let { for (i in 0 until it.length()) rules.put(it.get(i)) }
+        routing.put("rules", rules); routed.put("routing", routing)
+        val vpn = routed.toString()
         try {
             stop()
             assertTrue(start(original, proxyOnly = true))
@@ -157,10 +165,11 @@ class ActualProfileRoutingTest {
             assertTrue(start(vpn, proxyOnly = false))
             await("VPN routes ready") { captured() && snapshot().lineSequence().lastOrNull { it.isNotBlank() } == "CONNECTED" }
             assertRoutes(1)
-            // The original extra direct SOCKS input must reject before replacing this working VPN.
-            assertFalse(start(original, proxyOnly = false))
-            await("incompatible replacement rejected") { snapshot().contains("CONFIG_REJECTED") }
-            assertTrue(captured())
+            // Full-profile replacement is valid, including its secondary direct input.
+            assertTrue(start(original, proxyOnly = false))
+            await("full original VPN replacement ready") { captured() && snapshot().lineSequence().lastOrNull { it.isNotBlank() } == "CONNECTED" }
+            assertTrue(start(vpn, proxyOnly = false))
+            await("domain test rules reapplied") { captured() && snapshot().lineSequence().lastOrNull { it.isNotBlank() } == "CONNECTED" }
             val before = snapshot().lineSequence().count { it == "CONNECTED" }
             assertEquals(0, ProcessBuilder("pkill", "-9", "-x", "libxray.so").start().waitFor())
             await("recovered routes ready") { captured() && snapshot().lineSequence().count { it == "CONNECTED" } > before }

@@ -25,7 +25,7 @@ artifact before release.
 
 | Platform | Supported modes | Minimum / validated version | Native requirement | Main limitations |
 | --- | --- | --- | --- | --- |
-| Android | VPN, proxy-only | `minSdk` 23, target SDK 35 in the Android package | Xray runtime AAR from Maven Central; Gradle `packaging.jniLibs.useLegacyPackaging = true` when extracted native executables are required | Main AAR includes device and emulator ABIs. |
+| Android | VPN, proxy-only | `minSdk` 23, target SDK 35 in the Android package (example: 24/36) | Xray runtime AAR from Maven Central; Gradle `packaging.jniLibs.useLegacyPackaging = true` when extracted native executables are required | Main AAR includes device and emulator ABIs. |
 | iOS | VPN, proxy-only | iOS 15.0+ | Network Extension, Packet Tunnel target, App Group, signed real device for tunnel validation | Simulator is not a reliable VPN/tunnel test target. |
 | macOS | VPN, proxy-only | macOS 13.0+ for the validated setup | Packet Tunnel extension, App Group, Swift Package products, setup command | Packet Tunnel routing and DNS changes must follow the architecture note. |
 | Windows | VPN/tunnel, proxy-only | Recent Flutter Windows toolchain | Local `xray.exe` available to the app | Tunnel/system routing may require elevated permissions; the plugin does not download Xray for you. |
@@ -82,10 +82,11 @@ windows/xray/xray.exe
 xray/xray.exe
 xray.exe
 data/flutter_assets/xray/xray.exe
-%APPDATA%/flutter_vless/xray.exe
+data/flutter_assets/windows/xray/xray.exe
 ```
 
-The bundled example expects:
+The plugin does not search PATH, AppData or the current working directory.
+Paths are resolved relative to the application directory. The bundled example expects:
 
 ```text
 example/windows/xray/xray.exe
@@ -99,3 +100,66 @@ example/windows/xray/xray.exe
 - No automatic conversion for protocols that Xray cannot run.
 - VPN/tunnel mode depends on operating-system permissions and native project
   setup, not only Dart code.
+
+## Full Xray profiles in 1.1.7
+
+Android, iOS, macOS and Windows add a separate authenticated loopback SOCKS
+adapter for the VPN. Imported listeners, accounts, tags and sniffing remain in
+the runtime profile, including the common `socks-in` + `socks-direct` arrangement.
+Service ports and tags avoid profile collisions; adapters use HTTP/TLS/QUIC
+sniffing for VPN domain routing. Apple preparation also preserves an explicitly
+selected `routing.domainStrategy`. Isolated Apple delay probes open only their
+own temporary authenticated listener.
+
+This fixes the extra-listener rejection. It does not establish compatibility
+with every feature or protocol accepted by the Xray command-line runtime.
+
+## Remaining compatibility work
+
+These are implementation and acceptance tasks, not supported-feature claims.
+
+1. **Preserve advanced DNS semantics.** Separate the OS-facing protected resolver
+   from imported `dns` hosts, servers, per-domain rules, query strategies, DoH/DoT
+   and DNS tags. Apple/Windows currently replace DNS for VPN protection; FakeDNS
+   and IPv6 remain constrained. Cover DNS loops and endpoint bootstrap without
+   adding physical resolver fallbacks.
+2. **Complete IPv6 forwarding.** Carry TCP/UDP and DNS across both address
+   families, including IPv6-only endpoints, NAT64 and network handover. Current
+   Apple/Windows forwarding blocks IPv6 instead of providing full dual stack.
+3. **Broaden native protocol/transport acceptance.** Test every protocol and
+   transport in the pinned core against each packaged artifact. Include XHTTP
+   download settings, Reality/TLS variants, QUIC/UDP, chaining, mux, balancers,
+   observatory and reverse routing; remove wrapper whitelists only after socket
+   protection and bootstrap behavior are established for that path.
+4. **Finish full-document passthrough.** Preserve imported API/services/stats
+   alongside private statistics (Android/Windows currently replace API settings),
+   and isolate all injected DNS/probe rules to their own adapter. Test tag
+   references, inbound-dependent rules and profiles whose first outbound is not
+   the intended VPN default. Preserve user fields outside the documented privacy
+   overrides for logs and native protection.
+5. **Unify port/address handling.** Accept upstream string port lists, ranges,
+   `env:` references, port zero and Unix sockets where supported. Align Dart and
+   native validators. Private allocation must also check actual OS listeners,
+   API listeners and every generated tag namespace, with bounded retries for
+   bind races. Profile collision checks alone do not cover unrelated processes.
+6. **Manage portable assets and imports.** Define per-platform mappings for
+   certificates/keys, GeoIP/GeoSite and external rule files. Validate missing
+   assets explicitly; a macOS absolute path cannot be assumed to exist on
+   Android. Match JSON/JSONC/BOM/multiple-document support to the actual embedded
+   core and preserve full JSON independently of share-link conversion.
+7. **Expose precise compatibility errors.** Run the pinned core's configuration
+   check before replacing a working session. Report the failing feature/stage
+   with redacted diagnostics and a safe original/effective-config comparison;
+   avoid generic “invalid config” for an OS policy requirement or asset failure.
+8. **Maintain a cross-platform runtime corpus.** Store synthetic, non-secret
+   profiles for the cases above and run them on every core upgrade. Check real
+   HTTP/TCP/UDP bytes, IP/country, direct/proxy routing in both directions,
+   ECH/DoH/QUIC behavior, fresh browser connections, worker/process recovery,
+   system controls and physical devices. A green parser test or CONNECTED icon
+   alone is insufficient.
+
+Always-on acceptance must include an initial authorized profile, cold system
+starts with library reconnect disabled, and policy changes while the service is
+inactive. Android's public state getter may return false until a VPN network
+exists. Lockdown settings are read only for the current consented owner; the
+plugin never changes OS Always-on policy itself.

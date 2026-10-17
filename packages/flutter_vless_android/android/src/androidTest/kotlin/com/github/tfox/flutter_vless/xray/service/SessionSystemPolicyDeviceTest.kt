@@ -25,12 +25,19 @@ class SessionSystemPolicyDeviceTest {
     private val manager get() = context.getSystemService(ConnectivityManager::class.java)
     private fun captured() = manager.getNetworkCapabilities(manager.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
     private fun snapshot() = XrayCoreManager.getProviderDebugSnapshot(context)
-    private fun start() {
+    private fun start(options: NativeVlessOptions = NativeVlessOptions()) {
         check(android.net.VpnService.prepare(context) == null) { "Disposable test VPN consent is required" }
+        val accepted = java.util.concurrent.CountDownLatch(1)
+        var resultCode = -1
         context.startForegroundService(Intent(context, XrayVPNService::class.java)
+            .putExtra("start_receiver", object : android.os.ResultReceiver(android.os.Handler(android.os.Looper.getMainLooper())) {
+                override fun onReceiveResult(code: Int, data: android.os.Bundle?) { resultCode = code; accepted.countDown() }
+            })
             .putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE)
-            .putExtra("V2RAY_CONFIG", XrayConfig(REMARK = "System policy test", V2RAY_FULL_JSON_CONFIG =
+            .putExtra("V2RAY_CONFIG", XrayConfig(REMARK = "System policy test", PLUGIN_OPTIONS_JSON = com.google.gson.Gson().toJson(options), V2RAY_FULL_JSON_CONFIG =
                 """{"inbounds":[],"outbounds":[{"tag":"proxy","protocol":"socks","settings":{"address":"10.0.2.2","port":18080}}]}""")))
+        assertTrue("Native start acknowledgement", accepted.await(15, TimeUnit.SECONDS))
+        assertEquals("Native session accepted", 0, resultCode)
     }
     private fun stop() = context.startService(Intent(context, XrayVPNService::class.java)
         .putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.STOP_SERVICE))
@@ -63,6 +70,12 @@ class SessionSystemPolicyDeviceTest {
                 start(); await("initial session ready", ::ready)
                 policy.enableLockdown()
                 assertEquals(context.packageName, policy.alwaysOn()); assertTrue(policy.locked())
+                // Requiring Always-on must survive a cold OS restart even with
+                // library reconnect disabled; public isAlwaysOn is false before establish().
+                val strict = NativeVlessOptions(reconnect = NativeVlessOptions.Reconnect(enabled = false),
+                    protection = NativeVlessOptions.Protection(alwaysOn = "requireEnabled"))
+                start(strict)
+                await("strict always-on session ready", ::ready)
                 val oldPid = context.getSystemService(ActivityManager::class.java).runningAppProcesses.first {
                     it.processName == "${context.packageName}:RunSoLibXrayDaemon"
                 }.pid

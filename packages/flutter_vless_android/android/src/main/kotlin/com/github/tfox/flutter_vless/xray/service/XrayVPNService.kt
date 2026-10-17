@@ -76,8 +76,15 @@ class XrayVPNService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (Build.VERSION.SDK_INT >= 29) {
-            AppConfigs.ALWAYS_ON_ENABLED = isAlwaysOn
-            AppConfigs.LOCKDOWN_ENABLED = isLockdownEnabled
+            // Public getters are false before an active VPN network exists.
+            // The readable OS lockdown bit plus current VPN consent identifies
+            // this owner even during a cold sticky restart, without guessing
+            // from preferences or another application's Always-on policy.
+            val ownConfiguredLockdown = VpnService.prepare(this) == null && runCatching {
+                android.provider.Settings.Secure.getInt(contentResolver, "always_on_vpn_lockdown", 0) == 1
+            }.getOrDefault(false)
+            AppConfigs.ALWAYS_ON_ENABLED = isAlwaysOn || ownConfiguredLockdown
+            AppConfigs.LOCKDOWN_ENABLED = isLockdownEnabled || ownConfiguredLockdown
         }
         if (intent?.action == ACTION_QUERY_SYSTEM_STATE || intent?.action == ACTION_CLEAR_QUICK_ACCESS) {
             @Suppress("DEPRECATION")
@@ -138,6 +145,10 @@ class XrayVPNService : VpnService() {
             }
             return START_NOT_STICKY
         }
+        // Android sends this action when starting its configured Always-on owner.
+        // Before establish(), isAlwaysOn can be false because no VPN network exists.
+        // The service is non-exported and protected by BIND_VPN_SERVICE.
+        val systemAlwaysOnStart = intent?.action == SERVICE_INTERFACE && suppliedCommand == null
         val request = requests.incrementAndGet()
         if (tileToggle) tileStartPending = true
         showForeground("Connecting; traffic protection is being prepared")
@@ -158,7 +169,7 @@ class XrayVPNService : VpnService() {
                     PROXY_ONLY = intent.getBooleanExtra("PROXY_ONLY", false)
                 }
             else runCatching { profiles.load() }.getOrNull()
-            val restoreDisabled = command == null && incoming != null && !AppConfigs.ALWAYS_ON_ENABLED && runCatching {
+            val restoreDisabled = command == null && incoming != null && !AppConfigs.ALWAYS_ON_ENABLED && !systemAlwaysOnStart && runCatching {
                 val raw = incoming.PLUGIN_OPTIONS_JSON?.let { Gson().fromJson(it,Map::class.java) }
                 !(if (raw == null) NativeOptionsStore(this).read() else NativeVlessOptions.parse(raw)).reconnect.enabled
             }.getOrDefault(true)
@@ -174,7 +185,7 @@ class XrayVPNService : VpnService() {
                 }
                 return@execute
             }
-            val accepted = runCatching { acceptSession(incoming, command == AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE, request) }
+            val accepted = runCatching { acceptSession(incoming, command == AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE, request, systemAlwaysOnStart) }
                 .getOrElse { event(Event.CONFIG_REJECTED); false }
             if (tileToggle && accepted) XrayCoreManager.publishState(this,AppConfigs.V2RAY_STATES.V2RAY_CONNECTING)
             tileStartPending = false
@@ -186,13 +197,13 @@ class XrayVPNService : VpnService() {
         return START_STICKY
     }
 
-    private fun acceptSession(incoming: XrayConfig, explicit: Boolean, request: Long): Boolean {
+    private fun acceptSession(incoming: XrayConfig, explicit: Boolean, request: Long, systemAlwaysOnStart: Boolean): Boolean {
         if (request != requests.get()) return false
         val options = try {
             val parsed = incoming.PLUGIN_OPTIONS_JSON?.let { Gson().fromJson(it,Map::class.java) }
             (if (parsed == null) NativeOptionsStore(this).read() else NativeVlessOptions.parse(parsed)).also {
                 it.validateAndroid(Build.VERSION.SDK_INT)
-                require(incoming.PROXY_ONLY || it.protection.alwaysOn != "requireEnabled" || AppConfigs.ALWAYS_ON_ENABLED)
+                require(incoming.PROXY_ONLY || it.protection.alwaysOn != "requireEnabled" || AppConfigs.ALWAYS_ON_ENABLED || systemAlwaysOnStart)
             }
         } catch (_: Exception) { event(Event.CONFIG_REJECTED); return false }
         val candidate = incoming.copy(BLOCKED_APPS = ArrayList(incoming.BLOCKED_APPS), BYPASS_SUBNETS = ArrayList(incoming.BYPASS_SUBNETS))

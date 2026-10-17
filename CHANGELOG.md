@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Fix Android cold Always-on restoration with disabled library reconnect and required Always-on policy; preserve OS-managed protection before a VPN network exists.
 * Accept full VPN profiles with multiple or no imported listeners on Android, iOS, macOS and Windows. Add a separate authenticated VPN adapter with collision-safe service ports/tags; preserve imported authentication, sniffing and routing. Accept full JSON in the example clipboard importer and multi-listener Apple delay probes.
 
 * Add backward-compatible typed Notification, Quick Access/Quick Tile, Reconnect, Protection and Diagnostics options, native capability discovery and validated platform errors.

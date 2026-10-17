@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Keep status events and traffic counter updates on the Flutter platform thread; cover delivery from background callbacks and cancelled listeners.
 * Add native menu-bar controls, optional macOS 26+ Control Center integration, validated typed options and native capability reporting.
 * Configure native worker retry limits, Apple On Demand and bounded private diagnostics while preserving protected VPN policy and Keychain references.
 * Add isolated options/control tests and an idempotent host WidgetKit setup generator in the main package.

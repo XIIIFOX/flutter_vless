@@ -340,7 +340,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 return
             }
 
-            Task{
+            Task { @MainActor in
                 do{
                     await self.packetTunnelManager?.refreshForwardingState()
                     self.emitStatus(duration: seconds, state: self.currentRuntimeState(), reason: "provider-readiness")
@@ -425,6 +425,12 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     }
 
     private func emitStatus(duration: Int, state: String, reason: String) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.emitStatus(duration: duration, state: state, reason: reason)
+            }
+            return
+        }
         let payload = ["\(duration)", "\(uploadSpeed)", "\(downloadSpeed)", "\(totalUpload)", "\(totalDownload)", state]
         if state != "CONNECTED" || Date().timeIntervalSince(lastTrafficLogDate) >= 5 {
             pluginLog.info("Status event reason=\(reason, privacy: .public) payload=\(payload.joined(separator: ","), privacy: .public) vpnStatus=\(self.packetTunnelManager?.status?.rawValue ?? -1, privacy: .public)")

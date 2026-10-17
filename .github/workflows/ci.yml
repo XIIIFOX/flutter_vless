@@ -191,6 +191,7 @@ jobs:
         run: |
           tool/test_ios_manager_policy.sh
           tool/test_ios_operation_queue.sh
+          python3 tool/test_platform_status_dispatch.py
       - name: Test strict local proxy transport and TLS rejection
         run: tool/test_ios_local_proxy_transport.sh
       - name: Resolve pinned HEV and verify its authentication configuration

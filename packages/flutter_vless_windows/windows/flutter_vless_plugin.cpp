@@ -67,19 +67,10 @@ inline void LogMessage(const std::string& msg) {
  * - MethodChannel: For method calls from Flutter to native (start/stop/status)
  * - EventChannel: For streaming status updates from native to Flutter
  * 
- * @details Thread Safety and UI Thread Requirements:
- * Flutter platform channels have specific threading requirements:
- * - MethodChannel callbacks are invoked on the platform (UI) thread
- * - EventChannel EventSink operations should ideally be called from UI thread
- * - However, modern Flutter Windows implementation makes EventSink thread-safe
- * 
- * @warning UI Thread Interaction:
- * The SendStatusToUI() function sends status updates to Flutter. While Flutter
- * documentation recommends calling EventSink from UI thread, the current
- * implementation works correctly from background threads due to Flutter's
- * thread-safe EventSink implementation. The warning about non-platform thread
- * is non-critical and does not affect functionality.
- * 
+ * @details Platform channel callbacks and status delivery run on the platform
+ * thread. Worker threads enqueue copied status payloads through the window
+ * message dispatcher.
+ *
  * @note Status Update Format:
  * Status updates are sent as EncodableList with 6 elements:
  * [0] = connection duration (seconds as string)
@@ -104,21 +95,7 @@ class FlutterVlessPlugin : public flutter::Plugin {
   void StartStatusTimer();
   void StopStatusTimer();
   void UpdateStatus();
-  /**
-   * @brief Sends status update to Flutter UI via EventChannel.
-   * 
-   * @param status Status data as EncodableList (see class documentation for format).
-   * 
-   * @details Thread Safety:
-   * This function is called from background threads (status update thread).
-   * While Flutter documentation recommends calling EventSink from UI thread,
-   * modern Flutter Windows implementation makes EventSink operations thread-safe.
-   * The warning about non-platform thread is non-critical.
-   * 
-   * @warning DO NOT MODIFY:
-   * This function's implementation is critical for UI communication. Changing
-   * the status format or sending mechanism may break Flutter UI updates.
-   */
+  // Copies worker status updates to the platform thread before EventSink use.
   void SendStatusToUI(const flutter::EncodableList& status);
 
   // Flutter platform integration
@@ -135,7 +112,7 @@ class FlutterVlessPlugin : public flutter::Plugin {
   
   // Thread synchronization
   std::mutex status_mutex_;  ///< Protects traffic statistics (total_upload_, total_download_, etc.)
-  std::mutex sink_mutex_;    ///< Protects status_sink_ access (thread-safe EventSink operations)
+  std::mutex sink_mutex_;    ///< Protects status_sink_ lifetime
   
   // Traffic statistics (protected by status_mutex_)
   std::chrono::steady_clock::time_point start_time_;  ///< When connection was established
@@ -144,8 +121,9 @@ class FlutterVlessPlugin : public flutter::Plugin {
   int64_t upload_speed_ = 0;     ///< Current upload speed (bytes/second)
   int64_t download_speed_ = 0;   ///< Current download speed (bytes/second)
   
-  // UI thread invocation mechanism (for future use, not currently used for status updates)
+  // Platform-thread callback dispatcher for status, method results and controls
   HWND main_window_handle_ = nullptr;  ///< Main window handle for PostMessage
+  const DWORD platform_thread_id_ = GetCurrentThreadId();
   int window_proc_delegate_id_ = 0;      ///< ID of registered window proc delegate
   UINT ui_callback_message_id_ = 0;      ///< Registered window message ID for UI callbacks
   std::mutex ui_callbacks_mutex_;        ///< Protects ui_callbacks_ vector
@@ -296,37 +274,15 @@ FlutterVlessPlugin::FlutterVlessPlugin(flutter::PluginRegistrarWindows *registra
 
   status_channel_->SetStreamHandler(std::move(status_handler));
 
-  /**
-   * @brief Setup UI thread invocation mechanism using window proc delegate.
-   * 
-   * @details Purpose:
-   * This mechanism allows executing callbacks on the Flutter UI thread by
-   * posting custom window messages that are handled by the window proc delegate.
-   * 
-   * @details Current Usage:
-   * Currently, this mechanism is set up but NOT used for status updates.
-   * Status updates are sent directly via EventSink (which is thread-safe in
-   * modern Flutter Windows). This mechanism is kept for potential future use
-   * or other UI thread operations that may require strict UI thread execution.
-   * 
-   * @details Implementation:
-   * 1. Registers a custom window message ID via RegisterWindowMessageA
-   * 2. Registers a window proc delegate that handles this message
-   * 3. When PostMessage is called with this message ID, the delegate executes
-   *    callbacks from the ui_callbacks_ queue on the UI thread
-   * 
-   * @note This is NOT used for status updates. Status updates use direct
-   *       EventSink calls which are thread-safe in modern Flutter.
-   * 
-   * @warning DO NOT REMOVE:
-   * While not currently used for status updates, this mechanism may be needed
-   * for other UI operations. Removing it may break future functionality.
-   */
+  // Deliver queued callbacks through the top-level window's platform thread.
   // Setup UI thread invocation mechanism using window proc delegate
   if (registrar_) {
     auto view = registrar_->GetView();
     if (view) {
-      main_window_handle_ = view->GetNativeWindow();
+      // The registrar's delegate receives messages for the top-level window,
+      // while Flutter's view can be a child HWND.
+      const HWND view_window = view->GetNativeWindow();
+      main_window_handle_ = view_window ? GetAncestor(view_window, GA_ROOT) : nullptr;
       if (main_window_handle_) {
         LogMessage("Main window handle obtained: " + std::to_string(reinterpret_cast<uintptr_t>(main_window_handle_)));
       } else {
@@ -344,22 +300,6 @@ FlutterVlessPlugin::FlutterVlessPlugin(flutter::PluginRegistrarWindows *registra
       LogMessage("Window message ID registered: " + std::to_string(ui_callback_message_id_));
     }
     
-    /**
-     * @brief Registers window proc delegate for UI thread callback execution.
-     * 
-     * @details Window Proc Delegate:
-     * Flutter Windows allows plugins to register a delegate that intercepts
-     * window messages before they reach the default window procedure. This
-     * provides a way to execute code on the UI thread by posting custom messages.
-     * 
-     * @details Message Handling:
-     * When a custom window message (ui_callback_message_id_) is received:
-     * 1. The delegate extracts all queued callbacks from ui_callbacks_
-     * 2. Executes each callback on the UI thread
-     * 3. Returns LRESULT(0) to indicate the message was handled
-     * 
-     * @note Currently not used for status updates, but kept for future use.
-     */
     window_proc_delegate_id_ = registrar_->RegisterTopLevelWindowProcDelegate(
         [this](HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
             -> std::optional<LRESULT> {
@@ -648,7 +588,7 @@ void FlutterVlessPlugin::StopStatusTimer() {
  * @note Thread Safety:
  * Uses status_mutex_ to protect traffic statistics and sink_mutex_ to protect
  * status_sink_ access. The function is called from status_thread_ (background
- * thread), but SendStatusToUI() handles thread-safe EventSink operations.
+ * thread); SendStatusToUI() dispatches sink delivery to the platform thread.
  */
 void FlutterVlessPlugin::UpdateStatus() {
   const int state = V2rayManager::GetInstance().IsRunning() ? 2 : (V2rayManager::GetInstance().IsProtecting() ? 1 : 0);
@@ -695,65 +635,13 @@ void FlutterVlessPlugin::UpdateStatus() {
 }
 
 
-/**
- * @brief Sends status update to Flutter UI via EventChannel EventSink.
- * 
- * @param status Status data as EncodableList (see UpdateStatus() for format).
- * 
- * @details Thread Safety and UI Thread Requirements:
- * 
- * @subsection Threading_Model Threading Model:
- * - This function is called from background threads (status update thread)
- * - Flutter documentation recommends calling EventSink from UI thread
- * - However, modern Flutter Windows implementation makes EventSink thread-safe
- * - The warning "sent a message from native to Flutter on a non-platform thread"
- *   is non-critical and does not affect functionality
- * 
- * @subsection Implementation_Details Implementation Details:
- * The function uses direct EventSink->Success() calls with proper mutex
- * synchronization. While Flutter prefers UI thread execution, the thread-safe
- * nature of EventSink in modern Flutter Windows allows this approach to work
- * correctly from any thread.
- * 
- * @subsection Alternative_Approach Alternative Approach (Not Used):
- * An alternative approach using PostMessage + window proc delegate was
- * considered but not implemented because:
- * - EventSink is already thread-safe in modern Flutter
- * - Direct calls are simpler and more reliable
- * - The PostMessage mechanism adds complexity without clear benefits
- * 
- * @details Status Format:
- * The status parameter must be an EncodableList with exactly 6 string elements:
- * [0] = duration (seconds)
- * [1] = upload speed (bytes/second)
- * [2] = download speed (bytes/second)
- * [3] = total upload (bytes)
- * [4] = total download (bytes)
- * [5] = status ("CONNECTED" or "DISCONNECTED")
- * 
- * @details Error Handling:
- * - Catches and logs exceptions during EventSink operations
- * - Logs warning if status_sink_ is null (EventChannel not connected)
- * - Continues execution even if status send fails (non-critical)
- * 
- * @warning CRITICAL: DO NOT MODIFY THIS FUNCTION
- * 
- * This function is critical for UI communication. Modifying the status sending
- * logic, format, or thread handling may break Flutter UI updates. The current
- * implementation works correctly despite the non-UI thread warning.
- * 
- * @note The warning about non-platform thread is expected and non-critical.
- *       The functionality works correctly as-is.
- * 
- * @note Status updates are protected by sink_mutex_ to ensure thread-safe
- *       access to status_sink_ even though EventSink itself is thread-safe.
- */
+// EventSink delivery belongs to the thread that registered the plugin. A mutex
+// protects the sink lifetime; it does not make platform channel calls thread-safe.
 void FlutterVlessPlugin::SendStatusToUI(const flutter::EncodableList& status) {
-  // In modern Flutter Windows, EventSink operations are thread-safe
-  // We can safely call Success() from any thread, but Flutter prefers UI thread
-  // Since PostMessage -> delegate mechanism doesn't seem to work reliably,
-  // we'll use a simpler approach: send directly with proper synchronization
-  
+  if (GetCurrentThreadId() != platform_thread_id_) {
+    RunOnUIThread([this, status] { SendStatusToUI(status); });
+    return;
+  }
   std::lock_guard<std::mutex> sink_lock(sink_mutex_);
   if (status_sink_) {
     try {

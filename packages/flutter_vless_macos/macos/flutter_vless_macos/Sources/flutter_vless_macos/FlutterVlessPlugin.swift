@@ -793,7 +793,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             let elapsed = Date().timeIntervalSince(self.packetTunnelManager?.connectedDate ?? Date())
             let seconds = Int(elapsed)
             self.emitStatus(duration: seconds, state: self.currentWireState(), reason: "timer-vpn")
-            Task{
+            Task { @MainActor in
                 await self.packetTunnelManager?.refreshForwardingState()
                 do{
                     let response =  try await self.packetTunnelManager?.sendProviderMessage(data: "xray_traffic".data(using: .utf8)!)
@@ -885,6 +885,12 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     }
 
     private func emitStatus(duration: Int, state: String, reason: String) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.emitStatus(duration: duration, state: state, reason: reason)
+            }
+            return
+        }
         let payload = ["\(duration)", "\(uploadSpeed)", "\(downloadSpeed)", "\(totalUpload)", "\(totalDownload)", state]
         if Date().timeIntervalSince(lastTrafficLogDate) >= 5 || state != "CONNECTED" {
             pluginDebug("Status event reason=\(reason) payload=\(payload.joined(separator: ",")) eventSink=\(eventSink != nil) vpnStatus=\(packetTunnelManager?.status?.rawValue ?? -1)")

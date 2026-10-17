@@ -51,6 +51,7 @@ enum SDK {
     static var failAllLoads = false
     static var failAfterNextSave = false
     static var failNextRefresh = false
+    static var rearmOnNextRefresh = false
     static var failNextSave = false
     static var loads = 0
     static var notifyTemporaryConnections = false
@@ -76,6 +77,11 @@ class NETunnelProviderManager {
     }
     func loadFromPreferences() async throws {
         if SDK.failNextRefresh { SDK.failNextRefresh = false; throw SDKError.unavailable }
+        if SDK.rearmOnNextRefresh && !isEnabled {
+            SDK.rearmOnNextRefresh = false
+            isEnabled = true
+            isOnDemandEnabled = true
+        }
     }
     func saveToPreferences() async throws {
         if SDK.failNextSave { SDK.failNextSave = false; throw SDKError.unavailable }

@@ -6,6 +6,15 @@ mkdir -p "$PROBE_DIR"
 cat "$ROOT_DIR/tool/fixtures/ios_manager_policy/SDK.swift" > "$PROBE_DIR/Manager.swift"
 sed -n '/^final class PacketTunnelManager/,$p' \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless/FlutterVlessPlugin.swift" >> "$PROBE_DIR/Manager.swift"
+# Storage rollback tests invoke the private transaction in this same-file test
+# extension. Public start separately rejects replacement of a live provider.
+cat >> "$PROBE_DIR/Manager.swift" <<'SWIFT'
+extension PacketTunnelManager {
+    func fixturePersist() async throws {
+        try await preferenceOperations.submit { try await self.saveConfiguration(activate: true) }.value
+    }
+}
+SWIFT
 # Execute the actual provider's entry guards without NetworkExtension side effects.
 python3 - "$ROOT_DIR" "$PROBE_DIR" <<'PYTHON'
 from pathlib import Path

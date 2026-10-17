@@ -29,6 +29,10 @@ import Security
         let saved = SDK.saves
         try await manager.start()
         precondition(SDK.saves == saved && SDK.stopCalls == 0, "Idempotent start must preserve the live provider")
+        manager.nativeOptions = try VlessNativeOptions(["reconnect": ["enabled": false]])
+        do { try await manager.start(); fatalError("Options changes must require a stopped session") } catch {}
+        precondition(SDK.saves == saved && manager.forwardingReady)
+        manager.nativeOptions = try VlessNativeOptions()
         manager.xrayConfig = Data(#"{"secret":"replacement"}"#.utf8)
         do { try await manager.start(); fatalError("Live configuration replacement must be explicit") } catch {}
         precondition(SDK.saves == saved && SDK.stopCalls == 0 && manager.isRecoveryEnabled)
@@ -43,8 +47,12 @@ import Security
         SDK.failNextSave = true
         do { try await manager.stop(); fatalError("Failed disarm must not stop provider") } catch {}
         precondition(SDK.stopCalls == 0 && profile.isOnDemandEnabled)
+        SDK.rearmOnNextRefresh = true
+        do { try await manager.stop(); fatalError("Stop must reject recovery remaining enabled after readback") }
+        catch let error as NSError { precondition(error.domain == "VPN" && error.code == 6) }
+        precondition(SDK.stopCalls == 0 && manager.isRecoveryEnabled)
         SDK.delayedStop = true
-        try await manager.stop(waitForDisconnect: true)
+        try await manager.stop()
         precondition(SDK.stopCalls == 1 && profile.connection.status == .disconnected)
         precondition(!manager.isRecoveryEnabled && !profile.isOnDemandEnabled && !profile.isEnabled)
         manager.bypassSubnets = ["192.168.0.0/16"]
@@ -65,6 +73,19 @@ import Security
         let optionMetadata = (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
         precondition((optionMetadata["options"] as? [String:Any])?["reconnect"] is [String:Any])
         precondition(notifiedReference == optionMetadata["xrayConfigReference"] as? Data)
+        SDK.profile!.connection.status = .connected
+        SDK.providerResponse = Data("recovering".utf8)
+        await manager.refreshForwardingState()
+        precondition(!manager.forwardingReady && !manager.isRecoveryEnabled)
+        SDK.providerResponse = Data("ready".utf8)
+        await manager.refreshForwardingState()
+        precondition(manager.forwardingReady, "Readiness must not depend on On Demand")
+        let beforeNoRecoveryStart = SDK.saves
+        try await manager.start()
+        precondition(manager.forwardingReady && SDK.saves == beforeNoRecoveryStart)
+        SDK.profile!.connection.status = .disconnected
+        await manager.refreshForwardingState()
+        precondition(!manager.forwardingReady)
         try await manager.stop(waitForDisconnect:true)
         try await manager.removeFromPreferences()
         print("PASS macOS manager: mandatory policy, private persistence, readiness, live-config rejection, subnet policy, failed disarm, ordered stop and secret cleanup")

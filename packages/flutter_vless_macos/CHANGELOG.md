@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Wait for full tunnel teardown after explicit Stop, verify that recovery is disabled, and keep live configuration/options changes explicit. Check forwarding readiness even with On Demand disabled.
 * Keep status events and traffic counter updates on the Flutter platform thread; cover delivery from background callbacks and cancelled listeners.
 * Add native menu-bar controls, optional macOS 26+ Control Center integration, validated typed options and native capability reporting.
 * Configure native worker retry limits, Apple On Demand and bounded private diagnostics while preserving protected VPN policy and Keychain references.

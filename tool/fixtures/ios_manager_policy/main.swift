@@ -28,6 +28,20 @@ import Security
         SDK.providerResponse = Data("ready".utf8)
         await manager.refreshForwardingState()
         precondition(manager.forwardingReady)
+        let original = manager.xrayConfig
+        let beforeIdempotentStart = SDK.saves
+        try await manager.start()
+        precondition(SDK.saves == beforeIdempotentStart && manager.forwardingReady,
+                     "Idempotent start must keep the actual live revision")
+        manager.xrayConfig = Data("replacement-not-read-by-provider".utf8)
+        do { try await manager.start(); preconditionFailure("Live replacement must require an explicit stop") }
+        catch let error as NSError { precondition(error.domain == "VPN" && error.code == 5) }
+        precondition(SDK.saves == beforeIdempotentStart && manager.forwardingReady && manager.isRecoveryEnabled)
+        manager.xrayConfig = original
+        manager.nativeOptions = try VlessNativeOptions(["reconnect": ["enabled": false]])
+        do { try await manager.start(); preconditionFailure("Changed options must not pretend to replace a live session") }
+        catch let error as NSError { precondition(error.code == 5) }
+        manager.nativeOptions = try VlessNativeOptions()
         SDK.profile?.connection.status = .reasserting
         await manager.refreshForwardingState()
         precondition(!manager.forwardingReady)
@@ -53,6 +67,11 @@ import Security
         let beforeReject = SDK.saves
         do { try await manager.start(); preconditionFailure("Strict mode must reject route exclusions") } catch {}
         precondition(SDK.saves == beforeReject && manager.isRecoveryEnabled && manager.forwardingReady)
+        let stopsBeforeFailedReadback = SDK.stopCalls
+        SDK.rearmOnNextRefresh = true
+        do { try await manager.stop(); preconditionFailure("Stop must verify persisted recovery is disabled") }
+        catch let error as NSError { precondition(error.domain == "VPN" && error.code == 6) }
+        precondition(SDK.stopCalls == stopsBeforeFailedReadback && manager.isRecoveryEnabled)
         try await manager.stop()
         precondition(SDK.profile?.isEnabled == false && SDK.profile?.isOnDemandEnabled == false)
         let legacy = NETunnelProviderProtocol()
@@ -127,6 +146,7 @@ import Security
         try await provider.startTunnel(options: nil)
         precondition(provider.reachedBootstrap, "Obsolete metadata cannot disable the required OS protection")
         try await verifyStatusNotificationScope(manager)
+        try await verifyOrderedStopAndReplacement(manager, keychain: keychain)
         try await verifySecretTransactions()
         manager.nativeOptions = try VlessNativeOptions(["quickAccess":["enabled":true],"reconnect":["enabled":false]])
         manager.bypassSubnets = []
@@ -138,10 +158,30 @@ import Security
         let optionMetadata = (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
         precondition((optionMetadata["options"] as? [String:Any])?["reconnect"] is [String:Any])
         precondition(notifiedReference == optionMetadata["xrayConfigReference"] as? Data)
+        try await verifyReadinessWithoutOnDemand(manager)
         try await manager.stop(waitForDisconnect:true)
         try await manager.removeFromPreferences()
         print("PASS: preference-load errors; transactional Keychain rollback/migration/cleanup; permission privacy; cold-start secret denial; traffic protection and proxy-switch teardown")
     }
+}
+
+func verifyReadinessWithoutOnDemand(_ manager: PacketTunnelManager) async throws {
+    // A connected OS tunnel must still prove forwarding when automatic
+    // recovery is disabled. On Demand is a policy, not a readiness signal.
+    precondition(!manager.isRecoveryEnabled)
+    SDK.profile!.connection.status = .connected
+    SDK.providerResponse = Data("recovering".utf8)
+    await manager.refreshForwardingState()
+    precondition(!manager.forwardingReady)
+    SDK.providerResponse = Data("ready".utf8)
+    await manager.refreshForwardingState()
+    precondition(manager.forwardingReady)
+    let saved = SDK.saves
+    try await manager.start()
+    precondition(manager.forwardingReady && SDK.saves == saved)
+    SDK.profile!.connection.status = .disconnected
+    await manager.refreshForwardingState()
+    precondition(!manager.forwardingReady, "Inactive sessions must discard a stale ready reply")
 }
 
 func verifySecretTransactions() async throws {
@@ -163,20 +203,21 @@ func verifySecretTransactions() async throws {
     let saves = SDK.saves
     keychain.failure = errSecMissingEntitlement
     manager.xrayConfig = Data("new-secret".utf8)
-    do { try await manager.start(); preconditionFailure("Wrong access group must reject the new profile") } catch {}
+    do { try await manager.fixturePersist(); preconditionFailure("Wrong access group must reject the new profile") } catch {}
     precondition(SDK.saves == saves && SDK.stopCalls == stops && manager.forwardingReady && manager.isRecoveryEnabled)
     keychain.failure = nil
     SDK.failNextSave = true
-    do { try await manager.start(); preconditionFailure("Profile save failure must rollback") } catch {}
+    do { try await manager.fixturePersist(); preconditionFailure("Profile save failure must rollback") } catch {}
     precondition((try? TunnelSecretProfile.reference(in: (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!)) == first)
     precondition(keychain.records[first] != nil && manager.isRecoveryEnabled)
     keychain.failReadNumber = keychain.readCount + 2
-    do { try await manager.start(); preconditionFailure("Post-save Keychain read failure must rollback") } catch {}
+    do { try await manager.fixturePersist(); preconditionFailure("Post-save Keychain read failure must rollback") } catch {}
     keychain.failReadNumber = nil
     precondition((try? TunnelSecretProfile.reference(in: (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!)) == first)
     precondition(keychain.records[first] != nil && SDK.stopCalls == stops && manager.isRecoveryEnabled)
-    // Successful replacement still retains every possibly active old revision.
-    try await manager.start()
+    // Test the private transaction's revision retention independently of the
+    // public live-start guard (which correctly rejects this replacement).
+    try await manager.fixturePersist()
     let second = try TunnelSecretProfile.reference(in: (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!)
     precondition(second != first && keychain.records[first] != nil)
     keychain.deleteFailure = errSecInteractionNotAllowed
@@ -202,6 +243,26 @@ func verifySecretTransactions() async throws {
     SDK.delayedStop = true
     try await manager.removeFromPreferences()
     precondition(SDK.profile == nil && keychain.records.isEmpty && manager.status == nil)
+}
+
+func verifyOrderedStopAndReplacement(_ manager: PacketTunnelManager, keychain: FixtureKeychain) async throws {
+    manager.bypassSubnets = []
+    SDK.profile!.connection.status = .connected
+    SDK.delayedStop = true
+    try await manager.stop()
+    precondition(manager.status == .disconnected && !manager.isRecoveryEnabled,
+                 "Default stop must await extension teardown before returning")
+    let replacement = Data("ordered-replacement".utf8)
+    manager.xrayConfig = replacement
+    try await manager.start()
+    let metadata = (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+    let applied = try TunnelSecretProfile.load(metadata, providerBundleIdentifier: "fixture.XrayTunnel", client: keychain)
+    precondition(applied == replacement, "Immediate start after stop must install the new revision")
+    SDK.profile!.connection.status = .connected
+    try await manager.stop()
+    precondition(manager.status == .disconnected && SDK.profile!.isEnabled == false
+                 && SDK.profile!.isOnDemandEnabled == false)
+    SDK.delayedStop = false
 }
 
 @MainActor func verifyStatusNotificationScope(_ manager: PacketTunnelManager) async throws {

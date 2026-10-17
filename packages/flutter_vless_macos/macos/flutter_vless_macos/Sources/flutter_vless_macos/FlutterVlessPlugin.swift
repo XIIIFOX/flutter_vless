@@ -975,7 +975,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         pluginLog.info("stopVless requested")
         let operation = commands.submit {
             self.proxyOnlyRunner.stop()
-            try await self.packetTunnelManager?.stop()
+            try await self.packetTunnelManager?.stop(waitForDisconnect: true)
         }
         Task {
             do {
@@ -1526,14 +1526,18 @@ final class PacketTunnelManager: ObservableObject {
         try await preferenceOperations.submit {
             try self.validateRouting()
             if let active = try await self.loadTunnelProviderManager(),
-               [.connecting, .connected, .reasserting].contains(active.connection.status) {
+               [.connecting, .connected, .reasserting, .disconnecting].contains(active.connection.status) {
                 self.manager = active
-                guard self.storedConfigurationMatches(xrayConfig: self.xrayConfig,
-                    bypassSubnets: self.bypassSubnets, proxyOnly: self.proxyOnly) else {
-                    throw DesktopTunnelError.configurationInUse
+                if active.connection.status == .disconnecting {
+                    try await self.waitUntilInactive()
+                } else {
+                    guard self.storedConfigurationMatches(xrayConfig: self.xrayConfig,
+                        bypassSubnets: self.bypassSubnets, proxyOnly: self.proxyOnly) else {
+                        throw DesktopTunnelError.configurationInUse
+                    }
+                    // Do not persist a revision that the running provider has not read.
+                    return
                 }
-                // Do not persist a revision that the running provider has not read.
-                return
             }
             // Storage validation precedes changing the current readiness flag.
             try await self.saveConfiguration(activate: true)
@@ -1546,7 +1550,7 @@ final class PacketTunnelManager: ObservableObject {
         }.value
     }
 
-    func stop(waitForDisconnect: Bool = false) async throws {
+    func stop(waitForDisconnect: Bool = true) async throws {
         try await preferenceOperations.submit {
             guard let manager = try await self.loadTunnelProviderManager() else {
                 self.manager = nil
@@ -1573,6 +1577,10 @@ final class PacketTunnelManager: ObservableObject {
         }
         self.manager = manager
         try await manager.loadFromPreferences()
+        guard !manager.isEnabled && !manager.isOnDemandEnabled else {
+            throw NSError(domain: "VPN", code: 6, userInfo: [NSLocalizedDescriptionKey:
+                "VPN recovery remained enabled after the stop request"])
+        }
         manager.connection.stopVPNTunnel()
         if waitForDisconnect {
             let deadline = Date().addingTimeInterval(20)
@@ -1588,7 +1596,10 @@ final class PacketTunnelManager: ObservableObject {
     }
 
     func refreshForwardingState() async {
-        guard isRecoveryEnabled else { return }
+        guard status == .connected || status == .reasserting else {
+            forwardingReady = false
+            return
+        }
         let session = manager
         let response = try? await sendProviderMessage(data: Data("xray_runtime_state".utf8))
         // Ignore a reply from a session replaced by a queued start/stop.
@@ -1726,12 +1737,15 @@ final class PacketTunnelManager: ObservableObject {
         }
     }
     func storedConfigurationMatches(xrayConfig: Data, bypassSubnets: [String], proxyOnly: Bool) -> Bool {
-        guard isRecoveryEnabled,
+        guard manager?.isEnabled == true,
               let configuration = manager?.protocolConfiguration as? NETunnelProviderProtocol,
+              configuration.includeAllNetworks,
               let metadata = configuration.providerConfiguration,
-              let stored = try? TunnelSecretProfile.load(metadata, providerBundleIdentifier: providerBundleIdentifier ?? "", client: keychainClient) else { return false }
+              let stored = try? TunnelSecretProfile.load(metadata, providerBundleIdentifier: providerBundleIdentifier ?? "", client: keychainClient),
+              let options = try? VlessNativeOptions(metadata["options"] as? [String: Any]) else { return false }
         return stored == xrayConfig && (metadata["bypassSubnets"] as? [String] ?? []) == bypassSubnets
             && (metadata["geoAssetsDirectory"] as? String) == geoAssetsDirectory && !proxyOnly
+            && NSDictionary(dictionary: options.dictionary).isEqual(to: nativeOptions.dictionary)
     }
 
 }

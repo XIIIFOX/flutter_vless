@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Await Apple tunnel teardown after disabling and reading back recovery preferences before returning from Stop. Reject live configuration/options replacement and verify forwarding independently of On Demand, including when reconnect is disabled.
 * Deliver native status events on the Flutter platform thread on iOS, macOS and Windows. Keep Apple traffic polling on the main actor and route Windows callbacks through the top-level window; add real queue/thread regression checks.
 * Fix Android cold Always-on restoration with disabled library reconnect and required Always-on policy; preserve OS-managed protection before a VPN network exists.
 * Accept full VPN profiles with multiple or no imported listeners on Android, iOS, macOS and Windows. Add a separate authenticated VPN adapter with collision-safe service ports/tags; preserve imported authentication, sniffing and routing. Accept full JSON in the example clipboard importer and multi-listener Apple delay probes.

@@ -23,8 +23,11 @@ import Foundation
         SDK.failNextSave = true
         do { try await VlessSystemControl.setConnected(false,group:group,provider:provider); fatalError("Expected failed disarm") } catch {}
         precondition(SDK.stopCalls == 0, "Do not stop before confirmed disarm")
+        SDK.rearmOnNextRefresh = true
+        do { try await VlessSystemControl.setConnected(false,group:group,provider:provider); fatalError("Expected failed recovery readback") } catch {}
+        precondition(SDK.stopCalls == 0, "A system control must verify the disabled profile before stopping")
         try await VlessSystemControl.setConnected(false,group:group,provider:provider)
-        precondition(SDK.stopCalls == 1 && !manager.isOnDemandEnabled && manager.onDemandRules == nil)
+        precondition(SDK.stopCalls == 1 && !manager.isEnabled && !manager.isOnDemandEnabled && manager.onDemandRules == nil)
         precondition(manager.connection.status == .disconnected, "Stop must wait for provider teardown before a queued reconnect")
         precondition(configuration.includeAllNetworks && !configuration.excludeLocalNetworks)
         precondition(configuration.providerConfiguration?["xrayConfigReference"] as? Data == Data([1,2,3]))

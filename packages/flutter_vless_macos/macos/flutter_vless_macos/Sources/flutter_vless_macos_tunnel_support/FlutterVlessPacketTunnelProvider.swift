@@ -164,7 +164,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
                 isCancelled: { self.isStartupStopped() }) { result in
                 switch result {
                 case .success:
-                    rememberTunnelLog("On-demand recovery armed for tunnel session")
+                    rememberTunnelLog("On-demand recovery policy applied: enabled=\(self.nativeOptions.enableOnDemand)")
                     continuation.resume()
                 case .failure:
                     rememberTunnelLog("Unable to arm on-demand recovery for tunnel session")

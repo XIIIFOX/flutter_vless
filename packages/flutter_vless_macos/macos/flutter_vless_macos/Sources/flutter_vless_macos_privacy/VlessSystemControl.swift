@@ -86,7 +86,7 @@ public enum VlessSystemControl {
                 metadata["options"] = options.dictionary
                 configuration.providerConfiguration = metadata
             }
-            manager.isEnabled = true
+            manager.isEnabled = connected
             manager.isOnDemandEnabled = connected && options.enableOnDemand
             if manager.isOnDemandEnabled {
                 let rule = NEOnDemandRuleConnect(); rule.interfaceTypeMatch = .any
@@ -98,6 +98,7 @@ public enum VlessSystemControl {
                   fresh.providerBundleIdentifier == provider,
                   fresh.providerConfiguration?["groupIdentifier"] as? String == group,
                   fresh.providerConfiguration?["xrayConfigReference"] as? Data == reference,
+                  manager.isEnabled == connected,
                   manager.isOnDemandEnabled == (connected && options.enableOnDemand) else { throw Failure.verificationFailed }
             // Recheck opt-in after the asynchronous preference transaction.
             guard self.options(group: group)?.quickAccessEnabled == true,

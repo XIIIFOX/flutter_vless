@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Disable and verify the saved profile when a system control disconnects; report the actual On Demand policy in private provider diagnostics.
 * Wait for full tunnel teardown after explicit Stop, verify that recovery is disabled, and keep live configuration/options changes explicit. Check forwarding readiness even with On Demand disabled.
 * Keep status events and traffic counter updates on the Flutter platform thread; cover delivery from background callbacks and cancelled listeners.
 * Add native menu-bar controls, optional macOS 26+ Control Center integration, validated typed options and native capability reporting.

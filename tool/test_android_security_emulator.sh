@@ -236,6 +236,9 @@ PY
       wait "$fixture" 2>/dev/null
     fi
   done
+  # An interrupted/incomplete script must never become a successful report,
+  # even when a shell parser error leaves EXIT with a stale zero status.
+  if [ "$result" -eq 0 ] && [ "$PHASE" != complete ]; then result=1; fi
   python3 - "$OUT_DIR" "$SERIAL" "$result" "$PHASE" "$CAPTURE_DNS" <<'PY'
 import json, pathlib, sys
 output, serial, code, phase, capture = sys.argv[1:]

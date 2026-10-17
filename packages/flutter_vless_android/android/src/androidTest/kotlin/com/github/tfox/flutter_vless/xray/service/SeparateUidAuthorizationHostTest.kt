@@ -41,6 +41,7 @@ class SeparateUidAuthorizationHostTest {
             V2RAY_FULL_JSON_CONFIG = """{"inbounds":[{"tag":"http","protocol":"http","listen":"127.0.0.1","port":$http,"settings":{}}],"outbounds":[{"tag":"proxy","protocol":"freedom"}]}""")
         val nativeConfig = File(context.noBackupFilesDir, "separate-uid-${UUID.randomUUID()}.json")
         nativeConfig.writeText(XrayCoreManager.buildRuntimeConfigJson(config, context.noBackupFilesDir, credentials).toString())
+        val managedPort = config.LOCAL_SOCKS5_PORT
         val native = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
             "run", "-config", nativeConfig.absolutePath).redirectErrorStream(true).start()
         val calls = AtomicInteger()
@@ -50,7 +51,7 @@ class SeparateUidAuthorizationHostTest {
         val origin = ServerSocket(0)
         try {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-            while (runCatching { Socket("127.0.0.1", socks).close() }.isFailure && System.nanoTime() < deadline) Thread.sleep(100)
+            while (runCatching { Socket("127.0.0.1", managedPort).close() }.isFailure && System.nanoTime() < deadline) Thread.sleep(100)
             assertTrue("Native positive-control runtime is not alive", native.isAlive)
             executor.submit {
                 while (!origin.isClosed) {
@@ -82,8 +83,11 @@ class SeparateUidAuthorizationHostTest {
                 } finally { pipe.forEach { it.close() } }
                 assertTrue(broker.awaitVerified())
                 assertEquals(1, calls.get())
-                ready.writeText(JSONObject().put("hostUid", android.os.Process.myUid()).put("socksPort", socks)
-                    .put("httpPort", http).put("originPort", origin.localPort).put("broker", broker.socketName).toString())
+                // The private SOCKS adapter also multiplexes HTTP. Imported HTTP
+                // listeners retain their caller-specified policy and are not the
+                // native authentication boundary under test.
+                ready.writeText(JSONObject().put("hostUid", android.os.Process.myUid()).put("socksPort", managedPort)
+                    .put("httpPort", managedPort).put("originPort", origin.localPort).put("broker", broker.socketName).toString())
                 val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(90)
                 while (!done.exists() && System.nanoTime() < until) { assertTrue(native.isAlive); Thread.sleep(100) }
                 assertTrue("Separate-UID runner did not provide its result", done.exists())

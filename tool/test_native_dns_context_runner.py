@@ -86,22 +86,25 @@ class RunnerGuards(unittest.TestCase):
 
     def test_cp1252_console_retains_complete_utf8_artifact(self):
         message = 'synthetic child: DNS → Пример ☃\nsecond 日本語 ✓\ncomplete\n'
-        console_bytes = io.BytesIO()
-        console = io.TextIOWrapper(console_bytes, encoding='cp1252', errors='strict', write_through=True)
-        try:
-            program = f'import sys; sys.stdout.buffer.write({message.encode("utf-8")!r}); sys.stdout.buffer.flush()'
-            with mock.patch.object(runner.sys, 'stdout', console):
-                results, output = self.harmless(program, 5)
-            self.assertEqual(results[0]['exit_code'], 0)
-            self.assertTrue(results[0]['output_eof'])
-            self.assertTrue(results[0]['output_closed'])
-            self.assertEqual(results[0]['output_errors'], [])
-            self.assertEqual(output, message)
-            rendered = console_bytes.getvalue().decode('cp1252')
-            self.assertIn(message.encode('cp1252', errors='backslashreplace').decode('cp1252'), rendered)
-            self.assertIn('PHASE synthetic: PASS (0)', rendered)
-        finally:
-            console.close()
+        for newline in ['\n', '\r\n']:
+            with self.subTest(newline=newline):
+                console_bytes = io.BytesIO()
+                console = io.TextIOWrapper(console_bytes, encoding='cp1252', errors='strict',
+                                           newline=newline, write_through=True)
+                try:
+                    program = f'import sys; sys.stdout.buffer.write({message.encode("utf-8")!r}); sys.stdout.buffer.flush()'
+                    with mock.patch.object(runner.sys, 'stdout', console):
+                        results, output = self.harmless(program, 5)
+                    self.assertEqual(results[0]['exit_code'], 0)
+                    self.assertTrue(results[0]['output_eof'])
+                    self.assertTrue(results[0]['output_closed'])
+                    self.assertEqual(results[0]['output_errors'], [])
+                    self.assertEqual(output, message)
+                    rendered = console_bytes.getvalue().decode('cp1252').replace('\r\n', '\n')
+                    self.assertIn(message.encode('cp1252', errors='backslashreplace').decode('cp1252'), rendered)
+                    self.assertIn('PHASE synthetic: PASS (0)', rendered)
+                finally:
+                    console.close()
 
     def test_console_io_failure_fails_phase_but_keeps_full_artifact(self):
         # Larger than a pipe buffer: stopping at the failed sink would block

@@ -91,9 +91,28 @@ func localDefaultDNS(answer string, stallEntered chan struct{}, stallEnded chan 
 }
 
 type localDefaultOwner struct {
-	engine   *ownedCore
-	resolver *nativednsruntime.TCPResolver
-	source   *core.Config
+	engine         *ownedCore
+	resolver       *nativednsruntime.TCPResolver
+	source         *core.Config
+	queryDeadlines <-chan time.Time
+}
+
+// Observe the actual contextual local-client deadline rather than assuming a
+// nominal timeout. This wrapper adds no resolver, socket or production hook.
+type deadlineResolver struct {
+	delegate  *nativednsruntime.TCPResolver
+	deadlines chan<- time.Time
+}
+
+func (r *deadlineResolver) LookupIPContext(ctx context.Context, name string, option featureDNS.IPOption) ([]xnet.IP, uint32, error) {
+	if name == "stall.invalid" {
+		deadline, _ := ctx.Deadline()
+		select {
+		case r.deadlines <- deadline:
+		default:
+		}
+	}
+	return r.delegate.LookupIPContext(ctx, name, option)
 }
 
 func startLocalDefault(t *testing.T, rootDNS any, withDNS bool, server *loopServer) *localDefaultOwner {
@@ -135,11 +154,12 @@ func startLocalDefault(t *testing.T, rootDNS any, withDNS bool, server *loopServ
 		t.Fatal(err)
 	}
 	address := server.listener.Addr().(*net.TCPAddr)
-	resolver, err := nativednsruntime.NewTCPResolver(owner, 1, xnet.TCPDestination(xnet.ParseAddress(address.IP.String()), xnet.Port(address.Port)), 1500*time.Millisecond)
+	resolver, err := nativednsruntime.NewTCPResolver(owner, 1, xnet.TCPDestination(xnet.ParseAddress(address.IP.String()), xnet.Port(address.Port)), 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := featureDNS.ContextWithNativeLocalResolver(internet.ContextWithNativeDNSOwner(context.Background(), owner), resolver)
+	queryDeadlines := make(chan time.Time, 1)
+	ctx := featureDNS.ContextWithNativeLocalResolver(internet.ContextWithNativeDNSOwner(context.Background(), owner), &deadlineResolver{delegate: resolver, deadlines: queryDeadlines})
 	if _, _, err := resolver.LookupIPContext(ctx, "default.invalid", featureDNS.IPOption{IPv4Enable: true}); !errors.Is(err, nativednsruntime.ErrNotReady) {
 		t.Fatal("query before ready", err)
 	}
@@ -151,7 +171,7 @@ func startLocalDefault(t *testing.T, rootDNS any, withDNS bool, server *loopServ
 		t.Fatal("actual scoped Core construction", err)
 	}
 	engine := &ownedCore{owner: owner, core: instance, config: configuration}
-	item := &localDefaultOwner{engine: engine, resolver: resolver, source: source}
+	item := &localDefaultOwner{engine: engine, resolver: resolver, source: source, queryDeadlines: queryDeadlines}
 	t.Cleanup(func() {
 		_ = owner.Close()
 		if err := resolver.Close(); err != nil {
@@ -287,18 +307,30 @@ func TestAcceptanceNativeDNSLocalDefault(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("stalled TCP query never reached owned policy server")
 	}
+	var queryDeadline time.Time
+	select {
+	case queryDeadline = <-missingA.queryDeadlines:
+	default:
+		t.Fatal("actual scoped query deadline was not observed")
+	}
+	const closeWait = 2 * time.Second
+	if queryDeadline.IsZero() || time.Until(queryDeadline) < closeWait+500*time.Millisecond {
+		t.Fatal("insufficient remaining query deadline to prove owner-only cancellation")
+	}
+	closed := time.NewTimer(closeWait)
+	defer closed.Stop()
 	_ = missingA.engine.owner.Close()
 	select {
 	case err := <-queryEnded:
 		if err == nil {
 			t.Fatal("closed-owner late DNS success")
 		}
-	case <-time.After(2 * time.Second):
+	case <-closed.C:
 		t.Fatal("closed-owner DNS did not cancel")
 	}
 	select {
 	case <-stallEnded:
-	case <-time.After(2 * time.Second):
+	case <-closed.C:
 		t.Fatal("owned DNS TCP socket remained open")
 	}
 	// Owner cancellation itself must close the real exchange. Closing the

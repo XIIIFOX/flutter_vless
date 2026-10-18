@@ -198,11 +198,14 @@ API/metrics listeners to avoid rebinding an active session's sockets. Ordinary
 session OS bind races, service-name allocation, caller stats/policy preservation
 and standalone Windows delay remain open.
 
-[CI on a087241](https://github.com/XIIIFOX/flutter_vless/actions/runs/39135338877)
+[CI on 81ca7d0](https://github.com/XIIIFOX/flutter_vless/actions/runs/39141006566)
 passes all five jobs. The iOS/macOS runtime artifacts contain both generations
 of API HTTP/2, metrics HTTP and authenticated SOCKS acceptance, a working isolated
 delay while the caller's service ports are occupied, and the macOS native-counter
-check alongside retained API services. Physical iPhone owner-authenticated
+check alongside retained API services, including signed decimal listener ports.
+[Windows runtime on the same commit](https://github.com/XIIIFOX/flutter_vless/actions/runs/39141023789)
+also passes both OS versions with real metrics JSON, routing and recovery.
+Physical iPhone owner-authenticated
 Control Center start/stop and subsequent ordinary internet also pass; this does
 not complete the remaining compatibility items below.
 
@@ -212,6 +215,26 @@ provider; fresh Safari requests afterward reached both IP sites through the
 proxy. Explicit Stop and normal internet were checked before restoring the
 ordinary signed app. See the [device record](device_matrix.md#iphone-acceptance-2026-10-18-117--core-261017)
 for the fault boundary, timestamps and limits of that observation.
+
+Advanced DNS preparation now has an unpublished, pinned Core source capability
+under [third_party/xray-native-dns](../third_party/xray-native-dns/README.md).
+It separates immutable, instance-owned physical transport pins from caller DNS
+lookups and preserves compiled caller root DNS. Shared Go preparation inspects
+actual compiled outbound/transport types and uses Core's static-host matcher;
+it does not copy endpoint addresses into caller `dns.hosts`. Root DNS analysis
+classifies routed/local resolver modes, implicit system-DNS defaults, resolver
+names, FakeDNS, system-family queries and scripts into explicit native
+requirements. A transport scope alone cannot authorize these separate paths.
+
+This source capability is not enabled in native builders or published artifacts.
+Its pure preparation checks do not establish protected socket behavior or full
+DNS support. A separate CI-only real-Core fixture checks concurrent owners,
+caller hosts, per-domain tagged TCP DNS, rejected candidates and owner shutdown;
+actual runtime results must be recorded separately. Local checks compile this
+fixture without executing Core. Root/local DNS, ECH/QUIC/cached transports,
+protected bootstrap, API-created handlers and native integration still need
+implementation and qualification before preserving arbitrary imported DNS is
+safe to enable. Item 1 remains pending.
 
 Current implementation/acceptance status (1.1.7, unreleased):
 

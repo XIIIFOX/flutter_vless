@@ -1,0 +1,14 @@
+{
+  "core_commit": "92ccc939aaf4f8965f369cf0b142e005aeaa11d5",
+  "upstream_sha256": {
+    "transport/internet/dialer.go": "ed2825ff30a2bfdfacf8681cd1af81d96179103ccff0a0b0b42f4ea64db451d4",
+    "app/proxyman/outbound/handler.go": "77d3085a461b30a6a4d25273ba1487c9715655e1a6cfeafe17d6df0605f2c453",
+    "proxy/freedom/freedom.go": "da88b4394315870465f44684b58f1bc4177f12d440a3d4e7a4747a7de1332d88",
+    "go.mod": "31fe6bd6c04eb2738e157b850236b1376cbbac3f33e974256bb7325c8c764250"
+  },
+  "module": "github.com/xtls/xray-core",
+  "module_version": "v1.260327.1-0.20261017152356-92ccc939aaf4",
+  "module_sum": "h1:FlGykoNEWRZN5ExwxSEU5lnuEWU5CD3SJFyKKWLChl8=",
+  "capability": "native-dns-context-preview-1",
+  "published": false
+}

@@ -25,8 +25,11 @@ class RuntimeFixtureTest(unittest.TestCase):
             rules = runtime.config(reverse, "203.0.113.1")["routing"]["rules"]
             self.assertEqual("external-direct", rules[-1]["outboundTag"])
             self.assertEqual("tcp,udp", rules[-1]["network"])
-            self.assertEqual("proxy", rules[2]["outboundTag"])
-            self.assertEqual(["full:2ip.ru", "full:2ip.io"] if reverse else ["full:myip.com"], rules[2]["domain"])
+            self.assertEqual({"type": "field", "inboundTag": ["flutter-vless-tun"],
+                              "outboundTag": "fixture-blocked"}, rules[0])
+            self.assertEqual("direct", rules[2]["outboundTag"])
+            self.assertEqual("proxy", rules[3]["outboundTag"])
+            self.assertEqual(["full:2ip.ru", "full:2ip.io"] if reverse else ["full:myip.com"], rules[3]["domain"])
 
     def test_proxy_only_fixture_keeps_original_default_outbound(self):
         profile = runtime.config(False)

@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Shut down development-broker sockets before closing them so blocked accepts/reads drain. Strengthen rejection checks and add an opt-in, provenance-verified instrumentation APK for actual composed Core DNS/HTTP and bounded parent-EOF cleanup; ordinary runtime packaging is unchanged.
 * Add an opt-in development socket broker requiring both VPN protection and binding of transferred descriptors to a captured physical Network. Revoke new acknowledgements on generation closure and refuse legacy/system DNS commands; ordinary VPN startup retains its existing path.
 * Reserve standalone delay SOCKS/API listener ports together until Core launch; bound allocation retries, retain cleanup on interruption and add private stage/exit diagnostics without native output.
 * Reserve caller API and metrics listener ports before allocating the private VPN adapter; preserve caller metrics settings and cover their listener alongside authenticated traffic. Full caller API passthrough remains separate work.

@@ -1,6 +1,11 @@
 // The nativeinstance preview is retained preparation plus an owned runtime, not
 // a general Xray/native API and not production host integration.
 //
+// Optional SystemDNSBridge is ONLY an in-process bounded DNS wire primitive.
+// It is not wired into the CLI, OS, TUN, browser, managed SOCKS or router. It
+// adds no listener/rules/tags and cannot be described as system-DNS integration.
+// A future consumer needs exact native managed input/handler provenance.
+//
 // V1 admits zero or authenticated single-port TCP SOCKS inbounds on 127.0.0.1;
 // caller freedom UseIPv4, a separate selected plain freedom egress, and optional
 // blackhole outbounds. It denies other inbound/outbound protocols, mux/chaining,

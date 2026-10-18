@@ -10,11 +10,11 @@ import android.content.pm.ApplicationInfo
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.system.Os
+import android.system.OsConstants
 import java.io.Closeable
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.FileDescriptor
-import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -36,7 +36,8 @@ class XraySocketProtector private constructor(
     private val verified = CountDownLatch(1)
     @Volatile private var closed = false
     @Volatile private var allowedPhysicalDnsNames: Set<String>? = null
-    private val clients = Collections.synchronizedSet(mutableSetOf<LocalSocket>())
+    private val admission = Any()
+    private val clients = mutableSetOf<LocalSocket>()
     private val requests = ThreadPoolExecutor(0, 8, 10, TimeUnit.SECONDS, SynchronousQueue(),
         { task -> Thread(task, "xray-protection-request").apply { isDaemon = true } })
     private val worker = Thread({ serve() }, "xray-socket-protector").apply {
@@ -56,11 +57,16 @@ class XraySocketProtector private constructor(
         while (!closed) {
             try {
                 val accepted = server.accept()
-                clients.add(accepted)
-                try { requests.execute { serveClient(accepted) } }
-                catch (_: Exception) { clients.remove(accepted); accepted.close() }
+                val admitted = synchronized(admission) {
+                    if (closed) false else {
+                        clients.add(accepted)
+                        try { requests.execute { serveClient(accepted) }; true }
+                        catch (_: Exception) { clients.remove(accepted); false }
+                    }
+                }
+                if (!admitted) shutdownAndClose(accepted)
             } catch (_: Exception) {
-                // Closing the server wakes accept().
+                // Explicit shutdown in close() wakes the native accept call.
             }
         }
     }
@@ -123,7 +129,7 @@ class XraySocketProtector private constructor(
         } catch (_: Exception) {
             // EOF, timeout and shutdown produce no positive acknowledgement.
         } finally {
-            clients.remove(accepted)
+            synchronized(admission) { clients.remove(accepted) }
         }
     }
 
@@ -177,11 +183,24 @@ class XraySocketProtector private constructor(
 
     override fun close() {
         numericPreview?.policy?.revoke()
-        closed = true
+        val owned = synchronized(admission) {
+            if (closed) return
+            closed = true
+            clients.toList()
+        }
+        // LocalSocketImpl.close() only closes the descriptor. On Linux a
+        // concurrent native accept/read can retain its open-file reference;
+        // shutdown must precede close to wake that operation.
+        runCatching { Os.shutdown(server.fileDescriptor, OsConstants.SHUT_RDWR) }
         runCatching { server.close() }
-        synchronized(clients) { clients.forEach { runCatching { it.close() } } }
+        owned.forEach(::shutdownAndClose)
         requests.shutdownNow()
         worker.interrupt()
+    }
+
+    private fun shutdownAndClose(socket: LocalSocket) {
+        runCatching { Os.shutdown(socket.fileDescriptor, OsConstants.SHUT_RDWR) }
+        runCatching { socket.close() }
     }
 
     /** Bounded lifecycle observation for the opt-in launcher/tests, never a new admission. */
@@ -193,6 +212,6 @@ class XraySocketProtector private constructor(
         if (!requests.awaitTermination(remaining, TimeUnit.NANOSECONDS)) return false
         val waitMillis = TimeUnit.NANOSECONDS.toMillis((deadline - System.nanoTime()).coerceAtLeast(0))
         if (waitMillis > 0) worker.join(waitMillis)
-        return !worker.isAlive && clients.isEmpty()
+        return !worker.isAlive && synchronized(admission) { clients.isEmpty() }
     }
 }

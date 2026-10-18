@@ -1,5 +1,5 @@
 group 'com.github.tfox.flutter_vless'
-version '1.0'
+version '1.1.7'
 
 buildscript {
     ext.kotlin_version = '2.2.20'
@@ -89,6 +89,29 @@ android {
             pickFirsts += ['lib/**/libc++_shared.so']
         }
     }
+}
+
+// Explicit development-only instrumentation input. It is never added to main,
+// debug/release library artifacts, or an ordinary example build.
+def nativeDnsPreviewInput = findProperty('flutterVlessNativeDnsPreviewDir')
+if (nativeDnsPreviewInput) {
+    def repositoryRoot = new File(projectDir, '../../..').canonicalFile
+    def previewDirectory = file(nativeDnsPreviewInput).canonicalFile
+    def verifier = new File(repositoryRoot, 'tool/verify_android_dns_preview.py')
+    def verification = new ProcessBuilder('python3', verifier.absolutePath,
+        '--directory', previewDirectory.absolutePath)
+        .directory(repositoryRoot).redirectErrorStream(true).start()
+    if (!verification.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
+        verification.destroyForcibly()
+        verification.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+        throw new GradleException('Native DNS preview verification timed out')
+    }
+    def verificationOutput = verification.inputStream.getText('UTF-8')
+    if (verification.exitValue() != 0) {
+        throw new GradleException('Native DNS preview verification failed: ' + verificationOutput)
+    }
+    android.sourceSets.androidTest.jniLibs.srcDir(new File(previewDirectory, 'jniLibs'))
+    android.sourceSets.androidTest.java.srcDir('src/nativeDnsPreviewTest/kotlin')
 }
 
 dependencies {

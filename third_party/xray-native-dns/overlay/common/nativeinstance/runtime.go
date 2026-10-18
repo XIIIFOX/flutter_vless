@@ -22,7 +22,7 @@ type runtimeCore interface {
 	bind(*nativednsruntime.TCPResolver) error
 	start() error
 	close() error
-	lookup(string) ([]xnet.IP, error)
+	lookupDNS(string) ([]xnet.IP, uint32, error)
 }
 type coreFactory func(context.Context, *core.Config) (runtimeCore, error)
 
@@ -40,13 +40,12 @@ func (c *liveCore) bind(resolver *nativednsruntime.TCPResolver) error {
 }
 func (c *liveCore) start() error { return c.instance.Start() }
 func (c *liveCore) close() error { return c.instance.Close() }
-func (c *liveCore) lookup(name string) ([]xnet.IP, error) {
+func (c *liveCore) lookupDNS(name string) ([]xnet.IP, uint32, error) {
 	client, ok := c.instance.GetFeature(featuredns.ClientType()).(featuredns.Client)
 	if !ok || client == nil {
-		return nil, ErrLookup
+		return nil, 0, ErrLookup
 	}
-	ips, _, err := client.LookupIP(name, featuredns.IPOption{IPv4Enable: true})
-	return ips, err
+	return client.LookupIP(name, featuredns.IPOption{IPv4Enable: true})
 }
 func construct(ctx context.Context, c *core.Config) (runtimeCore, error) {
 	instance, err := core.NewWithContext(ctx, c)
@@ -75,6 +74,7 @@ type Runtime struct {
 	workers      sync.WaitGroup
 	slot         chan struct{}
 	timeout      time.Duration
+	bridge       *systemDNSBinding
 }
 
 func (p *Prepared) Start(ctx context.Context) (*Runtime, error) { return p.start(ctx, construct) }
@@ -97,6 +97,9 @@ func (p *Prepared) start(ctx context.Context, factory coreFactory) (result *Runt
 	}
 	life, cancel := context.WithCancel(ctx)
 	r := &Runtime{owner: owner, resolver: resolver, life: life, cancel: cancel, buildDone: make(chan struct{}), cleanupDone: make(chan struct{}), slot: make(chan struct{}, 1), timeout: p.policy.LookupTimeout}
+	if p.policy.SystemDNSBridge != nil {
+		r.bridge = &systemDNSBinding{identity: configuration, owner: owner, virtual: p.policy.SystemDNSBridge.VirtualIPv4}
+	}
 	// The callback revokes while construction may still be blocked. Cleanup waits
 	// for buildDone so a Core returned late is still closed exactly once.
 	context.AfterFunc(life, func() { r.beginClose() })
@@ -201,6 +204,7 @@ func (r *Runtime) Close(ctx context.Context) error {
 
 type lookupResult struct {
 	ips []xnet.IP
+	ttl uint32
 	err error
 }
 
@@ -214,46 +218,60 @@ func (r *Runtime) LookupIPv4(ctx context.Context, name string) ([]netip.Addr, er
 	if r == nil || ctx == nil {
 		return nil, ErrClosed
 	}
-	if !validLookupName(name) {
-		return nil, ErrLookup
-	}
-	if err := ctx.Err(); err != nil {
+	operation, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	answer, err := r.lookupRoot(operation, name)
+	if err != nil {
 		return nil, err
+	}
+	return r.commitLookup(operation, answer)
+}
+
+// lookupRoot is the only worker-admission path used by both the plain lookup
+// API and the optional wire primitive. The caller owns an already bounded
+// operation context and must recheck it at final result publication.
+func (r *Runtime) lookupRoot(operation context.Context, name string) (lookupResult, error) {
+	if r == nil || operation == nil {
+		return lookupResult{}, ErrClosed
+	}
+	if !validLookupName(name) {
+		return lookupResult{}, ErrLookup
+	}
+	if err := operation.Err(); err != nil {
+		return lookupResult{}, err
 	}
 	r.mu.Lock()
 	if r.closed || r.life.Err() != nil || r.core == nil {
 		r.mu.Unlock()
-		return nil, ErrClosed
+		return lookupResult{}, ErrClosed
 	}
 	select {
 	case r.slot <- struct{}{}:
 	default:
 		r.mu.Unlock()
-		return nil, ErrBusy
+		return lookupResult{}, ErrBusy
 	}
-	r.workers.Add(1) // Under admission lock: cannot race Wait after revocation.
+	r.workers.Add(1)
 	instance := r.core
 	r.mu.Unlock()
 	result := make(chan lookupResult, 1)
 	go func() {
 		defer r.workers.Done()
 		defer func() { <-r.slot }()
-		ips, err := instance.lookup(name)
+		ips, ttl, err := instance.lookupDNS(name)
 		copied := make([]xnet.IP, len(ips))
 		for i, ip := range ips {
 			copied[i] = append(xnet.IP(nil), ip...)
 		}
-		result <- lookupResult{copied, err}
+		result <- lookupResult{ips: copied, ttl: ttl, err: err}
 	}()
-	operation, cancel := context.WithTimeout(ctx, r.timeout)
-	defer cancel()
 	select {
 	case <-r.life.Done():
-		return nil, ErrClosed
+		return lookupResult{}, ErrClosed
 	case <-operation.Done():
-		return nil, operation.Err()
+		return lookupResult{}, operation.Err()
 	case answer := <-result:
-		return r.commitLookup(operation, answer)
+		return answer, nil
 	}
 }
 

@@ -267,8 +267,8 @@ def main():
         report['native_launcher_sha256'] = hashlib.sha256(launcher.read_bytes()).hexdigest()
         if arguments.run_runtime:
             runtime_environment = dict(environment, FLUTTER_VLESS_NATIVE_PREVIEW=str(launcher.resolve()))
-            selected_tests = ['TestAcceptanceNativeDNSRuntime', 'TestAcceptanceNativeDNSLocalDefault', 'TestAcceptanceNativeDNSLauncher']
-            checked('runtime-loopback', [str(binary), '-test.run', '^TestAcceptanceNativeDNS(Runtime|LocalDefault|Launcher)$', '-test.v', '-test.timeout=75s'],
+            selected_tests = ['TestAcceptanceNativeDNSRuntime', 'TestAcceptanceNativeDNSLocalDefault', 'TestAcceptanceNativeDNSLauncher', 'TestAcceptanceNativeDNSSystemBridge']
+            checked('runtime-loopback', [str(binary), '-test.run', '^TestAcceptanceNativeDNS(Runtime|LocalDefault|Launcher|SystemBridge)$', '-test.v', '-test.timeout=75s'],
                     cwd=core, environment=runtime_environment, seconds=90, results=results)
             for name in selected_tests:
                 require_selected_test_pass((EVIDENCE / 'runtime-loopback.log').read_text(encoding='utf-8'), name)

@@ -139,6 +139,8 @@ jobs:
         run: |
           python3 tool/test_verify_android_dns_capture.py
           python3 tool/test_android_dns_fixture.py
+          python3 tool/test_android_native_dns_fixture.py
+          python3 tool/test_verify_android_dns_preview.py
           python3 tool/test_android_flutter_smoke_retry.py
           python3 tool/test_android_emulator_failure_capture.py
       - name: Verify Maven Central Android runtime resolution
@@ -158,6 +160,28 @@ jobs:
         with:
           channel: stable
           cache: true
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: third_party/xray-mobile/go.mod
+          cache-dependency-path: third_party/xray-mobile/go.sum
+      - name: Build and verify unpublished composed Android DNS entry
+        run: |
+          preview_ndk="$(python3 - <<'PY'
+          import os
+          from pathlib import Path
+          sdk = Path(os.environ.get('ANDROID_SDK_ROOT') or os.environ['ANDROID_HOME'])
+          candidates = list((sdk / 'ndk').glob('*'))
+          configured = os.environ.get('ANDROID_NDK_LATEST_HOME')
+          if configured:
+              candidates.insert(0, Path(configured))
+          candidates = [path for path in candidates if (path / 'toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android23-clang').is_file()]
+          if not candidates:
+              raise SystemExit('No installed Android NDK supports the preview target')
+          print(candidates[0].resolve())
+          PY
+          )"
+          python3 tool/build_android_dns_preview.py --ndk "$preview_ndk" --arch x86_64 --output build/android-native-dns-preview
+          python3 tool/verify_android_dns_preview.py --directory build/android-native-dns-preview > build/android-native-dns-preview/verification.json
       - name: Enable KVM group perms
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -176,7 +200,7 @@ jobs:
             adb -s emulator-5554 shell settings put global mobile_data_always_on 1
             (cd example && flutter pub get)
             python3 tool/test_android_flutter_smoke.py --serial emulator-5554
-            ANDROID_SERIAL=emulator-5554 tool/test_android_security_emulator.sh
+            ANDROID_SERIAL=emulator-5554 tool/test_android_security_emulator.sh --native-dns-preview build/android-native-dns-preview
             python3 tool/test_android_separate_uid.py --serial emulator-5554 --output build/android-separate-uid-results.json
       - name: Preserve Android security test evidence
         if: always()
@@ -187,6 +211,8 @@ jobs:
             build/android-security-emulator.*/
             build/android-flutter-smoke/
             build/android-separate-uid-results.json
+            build/android-native-dns-preview/result.json
+            build/android-native-dns-preview/verification.json
           if-no-files-found: ignore
 
   ios:

@@ -5,9 +5,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CAPTURE_DNS=1
+NATIVE_DNS_PREVIEW=""
+NATIVE_DNS_PREVIEW_SHA=""
 usage() {
   cat <<'USAGE'
-Usage: tool/test_android_security_emulator.sh [--no-capture]
+Usage: tool/test_android_security_emulator.sh [--no-capture] [--native-dns-preview BUILD_DIRECTORY]
 
 Use an already booted, dedicated emulator. ANDROID_SERIAL selects it explicitly;
 otherwise exactly one online emulator must be present. Physical devices are refused.
@@ -17,14 +19,22 @@ check and does not establish absence of duplicate plaintext DNS leaks.
 Handover is reported as skipped if emulator Wi-Fi/cellular is unavailable.
 Physical DNS needs a working emulator upstream resolver.
 The computer's current VPN must remain enabled.
+The optional preview is verified against this checkout and added only to the
+instrumentation APK, never to the ordinary plugin/runtime or release artifacts.
 USAGE
 }
-for argument in "$@"; do
-  case "$argument" in
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     --no-capture) CAPTURE_DNS=0 ;;
+    --native-dns-preview)
+      shift
+      if [ "$#" -eq 0 ] || [ -z "$1" ]; then usage >&2; exit 2; fi
+      NATIVE_DNS_PREVIEW="$1"
+      ;;
     --help|-h) usage; exit 0 ;;
-    *) echo "Unknown argument: $argument" >&2; usage >&2; exit 2 ;;
+    *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
+  shift
 done
 
 if [ -n "${FLUTTER_VLESS_ANDROID_RUNTIME_REPO:-}" ] ||
@@ -307,10 +317,29 @@ bounded 20 "$OUT_DIR/emulator-wifi-enable.log" "$ADB" -s "$SERIAL" shell svc wif
 bounded 20 "$OUT_DIR/emulator-wifi-connect.log" "$ADB" -s "$SERIAL" shell cmd wifi connect-network AndroidWifi open
 
 PHASE=build
+PREVIEW_GRADLE_ARGS=()
+if [ -n "$NATIVE_DNS_PREVIEW" ]; then
+  PHASE=verify-native-preview
+  bounded 30 "$OUT_DIR/native-preview-verification.json" python3 "$ROOT_DIR/tool/verify_android_dns_preview.py" --directory "$NATIVE_DNS_PREVIEW"
+  NATIVE_DNS_PREVIEW="$(python3 - "$NATIVE_DNS_PREVIEW" <<'PY'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).resolve())
+PY
+)"
+  NATIVE_DNS_PREVIEW_SHA="$(python3 - "$OUT_DIR/native-preview-verification.json" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1]))['artifact_sha256'])
+PY
+)"
+  PREVIEW_GRADLE_ARGS=("-PflutterVlessNativeDnsPreviewDir=$NATIVE_DNS_PREVIEW")
+fi
+PHASE=build
 echo "Building the Android test APK with strict official-runtime verification..."
 (cd "$ROOT_DIR/example" && bounded 300 "$OUT_DIR/flutter-pub-get.log" flutter pub get)
 (cd "$ROOT_DIR/example/android" && bounded 1200 "$OUT_DIR/gradle-build.log" ./gradlew \
   :flutter_vless_android:assembleDebugAndroidTest \
+  ${PREVIEW_GRADLE_ARGS[@]+"${PREVIEW_GRADLE_ARGS[@]}"} \
   -PflutterVlessOfficialRuntimeVerification=true --dependency-verification=strict --console=plain --stacktrace)
 APK="$ROOT_DIR/example/build/flutter_vless_android/outputs/apk/androidTest/debug/flutter_vless_android-debug-androidTest.apk"
 if [ ! -f "$APK" ]; then echo "Expected freshly built AndroidTest APK is missing: $APK" >&2; exit 1; fi
@@ -329,12 +358,14 @@ PY
 PHASE=fixtures
 # Refuse occupied fixture ports instead of reusing, replacing, or killing any
 # existing listener. Bind checks include the UDP socket used by the native test.
-python3 - <<'PY'
+python3 - "$NATIVE_DNS_PREVIEW" <<'PY'
 import socket
+import sys
 sockets = []
 try:
-    for port, kind in [(18080, socket.SOCK_STREAM), (18082, socket.SOCK_DGRAM),
-                       (18083, socket.SOCK_STREAM)] + [(p, socket.SOCK_STREAM) for p in range(18280, 18284)]:
+    fixture_ports = [(18080, socket.SOCK_STREAM), (18082, socket.SOCK_DGRAM), (18083, socket.SOCK_STREAM)]
+    fixture_ports += [(p, socket.SOCK_STREAM) for p in range(18280, 18286 if sys.argv[1] else 18284)]
+    for port, kind in fixture_ports:
         sock = socket.socket(socket.AF_INET, kind)
         sockets.append(sock)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -345,9 +376,11 @@ finally:
 PY
 python3 "$ROOT_DIR/tool/android_protection_fixture.py" --relay-readiness > "$OUT_DIR/protection-fixture.log" 2>&1 &
 FIXTURE_PID=$!
-python3 "$ROOT_DIR/tool/android_dns_fixture.py" --events "$OUT_DIR/dns-events.jsonl" > "$OUT_DIR/dns-fixture.log" 2>&1 &
+DNS_FIXTURE_ARGS=()
+if [ -n "$NATIVE_DNS_PREVIEW" ]; then DNS_FIXTURE_ARGS=(--native-preview); fi
+python3 "$ROOT_DIR/tool/android_dns_fixture.py" --events "$OUT_DIR/dns-events.jsonl" ${DNS_FIXTURE_ARGS[@]+"${DNS_FIXTURE_ARGS[@]}"} > "$OUT_DIR/dns-fixture.log" 2>&1 &
 DNS_PID=$!
-python3 - "$FIXTURE_PID" "$DNS_PID" "$OUT_DIR" <<'PY'
+python3 - "$FIXTURE_PID" "$DNS_PID" "$OUT_DIR" "$NATIVE_DNS_PREVIEW" <<'PY'
 import os, pathlib, socket, sys, time
 pids = [int(value) for value in sys.argv[1:3]]
 directory = pathlib.Path(sys.argv[3])
@@ -359,7 +392,8 @@ while time.monotonic() < deadline:
         if 'Traceback' in (directory / name).read_text():
             raise SystemExit('Fixture startup failed; inspect ' + str(directory / name))
     try:
-        for port in (18080, 18083, 18280, 18281, 18282, 18283):
+        ports = [18080, 18083, 18280, 18281, 18282, 18283] + ([18284, 18285] if sys.argv[4] else [])
+        for port in ports:
             with socket.create_connection(('127.0.0.1', port), timeout=.5):
                 pass
         break
@@ -439,6 +473,9 @@ PY
 instrument native-options "$CLASS_PREFIX.NativeOptionsDeviceTest" 2 0
 instrument native-quick-tile "$CLASS_PREFIX.NativeQuickTileDeviceTest" 3 0
 instrument native-preview-broker "$CLASS_PREFIX.NativePreviewBrokerDeviceTest" 4 0
+if [ -n "$NATIVE_DNS_PREVIEW" ]; then
+  instrument native-preview-runtime "$CLASS_PREFIX.NativePreviewRuntimeDeviceTest" 2 0 -e previewSha256 "$NATIVE_DNS_PREVIEW_SHA"
+fi
 instrument native-authorization "$CLASS_PREFIX.NativeLocalAuthorizationTest" 3 0
 instrument session-recovery "$CLASS_PREFIX.SessionRecoveryDeviceTest" 3 0
 instrument session-replacement "$CLASS_PREFIX.SessionReplacementDeviceTest" 1 0

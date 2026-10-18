@@ -44,16 +44,19 @@ class NativePreviewBrokerDeviceTest {
             caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     } ?: error("Dedicated emulator has no physical INTERNET network")
 
-    private fun exchange(broker: XraySocketProtector, command: Char, descriptors: Array<FileDescriptor>): Int = try {
+    private fun exchange(broker: XraySocketProtector, command: Char, descriptors: Array<FileDescriptor>,
+        allowClosed: Boolean = false): Int = try {
         LocalSocket().use { client ->
-            client.soTimeout = 2000
             client.connect(LocalSocketAddress(broker.socketName, LocalSocketAddress.Namespace.ABSTRACT))
+            client.soTimeout = 2000
             client.setFileDescriptorsForSend(descriptors)
             client.outputStream.write(command.code)
             client.setFileDescriptorsForSend(null)
             client.inputStream.read()
         }
-    } catch (_: Exception) { -1 }
+    } catch (error: Exception) {
+        if (allowClosed) -1 else throw AssertionError("Broker exchange failed before a protocol reply", error)
+    }
 
     private fun <T> withInetFd(type: Int = OsConstants.SOCK_DGRAM, body: (FileDescriptor) -> T): T {
         val fd = Os.socket(OsConstants.AF_INET, type, 0)
@@ -132,12 +135,12 @@ class NativePreviewBrokerDeviceTest {
             NativePreviewNetworkGeneration(), protectFd = { calls.incrementAndGet(); true })) { broker ->
             withInetFd { first -> withInetFd { second ->
                 for (command in listOf('H', 'P', 'D', '?')) {
-                    assertNotEquals(1, exchange(broker, command, emptyArray()))
-                    assertNotEquals(1, exchange(broker, command, arrayOf(first)))
+                    assertEquals(0, exchange(broker, command, emptyArray()))
+                    assertEquals(0, exchange(broker, command, arrayOf(first)))
                 }
                 for (command in listOf('S', 'Q')) {
-                    assertNotEquals(1, exchange(broker, command, emptyArray()))
-                    assertNotEquals(1, exchange(broker, command, arrayOf(first, second)))
+                    assertEquals(0, exchange(broker, command, emptyArray()))
+                    assertEquals(0, exchange(broker, command, arrayOf(first, second)))
                 }
                 Os.fstat(first); Os.fstat(second)
             } }
@@ -151,8 +154,8 @@ class NativePreviewBrokerDeviceTest {
         withBroker(XraySocketProtector.forNumericPreview(service, network, NativePreviewNetworkGeneration(),
             protectFd = { false })) { broker ->
             withInetFd { fd ->
-                assertNotEquals(1, exchange(broker, 'S', arrayOf(fd)))
-                assertNotEquals(1, exchange(broker, 'Q', arrayOf(fd)))
+                assertEquals(0, exchange(broker, 'S', arrayOf(fd)))
+                assertEquals(0, exchange(broker, 'Q', arrayOf(fd)))
             }
         }
         // A real pipe cannot be bound by Network.bindSocket(FileDescriptor).
@@ -160,7 +163,7 @@ class NativePreviewBrokerDeviceTest {
         withBroker(XraySocketProtector.forNumericPreview(service, network, NativePreviewNetworkGeneration(),
             protectFd = { true })) { broker ->
             val pipe = ParcelFileDescriptor.createPipe()
-            try { assertNotEquals(1, exchange(broker, 'Q', arrayOf(pipe[0].fileDescriptor))) }
+            try { assertEquals(0, exchange(broker, 'Q', arrayOf(pipe[0].fileDescriptor))) }
             finally { pipe.forEach { it.close() } }
         }
         val entered = CountDownLatch(1)
@@ -174,7 +177,7 @@ class NativePreviewBrokerDeviceTest {
         })
         try {
             withBroker(broker) {
-                val request = executor.submit<Int> { withInetFd { fd -> exchange(broker, 'S', arrayOf(fd)) } }
+                val request = executor.submit<Int> { withInetFd { fd -> exchange(broker, 'S', arrayOf(fd), allowClosed = true) } }
                 assertTrue(entered.await(3, TimeUnit.SECONDS))
                 generation.revoke()
                 broker.close()
@@ -215,8 +218,8 @@ class NativePreviewBrokerDeviceTest {
             broker.close()
             assertTrue(broker.awaitClosed())
             withInetFd { fd ->
-                assertNotEquals(1, exchange(broker, 'S', arrayOf(fd)))
-                assertNotEquals(1, exchange(broker, 'Q', arrayOf(fd)))
+                assertNotEquals(1, exchange(broker, 'S', arrayOf(fd), allowClosed = true))
+                assertNotEquals(1, exchange(broker, 'Q', arrayOf(fd), allowClosed = true))
             }
             assertFalse(generation.isCurrent())
         }

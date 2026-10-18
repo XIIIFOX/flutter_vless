@@ -32,6 +32,7 @@ type Policy struct {
 	Resolver             netip.AddrPort
 	DefaultOutboundIndex int
 	LookupTimeout        time.Duration
+	SystemDNSBridge      *SystemDNSBridgePolicy
 }
 
 // Errors are a closed vocabulary; source credentials/decoder/Core errors are
@@ -45,6 +46,7 @@ var (
 	ErrBusy        = errors.New("native preview lookup busy")
 	ErrLookup      = errors.New("native preview lookup failed")
 	ErrDrain       = errors.New("native preview cleanup incomplete")
+	ErrDNSQuery    = errors.New("native preview DNS query rejected")
 )
 
 func checkedPolicy(policy Policy) (Policy, error) {
@@ -59,6 +61,15 @@ func checkedPolicy(policy Policy) (Policy, error) {
 	}
 	if policy.LookupTimeout < time.Millisecond || policy.LookupTimeout > maxLookupTimeout {
 		return Policy{}, ErrPolicy
+	}
+	if policy.SystemDNSBridge != nil {
+		bridge := *policy.SystemDNSBridge // Freeze caller-owned pointer metadata.
+		if !bridge.VirtualIPv4.IsValid() || !bridge.VirtualIPv4.Is4() || bridge.VirtualIPv4.Zone() != "" ||
+			bridge.VirtualIPv4.IsUnspecified() || bridge.VirtualIPv4.IsMulticast() || bridge.VirtualIPv4.IsLoopback() ||
+			bridge.VirtualIPv4 == policy.Resolver.Addr() {
+			return Policy{}, ErrPolicy
+		}
+		policy.SystemDNSBridge = &bridge
 	}
 	return policy, nil
 }

@@ -179,6 +179,50 @@ locally is distinct from a remote runtime PASS. Native mobile host wiring and
 the OS-facing DNS bridge remain pending; none of this establishes browser DNS
 compatibility, DoH/DoT/FakeDNS or full dual stack.
 
+## In-process DNS wire preview
+
+An optional trusted `Policy.SystemDNSBridge` grants an opaque handle owned by one
+retained runtime and its exact compiled config clone. `ExchangeUDP` accepts one
+DNS message; `ExchangeTCP` accepts one complete length-prefixed message. Neither
+method opens a listener, reassembles streams or installs an OS/TUN consumer. The
+destination must equal the policy's virtual IPv4 address on port 53. JSON fields,
+tags and request metadata cannot grant this handle.
+
+The first bounded subset sends ordinary A questions through the same caller root
+DNS, preserving hosts, per-domain servers and DNS routing tags. AAAA deliberately
+returns IPv4-policy NODATA. Other record types and unsupported EDNS/opcodes receive
+REFUSED; malformed, compressed or oversized questions fail before resolution.
+Replies retain available TTL and DNS error codes, with explicit UDP truncation
+and bounded TCP responses. These restrictions are preview limits, not full DNS
+compatibility. The existing single outstanding root-lookup worker and bounded
+Close behavior still apply to the context-free Core lookup API.
+
+`TestAcceptanceNativeDNSSystemBridge` adds actual-Core checks for two independent
+owners, original hosts/default/per-domain DNS, tag-dependent routing, UDP/TCP
+message framing, non-A refusal without resolver traffic, NXDOMAIN and owner
+shutdown. Local checks compile this fourth fixture without running Core; runtime
+qualification belongs to CI. A managed input/outbound consumer with exact config
+pointer provenance is still required before any system traffic can use it.
+
+## Optional Android instrumentation composition
+
+`tool/test_android_security_emulator.sh --native-dns-preview BUILD_DIRECTORY`
+verifies a separate build's complete source snapshot, capability, ABI, ELF
+alignment and binary digest before adding it to the instrumentation APK. The
+explicit Gradle property `flutterVlessNativeDnsPreviewDir` adds only the test
+source set and test JNI library. Ordinary plugin AARs and example builds do not
+include this executable. An extra ABI/library or stale build is rejected.
+
+The two conditional device tests run the actual child entry through the strict
+captured-network broker. They require authenticated HTTP bytes, separately
+observed native-default and caller-domain DNS, local-host precedence and survival
+of an old runtime after rejected preparation. The stalled-query case must observe
+real resolver socket EOF and child/pipe/broker cleanup within one two-second
+budget beginning before the request, before the longer natural DNS timeout.
+Generation revocation refuses new descriptors; parent EOF additionally closes
+the already running Core. These tests do not install a TUN or establish browser
+DNS interception, VPN handover or system DNS support.
+
 ## Required native host integration contract (partial)
 
 1. Freeze a candidate's compiled config once, then enumerate **that exact

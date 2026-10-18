@@ -268,6 +268,28 @@ for the exact qualification boundary and runtime checks. Item 1 remains pending.
 Protected proxy egress, OS DNS semantics, DoH/DoT, FakeDNS and physical native
 socket protection remain separate work; this does not complete item 1.
 
+The [0273c1a CI run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39157185531)
+passes the Runtime, LocalDefault and Launcher actual-Core fixtures on Windows,
+macOS and Ubuntu. Apple native runtime and pure suites also pass. Its overall
+result is failure: the four new Android broker tests fail before later device
+suites run. The socket timeout was configured before connect, and listener close
+did not wake a blocked accept. Both are corrected in the following increment;
+negative tests now require explicit protocol refusal rather than accepting a
+connection error. Local Android unit tests pass all 99 cases and the corrected
+instrumentation APK compiles; a new device run is still required.
+
+The next increment adds an optional in-process DNS wire-message handle tied to
+that runtime's exact compiled config clone. Its restricted A path uses the
+original caller root DNS; AAAA is explicit IPv4-policy NODATA and unsupported
+records are refused. It creates no listener or OS/TUN consumer. A fourth actual
+Core acceptance fixture covers two owners, DNS tags, UDP/TCP framing and shutdown.
+Local validation passes 97 top-level pure Go tests and 162 subtests, compiles all
+four runtime fixtures, and builds the separate Android executable and conditional
+instrumentation APK. These are compile/pure results, not device runtime passes.
+The optional Android fixture additionally requires real brokered Core HTTP/DNS
+traffic and causal stalled-query cleanup. It still does not qualify system DNS,
+proxy bootstrap, IPv6 or arbitrary imported graphs; item 1 remains pending.
+
 Session teardown progress: Android now closes callback admission before its final
 cleanup, so late network/worker events cannot enqueue into a stopped executor.
 [Android CI on 9a6b595](https://github.com/XIIIFOX/flutter_vless/actions/runs/39147429528)

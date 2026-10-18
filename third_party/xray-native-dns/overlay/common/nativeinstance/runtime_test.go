@@ -68,6 +68,11 @@ func (f *fakeCore) lookup(n string) ([]xnet.IP, error) {
 	}
 	return []xnet.IP{{127, 0, 0, 1}}, nil
 }
+func (f *fakeCore) lookupDNS(name string) ([]xnet.IP, uint32, error) {
+	ips, err := f.lookup(name)
+	return ips, 37, err
+}
+
 func fakeFactory(f *fakeCore) coreFactory {
 	return func(context.Context, *core.Config) (runtimeCore, error) { return f, nil }
 }

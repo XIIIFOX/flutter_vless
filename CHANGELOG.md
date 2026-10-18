@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Add an unpublished per-runtime DNS wire-message primitive that retains caller hosts, per-domain servers and DNS tags. Add actual-Core and optional Android composition fixtures; system VPN DNS integration remains pending.
+* Wake blocked Android development-broker accepts/reads during shutdown and reject unexpected test socket errors. Verify preview provenance and package it only in explicitly enabled instrumentation builds.
 * Add an unpublished retained native DNS entry with per-instance ownership, private capability/preparation/status messages and bounded Stop/parent-EOF cleanup. Add a separate Android build path and development-only captured-network FD broker; keep official runtimes and ordinary launchers unchanged while qualification continues.
 * Reject stale Apple startup/recovery callbacks after Stop; preserve the latest sleep/wake decision and rearm health retries after sleep. Add causal provider tests and physical iPhone profile/routing/early-Stop regression coverage.
 * Reserve both Android standalone-delay listener ports during preparation with bounded allocation retries. Keep probe cleanup effective under cancellation and report only bounded, content-free stage/exit diagnostics.

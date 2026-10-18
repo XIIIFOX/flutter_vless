@@ -94,6 +94,77 @@ def dns_answer(query, transport):
     return query[:2] + struct.pack("!HHHHH", 0x8180, 1, len(values), 0, 0) + question + answers
 
 
+def native_question(query):
+    """Only bounded ordinary fixture questions; never delegates to OS DNS."""
+    if not 17 <= len(query) <= 4096:
+        raise ValueError('Invalid native DNS size')
+    _, flags, questions, answers, authority, additional = struct.unpack('!HHHHHH', query[:12])
+    if flags & 0xf800 or questions != 1 or answers or authority or additional > 1:
+        raise ValueError('Invalid native DNS header')
+    offset, labels = 12, []
+    while True:
+        if offset >= len(query):
+            raise ValueError('Truncated native DNS name')
+        size = query[offset]
+        offset += 1
+        if size == 0:
+            break
+        if size > 63 or offset + size >= len(query):
+            raise ValueError('Invalid native DNS label')
+        label = query[offset:offset + size].decode('ascii')
+        if not label or any(not (c.isalnum() or c == '-') for c in label):
+            raise ValueError('Invalid native DNS label')
+        labels.append(label)
+        offset += size
+    if offset + 4 > len(query):
+        raise ValueError('Truncated native DNS question')
+    kind, cls = struct.unpack('!HH', query[offset:offset + 4])
+    if cls != 1:
+        raise ValueError('Invalid native DNS class')
+    return '.'.join(labels).lower(), kind, query[12:offset + 4]
+
+
+def native_answer(query, transport, port):
+    name, kind, question = native_question(query)
+    controlled = name.endswith(SUFFIX)
+    event(event='dns', transport=transport, qname=name, qtype=kind,
+          destination=f'10.0.2.2:{port}', network='tcp', dropped=False)
+    code = 0 if controlled and kind in (1, 28) else 5
+    answers = b''
+    if controlled and kind == 1:
+        packed = ipaddress.ip_address('10.0.2.2').packed
+        answers = b'\xc0\x0c' + struct.pack('!HHIH', kind, 1, 0, len(packed)) + packed
+    return query[:2] + struct.pack('!HHHHH', 0x8180 | code, 1, int(bool(answers)), 0, 0) + question + answers
+
+
+class NativeTCP(socketserver.BaseRequestHandler):
+    """Raw numeric upstream for the opt-in composed native-entry tests only."""
+    def handle(self):
+        sock = self.request
+        sock.settimeout(10)
+        try:
+            while True:
+                size = int.from_bytes(exact(sock, 2), 'big')
+                if not 17 <= size <= 4096:
+                    raise ValueError('Invalid native TCP frame')
+                query = exact(sock, size)
+                name, kind, _ = native_question(query)
+                if name.startswith('stall-') and name.endswith(SUFFIX):
+                    details = dict(transport=self.server.transport, qname=name)
+                    event(event='dns', qtype=kind, destination=f'10.0.2.2:{self.server.server_address[1]}', network='tcp', dropped=True, **details)
+                    event(event='native-stall-start', **details)
+                    try:
+                        ended = sock.recv(1)
+                        event(event='native-stall-eof' if ended == b'' else 'native-stall-data', **details)
+                    except TimeoutError:
+                        event(event='native-stall-timeout', **details)
+                    return
+                answer = native_answer(query, self.server.transport, self.server.server_address[1])
+                sock.sendall(len(answer).to_bytes(2, 'big') + answer)
+        except (EOFError, OSError, ValueError, UnicodeError):
+            pass
+
+
 def tunnel(sock, destination, port, transport):
     if port == 53:
         if destination != "1.1.1.1":
@@ -176,16 +247,28 @@ class Status(socketserver.BaseRequestHandler):
             request += chunk
             if len(request) > 16384:
                 return
+        preview_run = None
         try:
             path = request.split(b" ", 2)[1].decode("ascii")
-            query = parse_qs(urlsplit(path).query)
+            parsed = urlsplit(path)
+            query = parse_qs(parsed.query)
             phase, run = query.get("phase", [None])[0], query.get("run", [None])[0]
+            if parsed.path == '/native-preview' and run and run.isalnum() and len(run) == 12:
+                preview_run = run
             if phase in ("ready", "stop-requested", "recovery-start", "recovery-ready") and run and run.isalnum() and len(run) == 12:
                 event(event="lifecycle", phase=phase, run=run)
         except (IndexError, UnicodeError):
             pass
         with LOCK:
-            payload = json.dumps(EVENTS).encode()
+            value = EVENTS
+            if preview_run:
+                records = [record for record in EVENTS if record.get('qname', '').endswith('-' + preview_run + SUFFIX)]
+                value = {'run': preview_run, 'queries': records}
+                for transport in ('native-default', 'native-caller'):
+                    value[transport.replace('-', '_')] = sum(record.get('event') == 'dns' and record.get('transport') == transport for record in records)
+                for name in ('native-stall-start', 'native-stall-eof', 'native-stall-timeout'):
+                    value[name.replace('-', '_')] = sum(record.get('event') == name for record in records)
+            payload = json.dumps(value).encode()
         self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: " + str(len(payload)).encode() + b"\r\n\r\n" + payload)
 
 
@@ -198,7 +281,9 @@ def main():
     global EVENT_FILE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--events", help="Write controlled DNS observations as JSONL")
-    EVENT_FILE = parser.parse_args().events
+    parser.add_argument('--native-preview', action='store_true', help='Add numeric scoped-entry TCP fixture resolvers')
+    arguments = parser.parse_args()
+    EVENT_FILE = arguments.events
     servers = []
     try:
         for port, transport in [(18280, "http"), (18281, "socks"), (18282, "vless"), (18283, "status")]:
@@ -206,6 +291,12 @@ def main():
             server.transport = transport
             servers.append(server)
             threading.Thread(target=server.serve_forever, daemon=True).start()
+        if arguments.native_preview:
+            for port, transport in [(18284, 'native-default'), (18285, 'native-caller')]:
+                server = Server(('127.0.0.1', port), NativeTCP)
+                server.transport = transport
+                servers.append(server)
+                threading.Thread(target=server.serve_forever, daemon=True).start()
         event(event="fixture-ready", ports={"http": 18280, "socks": 18281, "vless": 18282, "status": 18283})
         threading.Event().wait()
     except KeyboardInterrupt:

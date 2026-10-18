@@ -1,0 +1,49 @@
+[
+  {
+    "name": "caller_api_services_and_disabled_counters",
+    "config": {
+      "log": {"loglevel": "none"},
+      "inbounds": [],
+      "outbounds": [{"tag": "proxy", "protocol": "http", "settings": {"address": "endpoint.invalid", "port": 443}}, {"tag": "direct", "protocol": "freedom"}],
+      "dns": {"queryStrategy": "UseIPv4", "servers": ["tcp://9.9.9.9"]},
+      "api": {"tag": "caller-api", "listen": "127.0.0.1:10086", "services": ["HandlerService", "StatsService", "LoggerService"]},
+      "stats": {},
+      "policy": {"levels": {"8": {"handshake": 4, "connIdle": 180, "statsUserUplink": false}}, "system": {"statsInboundUplink": false, "statsInboundDownlink": false, "statsOutboundUplink": false, "statsOutboundDownlink": false}}
+    }
+  },
+  {
+    "name": "folded_api_without_stats_service",
+    "config": {
+      "log": {"loglevel": "none"},
+      "inbounds": [],
+      "outbounds": [{"tag": "proxy", "protocol": "http", "settings": {"address": "endpoint.invalid", "port": 443}}, {"tag": "direct", "protocol": "freedom"}],
+      "dns": {"queryStrategy": "UseIPv4", "servers": ["tcp://9.9.9.9"]},
+      "API": {"Tag": "caller-api", "Services": ["HandlerService", "LoggerService"]},
+      "Statſ": {},
+      "Policy": {"System": {"StatsOutboundUplink": false, "StatsOutboundDownlink": false}}
+    }
+  },
+  {
+    "name": "explicit_null_service_roots",
+    "config": {
+      "log": {"loglevel": "none"},
+      "inbounds": [],
+      "outbounds": [{"tag": "proxy", "protocol": "http", "settings": {"address": "endpoint.invalid", "port": 443}}, {"tag": "direct", "protocol": "freedom"}],
+      "dns": {"queryStrategy": "UseIPv4", "servers": ["tcp://9.9.9.9"]},
+      "api": null,
+      "stats": null,
+      "policy": null
+    }
+  },
+  {
+    "name": "private_api_retains_caller_stats_policy",
+    "config": {
+      "log": {"loglevel": "none"},
+      "inbounds": [],
+      "outbounds": [{"tag": "proxy", "protocol": "http", "settings": {"address": "endpoint.invalid", "port": 443}}, {"tag": "direct", "protocol": "freedom"}],
+      "dns": {"queryStrategy": "UseIPv4", "servers": ["tcp://9.9.9.9"]},
+      "stats": {},
+      "policy": {"levels": {"8": {"bufferSize": 3, "handshake": 4}}}
+    }
+  }
+]

@@ -133,7 +133,8 @@ class ProxyService {
   // Configuration and paths
   fs::path temp_config_path_;
   fs::path xray_executable_path_;
-  std::string api_address_ = "127.0.0.1:10085";
+  // Empty when the source supplies API settings; never query a caller endpoint.
+  std::string api_address_;
   std::chrono::steady_clock::time_point start_time_;
   
   // Proxy settings buffers
@@ -158,7 +159,7 @@ struct ProcessHandle {
 // ApiClient (moved from v2ray_manager.h)
 struct ApiClient {
   std::string api_address_;
-  int api_port_ = 10085;
+  int api_port_ = 0;
   
   bool GetStats(std::map<std::string, int64_t>& stats);
   int MeasureDelay(const std::string& url);

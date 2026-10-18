@@ -342,6 +342,42 @@ class AndroidTunnelDnsPolicyTest {
         assertEquals(setOf("proxy.test", "xdrive.test"), prepare(config(outbound("vless").put("streamSettings", xdrive))).bootstrapHostnames)
     }
 
+    @Test fun downloadSocketNullMatchesAbsenceWithoutEagerParentInheritance() {
+        for (penetrate in listOf<Boolean?>(null, false, true)) {
+            val parent = JSONObject().put("dialerProxy", "caller-chain").put("interface", "caller-interface")
+                .put("tcpKeepAliveIdle", 45).put("mark", 13)
+            if (penetrate != null) parent.put("penetrate", penetrate)
+            val explicit = JSONObject().put("dialerProxy", "child-chain").put("interface", "child-interface")
+                .put("tcpKeepAliveIdle", 9)
+            for (child in listOf<Any?>(null, JSONObject.NULL, JSONObject(), explicit)) {
+                val download = JSONObject().put("address", "download.test").put("network", "xhttp")
+                    .put("xhttpSettings", JSONObject().put("path", "/download"))
+                if (child != null) download.put("sockopt", child)
+                val stream = JSONObject().put("network", "xhttp").put("sockopt", JSONObject(parent.toString()))
+                    .put("xhttpSettings", JSONObject().put("extra", JSONObject().put("downloadSettings", download)))
+                val input = config(outbound().put("streamSettings", stream)); val before = input.toString()
+                val output = JSONObject(prepare(input).configJson).getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
+                val actualParent = output.getJSONObject("sockopt")
+                for (key in listOf("dialerProxy", "interface", "tcpKeepAliveIdle", "mark"))
+                    assertEquals(parent.get(key), actualParent.get(key))
+                assertEquals(parent.has("penetrate"), actualParent.has("penetrate"))
+                if (penetrate != null) assertEquals(penetrate, actualParent.getBoolean("penetrate"))
+                val actualChild = output.getJSONObject("xhttpSettings").getJSONObject("extra")
+                    .getJSONObject("downloadSettings").getJSONObject("sockopt")
+                assertEquals("ForceIP", actualChild.getString("domainStrategy"))
+                if (child === explicit) {
+                    for (key in listOf("dialerProxy", "interface", "tcpKeepAliveIdle"))
+                        assertEquals(explicit.get(key), actualChild.get(key))
+                } else {
+                    assertEquals("No eager caller/private parent-policy copy is allowed", 1, actualChild.length())
+                }
+                // Core, not this JSON preparer, performs its penetrate=true
+                // runtime override. The explicit child object must survive too.
+                assertEquals(before, input.toString())
+            }
+        }
+    }
+
     @Test fun sharedPinnedCoreProtocolCorpusPreservesCallerOutboundsAndTransportFields() {
         val cases = JSONArray(requireNotNull(javaClass.getResource("/protocols.json")).readText())
         assertEquals("Expected the complete shared protocol corpus", 7, cases.length())

@@ -22,7 +22,7 @@ class XrayServiceTagsTest {
         }
     }
 
-    @Test fun vpnAdapterAndStatsDoNotInheritUserTagsOrDanglingReferences() {
+    @Test fun vpnAdapterReservesCallerApiTagsAndLeavesItsApiUntouched() {
         val raw = """{"api":{"tag":"flutter-vless-tun-1"},"dns":{"tag":"flutter-vless-stats"},
           "reverse":{"portals":[{"tag":"flutter-vless-stats-in"}]},
           "outbounds":[{"protocol":"freedom","tag":"direct"}],
@@ -31,8 +31,25 @@ class XrayServiceTagsTest {
         val output = XrayCoreManager.buildRuntimeConfigJson(config, File("."), LocalProxyCredentials("user", "password"))
         val inbounds = output.getJSONArray("inbounds")
         assertEquals("flutter-vless-tun-2", inbounds.getJSONObject(0).getString("tag"))
+        assertEquals(1, inbounds.length())
+        assertEquals("flutter-vless-tun-1", output.getJSONObject("api").getString("tag"))
+        assertEquals(JSONObject(raw).getJSONObject("routing").toString(), output.getJSONObject("routing").toString())
+        assertEquals(0, config.LOCAL_API_PORT)
+        assertEquals(raw, config.V2RAY_FULL_JSON_CONFIG)
+    }
+
+    @Test fun ownedStatsStillReservesUserDefinitionsAndDanglingReferences() {
+        val raw = """{"dns":{"tag":"flutter-vless-stats"},
+          "reverse":{"portals":[{"tag":"flutter-vless-stats-in"}]},
+          "outbounds":[{"protocol":"freedom","tag":"direct"}],
+          "routing":{"rules":[{"inboundTag":["flutter-vless-tun"],"outboundTag":"direct"}]}}"""
+        val config = XrayConfig(V2RAY_FULL_JSON_CONFIG = raw)
+        val output = XrayCoreManager.buildRuntimeConfigJson(config, File("."), LocalProxyCredentials("user", "password"))
+        val inbounds = output.getJSONArray("inbounds")
+        assertEquals("flutter-vless-tun-1", inbounds.getJSONObject(0).getString("tag"))
         assertEquals("flutter-vless-stats-in-1", inbounds.getJSONObject(1).getString("tag"))
         assertEquals("flutter-vless-stats-1", output.getJSONObject("api").getString("tag"))
+        assertTrue(config.LOCAL_API_PORT > 0)
         assertEquals(raw, config.V2RAY_FULL_JSON_CONFIG)
     }
 

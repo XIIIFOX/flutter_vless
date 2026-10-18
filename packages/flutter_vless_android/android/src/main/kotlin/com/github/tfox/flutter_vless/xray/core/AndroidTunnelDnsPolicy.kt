@@ -222,7 +222,10 @@ internal object AndroidTunnelDnsPolicy {
 
     private fun prepareStream(stream: JSONObject, pinEndpoint: (String) -> Unit, independentDownload: Boolean = false) {
         canonicalize(stream, "sockopt", "address", "network", "method", "xhttpSettings", "splithttpSettings")
-        val sockopt = objectValue(stream, "sockopt") ?: JSONObject()
+        // Core treats an absent or null SocketSettings as nil. The independent
+        // download keeps its own policy; only Core's explicit penetrate flag
+        // makes it inherit the parent at dial time.
+        val sockopt = if (stream.isNull("sockopt")) JSONObject() else objectValue(stream, "sockopt") ?: JSONObject()
         canonicalize(sockopt, "domainStrategy", "addressPortStrategy", "dialerProxy")
         require((optionalString(sockopt, "addressPortStrategy") ?: "none").equals("none", true)) {
             "SRV/TXT endpoint overrides cannot use the protected system DNS policy"

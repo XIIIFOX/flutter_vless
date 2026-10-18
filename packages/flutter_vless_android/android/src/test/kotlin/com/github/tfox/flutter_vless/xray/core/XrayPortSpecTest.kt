@@ -40,7 +40,7 @@ class XrayPortSpecTest {
         }
     }
 
-    @Test fun privateAdapterAndStatsApiReserveCallerMetricsWithoutChangingThem() {
+    @Test fun privateAdapterReservesCallerApiAndMetricsWithoutAddingAnApi() {
         for (metricsKey in listOf("metrics", "METRICS", "Metric\u017f")) {
             val source = JSONObject("""{"api":{"listen":"127.0.0.1:+10807","tag":"caller-api","services":["StatsService"]},
                 "inbounds":[{"protocol":"http","port":"10808-10810"}],"outbounds":[{"protocol":"freedom"}]}""")
@@ -50,11 +50,20 @@ class XrayPortSpecTest {
             val config = com.github.tfox.flutter_vless.xray.dto.XrayConfig(V2RAY_FULL_JSON_CONFIG = raw)
             val effective = XrayCoreManager.buildRuntimeConfigJson(config, java.io.File("."), LocalProxyCredentials("user", "password"))
             assertEquals(10812, config.LOCAL_SOCKS5_PORT)
-            assertEquals(10813, config.LOCAL_API_PORT)
+            assertEquals(0, config.LOCAL_API_PORT)
+            assertEquals(source.getJSONObject("api").toString(), effective.getJSONObject("api").toString())
             assertEquals(metrics.toString(), effective.getJSONObject(metricsKey).toString())
             assertEquals(raw, source.toString())
             assertEquals(raw, config.V2RAY_FULL_JSON_CONFIG)
         }
+    }
+
+    @Test fun ownedStatsApiStillReservesCallerMetricsPorts() {
+        val config = com.github.tfox.flutter_vless.xray.dto.XrayConfig(V2RAY_FULL_JSON_CONFIG =
+            """{"metrics":{"listen":"127.0.0.1:10809"},"outbounds":[{"protocol":"freedom"}]}""")
+        XrayCoreManager.buildRuntimeConfigJson(config, java.io.File("."), LocalProxyCredentials("user", "password"))
+        assertEquals(10807, config.LOCAL_SOCKS5_PORT)
+        assertEquals(10810, config.LOCAL_API_PORT)
     }
 
     @Test fun sharedPinnedCorePortCorpus() {

@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Preserve caller API/services, stats and policy without enabling disabled counters or polling an imported API. Keep private statistics only for profiles without an API; accept null download socket options consistently with Core.
 * Recognize MASQUE in explicit proxy DNS; follow Core's active XHTTP/alias/null branches and distinguish ignored primary stream addresses from independent download endpoints. Add shared protocol preparation fixtures.
 * Connect the default config DNS policy to Core's caller DNS through the private VPN adapter. Preserve root hosts/server/tag policy and protected physical-Network localhost resolution; retain explicit proxy overrides and separate proxy-only behavior.
 * Bound statistics collection while reading, rather than waiting for EOF before applying its timeout. Cap captured bytes, reject unsuccessful commands and terminate/reap owned children on timeout or cancellation.

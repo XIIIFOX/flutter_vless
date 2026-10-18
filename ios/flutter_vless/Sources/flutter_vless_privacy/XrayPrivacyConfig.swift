@@ -3,7 +3,14 @@ import Foundation
 /// Mirrors the packaged Go privacy boundary so prepared JSON is safe as well.
 public enum XrayPrivacyConfig {
     public static func apply(to config: inout [String: Any]) -> Bool {
-        guard fields(&config, ["log", "inbounds", "outbounds"]) else { return false }
+        guard fields(&config, ["log", "inbounds", "outbounds", "api", "stats", "policy"]) else { return false }
+        // UI counters may use library defaults only when the caller omitted
+        // the root section. Explicit null, false flags, and levels-only policy
+        // remain caller decisions; unavailable counters can report zero.
+        if config["stats"] == nil { config["stats"] = [String: Any]() }
+        if config["policy"] == nil {
+            config["policy"] = ["system": ["statsOutboundUplink": true, "statsOutboundDownlink": true]]
+        }
         guard config["log"] == nil || config["log"] is NSNull || config["log"] is [String: Any] else { return false }
         var log = config["log"] as? [String: Any] ?? [:]
         guard fields(&log, ["access", "error", "loglevel", "dnsLog"]) else { return false }

@@ -4,18 +4,13 @@ import Foundation
 public enum XrayPrivacyConfig {
     public static func apply(to config: inout [String: Any]) -> Bool {
         guard fields(&config, ["log", "inbounds", "outbounds", "api", "stats", "policy"]) else { return false }
-        // Caller-owned services and API listeners are part of the profile.
-        // Native statistics use the in-process bridge alongside that API.
-        guard config["policy"] == nil || config["policy"] is NSNull || config["policy"] is [String: Any] else { return false }
-        var policy = config["policy"] as? [String: Any] ?? [:]
-        guard fields(&policy, ["system"]), policy["system"] == nil || policy["system"] is NSNull || policy["system"] is [String: Any] else { return false }
-        var system = policy["system"] as? [String: Any] ?? [:]
-        guard fields(&system, ["statsOutboundUplink", "statsOutboundDownlink"]) else { return false }
-        system["statsOutboundUplink"] = true
-        system["statsOutboundDownlink"] = true
-        policy["system"] = system
-        config["policy"] = policy
-        config["stats"] = [String: Any]()
+        // UI counters may use library defaults only when the caller omitted
+        // the root section. Explicit null, false flags, and levels-only policy
+        // remain caller decisions; unavailable counters can report zero.
+        if config["stats"] == nil { config["stats"] = [String: Any]() }
+        if config["policy"] == nil {
+            config["policy"] = ["system": ["statsOutboundUplink": true, "statsOutboundDownlink": true]]
+        }
         guard config["log"] == nil || config["log"] is NSNull || config["log"] is [String: Any] else { return false }
         var log = config["log"] as? [String: Any] ?? [:]
         guard fields(&log, ["access", "error", "loglevel", "dnsLog"]) else { return false }

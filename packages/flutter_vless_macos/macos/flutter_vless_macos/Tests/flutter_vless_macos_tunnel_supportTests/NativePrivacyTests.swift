@@ -3,6 +3,80 @@ import XCTest
 @testable import flutter_vless_macos_tunnel_support
 
 final class NativePrivacyTests: XCTestCase {
+    func testCallerAPIStatsAndPolicyArePreservedThroughPrivatePreparation() throws {
+        let api: [String: Any] = ["Tag": "caller-management", "Listen": "127.0.0.1:+10809", "Services": ["HandlerService", "StatsService", "RoutingService"]]
+        let stats: [String: Any] = ["caller-metadata": ["keep": true]]
+        let policy: [String: Any] = ["Levels": ["7": ["handshake": 3, "statsUserUplink": true]], "System": ["StatsOutboundUplink": false, "statsOutboundDownlink": false, "statsInboundUplink": true]]
+        let raw: [String: Any] = ["API": api, "Stats": stats, "Policy": policy, "inbounds": [["protocol": "socks", "port": 10808]], "outbounds": [["tag": "proxy", "protocol": "http", "settings": ["address": "203.0.113.9", "port": 443]]], "log": ["access": "/private/canary", "dnsLog": true]]
+        let credentials = try LocalProxyCredentials(username: "fixture-user", password: "fixture-password")
+        let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: JSONSerialization.data(withJSONObject: raw), credentials: credentials))
+        let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+        XCTAssertEqual(output["api"] as? NSDictionary, api as NSDictionary)
+        XCTAssertEqual(output["stats"] as? NSDictionary, stats as NSDictionary)
+        XCTAssertEqual(output["policy"] as? NSDictionary, policy as NSDictionary)
+        XCTAssertEqual((output["log"] as? [String: Any])?["access"] as? String, "none")
+        XCTAssertEqual((output["log"] as? [String: Any])?["dnsLog"] as? Bool, false)
+        XCTAssertEqual((output["inbounds"] as? [[String: Any]])?.first?["port"] as? Int, 10810)
+    }
+
+    func testExistingNullLevelsOnlyAndExplicitCounterFlagsDoNotAcquireDefaults() {
+        let policies: [Any] = [NSNull(), [String: Any](), ["levels": ["0": ["handshake": 7]]], ["system": NSNull()], ["System": ["StatsOutboundUplink": false, "statsOutboundDownlink": false]]]
+        for policy in policies {
+            for stats: Any in [NSNull(), [String: Any](), ["caller-field": "preserved"]] {
+                var config: [String: Any] = ["Policy": policy, "STATS": stats]
+                XCTAssertTrue(XrayPrivacyConfig.apply(to: &config))
+                XCTAssertNotNil(config["policy"])
+                XCTAssertNotNil(config["stats"])
+                if let actualPolicy = config["policy"], let actualStats = config["stats"] {
+                    XCTAssertEqual(["value": actualPolicy] as NSDictionary, ["value": policy] as NSDictionary)
+                    XCTAssertEqual(["value": actualStats] as NSDictionary, ["value": stats] as NSDictionary)
+                }
+            }
+        }
+    }
+
+    func testStatisticsDefaultsOnlyFillAbsentRootSections() throws {
+        var missing: [String: Any] = [:]
+        XCTAssertTrue(XrayPrivacyConfig.apply(to: &missing))
+        XCTAssertEqual(missing["stats"] as? NSDictionary, [:] as NSDictionary)
+        let system = try XCTUnwrap((missing["policy"] as? [String: Any])?["system"] as? [String: Any])
+        XCTAssertEqual(system as NSDictionary, ["statsOutboundUplink": true, "statsOutboundDownlink": true] as NSDictionary)
+        var explicitNull: [String: Any] = ["stats": NSNull(), "policy": NSNull()]
+        XCTAssertTrue(XrayPrivacyConfig.apply(to: &explicitNull))
+        XCTAssertTrue(explicitNull["stats"] is NSNull)
+        XCTAssertTrue(explicitNull["policy"] is NSNull)
+        var levelsOnly: [String: Any] = ["policy": ["levels": ["7": ["handshake": 3]]]]
+        XCTAssertTrue(XrayPrivacyConfig.apply(to: &levelsOnly))
+        XCTAssertEqual(levelsOnly["stats"] as? NSDictionary, [:] as NSDictionary)
+        XCTAssertEqual(levelsOnly["policy"] as? NSDictionary, ["levels": ["7": ["handshake": 3]]] as NSDictionary)
+    }
+
+    func testSharedFullConfigServiceCorpusPreservesCallerSubtrees() throws {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/full-config.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/full-config.json"))) as? [[String: Any]])
+        let credentials = try LocalProxyCredentials(username: "fixture-user", password: "fixture-password")
+        for item in cases {
+            let source = try XCTUnwrap(item["config"] as? [String: Any])
+            let data = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: data, credentials: credentials, resolveIPv4: { _ in "203.0.113.9" }))
+            let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+            for name in ["api", "stats", "policy"] {
+                let key = source.keys.first { XrayJSONField.matches($0, name) }
+                if let key, let expected = source[key] {
+                    let actual = try XCTUnwrap(output[name], "Missing caller service section: \(item["name"] as? String ?? "fixture")")
+                    XCTAssertEqual(["value": actual] as NSDictionary, ["value": expected] as NSDictionary)
+                } else if name == "api" {
+                    XCTAssertNil(output[name], "Apple must not create a management listener for UI counters")
+                }
+            }
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), data)
+        }
+    }
+
     func testEveryLogLevelAndMissingLogDisableContentSinks() {
         for level in [nil, "debug", "info", "warning", "ERROR", "none"] as [String?] {
             var config: [String: Any] = [:]

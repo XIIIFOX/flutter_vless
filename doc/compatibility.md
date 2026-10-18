@@ -198,15 +198,44 @@ covers MASQUE/TLS, VLESS with WS/gRPC/HTTPUpgrade, two XHTTP precedence cases
 and HTTP alongside internal handlers/role aliases. Android checks this same
 corpus in JVM tests. Production C++/Apple export plus pinned Core decode/build
 passes locally without a Core instance or listeners. This proves preparation,
-not MASQUE/WS/gRPC/HTTPUpgrade server handshakes. The next remote traffic fixture
-also requires imported loopback HTTP routing and a source DNS raw relay; its
-runtime result is recorded separately.
+not MASQUE/WS/gRPC/HTTPUpgrade server handshakes.
+[Ordinary Core acceptance at dacfd59](https://github.com/XIIIFOX/flutter_vless/actions/runs/39176129350)
+passes on Linux/macOS/Windows: imported loopback HTTP routing and a source DNS
+raw relay both carry controlled traffic, with final upstream counts checked
+after cleanup. The macOS job exercises both production C++ and Apple preparers.
 
-Keep socket-policy inheritance for XHTTP downloads with caller chains as a
-separate remaining check: inserting download sockopt can suppress Core's parent
-inheritance. WG/XDRIVE and the exhaustive protocol matrix remain unqualified.
+The pinned Core keeps download socket settings independent unless the parent's
+`sockopt.penetrate` is true; only then does it replace the download's settings
+with the parent object. Apple/Windows currently reject that combined path until
+its shared pin scope is qualified. Missing/null download socket settings must
+not acquire a caller chain merely because the upload has one. WG/XDRIVE and the
+exhaustive protocol matrix remain unqualified.
 Pinned Core requires one receiver/user in the relevant `servers`/`vnext` arrays;
 multiple independent outbounds with a balancer are a different supported shape.
+
+### Minimum full configuration preservation
+
+Caller `api` (tag, listener and services), `stats` and `policy` subtrees remain
+intact during VPN preparation, including explicit null, disabled flags,
+levels-only policy and nested field spelling. Library statistics defaults are
+added only when the respective root section is absent. Normal sessions retain
+caller services; the standalone delay probe still omits API/metrics listeners
+to avoid rebinding a live session's ports.
+
+Android/Windows create and query a private statistics endpoint only when the
+source has no API section. They do not query an imported API, even if it has
+StatsService and a loopback listener. An explicit API/null or caller policy
+may therefore leave the example's counters at zero; this does not prevent VPN
+startup. Exact per-adapter accounting and a public availability signal remain
+separate work. Apple uses its existing in-process reader.
+
+The shared [four-case full-config corpus](../tool/fixtures/compatibility/full-config.json)
+checks these source sections after native preparation and against pinned Core
+decode/build. Runtime acceptance additionally requires a caller StatsService
+to remain available while HTTP/DNS traffic flows and disabled counters to stay
+disabled; this increment's remote runtime result is still pending.
+This increment does not implement source-inbound context selection, explicit
+VPN default selection or isolation from caller prefix-based balancers.
 
 Port grammar progress (2026-10-18): the Dart, Kotlin, Swift and C++ paths now
 share a 20-case corpus checked against the pinned Core decoder/build path.
@@ -466,8 +495,8 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | --- | --- | --- |
 | 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private A queries. Ordinary Core tests pass on all three desktop systems, Android TUN passes both new DNS cases within 35 native checks, and iOS/macOS native runtime variants pass in CI. Localhost adaptation, IPv4-only answers and unsupported paths are documented above. Full advanced/FakeDNS semantics remain open. |
 | 2. IPv6 | Pending | Current tests prove blocking, not dual-stack forwarding, IPv6-only endpoint or NAT64 support. |
-| 3. Protocol/transport matrix | Partial | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP preparation fixes and a seven-case pinned Core build corpus pass native tests. Imported loopback/DNS runtime acceptance is being extended; new protocol handshakes, download socket inheritance and the full matrix remain open. |
-| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. Apple retains caller API/services; Android/Windows API, caller stats/policy, source-inbound context and explicit VPN default selection remain open. |
+| 3. Protocol/transport matrix | Partial | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP preparation fixes and a seven-case pinned Core build corpus pass native tests. Imported loopback/DNS traffic passes ordinary Core acceptance on all three desktop systems at dacfd59; new protocol handshakes, XHTTP penetrate and the full matrix remain open. |
+| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation is implemented across platforms with shared preparation tests; its new runtime check is pending. Source-inbound context, explicit VPN default selection, prefix-selector isolation and exact adapter counters remain open. |
 | 5. Ports/addresses | Partial | Shared 20-case port, 12-case service-tag, 21-case numeric API and 36-case service-listener fixtures cover allocation. Real Android/iPhone list/range/env/Unix and tag-collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. OS port checks, service-name resolution, prefix-selector isolation, bind retries and broader proxy-only parity remain open. |
 | 6. Assets/import syntax | Partial | A shared 22-case JSON syntax corpus is checked against actual Core decoding. SDK start/delay/import/subscriptions and the example routing editor accept Core-style comments and a leading BOM. Device browser/routing checks pass. Portable cert/key/geodata assets and explicit multi-document merging remain open. |
 | 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |

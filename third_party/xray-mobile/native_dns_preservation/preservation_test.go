@@ -27,11 +27,14 @@ import (
 	"time"
 
 	dns "github.com/miekg/dns"
+	statscommand "github.com/xtls/xray-core/app/stats/command"
 	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
 	"golang.org/x/net/http2"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type fixture struct {
@@ -522,9 +525,23 @@ func testNativeDNSPreservation(t *testing.T) {
 	betaPort := udpResolver(t, beta, "beta.invalid", "192.0.2.12")
 	gammaPort := h2cResolver(t, gamma)
 	proxyPort := socksMarker(t, origin)
+	// Keep the caller API separate from the adapter. Reserve its port through
+	// preparation so the native allocator must account for an existing service.
+	apiReservation, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = apiReservation.Close() })
+	apiAddress := apiReservation.Addr().String()
 	source := map[string]any{
 		"log":      map[string]any{"loglevel": "none"},
 		"inbounds": []any{},
+		"api": map[string]any{"tag": "caller-api", "listen": apiAddress,
+			"services": []string{"StatsService", "HandlerService", "LoggerService"}},
+		"stats": map[string]any{},
+		"policy": map[string]any{"system": map[string]any{
+			"statsInboundUplink": false, "statsInboundDownlink": false,
+			"statsOutboundUplink": false, "statsOutboundDownlink": false}},
 		"outbounds": []any{
 			map[string]any{"tag": "proxy", "protocol": "socks", "settings": map[string]any{"servers": []any{map[string]any{"address": "endpoint.invalid", "port": proxyPort}}}},
 			map[string]any{"tag": "dns-direct", "protocol": "direct", "settings": map[string]any{"domainStrategy": "AsIs", "finalRules": []any{map[string]any{"action": "allow"}}}},
@@ -546,6 +563,11 @@ func testNativeDNSPreservation(t *testing.T) {
 		}},
 	}
 	prepared, port := prepare(t, source)
+	var effective map[string]any
+	if err := json.Unmarshal(prepared, &effective); err != nil {
+		t.Fatal(err)
+	}
+	assertCallerServiceRoots(t, source, effective)
 	decoded, err := serial.DecodeJSONConfig(bytes.NewReader(prepared))
 	if err != nil {
 		t.Fatal(err)
@@ -563,6 +585,9 @@ func testNativeDNSPreservation(t *testing.T) {
 			t.Error(err)
 		}
 	})
+	if err := apiReservation.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -603,6 +628,20 @@ func testNativeDNSPreservation(t *testing.T) {
 	if err != nil || string(body) != "PINNED_ENDPOINT_OK" {
 		t.Fatal("proxy HTTP marker missing", err)
 	}
+	api, err := grpc.NewClient(apiAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer api.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	statistics, err := statscommand.NewStatsServiceClient(api).QueryStats(ctx, &statscommand.QueryStatsRequest{})
+	if err != nil {
+		t.Fatal("caller StatsService is unavailable after native preparation", err)
+	}
+	if len(statistics.Stat) != 0 {
+		t.Fatal("caller disabled counters were enabled by adaptation")
+	}
 	completed = true
-	t.Log("PASS actual native DNS: preserved root hosts/servers/tags/per-domain policy, TCP+UDP VIP, numeric TCP+UDP upstream, named h2c static host, AAAA NODATA, MX REFUSED, isolated endpoint pin and HTTP bytes; no OS resolver")
+	t.Log("PASS actual native DNS: preserved root hosts/servers/tags/per-domain policy, TCP+UDP VIP, numeric TCP+UDP upstream, named h2c static host, AAAA NODATA, MX REFUSED, isolated endpoint pin and HTTP bytes; caller API/StatsService works with disabled counters; no OS resolver")
 }

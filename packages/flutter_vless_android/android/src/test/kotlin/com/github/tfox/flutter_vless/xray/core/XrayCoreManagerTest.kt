@@ -11,6 +11,91 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class XrayCoreManagerTest {
+    @Test fun callerApiAndWholeStatisticsPolicyRemainUnchangedWithoutPrivateApi() {
+        for (api in listOf<Any>(JSONObject.NULL, JSONObject("""{"tag":"caller-api","listen":"127.0.0.1:10807","services":["HandlerService","RoutingService","StatsService"],"unknown":{"network":"UNCHANGED","allowInsecure":true}}"""))) {
+            for (policy in listOf<Any>(JSONObject.NULL, JSONObject("""{"system":{"statsOutboundUplink":false,"statsOutboundDownlink":false},"levels":{"8":{"bufferSize":3}},"unknown":{"allowInsecure":true}}"""))) {
+                val source = JSONObject().put("API", api).put("StAtS", JSONObject.NULL).put("PoLiCy", policy)
+                    .put("inbounds", JSONArray().put(JSONObject("""{"protocol":"http","port":18080,"tag":"caller-input"}""")))
+                    .put("outbounds", JSONArray().put(JSONObject("""{"protocol":"freedom","tag":"direct"}""")))
+                    .put("routing", JSONObject("""{"domainStrategy":"AsIs","rules":[{"inboundTag":["caller-input"],"outboundTag":"direct"}]}"""))
+                val original = source.toString()
+                val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = original)
+                val output = XrayCoreManager.buildRuntimeConfigJson(profile, File("build/test-files/caller-api"), credentials)
+                assertEquals(api.toString(), output.get("api").toString())
+                assertTrue(output.isNull("stats"))
+                assertEquals(policy.toString(), output.get("policy").toString())
+                assertEquals(source.getJSONObject("routing").toString(), output.getJSONObject("routing").toString())
+                assertEquals(2, output.getJSONArray("inbounds").length())
+                assertEquals(0, profile.LOCAL_API_PORT)
+                assertEquals(original, source.toString())
+            }
+        }
+    }
+
+    @Test fun ownedApiAddsOnlyWhollyAbsentStatisticsRootsAndRejectsAmbiguousAliases() {
+        for (policy in listOf<Any>(JSONObject.NULL, JSONObject("""{"system":{"statsOutboundUplink":false},"levels":{"8":{"handshake":2}}}"""))) {
+            val source = JSONObject().put("\u017ftat\u017f", JSONObject.NULL).put("POLICY", policy)
+                .put("outbounds", JSONArray().put(JSONObject().put("protocol", "freedom")))
+            val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = source.toString(), LOCAL_API_PORT = 0)
+            val output = XrayCoreManager.buildRuntimeConfigJson(profile, File("build/test-files/owned-api"), credentials)
+            assertTrue(output.isNull("stats"))
+            assertEquals(policy.toString(), output.get("policy").toString())
+            assertEquals("StatsService", output.getJSONObject("api").getJSONArray("services").getString(0))
+            assertTrue(profile.LOCAL_API_PORT in 1..65535)
+        }
+        for (port in listOf(-1, 65536)) {
+            try {
+                XrayCoreManager.buildRuntimeConfigJson(XrayConfig(LOCAL_API_PORT = port,
+                    V2RAY_FULL_JSON_CONFIG = """{"outbounds":[{"protocol":"freedom"}]}"""), File("build/test-files/invalid-private-api"), credentials)
+                org.junit.Assert.fail("Only the explicit no-owned-API sentinel may use the default preference")
+            } catch (_: IllegalArgumentException) { }
+        }
+        for (fields in listOf("\"api\":null,\"API\":{}", "\"stats\":{},\"\u017ftats\":null", "\"policy\":{},\"PoLiCy\":null")) {
+            try {
+                XrayCoreManager.buildRuntimeConfigJson(XrayConfig(V2RAY_FULL_JSON_CONFIG = """{$fields,"outbounds":[{"protocol":"freedom"}]}"""), File("build/test-files/duplicate-roots"), credentials)
+                org.junit.Assert.fail("Ambiguous caller roots must be rejected")
+            } catch (_: IllegalArgumentException) { }
+        }
+    }
+
+    @Test fun callerApiDisablesStatisticsPollingWithoutAFallbackPort() {
+        assertEquals(null, XrayCoreManager.statsQueryPort(null))
+        for (port in listOf(0, -1, 65536))
+            assertEquals(null, XrayCoreManager.statsQueryPort(XrayConfig(LOCAL_API_PORT = port)))
+        assertEquals(18081, XrayCoreManager.statsQueryPort(XrayConfig(LOCAL_API_PORT = 18081)))
+        val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = """{"api":null,"outbounds":[{"protocol":"freedom"}]}""")
+        val output = XrayCoreManager.buildRuntimeConfigJson(profile, File("build/test-files/no-caller-poll"), credentials)
+        assertEquals(null, XrayCoreManager.statsQueryPort(profile))
+        assertFalse(output.has("routing"))
+        assertEquals(1, output.getJSONArray("inbounds").length())
+        assertTrue(output.has("stats"))
+        assertTrue(output.getJSONObject("policy").getJSONObject("system").getBoolean("statsOutboundUplink"))
+    }
+
+    @Test fun sharedFullConfigCorpusPreservesCallerApiStatsPolicyAndPrivateAdapter() {
+        val cases = JSONArray(requireNotNull(javaClass.getResource("/full-config.json")).readText())
+        assertEquals(4, cases.length())
+        for (index in 0 until cases.length()) {
+            val item = cases.getJSONObject(index); val label = item.getString("name")
+            val source = item.getJSONObject("config"); val before = source.toString()
+            val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = before)
+            val output = XrayCoreManager.buildRuntimeConfigJson(profile, File("build/test-files/shared-full-config"), credentials)
+            fun field(key: String) = key.replace('\u017f', 's').replace('\u212a', 'k').lowercase(java.util.Locale.ROOT)
+            for (key in source.keys()) if (field(key) in setOf("api", "stats", "policy"))
+                assertEquals("$label/$key", source.get(key).toString(), output.get(field(key)).toString())
+            val callerApi = source.keys().asSequence().any { field(it) == "api" }
+            assertEquals(label, if (callerApi) 1 else 2, output.getJSONArray("inbounds").length())
+            if (callerApi) {
+                assertEquals(label, 0, profile.LOCAL_API_PORT)
+                assertFalse(label, output.has("routing"))
+            } else {
+                assertTrue(label, profile.LOCAL_API_PORT > 0)
+                assertEquals(label, "StatsService", output.getJSONObject("api").getJSONArray("services").getString(0))
+            }
+            assertEquals(label, before, source.toString())
+        }
+    }
+
     @Test fun callerRootDnsRelayBindsOnlyTheNativePreparedPrivateAdapter() {
         val source = """{
           "dns":{"hosts":{"caller.test":"192.0.2.8"},"servers":["localhost"],"tag":"caller-dns","queryStrategy":"UseIPv4"},

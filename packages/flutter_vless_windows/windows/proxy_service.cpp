@@ -123,11 +123,11 @@ bool ProxyService::Start(const std::string& config) {
   auto executable = FindXrayExecutable();
   if (!executable || !flutter_vless::native::CheckConfig(prepared, *executable,
       flutter_vless::native::ConfigCheckStorage::currentUser)) return false;
+  const auto owned_api_port = flutter_vless::xray_config::OwnedApiPort(config, prepared);
   Stop();
   xray_executable_path_ = *executable;
   current_config_ = prepared;
-  auto json = flutter_vless::xray_config::Parse(prepared);
-  api_address_ = json["api"]["listen"].get<std::string>();
+  api_address_ = owned_api_port ? "127.0.0.1:" + std::to_string(*owned_api_port) : "";
   ready_.store(false); is_running_.store(true);
   { std::lock_guard<std::mutex> lock(start_mutex_); start_finished_ = false; }
   v2ray_thread_ = std::thread(&ProxyService::RunV2ray, this);
@@ -148,6 +148,7 @@ void ProxyService::Stop() {
   
   StopXrayProcess();
   CleanupTempFiles();
+  api_address_.clear();
 
   std::lock_guard<std::mutex> lock(stats_mutex_);
   total_upload_ = 0;
@@ -231,25 +232,15 @@ bool ProxyService::WriteConfigToFile(const std::string& config, fs::path& config
 }
 
 bool ProxyService::InitializeApiClient() {
-  if (!api_client_) {
-    api_client_ = std::make_unique<ApiClient>();
-  }
-  
+  api_client_.reset();
+  if (api_address_.empty()) return false;
+  const auto port = flutter_vless::xray_config::ApiPort(
+      flutter_vless::xray_config::Json{{"api", {{"listen", api_address_}}}}.dump());
+  if (!port) return false;
+  api_client_ = std::make_unique<ApiClient>();
   api_client_->service_ = this;
-  
-  size_t colon_pos = api_address_.find(':');
-  if (colon_pos != std::string::npos) {
-    api_client_->api_address_ = api_address_.substr(0, colon_pos);
-    try {
-      api_client_->api_port_ = std::stoi(api_address_.substr(colon_pos + 1));
-    } catch (...) {
-      api_client_->api_port_ = 10085;
-    }
-  } else {
-    api_client_->api_address_ = api_address_;
-    api_client_->api_port_ = 10085;
-  }
-  
+  api_client_->api_address_ = "127.0.0.1";
+  api_client_->api_port_ = *port;
   return true;
 }
 
@@ -652,7 +643,7 @@ std::string ApiClient::GetVersion() {
  */
 bool ApiClient::RunXrayApiCommand(const std::string& args, std::string& output) {
   (void)args;
-  if (!service_) return false;
+  if (!service_ || api_port_ <= 0 || service_->api_address_.empty()) return false;
   return flutter_vless::native::Command(service_->xray_executable_path_,
       {L"api", L"statsquery", L"-server=" + flutter_vless::native::Wide(service_->api_address_)}, output);
 }

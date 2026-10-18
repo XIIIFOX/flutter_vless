@@ -102,6 +102,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     Event("Xray configuration check rejected generated VPN document; active session preserved");
     return false;
   }
+  const auto owned_api_port = xray_config::OwnedApiPort(config, *prepared).value_or(0);
   auto runtime = std::make_unique<native::ProtectedRuntime>();
   if (!runtime->Create(*xray)) {
     Event("Cannot create private administrator-owned VPN runtime");
@@ -115,7 +116,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   options_ = options;
   current_config_ = *prepared; username_ = user; password_ = password;
   socks_port_ = *xray_config::Port(xray_config::Parse(current_config_)["inbounds"][0]);
-  api_port_ = *xray_config::ApiPort(current_config_);
+  api_port_ = owned_api_port;
   // WFP must exist before native workers, resolver configuration or capture.
   if (!protection_.Install(xray_executable_path_)) { Event(("Could not install mandatory Windows traffic protection, code=" + std::to_string(protection_.Error())).c_str()); return false; }
   Event("Mandatory Windows traffic protection installed");
@@ -138,7 +139,7 @@ void VpnService::StopSession(bool release) {
   StopWorkers();
   private_runtime_.reset();
   if (release && !protection_.Release()) Event("Traffic protection cleanup failed; restart as administrator and stop again");
-  username_.clear(); password_.clear(); current_config_.clear();
+  username_.clear(); password_.clear(); current_config_.clear(); api_port_ = 0;
   if (release) bootstrap_cache_.clear();
   std::lock_guard<std::mutex> lock(stats_mutex_); total_upload_ = 0; total_download_ = 0;
 }
@@ -272,6 +273,7 @@ void VpnService::StopWorkers() {
   flutter_vless::native::RemovePrivateConfig(tun_config_path_);
 }
 void VpnService::UpdateTrafficStats() {
+  if (!api_port_) return;
   std::string output;
   if (!flutter_vless::native::Command(xray_executable_path_, {L"api", L"statsquery", L"-server=127.0.0.1:" + std::to_wstring(api_port_)}, output)) return;
   auto stats = flutter_vless::xray_config::Parse(output);

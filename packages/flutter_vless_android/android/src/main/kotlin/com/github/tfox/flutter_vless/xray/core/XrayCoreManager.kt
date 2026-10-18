@@ -121,8 +121,21 @@ object XrayCoreManager {
             }
             requireNotNull(protectedDns?.managedInboundTag) { "Protected DNS adapter identity is unavailable" }
         } else null
-        val json = normalizeRuntimeConfig(JSONObject(config.V2RAY_FULL_JSON_CONFIG)) as JSONObject
+        val imported = JSONObject(config.V2RAY_FULL_JSON_CONFIG)
+        // Service and policy subtrees belong to the caller. Keep them outside
+        // the compatibility normalizer, including explicit null and unknown
+        // fields, and reject ambiguous Go-decoder aliases before choosing one.
+        val callerRoots = mutableMapOf<String, Any>()
+        for (key in imported.keys().asSequence().toList()) {
+            val field = key.replace('\u017f', 's').replace('\u212a', 'k').lowercase(java.util.Locale.ROOT)
+            if (field !in setOf("api", "stats", "policy")) continue
+            require(!callerRoots.containsKey(field)) { "Duplicate native configuration field" }
+            callerRoots[field] = imported.get(key)
+            imported.remove(key)
+        }
+        val json = normalizeRuntimeConfig(imported) as JSONObject
         LocalProxyAccessPolicy.normalizeConfigInputs(json)
+        callerRoots.forEach { (key, value) -> json.put(key, value) }
         normalizeVlessOutbounds(json)
         require(json.optJSONArray("outbounds")?.length()?.let { it > 0 } == true) { "At least one outbound is required" }
         // Raw native logs can contain addresses and secrets even at error level.
@@ -161,25 +174,27 @@ object XrayCoreManager {
         } else {
             LocalProxyAccessPolicy.credentialsForProxyOnly(JSONObject().put("inbounds", inbounds), config.LOCAL_SOCKS5_PORT)
         }
-        // Keep StatsService, but do not create an unsolicited HTTP proxy.
-        val apiOutboundTag = serviceTags.next("flutter-vless-stats")
-        json.put("api", JSONObject().put("tag", apiOutboundTag).put("services", JSONArray().put("StatsService")))
-        json.put("stats", JSONObject())
-        val policy = json.optJSONObject("policy") ?: JSONObject()
-        val system = policy.optJSONObject("system") ?: JSONObject()
-        system.put("statsOutboundUplink", true).put("statsOutboundDownlink", true)
-        policy.put("system", system)
-        json.put("policy", policy)
-        config.LOCAL_API_PORT = nextFreePort(config.LOCAL_API_PORT, used)
-        val apiTag = serviceTags.next("flutter-vless-stats-in")
-        inbounds.put(JSONObject().put("tag", apiTag).put("port", config.LOCAL_API_PORT).put("listen", "127.0.0.1")
-            .put("protocol", "dokodemo-door").put("settings", JSONObject().put("address", "127.0.0.1")))
+        if (!json.has("stats")) json.put("stats", JSONObject())
+        if (!json.has("policy")) json.put("policy", JSONObject().put("system", JSONObject()
+            .put("statsOutboundUplink", true).put("statsOutboundDownlink", true)))
+        if (json.has("api")) {
+            // Zero means no library-owned API. Never query an arbitrary caller
+            // service, including when the caller intentionally supplied null.
+            config.LOCAL_API_PORT = 0
+        } else {
+            val apiOutboundTag = serviceTags.next("flutter-vless-stats")
+            json.put("api", JSONObject().put("tag", apiOutboundTag).put("services", JSONArray().put("StatsService")))
+            config.LOCAL_API_PORT = nextFreePort(if (config.LOCAL_API_PORT == 0) 10809 else config.LOCAL_API_PORT, used)
+            val apiTag = serviceTags.next("flutter-vless-stats-in")
+            inbounds.put(JSONObject().put("tag", apiTag).put("port", config.LOCAL_API_PORT).put("listen", "127.0.0.1")
+                .put("protocol", "dokodemo-door").put("settings", JSONObject().put("address", "127.0.0.1")))
+            val routing = json.optJSONObject("routing") ?: JSONObject()
+            val rules = JSONArray().put(JSONObject().put("type", "field").put("inboundTag", JSONArray().put(apiTag)).put("outboundTag", apiOutboundTag))
+            routing.optJSONArray("rules")?.let { for (i in 0 until it.length()) rules.put(it.get(i)) }
+            routing.put("rules", rules)
+            json.put("routing", routing)
+        }
         json.put("inbounds", inbounds)
-        val routing = json.optJSONObject("routing") ?: JSONObject()
-        val rules = JSONArray().put(JSONObject().put("type", "field").put("inboundTag", JSONArray().put(apiTag)).put("outboundTag", apiOutboundTag))
-        routing.optJSONArray("rules")?.let { for (i in 0 until it.length()) rules.put(it.get(i)) }
-        routing.put("rules", rules)
-        json.put("routing", routing)
         return json
     }
 
@@ -288,18 +303,22 @@ object XrayCoreManager {
         val changed = AppConfigs.V2RAY_STATE != state
         AppConfigs.V2RAY_STATE = state
         if (changed) com.github.tfox.flutter_vless.NativeQuickAccess.refresh(context)
-        val traffic = if (state == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED) getV2rayTraffic(context) else longArrayOf(0, 0, 0, 0)
+        val traffic = if (state == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED && statsQueryPort(AppConfigs.V2RAY_CONFIG) != null)
+            getV2rayTraffic(context) else longArrayOf(0, 0, 0, 0)
         context.sendBroadcast(Intent(AppConfigs.V2RAY_CONNECTION_INFO).setPackage(context.packageName)
             .putExtra("STATE", state).putExtra("DURATION", seconds.toString())
             .putExtra("UPLOAD_SPEED", traffic[0]).putExtra("DOWNLOAD_SPEED", traffic[1])
             .putExtra("UPLOAD_TRAFFIC", traffic[2]).putExtra("DOWNLOAD_TRAFFIC", traffic[3]))
     }
 
+    internal fun statsQueryPort(config: XrayConfig?): Int? = config?.LOCAL_API_PORT?.takeIf { it in 1..65535 }
+
     fun getV2rayTraffic(context: Context): LongArray {
+        val apiPort = statsQueryPort(AppConfigs.V2RAY_CONFIG) ?: return longArrayOf(0, 0, 0, 0)
         if (xrayProcess?.isAlive != true) return longArrayOf(0, 0, 0, 0)
         return try {
             val process = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
-                "api", "statsquery", "--server=127.0.0.1:${AppConfigs.V2RAY_CONFIG?.LOCAL_API_PORT ?: 10809}", "--pattern", "outbound>>>proxy>>>")
+                "api", "statsquery", "--server=127.0.0.1:$apiPort", "--pattern", "outbound>>>proxy>>>")
                 .redirectErrorStream(true).start()
             // Stats are bounded and parsed locally; never included in diagnostics.
             val output = BoundedCoreCommand.capture(process)?.toString(Charsets.UTF_8)

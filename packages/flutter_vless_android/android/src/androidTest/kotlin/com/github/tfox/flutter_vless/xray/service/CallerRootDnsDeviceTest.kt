@@ -11,6 +11,7 @@ import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.github.tfox.flutter_vless.xray.core.AndroidTunnelDnsPolicy
+import com.github.tfox.flutter_vless.xray.core.BoundedCoreCommand
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import org.json.JSONArray
@@ -23,6 +24,7 @@ import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.File
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -78,6 +80,10 @@ class CallerRootDnsDeviceTest {
         }.readText().let(::JSONObject)
         assertEquals("Caller root DNS presence changed", source.has("dns"), runtime.has("dns"))
         if (source.has("dns")) assertEquals(source.getJSONObject("dns").toString(), runtime.getJSONObject("dns").toString())
+        for (name in listOf("api", "stats", "policy")) if (source.has(name)) {
+            assertTrue("Caller $name root disappeared", runtime.has(name))
+            assertEquals("Caller $name subtree changed", source.get(name).toString(), runtime.get(name).toString())
+        }
     }
 
     @After fun stop() {
@@ -184,6 +190,15 @@ class CallerRootDnsDeviceTest {
                         .put("tag", "caller-per-domain").put("queryStrategy", "UseIPv4")))
             try {
                 val source = baseSource(blockDefault = true).put("dns", root)
+                val apiAddress = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1")).use {
+                    "127.0.0.1:${it.localPort}"
+                }
+                source.put("api", JSONObject().put("tag", "caller-api").put("listen", apiAddress)
+                    .put("services", JSONArray().put("StatsService").put("HandlerService")))
+                    .put("stats", JSONObject())
+                    .put("policy", JSONObject().put("system", JSONObject()
+                        .put("statsInboundUplink", false).put("statsInboundDownlink", false)
+                        .put("statsOutboundUplink", false).put("statsOutboundDownlink", false)))
                 source.getJSONObject("routing").getJSONArray("rules").put(JSONObject().put("type", "field")
                     .put("domain", JSONArray().put("full:$hosts")).put("outboundTag", "caller-direct"))
                 start(source)
@@ -202,6 +217,12 @@ class CallerRootDnsDeviceTest {
                 assertFalse("Per-domain query escaped to fallback", generalSeen.any { it.first == caller })
                 assertFalse("Static hosts escaped to a DNS server", (generalSeen + domainSeen).any { it.first == hosts })
                 assertTrue("IPv4 policy issued another record type", (generalSeen + domainSeen).all { it.second == 1 })
+                val command = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
+                    "api", "statsquery", "--server=$apiAddress").redirectErrorStream(true).start()
+                val output = BoundedCoreCommand.capture(command)?.toString(Charsets.UTF_8)
+                assertNotNull("Caller StatsService did not respond", output)
+                val counters = JSONObject(output!!).optJSONArray("stat")
+                assertTrue("Caller disabled counters were enabled", counters == null || counters.length() == 0)
             } finally { stop() }
         } }
     }

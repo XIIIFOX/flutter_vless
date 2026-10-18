@@ -49,6 +49,7 @@ def source_snapshot():
              WINDOWS / 'xray_config.h', WINDOWS / 'desktop_security_test.cpp',
              WINDOWS / 'xray_config_test.cpp', WINDOWS / 'third_party/nlohmann/json.hpp']
     paths.append(ROOT / 'tool/fixtures/compatibility/protocols.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/full-config.json')
     fixture = MOBILE / 'native_dns_preservation'
     sources = sorted(fixture.rglob('*.go'))
     if not sources:

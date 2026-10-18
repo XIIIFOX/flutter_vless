@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/xtls/xray-core/infra/conf/serial"
@@ -18,12 +19,20 @@ type protocolCase struct {
 }
 
 func protocolCorpus(t *testing.T) []protocolCase {
+	return preparationCorpus(t, "protocols.json", 7)
+}
+
+func fullConfigCorpus(t *testing.T) []protocolCase {
+	return preparationCorpus(t, "full-config.json", 4)
+}
+
+func preparationCorpus(t *testing.T, name string, count int) []protocolCase {
 	t.Helper()
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("corpus source path unavailable")
 	}
-	data, err := os.ReadFile(filepath.Join(filepath.Dir(source), "..", "..", "..", "tool", "fixtures", "compatibility", "protocols.json"))
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(source), "..", "..", "..", "tool", "fixtures", "compatibility", name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,15 +40,15 @@ func protocolCorpus(t *testing.T) []protocolCase {
 	if err := json.Unmarshal(data, &cases); err != nil {
 		t.Fatal(err)
 	}
-	if len(cases) != 7 {
-		t.Fatal("expected seven focused protocol preparation cases")
+	if len(cases) != count {
+		t.Fatalf("expected %d focused preparation cases in %s", count, name)
 	}
 	return cases
 }
 
 // Decode/build only: no core.Instance, listeners, DNS or runtime initialization.
 func TestProtocolCorpusBuilds(t *testing.T) {
-	for _, tc := range protocolCorpus(t) {
+	for _, tc := range append(protocolCorpus(t), fullConfigCorpus(t)...) {
 		t.Run(tc.Name, func(t *testing.T) {
 			data, err := json.Marshal(tc.Config)
 			if err != nil {
@@ -69,7 +78,7 @@ func TestNativeProtocolPreparation(t *testing.T) {
 }
 
 func testNativeProtocolPreparation(t *testing.T) {
-	for _, tc := range protocolCorpus(t) {
+	for _, tc := range append(protocolCorpus(t), fullConfigCorpus(t)...) {
 		t.Run(tc.Name, func(t *testing.T) {
 			prepared, _ := prepare(t, tc.Config)
 			decoded, err := serial.DecodeJSONConfig(bytes.NewReader(prepared))
@@ -83,6 +92,7 @@ func testNativeProtocolPreparation(t *testing.T) {
 			if err := json.Unmarshal(prepared, &effective); err != nil {
 				t.Fatal(err)
 			}
+			assertCallerServiceRoots(t, tc.Config, effective)
 			original := tc.Config["outbounds"].([]any)
 			actual := effective["outbounds"].([]any)
 			for index, value := range original {
@@ -115,5 +125,30 @@ func testNativeProtocolPreparation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func foldedRoot(object map[string]any, name string) (any, bool) {
+	for key, value := range object {
+		if strings.EqualFold(key, name) {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func assertCallerServiceRoots(t *testing.T, source, effective map[string]any) {
+	t.Helper()
+	for _, name := range []string{"api", "stats", "policy"} {
+		want, present := foldedRoot(source, name)
+		if !present {
+			continue
+		}
+		got, retained := foldedRoot(effective, name)
+		wantJSON, wantErr := json.Marshal(want)
+		gotJSON, gotErr := json.Marshal(got)
+		if !retained || wantErr != nil || gotErr != nil || !bytes.Equal(wantJSON, gotJSON) {
+			t.Fatalf("caller %s subtree changed during VPN preparation", name)
+		}
 	}
 }

@@ -7,7 +7,88 @@ using namespace flutter_vless::xray_config;
 void Check(bool ok, const char* message) {
   if (!ok) throw std::runtime_error(message);
 }
-int main() {
+void CallerServicePreservationCases() {
+  std::ifstream input("tool/fixtures/compatibility/full-config.json");
+  Check(input.good(), "shared full-config corpus is required");
+  Json cases; input >> cases;
+  const auto base = Parse(R"({"inbounds":[{"protocol":"socks","port":18580}],"outbounds":[{"protocol":"socks","tag":"proxy","settings":{"servers":[{"address":"127.0.0.1","port":18582}]}}]})");
+  for (const auto& api : {Json::object(), Json{{"tag", "caller"}, {"listen", "0.0.0.0:19001"}, {"services", Json::array({"HandlerService"})}}, Json(nullptr)}) {
+    auto profile = base; profile["api"] = api;
+    cases.push_back({{"name", "supplied_api_without_library_roots"}, {"config", profile}});
+  }
+  for (const auto& policy : {Json::object(), Json{{"system", nullptr}}, Json{{"system", {{"statsInboundUplink", false}}}}, Json(nullptr)}) {
+    auto profile = base; profile["policy"] = policy; profile["stats"] = nullptr;
+    cases.push_back({{"name", "private_api_retains_explicit_roots"}, {"config", profile}});
+  }
+  cases.push_back({{"name", "library_defaults_only_for_absent_roots"}, {"config", base}});
+  for (const auto& item : cases) {
+    auto source = item["config"];
+    if (source["inbounds"].empty()) source["inbounds"].push_back({{"protocol", "socks"}, {"port", 18580}});
+    const auto original = source.dump();
+    Check(Fields(source, {"api", "stats", "policy"}), "invalid full-config corpus roots");
+    auto verify = [&](const std::string& prepared) {
+      const auto result = Parse(prepared);
+      for (const auto* key : {"api", "stats", "policy"}) {
+        if (source.contains(key)) Check(result.contains(key) && result[key] == source[key], "caller API/stats/policy subtree changed");
+      }
+      if (!source.contains("api")) Check(ApiPort(prepared).has_value(), "absent caller API lost the library-owned listener");
+      Check(OwnedApiPort(original, prepared).has_value() == !source.contains("api"), "caller API was treated as a plugin-owned statistics endpoint");
+      if (!source.contains("stats")) Check(result["stats"] == Json::object(), "absent stats default missing");
+      if (!source.contains("policy")) Check(result["policy"] == Json{{"system", {{"statsInboundUplink", true}, {"statsInboundDownlink", true},
+          {"statsOutboundUplink", true}, {"statsOutboundDownlink", true}}}}, "absent policy default missing");
+    };
+    auto proxy = original;
+    unsigned api_probes = 0, allocations = 0;
+    Check(PrepareProxy(proxy, [&](uint16_t port) { if (port != 18580) ++api_probes; return true; },
+        [&] { ++allocations; return uint16_t{19000}; }), item["name"].get<std::string>().c_str());
+    verify(proxy);
+    Check(allocations == 0 && (!source.contains("api") || api_probes == 0), "supplied caller API triggered private listener allocation/probing");
+    auto vpn = PrepareVpn(original); Check(vpn.has_value(), "caller service roots rejected by VPN preparer"); verify(*vpn);
+    auto protected_vpn = PrepareProtectedVpn(original, "session-user", "session-password", "Ethernet",
+        [](const std::string& host) { return host == "endpoint.invalid" ? "192.0.2.5" : ""; });
+    Check(protected_vpn.has_value(), "caller service roots rejected by protected VPN preparer"); verify(*protected_vpn);
+  }
+  // Normalize only schema root names; nested service/policy spelling is caller data.
+  auto folded = base;
+  folded["API"] = {{"Tag", "caller"}, {"Liſten", "127.0.0.1:10085"}, {"Services", Json::array({"StatsService", "HandlerService"})}};
+  folded[u8"Statſ"] = nullptr; folded["Policy"] = {{"System", {{"StatsInboundUplink", false}}}};
+  auto text = folded.dump();
+  Check(PrepareProxy(text, [](uint16_t) { return true; }, [] { return uint16_t{0}; }), "folded caller service roots rejected");
+  auto normalized = Parse(text);
+  Check(normalized["api"] == folded["API"] && normalized["stats"].is_null() && normalized["policy"] == folded["Policy"], "folded root normalization changed nested service fields");
+}
+void OwnedApiPortCases() {
+  const auto source = Parse(R"({"inbounds":[{"protocol":"socks","port":18580}],"outbounds":[{"protocol":"freedom"}]})");
+  auto prepared = source.dump();
+  Check(PrepareProxy(prepared, [](uint16_t) { return true; }, [] { return uint16_t{0}; }), "owned API fixture preparation");
+  Check(OwnedApiPort(source.dump(), prepared) == 10085, "generated private API was not selected");
+  for (const auto& key : {"api", "API", "aPi"}) for (const auto& value : {Json(nullptr), Json::object(), Parse(prepared)["api"]}) {
+    auto caller = source; caller[key] = value;
+    Check(!OwnedApiPort(caller.dump(), prepared), "supplied API presence, even null, acquired a generated endpoint");
+  }
+  for (const auto& invalid : {"{bad json}", "null", "[]", R"({"api":null,"API":null})", R"({"api":null,"api":null})"})
+    Check(!OwnedApiPort(invalid, prepared), "unqualified source acquired statistics endpoint ownership");
+  for (const auto& listen : {"0.0.0.0:10085", "[::1]:10085", "localhost:10085", "127.0.0.1:0", "127.0.0.1:65536", "127.0.0.1:10085suffix", "127.0.0.1:"}) {
+    auto changed = Parse(prepared); changed["api"]["listen"] = listen;
+    Check(!OwnedApiPort(source.dump(), changed.dump()), "invalid or caller-facing statistics listen accepted");
+  }
+  for (const auto& services : {Json(nullptr), Json::array(), Json::array({"HandlerService"}), Json::array({"StatsService", "HandlerService"})}) {
+    auto changed = Parse(prepared); changed["api"]["services"] = services;
+    Check(!OwnedApiPort(source.dump(), changed.dump()), "foreign API service graph treated as generated");
+  }
+  for (const auto& tag : {Json(nullptr), Json(12), Json("")}) {
+    auto changed = Parse(prepared); changed["api"]["tag"] = tag;
+    Check(!OwnedApiPort(source.dump(), changed.dump()), "invalid private API tag accepted");
+  }
+  auto changed = Parse(prepared); changed["api"]["foreign"] = true;
+  Check(!OwnedApiPort(source.dump(), changed.dump()), "foreign private API shape accepted");
+  Check(!OwnedApiPort(source.dump(), "{bad json}"), "invalid prepared document accepted");
+}
+int main(int argc, char** argv) {
+  if (argc == 2 && std::string(argv[1]) == "--caller-services") { CallerServicePreservationCases(); return 0; }
+  if (argc == 2 && std::string(argv[1]) == "--owned-api") { OwnedApiPortCases(); return 0; }
+  CallerServicePreservationCases();
+  OwnedApiPortCases();
   std::ifstream api_input("tool/fixtures/compatibility/api-listeners.json");
   Check(api_input.good(), "shared API listener corpus is required");
   Json api_cases; api_input >> api_cases;

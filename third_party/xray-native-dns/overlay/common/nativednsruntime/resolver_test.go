@@ -442,8 +442,6 @@ func TestNativeDNSSameNameLookupsOwnIndependentActualTCPQueries(t *testing.T) {
 			if cancelFirst {
 				secondTimeout = 2 * time.Second
 			}
-			second, cancelSecondContext := context.WithTimeout(ctx, secondTimeout)
-			defer cancelSecondContext()
 			results := []chan error{make(chan error, 1), make(chan error, 1)}
 			lookup := func(index int, ctx context.Context) {
 				ips, _, err := resolver.LookupIPContext(ctx, "same.invalid", dns.IPOption{IPv4Enable: true})
@@ -459,6 +457,10 @@ func TestNativeDNSSameNameLookupsOwnIndependentActualTCPQueries(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("first TCP query missing")
 			}
+			// The second lookup's deadline starts at its own admission, rather
+			// than including unrelated scheduling of the first handler.
+			second, cancelSecondContext := context.WithTimeout(ctx, secondTimeout)
+			defer cancelSecondContext()
 			go lookup(1, second)
 			select {
 			case secondHandler = <-entered:

@@ -61,15 +61,19 @@ func localDefaultDNS(answer string, stallEntered chan struct{}, stallEnded chan 
 		}
 		response := &wireDNS.Msg{}
 		response.SetReply(query)
-		if question.Name != "default.invalid." && question.Name != "special.invalid." {
+		if question.Name != "default.invalid." {
 			response.Rcode = wireDNS.RcodeRefused
 		} else {
 			header := wireDNS.RR_Header{Name: question.Name, Rrtype: question.Qtype, Class: wireDNS.ClassINET, Ttl: 1}
 			switch question.Qtype {
 			case wireDNS.TypeA:
-				response.Answer = []wireDNS.RR{&wireDNS.A{Hdr: header, A: net.ParseIP(answer)}}
+				if ip := net.ParseIP(answer).To4(); ip != nil {
+					response.Answer = []wireDNS.RR{&wireDNS.A{Hdr: header, A: ip}}
+				}
 			case wireDNS.TypeAAAA:
-				response.Answer = []wireDNS.RR{&wireDNS.AAAA{Hdr: header, AAAA: net.ParseIP("::1")}}
+				if ip := net.ParseIP(answer); ip.To4() == nil {
+					response.Answer = []wireDNS.RR{&wireDNS.AAAA{Hdr: header, AAAA: ip}}
+				}
 			default:
 				response.Rcode = wireDNS.RcodeRefused
 			}
@@ -97,7 +101,7 @@ func startLocalDefault(t *testing.T, rootDNS any, withDNS bool, server *loopServ
 	document := map[string]any{
 		"log": map[string]any{"loglevel": "none"},
 		"outbounds": []any{
-			map[string]any{"protocol": "freedom", "settings": map[string]any{"domainStrategy": "UseIPv4"}},
+			map[string]any{"protocol": "freedom", "settings": map[string]any{"domainStrategy": "UseIP"}},
 			map[string]any{"protocol": "freedom"},
 		},
 	}
@@ -208,10 +212,10 @@ func TestAcceptanceNativeDNSLocalDefault(t *testing.T) {
 	t.Log("PHASE scoped missing/empty/explicit localhost: independent numeric policy resolvers")
 	httpA := newLoopServer(t, "tcp4", "127.0.0.1:0", markerProtocol("unused", "LOCAL_A"))
 	port := httpA.listener.Addr().(*net.TCPAddr).Port
-	httpB := newLoopServer(t, "tcp4", fmt.Sprintf("127.0.0.2:%d", port), markerProtocol("unused", "LOCAL_B"))
+	httpB := newLoopServer(t, "tcp6", net.JoinHostPort("::1", fmt.Sprint(port)), markerProtocol("unused", "LOCAL_B"))
 	stallEntered, stallEnded := make(chan struct{}), make(chan struct{})
 	dnsA := newLoopServer(t, "tcp4", "127.0.0.1:0", localDefaultDNS("127.0.0.1", stallEntered, stallEnded))
-	dnsB := newLoopServer(t, "tcp4", "127.0.0.1:0", localDefaultDNS("127.0.0.2", nil, nil))
+	dnsB := newLoopServer(t, "tcp4", "127.0.0.1:0", localDefaultDNS("::1", nil, nil))
 	missingA := startLocalDefault(t, nil, false, dnsA)
 	missingB := startLocalDefault(t, nil, false, dnsB)
 	if !proto.Equal(missingA.source, missingB.source) {
@@ -220,11 +224,12 @@ func TestAcceptanceNativeDNSLocalDefault(t *testing.T) {
 	for _, item := range []struct {
 		owner        *localDefaultOwner
 		answer, body string
-	}{{missingA, "127.0.0.1", "LOCAL_A"}, {missingB, "127.0.0.2", "LOCAL_B"}, {missingA, "127.0.0.1", "LOCAL_A"}} {
-		requireLocalAnswer(t, item.owner, "default.invalid", item.answer, featureDNS.IPOption{IPv4Enable: true})
+		option       featureDNS.IPOption
+	}{{missingA, "127.0.0.1", "LOCAL_A", featureDNS.IPOption{IPv4Enable: true}}, {missingB, "::1", "LOCAL_B", featureDNS.IPOption{IPv6Enable: true}}, {missingA, "127.0.0.1", "LOCAL_A", featureDNS.IPOption{IPv4Enable: true}}} {
+		requireLocalAnswer(t, item.owner, "default.invalid", item.answer, item.option)
 		marker(t, item.owner.engine, "default.invalid", port, item.body)
 	}
-	requireLocalAnswer(t, missingA, "default.invalid", "::1", featureDNS.IPOption{IPv6Enable: true})
+	requireLocalAnswer(t, missingB, "default.invalid", "::1", featureDNS.IPOption{IPv6Enable: true})
 	for _, root := range []any{
 		map[string]any{"queryStrategy": "UseIPv4"},
 		map[string]any{"queryStrategy": "UseIPv4", "servers": []string{"localhost"}},
@@ -237,7 +242,7 @@ func TestAcceptanceNativeDNSLocalDefault(t *testing.T) {
 		}
 	}
 	t.Log("PHASE mixed root localhost/per-domain TCP, hosts alias/rcode/family filtering")
-	special := newLoopServer(t, "tcp4", "127.0.0.1:0", dnsProtocol("special.invalid", "127.0.0.2", wireDNS.TypeA))
+	special := newLoopServer(t, "tcp4", "127.0.0.1:0", dnsProtocol("special.invalid", "127.0.0.1", wireDNS.TypeA))
 	root := map[string]any{
 		"queryStrategy": "UseIPv4", "disableCache": true, "disableFallbackIfMatch": true,
 		"hosts": map[string]any{"static.invalid": "127.0.0.1", "alias.invalid": "static.invalid", "empty.invalid": "::1", "rcode.invalid": "#5"},
@@ -247,8 +252,8 @@ func TestAcceptanceNativeDNSLocalDefault(t *testing.T) {
 		},
 	}
 	mixed := startLocalDefault(t, root, true, dnsA)
-	requireLocalAnswer(t, mixed, "special.invalid", "127.0.0.2", featureDNS.IPOption{IPv4Enable: true})
-	marker(t, mixed.engine, "special.invalid", port, "LOCAL_B")
+	requireLocalAnswer(t, mixed, "special.invalid", "127.0.0.1", featureDNS.IPOption{IPv4Enable: true})
+	marker(t, mixed.engine, "special.invalid", port, "LOCAL_A")
 	requireLocalAnswer(t, mixed, "default.invalid", "127.0.0.1", featureDNS.IPOption{IPv4Enable: true})
 	marker(t, mixed.engine, "default.invalid", port, "LOCAL_A")
 	beforeA, beforeB := dnsA.activity(), dnsB.activity()
@@ -257,6 +262,15 @@ func TestAcceptanceNativeDNSLocalDefault(t *testing.T) {
 		ips, _, err := mixed.client().LookupIP(name, featureDNS.IPOption{IPv4Enable: true})
 		if err == nil || len(ips) != 0 {
 			t.Fatal("static refusal returned success", name, ips, err)
+		}
+		if name == "empty.invalid" && !errors.Is(err, featureDNS.ErrEmptyResponse) {
+			t.Fatal("static family-filtered empty response changed", err)
+		}
+		if name == "rcode.invalid" {
+			var code featureDNS.RCodeError
+			if !errors.As(err, &code) || code != 5 {
+				t.Fatal("static RCode changed", err)
+			}
 		}
 	}
 	if dnsA.activity() != beforeA || dnsB.activity() != beforeB {
@@ -292,7 +306,7 @@ func TestAcceptanceNativeDNSLocalDefault(t *testing.T) {
 	if err := missingA.resolver.Close(); err != nil {
 		t.Fatal(err)
 	}
-	requireLocalAnswer(t, missingB, "default.invalid", "127.0.0.2", featureDNS.IPOption{IPv4Enable: true})
+	requireLocalAnswer(t, missingB, "default.invalid", "::1", featureDNS.IPOption{IPv6Enable: true})
 	marker(t, missingB.engine, "default.invalid", port, "LOCAL_B")
 	for _, owner := range []*localDefaultOwner{missingA, missingB, mixed} {
 		if !proto.Equal(owner.source, owner.engine.config) {

@@ -58,22 +58,71 @@ def stop_owned_process(process):
         process.wait(timeout=5)
 
 
+def write_console(value):
+    """Escape console-only unsupported characters; keep artifact text intact."""
+    stream = sys.stdout
+    encoding = getattr(stream, 'encoding', None)
+    if encoding:
+        value = value.encode(encoding, errors='backslashreplace').decode(encoding)
+    stream.write(value)
+    stream.flush()
+
+
 def checked(name, command, *, cwd, environment, seconds, results):
-    """Stream stdout/stderr while retaining it; return exact failure status."""
-    print(f'PHASE {name}: start', flush=True)
+    """Drain stdout/stderr independently of sinks; fail on incomplete evidence."""
     started = time.monotonic()
+    output_errors = []
+    errors_lock = threading.Lock()
+    console_available = True
+
+    def record_error(sink, operation, error):
+        with errors_lock:
+            output_errors.append({'sink': sink, 'operation': operation,
+                                  'error': f'{type(error).__name__}: {error}'})
+
+    def console(value):
+        nonlocal console_available
+        if console_available:
+            try:
+                write_console(value)
+            except Exception as error:
+                # A broken console must not stop draining the child's pipe.
+                console_available = False
+                record_error('console', 'write/flush', error)
+
+    console(f'PHASE {name}: start\n')
     creation = ({'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
                 if os.name == 'nt' else {'start_new_session': True})
-    with (EVIDENCE / f'{name}.log').open('w', encoding='utf-8') as log:
+    log = None
+    try:
+        log = (EVIDENCE / f'{name}.log').open('w', encoding='utf-8')
+    except Exception as error:
+        record_error('log', 'open', error)
+    output_eof = threading.Event()
+    stop_sinks = threading.Event()
+    try:
         process = subprocess.Popen(command, cwd=cwd, env=environment,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    text=True, encoding='utf-8', errors='replace', **creation)
 
         def reader():
-            for line in process.stdout:
-                log.write(line)
-                log.flush()
-                print(line, end='', flush=True)
+            log_available = log is not None
+            try:
+                for line in process.stdout:
+                    if stop_sinks.is_set():
+                        continue
+                    if log_available:
+                        try:
+                            log.write(line)
+                            log.flush()
+                        except Exception as error:
+                            log_available = False
+                            record_error('log', 'write/flush', error)
+                    console(line)
+                # Thread termination alone is not evidence of pipe EOF.
+                output_eof.set()
+            except Exception as error:
+                record_error('pipe', 'read', error)
 
         output_thread = threading.Thread(target=reader, daemon=True)
         output_thread.start()
@@ -90,19 +139,39 @@ def checked(name, command, *, cwd, environment, seconds, results):
             output_thread.join(timeout=OUTPUT_JOIN_SECONDS)
         if output_thread.is_alive():
             code = code or 125
+            record_error('pipe', 'drain', TimeoutError('Child output did not reach EOF before drain deadline'))
             # An exited leader may still own compiler grandchildren holding
             # the pipe. Its Unix session/group ID is the one created above.
             stop_owned_process(process)
             output_thread.join(timeout=OUTPUT_JOIN_SECONDS)
-        else:
-            process.stdout.close()
-        if not output_thread.is_alive() and not process.stdout.closed:
-            process.stdout.close()
-        result = {'name': name, 'exit_code': code, 'timed_out': timed_out,
-                  'output_closed': not output_thread.is_alive(),
-                  'elapsed_seconds': round(time.monotonic() - started, 3)}
-        results.append(result)
-    print(f'PHASE {name}: {"PASS" if code == 0 else "FAIL"} ({code})', flush=True)
+        stop_sinks.set()
+        if not output_thread.is_alive():
+            try:
+                process.stdout.close()
+            except Exception as error:
+                record_error('pipe', 'close', error)
+        output_closed = not output_thread.is_alive() and output_eof.is_set() and process.stdout.closed
+        if not output_closed:
+            code = code or 126
+    finally:
+        if log is not None:
+            try:
+                log.close()
+            except Exception as error:
+                record_error('log', 'close', error)
+    if output_errors:
+        code = code or 126
+    console(f'PHASE {name}: {"PASS" if code == 0 else "FAIL"} ({code})\n')
+    # The final console write/flush is evidence too, including when child exit
+    # and pipe EOF succeeded. Preserve a nonzero child/timeout status verbatim.
+    if output_errors:
+        code = code or 126
+    result = {'name': name, 'exit_code': code, 'process_exit_code': process.returncode,
+              'timed_out': timed_out, 'output_closed': output_closed,
+              'output_eof': output_eof.is_set(),
+              'output_errors': output_errors,
+              'elapsed_seconds': round(time.monotonic() - started, 3)}
+    results.append(result)
     if code:
         raise RuntimeError(f'{name} failed with status {code}')
 
@@ -194,7 +263,7 @@ def main():
             checked('runtime-loopback', [str(binary), '-test.run', '^TestAcceptanceNativeDNS(Runtime|LocalDefault)$', '-test.v', '-test.timeout=75s'],
                     cwd=core, environment=environment, seconds=90, results=results)
             for name in ['TestAcceptanceNativeDNSRuntime', 'TestAcceptanceNativeDNSLocalDefault']:
-                require_selected_test_pass((EVIDENCE / 'runtime-loopback.log').read_text(), name)
+                require_selected_test_pass((EVIDENCE / 'runtime-loopback.log').read_text(encoding='utf-8'), name)
             results[-1]['selected_test_pass'] = True
             results[-1]['selected_tests'] = ['TestAcceptanceNativeDNSRuntime', 'TestAcceptanceNativeDNSLocalDefault']
         report['module_cache_targeted_sources_unchanged'] = all(
@@ -229,7 +298,7 @@ def main():
             report['module_cache_targeted_sources_unchanged'] = all(
                 hashlib.sha256((source / path).read_bytes()).hexdigest() == expected
                 for path, expected in MANIFEST['upstream_sha256'].items())
-        (EVIDENCE / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
+        (EVIDENCE / 'result.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     return 0 if report.get('success') else 1
 
 

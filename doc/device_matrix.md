@@ -121,7 +121,7 @@ enabled throughout. Supplied profiles and device screenshots remain outside Git.
   native worker crash or subsecond timing accuracy.
 * Unlock-before-action displayed Apple's authentication UI. Failed recognition
   followed by Cancel left VPN disconnected and no provider running. Successful
-  device-owner authentication remains a manual acceptance step.
+  device-owner authentication was subsequently completed as recorded below.
 * Forgetting the quick-access profile during an active connection left fresh
   Safari traffic working. After Stop and a cold app start, the native toggle
   could no longer start that forgotten profile. Disabling quick access also
@@ -133,8 +133,8 @@ page must show ordinary connectivity. Never reinstall while the test VPN remains
 active. The initial reinstall incident required the owner to reboot the phone;
 subsequent stop/reinstall gates and normal-network checks passed.
 
-This is a partial acceptance record. Successful owner authentication, recovery
-from a running worker crash and the broader compatibility corpus are not implied
+This is a partial acceptance record. Recovery from a running worker crash
+and the broader compatibility corpus are not implied
 by the successful cases above.
 
 The build-only Apple preflight preview was also installed on the physical iPhone.
@@ -159,7 +159,8 @@ devices; fresh browser pages showed the respective underlay/proxy addresses.
 All test sessions were explicitly stopped, saved Apple recovery read back disabled,
 and fresh ordinary-network pages loaded. The task-owned Android emulator was
 stopped, and the added iPhone Control Center test control was removed. Successful
-owner authentication and recovery from a running worker crash remain outstanding.
+owner authentication was subsequently completed below; recovery from a running
+worker crash remains outstanding.
 
 Private service identifiers were then tested with a supplied-profile derivative:
 an imported rule blocks `flutter-vless-tun`, and four additional blackhole
@@ -199,3 +200,36 @@ were left running. This proves allocation/traffic, not all API RPC services or
 metrics listener allocation. Windows 2022/2025 native, proxy, VPN/recovery and
 example builds passed for the same allocator revision in
 [run 39091995713](https://github.com/XIIIFOX/flutter_vless/actions/runs/39091995713).
+
+The subsequent physical build added an independent `Profile delay` action.
+With the supplied profile running, caller API port 10809 used the same `proxy`
+tag as the VLESS outbound, and caller metrics listened on 10830. An isolated
+profile measurement returned 7051 ms; fresh Safari tfox/2ip requests afterward both used
+103.75.118.225, proving that stopping the measurement did not stop the provider.
+Explicit app Stop then restored 95.139.123.8 in Safari. This is a connectivity
+check, not a representative latency benchmark; API/metrics socket/RPC acceptance
+is separately required in the Apple runtime fixtures.
+
+Owner authentication was then accepted on the physical iPhone for both Control
+Center actions with `requireUnlock=true`. The owner added the shield control,
+pressed it and confirmed on the phone. The example showed CONNECTED with a real
+provider process; fresh Safari tfox and 2ip requests both showed 103.75.118.225
+(Japan on tfox). The owner pressed it again and confirmed the Stop action.
+The provider exited and a fresh Safari page showed ordinary 95.139.123.8 (Russia).
+After disabling quick access, a cold app launch read the VPN profile as
+`enabled=false status=1`; options showed quick access and reconnect off, On Demand
+disabled. The task-owned example process and USB forwarder were stopped.
+This proves device-owner acceptance; the record does not distinguish Face ID
+from the permitted passcode fallback or establish worker-crash recovery.
+
+The subsequent Android emulator suite passed all 29 tests without skips
+(`build/android-security-emulator.VSBoaWAZ`). It includes an actual SystemUI
+single-click Stop while a killed worker is in backoff with TUN still captured,
+and verifies authorization removal, worker exit and the tile's final inactive
+presentation. Earlier failures exposed unavailable recovery controls and stale
+states after re-add/Stop; native listening lifecycle refresh now covers both.
+A separate real-Core case transfers authenticated HTTP bytes while caller API
+and metrics ports remain occupied, with service tags equal to the proxy tag.
+The full DNS/routing/handover/OS-policy corpus also passes. Android pure tests
+pass 63 cases; shared Apple control tests explicitly cover authenticated Stop
+and cancelled authentication during `.reasserting` without touching a real VPN.

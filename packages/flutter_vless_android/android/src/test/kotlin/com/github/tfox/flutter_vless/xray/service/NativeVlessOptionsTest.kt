@@ -54,13 +54,33 @@ class NativeVlessOptionsTest {
         rejects { parse("protection","alwaysOn","requireEnabled").validateAndroid(28) }
     }
     @Test fun tilePolicyHonorsBusyPermissionAndSystemManagedStop() {
-        assertEquals(QuickTilePolicy.State.UNAVAILABLE,QuickTilePolicy.state(false,true,false,false,false))
-        assertEquals(QuickTilePolicy.State.UNAVAILABLE,QuickTilePolicy.state(true,false,false,false,false))
-        assertEquals(QuickTilePolicy.State.ACTIVE,QuickTilePolicy.state(true,true,true,false,false))
-        assertEquals(QuickTilePolicy.State.INACTIVE,QuickTilePolicy.state(true,true,false,false,false))
+        assertEquals(QuickTilePolicy.State.UNAVAILABLE,QuickTilePolicy.state(false,true,false,false,false,false))
+        assertEquals(QuickTilePolicy.State.UNAVAILABLE,QuickTilePolicy.state(true,false,false,false,false,false))
+        assertEquals(QuickTilePolicy.State.ACTIVE,QuickTilePolicy.state(true,true,true,false,false,true))
+        assertEquals(QuickTilePolicy.State.INACTIVE,QuickTilePolicy.state(true,true,false,false,false,false))
         assertEquals(QuickTilePolicy.Action.OPEN_APP,QuickTilePolicy.action(QuickTilePolicy.State.UNAVAILABLE,false,false))
         assertEquals(QuickTilePolicy.Action.OPEN_APP,QuickTilePolicy.action(QuickTilePolicy.State.ACTIVE,false,true))
         assertEquals(QuickTilePolicy.Action.OPEN_APP,QuickTilePolicy.action(QuickTilePolicy.State.INACTIVE,true,false))
         assertEquals(QuickTilePolicy.Action.TOGGLE,QuickTilePolicy.action(QuickTilePolicy.State.INACTIVE,false,false))
+    }
+    @Test fun acceptedRecoveryRemainsStoppableWithoutPermittingColdStartRaces() {
+        assertEquals(QuickTilePolicy.State.CONNECTING, QuickTilePolicy.state(true,true,false,true,false,true))
+        assertEquals(QuickTilePolicy.State.CONNECTING, QuickTilePolicy.state(true,false,false,true,false,true))
+        assertEquals(QuickTilePolicy.State.UNAVAILABLE, QuickTilePolicy.state(true,true,false,true,false,false))
+        assertEquals(QuickTilePolicy.State.UNAVAILABLE, QuickTilePolicy.state(true,true,true,false,false,false))
+        assertEquals(QuickTilePolicy.State.UNAVAILABLE, QuickTilePolicy.state(true,true,false,true,true,true))
+        assertEquals(QuickTilePolicy.State.UNAVAILABLE, QuickTilePolicy.state(false,true,false,true,false,true))
+        assertEquals(QuickTilePolicy.Action.TOGGLE, QuickTilePolicy.action(QuickTilePolicy.State.CONNECTING,false,false))
+        assertEquals(QuickTilePolicy.Action.OPEN_APP, QuickTilePolicy.action(QuickTilePolicy.State.CONNECTING,true,false))
+        assertEquals(QuickTilePolicy.Action.OPEN_APP, QuickTilePolicy.action(QuickTilePolicy.State.CONNECTING,false,true))
+    }
+    @Test fun nativeToggleGuardAllowsOnlyAcceptedRecoveryOrAnIdleColdStart() {
+        assertTrue(QuickTilePolicy.mayToggle(true,true,false,true,true))
+        assertTrue(QuickTilePolicy.mayToggle(true,true,true,true,true))
+        assertTrue(QuickTilePolicy.mayToggle(true,false,false,false,true))
+        assertFalse(QuickTilePolicy.mayToggle(true,false,true,false,true))
+        assertFalse(QuickTilePolicy.mayToggle(true,false,false,true,true))
+        assertFalse(QuickTilePolicy.mayToggle(false,true,false,true,true))
+        assertFalse(QuickTilePolicy.mayToggle(true,true,false,true,false))
     }
 }

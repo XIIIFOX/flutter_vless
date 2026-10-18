@@ -194,6 +194,14 @@ API/metrics listeners to avoid rebinding an active session's sockets. Ordinary
 session metrics port allocation, caller stats/policy preservation and standalone
 Windows delay remain open.
 
+[CI on a087241](https://github.com/XIIIFOX/flutter_vless/actions/runs/39135338877)
+passes all five jobs. The iOS/macOS runtime artifacts contain both generations
+of API HTTP/2, metrics HTTP and authenticated SOCKS acceptance, a working isolated
+delay while the caller's service ports are occupied, and the macOS native-counter
+check alongside retained API services. Physical iPhone owner-authenticated
+Control Center start/stop and subsequent ordinary internet also pass; this does
+not complete the remaining compatibility items below.
+
 Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |

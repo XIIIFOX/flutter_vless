@@ -29,6 +29,7 @@ harness=harness[:harness.index('class ModeDelegate:')]+ '\nTask { await runModes
 PY
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 COMMON=(-O -target "$(uname -m)-apple-macos13.0" -sdk "$SDK")
+echo 'PROBE_PHASE=macos-compile-begin'
 xcrun swiftc "${COMMON[@]}" -parse-as-library -module-name flutter_vless_macos_privacy -emit-module -emit-object -whole-module-optimization -emit-module-path "$OUT/modules/flutter_vless_macos_privacy.swiftmodule" "$SOURCE"/flutter_vless_macos_privacy/*.swift -o "$OUT/modules/privacy.o"
 SUPPORT=()
 for file in "$SOURCE"/flutter_vless_macos_tunnel_support/*.swift; do
@@ -39,7 +40,10 @@ COMPAT="$SOURCE/flutter_vless_macos_core_compat"
 xcrun clang -fobjc-arc -target "$(uname -m)-apple-macos13.0" -isysroot "$SDK" \
     -c "$COMPAT/FlutterVlessCoreCompat.m" -o "$OUT/modules/compat.o"
 xcrun swiftc "${COMMON[@]}" -I "$OUT/modules" -I "$SOURCE/CXRay/include" -framework AppKit -framework SystemConfiguration -framework NetworkExtension -lresolv -import-objc-header "$COMPAT/include/FlutterVlessCoreCompat.h" "$OUT/main.swift" "$SOURCE/flutter_vless_macos/BoundedNativeLogStore.swift" "$OUT/modules/privacy.o" "$OUT/modules/support.o" "$OUT/modules/compat.o" "$ROOT/packages/flutter_vless_macos/macos/XRay.xcframework/macos-arm64_x86_64/libXRay.a" -o "$OUT/probe"
-"$OUT/probe" > "$OUT/runtime.log" 2>&1
+echo 'PROBE_PHASE=macos-compile-complete'
+echo 'PROBE_PHASE=macos-runtime-begin'
+python3 "$ROOT/tool/run_apple_runtime_probe.py" --timeout 600 -- "$OUT/probe" 2>&1 | tee "$OUT/runtime.log"
+echo 'PROBE_PHASE=macos-runtime-complete'
 python3 - "$OUT/runtime.log" <<'PY'
 from pathlib import Path
 import os, sys

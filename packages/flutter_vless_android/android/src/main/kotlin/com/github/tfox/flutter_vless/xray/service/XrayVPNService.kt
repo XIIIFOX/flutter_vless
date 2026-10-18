@@ -55,6 +55,7 @@ class XrayVPNService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        currentRecovery = recovery
         profiles = AuthorizedProfileStore(this)
         // Cold start cleanup must also run when authorization cannot be decrypted or is absent.
         // The helper preserves files referenced by live native workers and all standalone delays.
@@ -118,9 +119,10 @@ class XrayVPNService : VpnService() {
         @Suppress("DEPRECATION")
         val suppliedCommand = intent?.getSerializableExtra("COMMAND") as? AppConfigs.V2RAY_SERVICE_COMMANDS
         val tileToggle = intent?.action == ACTION_QUICK_ACCESS_TOGGLE
-        if (tileToggle && (!NativeOptionsStore(this).read().quickAccess.enabled ||
-                tileStartPending || AppConfigs.V2RAY_STATE == AppConfigs.V2RAY_STATES.V2RAY_CONNECTING ||
-                VpnService.prepare(this) != null)) {
+        if (tileToggle && !QuickTilePolicy.mayToggle(NativeOptionsStore(this).read().quickAccess.enabled,
+                recovery.authorized, tileStartPending,
+                AppConfigs.V2RAY_STATE != AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED,
+                VpnService.prepare(this) == null)) {
             if (!recovery.authorized && requests.get() == 0L) stopSelfResult(startId)
             return if (recovery.authorized) START_STICKY else START_NOT_STICKY
         }
@@ -136,6 +138,7 @@ class XrayVPNService : VpnService() {
             }
             val request = requests.incrementAndGet()
             recovery.disarm() // Invalidate queued callbacks immediately, before slow native I/O finishes.
+            NativeQuickAccess.refresh(this)
             profiles.disarm()
             worker.execute {
                 profiles.disarm(); deactivateSession()
@@ -443,6 +446,7 @@ class XrayVPNService : VpnService() {
     override fun onDestroy() {
         requests.incrementAndGet()
         recovery.disarm()
+        if (currentRecovery === recovery) currentRecovery = null
         networkCallback?.let { runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) } }
         worker.execute { deactivateSession() }
         worker.shutdown()
@@ -482,6 +486,11 @@ class XrayVPNService : VpnService() {
         if (Build.VERSION.SDK_INT >= 34) startForeground(1, notification, 0x40000000) else startForeground(1, notification)
     }
     companion object {
+        // The tile shares this native process. Expose the authoritative accepted
+        // session without retaining a Service/Context or treating saved profiles
+        // as authorization for an automatic restart.
+        @Volatile private var currentRecovery: SessionRecoveryPolicy? = null
+        internal fun hasAcceptedSession() = currentRecovery?.authorized == true
         const val ACTION_QUERY_SYSTEM_STATE = "com.github.tfox.flutter_vless.QUERY_SYSTEM_STATE"
         const val ACTION_CLEAR_QUICK_ACCESS = "com.github.tfox.flutter_vless.CLEAR_QUICK_ACCESS"
         const val ACTION_QUICK_ACCESS_TOGGLE = "com.github.tfox.flutter_vless.QUICK_ACCESS_TOGGLE"

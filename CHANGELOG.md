@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Keep Android Quick Tile available to stop an accepted VPN during worker recovery. Refresh an already-listening or re-added tile with current native state; preserve cold-start single-flight and OS Always-on restrictions. Add real SystemUI recovery-stop and authenticated Apple reasserting-stop regressions.
 * Preserve caller API listeners/services alongside native macOS counters. Isolate Apple/Android profile-delay measurements from caller API/metrics listeners; add occupied-port runtime regressions for Apple.
 * Preserve bounded Android emulator startup/crash evidence and Apple synthetic runtime logs in CI. Keep unclassified VM disappearance and post-entry failures visible without retries.
 * Reserve numeric `api.listen` TCP ports when choosing managed adapters on every native platform, including IPv6/host addresses and Core field aliases. Keep Unix/port-zero syntax intact; add shared allocation fixtures and an Apple runtime check for simultaneous API HTTP/2 and authenticated SOCKS traffic.

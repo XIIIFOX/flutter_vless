@@ -161,6 +161,7 @@ jobs:
   ios:
     name: iOS Swift and Xcode build
     runs-on: macos-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
@@ -205,6 +206,7 @@ jobs:
           tool/test_ios_manager_policy.sh
           tool/test_ios_operation_queue.sh
           python3 tool/test_platform_status_dispatch.py
+          python3 -m unittest discover -s tool -p test_apple_runtime_probe_timeout.py
       - name: Test strict local proxy transport and TLS rejection
         run: tool/test_ios_local_proxy_transport.sh
       - name: Resolve pinned HEV and verify its authentication configuration
@@ -212,6 +214,7 @@ jobs:
           swift package --package-path ios/flutter_vless resolve
           tool/test_ios_hev_auth.sh
       - name: Test real iOS Xray authentication and DNS in simulator
+        timeout-minutes: 18
         run: |
           SIMULATOR_UDID="$(xcrun simctl create 'Flutter Vless Security' com.apple.CoreSimulator.SimDeviceType.iPhone-16)"
           export SIMULATOR_UDID
@@ -249,6 +252,7 @@ jobs:
           flutter build macos --config-only
           xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
       - name: Test macOS protection policies and real localhost runtime
+        timeout-minutes: 15
         run: |
           bash tool/test_macos_tunnel_support.sh
           bash tool/test_macos_manager_policy.sh

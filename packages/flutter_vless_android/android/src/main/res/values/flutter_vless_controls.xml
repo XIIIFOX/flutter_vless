@@ -1,6 +1,7 @@
 <resources>
     <string name="flutter_vless_tile_label">VPN</string>
     <string name="flutter_vless_tile_connected">Connected</string>
+    <string name="flutter_vless_tile_connecting">Connecting — tap to stop</string>
     <string name="flutter_vless_tile_disconnected">Disconnected</string>
     <string name="flutter_vless_tile_unavailable">Open the app to configure VPN</string>
 </resources>

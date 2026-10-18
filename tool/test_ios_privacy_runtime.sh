@@ -25,6 +25,7 @@ SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 SIMULATOR_ARCH="$(uname -m)"
 case "$SIMULATOR_ARCH" in arm64|x86_64) ;; *) echo "Unsupported simulator architecture: $SIMULATOR_ARCH" >&2; exit 1 ;; esac
 COMMON=(-O -target "$SIMULATOR_ARCH-apple-ios15.0-simulator" -sdk "$SDK")
+echo 'PROBE_PHASE=ios-compile-begin'
 xcrun swiftc "${COMMON[@]}" -parse-as-library -module-name flutter_vless_privacy -emit-module -emit-object -whole-module-optimization -emit-module-path "$OUT/modules/flutter_vless_privacy.swiftmodule" "$ROOT"/ios/flutter_vless/Sources/flutter_vless_privacy/*.swift -o "$OUT/modules/privacy.o"
 xcrun swiftc "${COMMON[@]}" -parse-as-library -I "$OUT/modules" -module-name flutter_vless_tunnel_support -emit-module -emit-object -whole-module-optimization -emit-module-path "$OUT/modules/flutter_vless_tunnel_support.swiftmodule" "$ROOT"/ios/flutter_vless/Sources/flutter_vless_tunnel_support/*.swift -o "$OUT/modules/support.o"
 COMPAT="$ROOT/ios/flutter_vless/Sources/flutter_vless_core_compat"
@@ -32,8 +33,15 @@ xcrun clang -fobjc-arc -target "$SIMULATOR_ARCH-apple-ios15.0-simulator" -isysro
     -c "$COMPAT/FlutterVlessCoreCompat.m" -o "$OUT/modules/compat.o"
 xcrun swiftc "${COMMON[@]}" -I "$OUT/modules" -F "$ROOT/ios/XRay.xcframework/ios-arm64_x86_64-simulator" -framework XRay -framework UIKit -lresolv -import-objc-header "$COMPAT/include/FlutterVlessCoreCompat.h" "$OUT/main.swift" "$ROOT/ios/flutter_vless/Sources/flutter_vless/BoundedNativeLogStore.swift" "$OUT/modules/privacy.o" "$OUT/modules/support.o" "$OUT/modules/compat.o" -o "$OUT/Probe.app/Probe"
 codesign --force --sign - "$OUT/Probe.app"
+echo 'PROBE_PHASE=ios-compile-complete'
+echo 'PROBE_PHASE=ios-install-begin'
 xcrun simctl install "$SIMULATOR_UDID" "$OUT/Probe.app"
-SIMCTL_CHILD_REQUIRE_CORE_PREFLIGHT="${REQUIRE_CORE_PREFLIGHT:-0}" xcrun simctl launch --console "$SIMULATOR_UDID" "$BUNDLE" > "$OUT/runtime.log" 2>&1
+echo 'PROBE_PHASE=ios-install-complete'
+echo 'PROBE_PHASE=ios-runtime-begin'
+SIMCTL_CHILD_REQUIRE_CORE_PREFLIGHT="${REQUIRE_CORE_PREFLIGHT:-0}" \
+    python3 "$ROOT/tool/run_apple_runtime_probe.py" --timeout 600 --ios-simulator "$SIMULATOR_UDID" -- \
+    xcrun simctl launch --console "$SIMULATOR_UDID" "$BUNDLE" 2>&1 | tee "$OUT/runtime.log"
+echo 'PROBE_PHASE=ios-runtime-complete'
 python3 - "$OUT/runtime.log" <<'PY'
 import os, sys
 from pathlib import Path

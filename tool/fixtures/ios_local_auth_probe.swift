@@ -99,7 +99,9 @@ func runLocalAuthRuntimeChecks() async throws {
     let logger = ProbeLogger()
     for generation in 0..<2 {
         var error: NSError?
+        print("PROBE_PHASE=auth-core-start-begin;generation=\(generation)")
         precondition(XRayStartPrivate(prepared, logger, &error))
+        print("PROBE_PHASE=auth-core-start-complete;generation=\(generation)")
         defer { XRayStop() }
         // An HTTP/2 SETTINGS frame proves that the imported API really bound
         // its original socket, rather than accidentally reaching our SOCKS input.
@@ -113,6 +115,7 @@ func runLocalAuthRuntimeChecks() async throws {
         let metricsResponse = LocalSOCKS5Client.receiveExactly(fd: metrics, count: 12) ?? []
         close(metrics)
         precondition(String(decoding: metricsResponse, as: UTF8.self).contains("200"))
+        print("PROBE_PHASE=auth-management-checked;generation=\(generation)")
         for secret in [nil, wrong] as [LocalProxyCredentials?] {
             let fd = openLoopback(managedPort)
             precondition(!LocalSOCKS5Client.authenticate(fd: fd, credentials: secret))
@@ -145,7 +148,9 @@ func runLocalAuthRuntimeChecks() async throws {
         precondition(wrongDelay == -1)
         let wrongHTTP = try? await LocalHTTPProxyClient(port: managedPort, credentials: wrong).measure(url: URL(string: "http://probe.invalid/")!)
         precondition(wrongHTTP == nil)
+        print("PROBE_PHASE=auth-core-stop-begin;generation=\(generation)")
         XRayStop()
+        print("PROBE_PHASE=auth-core-stop-complete;generation=\(generation)")
         print("AUTH_RUNTIME_PASS=\(generation)")
         print("SERVICE_TAG_RUNTIME_PASS=\(generation)")
         print("API_PORT_RESERVATION_PASS=\(generation)")
@@ -174,10 +179,12 @@ func runLocalAuthRuntimeChecks() async throws {
         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(occupiedMetrics, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
     } == 0)
     precondition(listen(occupiedMetrics, 1) == 0)
+    print("PROBE_PHASE=occupied-management-delay-begin")
     let delay = await ServerDelayRunner().measure(config: String(decoding: source, as: UTF8.self),
         url: "http://probe.invalid/", geoAssetsDirectory: nil)
     close(occupiedAPI)
     close(occupiedMetrics)
+    print("PROBE_PHASE=occupied-management-delay-complete")
     print("HTTP_DELAY_RESULT=\(delay)")
     precondition(delay >= 0, "Authenticated HTTP delay did not reach controlled origin")
     print("DELAY_API_ISOLATION_PASS")

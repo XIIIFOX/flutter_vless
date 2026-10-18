@@ -31,6 +31,38 @@ import Foundation
         precondition(manager.connection.status == .disconnected, "Stop must wait for provider teardown before a queued reconnect")
         precondition(configuration.includeAllNetworks && !configuration.excludeLocalNetworks)
         precondition(configuration.providerConfiguration?["xrayConfigReference"] as? Data == Data([1,2,3]))
+
+        // A recovering provider still owns capture. The control must offer Stop
+        // and authenticate it without mistaking forwarding loss for disconnect.
+        manager.connection.status = .reasserting
+        manager.isEnabled = true; manager.isOnDemandEnabled = true
+        manager.onDemandRules = [NEOnDemandRuleConnect()]
+        let recovering = await VlessSystemControl.isConnected(group:group,provider:provider)
+        precondition(recovering, "A recovering accepted tunnel remains active for the system control")
+        let savesBeforeRecoveryStop = SDK.saves, stopsBeforeRecoveryStop = SDK.stopCalls
+        var recoveryAuthorizations = 0
+        do {
+            try await VlessSystemControl.perform(false,group:group,provider:provider) {
+                recoveryAuthorizations += 1
+                throw SDKError.unavailable
+            }
+            fatalError("Cancelled owner authentication must preserve the recovering session")
+        } catch {}
+        precondition(recoveryAuthorizations == 1)
+        precondition(SDK.saves == savesBeforeRecoveryStop && SDK.stopCalls == stopsBeforeRecoveryStop)
+        precondition(manager.connection.status == .reasserting && manager.isEnabled && manager.isOnDemandEnabled)
+        precondition(manager.onDemandRules?.count == 1)
+        try await VlessSystemControl.perform(false,group:group,provider:provider) {
+            recoveryAuthorizations += 1
+        }
+        precondition(recoveryAuthorizations == 2)
+        precondition(SDK.saves == savesBeforeRecoveryStop + 1 && SDK.stopCalls == stopsBeforeRecoveryStop + 1)
+        precondition(!manager.isEnabled && !manager.isOnDemandEnabled && manager.onDemandRules == nil)
+        precondition(manager.connection.status == .disconnected, "Authorized recovery Stop awaits delayed provider termination")
+        let stoppedRecovery = await VlessSystemControl.isConnected(group:group,provider:provider)
+        precondition(!stoppedRecovery)
+        precondition(configuration.includeAllNetworks && !configuration.excludeLocalNetworks)
+        precondition(configuration.providerConfiguration?["xrayConfigReference"] as? Data == Data([1,2,3]))
         VlessSystemControl.clear(group:group)
         VlessSystemControl.configure(group:group,provider:provider,options:options)
         do { try await VlessSystemControl.setConnected(true,group:group,provider:provider); fatalError("Cleared permission") } catch {}
@@ -54,6 +86,6 @@ import Foundation
         let beforeOpen=SDK.saves
         try await VlessSystemControl.perform(false,group:group,provider:provider) { fatalError("Unlock disabled") }
         precondition(SDK.saves==beforeOpen)
-        print("PASS native Apple control: opt-in, identity, protected profile, verified disarm, failed save, clear and disabled recovery (in-memory SDK)")
+        print("PASS native Apple control: opt-in, identity, protected profile, verified disarm, failed save, authenticated recovery Stop, clear and disabled recovery (in-memory SDK)")
     }
 }

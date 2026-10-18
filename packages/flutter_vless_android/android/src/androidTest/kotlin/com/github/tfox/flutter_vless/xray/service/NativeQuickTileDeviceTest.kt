@@ -11,6 +11,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
+import com.github.tfox.flutter_vless.R
 import com.google.gson.Gson
 import org.junit.Assert.*
 import org.junit.Test
@@ -26,6 +27,16 @@ class NativeQuickTileDeviceTest {
     private fun shell(command:String)=instrumentation.uiAutomation.executeShellCommand(command).use { android.os.ParcelFileDescriptor.AutoCloseInputStream(it).bufferedReader().readText() }
     private fun captured()=context.getSystemService(ConnectivityManager::class.java).getNetworkCapabilities(context.getSystemService(ConnectivityManager::class.java).activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN)==true
     private fun snapshot()=XrayCoreManager.getProviderDebugSnapshot(context)
+    private fun tileState(state: Int, subtitle: String): Boolean =
+        shell("dumpsys activity service com.android.systemui/.SystemUIService QSTileHost")
+            .lineSequence().any { it.contains("spec=custom($component),") &&
+                it.contains(",state=$state,") && it.contains(",secondaryLabel=$subtitle,") }
+    private fun addConnectedTile() {
+        shell("cmd statusbar add-tile $component")
+        await("SystemUI tile reports current connection") {
+            tileState(2, context.getString(R.string.flutter_vless_tile_connected))
+        }
+    }
     private fun await(description:String, predicate:()->Boolean) {
         val end=System.nanoTime()+TimeUnit.SECONDS.toNanos(45)
         while(System.nanoTime()<end) { if(predicate())return; Thread.sleep(100) }
@@ -50,17 +61,48 @@ class NativeQuickTileDeviceTest {
         try {
             start(NativeVlessOptions(quickAccess=NativeVlessOptions.QuickAccess(enabled=true,requireUnlock=false)))
             assertTrue(AuthorizedProfileStore(context,AuthorizedProfileStore.Kind.QUICK_ACCESS).exists())
-            shell("cmd statusbar add-tile $component"); Thread.sleep(1000)
+            addConnectedTile()
             shell("cmd statusbar click-tile $component")
             await("SystemUI tile disconnect") { !captured() && !AuthorizedProfileStore(context).exists() }
             assertTrue(AuthorizedProfileStore(context,AuthorizedProfileStore.Kind.QUICK_ACCESS).exists())
-            context.getSystemService(ActivityManager::class.java).runningAppProcesses.firstOrNull { it.processName=="${context.packageName}:RunSoLibXrayDaemon" }?.let { android.os.Process.killProcess(it.pid) }
-            Thread.sleep(1500)
+            context.getSystemService(ActivityManager::class.java).runningAppProcesses.firstOrNull { it.processName=="${context.packageName}:RunSoLibXrayDaemon" }?.let { daemon ->
+                android.os.Process.killProcess(daemon.pid)
+                await("old native daemon exited") {
+                    context.getSystemService(ActivityManager::class.java).runningAppProcesses.none { it.pid == daemon.pid }
+                }
+            }
+            await("SystemUI tile reports stopped native session") {
+                tileState(1, context.getString(R.string.flutter_vless_tile_disconnected))
+            }
             shell("cmd statusbar click-tile $component")
             await("SystemUI cold tile reconnect") { captured() && snapshot().contains("CONNECTED") }
             context.startService(Intent(context,XrayVPNService::class.java).setAction(XrayVPNService.ACTION_CLEAR_QUICK_ACCESS))
             await("clear retained profile") { !AuthorizedProfileStore(context,AuthorizedProfileStore.Kind.QUICK_ACCESS).exists() }
             assertTrue("Forget must leave the active tunnel alone",captured())
+        } finally { cleanup() }
+    }
+    @Test fun systemTileStopsRetainedProtectionDuringWorkerRecovery() {
+        try {
+            start(NativeVlessOptions(
+                quickAccess=NativeVlessOptions.QuickAccess(enabled=true,requireUnlock=false),
+                reconnect=NativeVlessOptions.Reconnect(enabled=true,initialDelayMs=15000,maxDelayMs=15000,maxAttempts=1)))
+            addConnectedTile()
+            assertEquals(0,ProcessBuilder("pkill","-9","-x","libxray.so").start().waitFor())
+            await("worker loss with captured protection") { captured() && snapshot().contains("WORKER_EXIT") }
+            await("SystemUI tile reports cancellable recovery") {
+                tileState(2, context.getString(R.string.flutter_vless_tile_connecting))
+            }
+            assertTrue("Recovery must retain TUN protection", captured())
+            assertTrue(AuthorizedProfileStore(context).exists())
+            shell("cmd statusbar click-tile $component") // Exactly one click during backoff.
+            await("SystemUI tile stops recovery and disarms authorization") {
+                !captured() && !AuthorizedProfileStore(context).exists()
+            }
+            assertTrue(AuthorizedProfileStore(context,AuthorizedProfileStore.Kind.QUICK_ACCESS).exists())
+            assertFalse(shell("ps -A -o NAME").lineSequence().any { it.trim() == "libxray.so" })
+            await("SystemUI tile reports stopped recovery") {
+                tileState(1, context.getString(R.string.flutter_vless_tile_disconnected))
+            }
         } finally { cleanup() }
     }
     @Test fun disabledAutoReconnectRetainsCaptureAndDoesNotRestartKilledWorkers() {

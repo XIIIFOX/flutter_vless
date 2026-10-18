@@ -28,6 +28,7 @@ internal object NativeQuickAccess {
 
     fun refresh(context: Context) {
         if (Build.VERSION.SDK_INT >= 24) runCatching {
+            VlessTileService.refreshListeningInstance()
             TileService.requestListeningState(context, ComponentName(context,VlessTileService::class.java))
         }
     }

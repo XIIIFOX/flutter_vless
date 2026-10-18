@@ -22,7 +22,8 @@ internal object XrayPortSpec {
                 if (field(name) != "listen") return@listenField
                 val listen = service.opt(name) as? String ?: return@listenField
                 if (listen.startsWith('/') || listen.startsWith('@') || ':' !in listen) return@listenField
-                val digits = listen.substringAfterLast(':')
+                // Go net.parsePort permits one leading '+' on decimal ports.
+                val digits = listen.substringAfterLast(':').removePrefix("+")
                 if (digits.isEmpty() || digits.any { it !in '0'..'9' }) return@listenField
                 digits.toIntOrNull()?.takeIf { it in 1..65535 }?.let(ports::add)
             }

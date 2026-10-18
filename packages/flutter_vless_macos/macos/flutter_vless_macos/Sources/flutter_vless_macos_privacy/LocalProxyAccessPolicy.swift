@@ -71,7 +71,9 @@ public enum XrayPortSpec {
             for (field, value) in service where XrayJSONField.matches(field, "listen") {
                 guard let listen = value as? String, !listen.hasPrefix("/"), !listen.hasPrefix("@"),
                       let colon = listen.lastIndex(of: ":") else { continue }
-                let digits = listen[listen.index(after: colon)...]
+                var digits = listen[listen.index(after: colon)...]
+                // Go net.Listen accepts a single leading plus for decimal ports.
+                if digits.first == "+" { digits = digits.dropFirst() }
                 guard !digits.isEmpty, digits.utf8.allSatisfy({ (48...57).contains($0) }),
                       let port = Int(digits), (1...65535).contains(port) else { continue }
                 ports.insert(port)

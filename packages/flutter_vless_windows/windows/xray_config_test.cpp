@@ -26,7 +26,7 @@ int main() {
     Check(ServiceListenerPorts(item["config"]) == item["ports"].get<std::set<unsigned>>(), item["name"].get<std::string>().c_str());
     Check(item["config"].dump() == before, "service listener reservation mutated source");
   }
-  auto metrics_profile = Parse(u8R"({"api":{"listen":"127.0.0.1:10807"},"Metricſ":{"Liſten":"127.0.0.1:10811"},"inbounds":[{"protocol":"http","port":"10808-10810"}]})");
+  auto metrics_profile = Parse(u8R"({"api":{"listen":"127.0.0.1:+10807"},"Metricſ":{"Liſten":"127.0.0.1:+10811"},"inbounds":[{"protocol":"http","port":"10808-10810"}]})");
   const auto metrics_before = metrics_profile.dump();
   Check(AvailablePort(metrics_profile, 10807) == 10812, "private port collided with metrics/API/ranges");
   Check(metrics_profile.dump() == metrics_before, "private allocation mutated metrics config");
@@ -77,7 +77,7 @@ int main() {
   Check(after["policy"]["levels"] == before["policy"]["levels"], "policy preservation");
   Check(after["api"]["listen"] == "127.0.0.1:10085", "API without log section");
   auto metrics_proxy = before;
-  metrics_proxy[u8"Metricſ"] = {{u8"Liſten", "127.0.0.1:10085"}, {"tag", "caller-metrics"}};
+  metrics_proxy[u8"Metricſ"] = {{u8"Liſten", "127.0.0.1:+10085"}, {"tag", "caller-metrics"}};
   auto metrics_text = metrics_proxy.dump();
   Check(PrepareProxy(metrics_text, [](uint16_t) { return true; }, []() { return uint16_t{19000}; }), "proxy metrics reservation");
   Check(ApiPort(metrics_text) == 10086, "proxy stats API collided with caller metrics");
@@ -112,7 +112,7 @@ int main() {
   Check(!PrepareVpn(R"({"inbounds":[{"protocol":"socks","port":65536}]})"), "invalid port rejected");
   for (unsigned occupied : {10807u, 10086u}) {
     auto with_metrics = before;
-    with_metrics[u8"Metricſ"] = {{u8"Liſten", "127.0.0.1:" + std::to_string(occupied)}, {"tag", "caller-metrics"}};
+    with_metrics[u8"Metricſ"] = {{u8"Liſten", "127.0.0.1:+" + std::to_string(occupied)}, {"tag", "caller-metrics"}};
     const auto result = PrepareProtectedVpn(with_metrics.dump(), "native-user", "native-password", "Ethernet",
         [](const std::string&) { return std::string(); });
     Check(result.has_value(), "protected VPN rejected imported metrics listener");

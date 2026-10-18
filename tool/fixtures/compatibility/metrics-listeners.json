@@ -297,5 +297,87 @@
       }
     },
     "ports": []
+  },
+  {
+    "name": "metrics-positive-sign",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:+10810"
+      }
+    },
+    "ports": [
+      10810
+    ]
+  },
+  {
+    "name": "metrics-positive-sign-leading-zero",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:+010810"
+      }
+    },
+    "ports": [
+      10810
+    ]
+  },
+  {
+    "name": "metrics-positive-zero",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:+0"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "metrics-negative-zero",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:-0"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "metrics-sign-only-zero",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:+"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "metrics-double-positive-sign",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:++10810"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "metrics-mixed-sign",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:+-10810"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "positive-sign-api-and-metrics-union",
+    "config": {
+      "API": {
+        "Liſten": "127.0.0.1:+10809"
+      },
+      "Metricſ": {
+        "Liſten": "127.0.0.1:+10810"
+      }
+    },
+    "ports": [
+      10809,
+      10810
+    ]
   }
 ]

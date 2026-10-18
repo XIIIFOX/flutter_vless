@@ -278,3 +278,16 @@ the task-owned app, controls process and USB forwarder were stopped. This is
 physical allocation/traffic acceptance; service HTTP responses are separately
 checked by the synthetic native runtime fixtures. The private screenshots and
 diagnostics use `build/ios-live-2026-10-18/metrics-*` paths.
+
+The same physical check was repeated after recognizing Go's optional leading
+plus in TCP listener ports. Source API `127.0.0.1:+10809` and metrics
+`127.0.0.1:+10810` retained their spelling; the private adapter used 10811.
+Fresh Safari tfox/2ip pages showed the Japan exit, and Safari's direct request
+to local metrics port 10810 rendered the actual provider's Go metrics JSON.
+Explicit Stop restored the ordinary IP, the provider exited, and cold readback
+again reported `enabled=false status=1`. The normal signed build has no native
+fault hook; task-owned app, controls and forwarding processes were stopped.
+Android's corresponding three-test real-Core authorization class also passed
+with positive-sign metrics, actual HTTP JSON and authenticated SOCKS bytes;
+its task-owned emulator was stopped. These checks are recorded in ignored
+`signed-port-*` and `android-positive-metrics-*` artifacts.

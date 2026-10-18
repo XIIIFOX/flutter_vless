@@ -42,9 +42,9 @@ class XrayPortSpecTest {
 
     @Test fun privateAdapterAndStatsApiReserveCallerMetricsWithoutChangingThem() {
         for (metricsKey in listOf("metrics", "METRICS", "Metric\u017f")) {
-            val source = JSONObject("""{"api":{"listen":"127.0.0.1:10807","tag":"caller-api","services":["StatsService"]},
+            val source = JSONObject("""{"api":{"listen":"127.0.0.1:+10807","tag":"caller-api","services":["StatsService"]},
                 "inbounds":[{"protocol":"http","port":"10808-10810"}],"outbounds":[{"protocol":"freedom"}]}""")
-            val metrics = JSONObject().put("Li\u017ften", "127.0.0.1:10811").put("tag", "caller-metrics")
+            val metrics = JSONObject().put("Li\u017ften", "127.0.0.1:+10811").put("tag", "caller-metrics")
             source.put(metricsKey, metrics)
             val raw = source.toString()
             val config = com.github.tfox.flutter_vless.xray.dto.XrayConfig(V2RAY_FULL_JSON_CONFIG = raw)

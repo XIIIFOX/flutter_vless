@@ -457,7 +457,7 @@ def main():
             # Exercise both the managed VPN SOCKS candidate and the private
             # stats API candidate, before either Core listener exists in the OS.
             metrics_port = (10086 if reverse else 10807) if args.vpn else 10085
-            prepared["Metric\u017f"] = {"tag": "caller-metrics", "Li\u017ften": f"127.0.0.1:{metrics_port}"}
+            prepared["Metric\u017f"] = {"tag": "caller-metrics", "Li\u017ften": f"127.0.0.1:+{metrics_port}"}
             imported_ports = {entry["port"] for entry in prepared["inbounds"]}
             managed_port = next(port for port in range(10807, 65536) if port not in imported_ports | {metrics_port})
             if not args.vpn:

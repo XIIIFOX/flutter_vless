@@ -142,5 +142,72 @@
       }
     },
     "ports": []
+  },
+  {
+    "name": "api-positive-sign",
+    "config": {
+      "api": {
+        "listen": "127.0.0.1:+10810"
+      }
+    },
+    "ports": [
+      10810
+    ]
+  },
+  {
+    "name": "api-positive-sign-leading-zero",
+    "config": {
+      "api": {
+        "listen": "127.0.0.1:+010810"
+      }
+    },
+    "ports": [
+      10810
+    ]
+  },
+  {
+    "name": "api-positive-zero",
+    "config": {
+      "api": {
+        "listen": "127.0.0.1:+0"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "api-negative-zero",
+    "config": {
+      "api": {
+        "listen": "127.0.0.1:-0"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "api-sign-only-zero",
+    "config": {
+      "api": {
+        "listen": "127.0.0.1:+"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "api-double-positive-sign",
+    "config": {
+      "api": {
+        "listen": "127.0.0.1:++10810"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "api-mixed-sign",
+    "config": {
+      "api": {
+        "listen": "127.0.0.1:+-10810"
+      }
+    },
+    "ports": []
   }
 ]

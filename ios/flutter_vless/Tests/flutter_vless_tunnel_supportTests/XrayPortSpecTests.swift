@@ -20,7 +20,7 @@ final class XrayPortSpecTests: XCTestCase {
 
     func testPrivateAdapterAvoidsBothManagementServicesAndImportedPorts() throws {
         let api: [String: Any] = ["tag": "caller-api", "listen": "127.0.0.1:10808", "services": ["StatsService"]]
-        let metrics: [String: Any] = ["tag": "caller-metrics", "Liſten": "127.0.0.1:10809"]
+        let metrics: [String: Any] = ["tag": "caller-metrics", "Liſten": "127.0.0.1:+10809"]
         var config: [String: Any] = ["api": api, "Metricſ": metrics,
             "inbounds": [["protocol": "http", "port": "10810-10811"]]]
         let port = try LocalProxyAccessPolicy.applyVPN(to: &config,

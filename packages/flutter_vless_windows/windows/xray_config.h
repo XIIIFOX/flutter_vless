@@ -359,7 +359,9 @@ inline std::set<unsigned> ListenerPorts(const Json& config, const std::set<std::
       if (address.empty() || address[0] == '/' || address[0] == '@') continue;
       const auto colon = address.rfind(':');
       if (colon == std::string::npos || colon + 1 == address.size()) continue;
-      const auto digits = address.substr(colon + 1);
+      auto digits = address.substr(colon + 1);
+      if (!digits.empty() && digits[0] == '+') digits.erase(0, 1);
+      if (digits.empty()) continue;
       if (digits.find_first_not_of("0123456789") != std::string::npos) continue;
       unsigned port = 0;
       for (char c : digits) { port = port * 10 + static_cast<unsigned>(c - '0'); if (port > 65535) break; }

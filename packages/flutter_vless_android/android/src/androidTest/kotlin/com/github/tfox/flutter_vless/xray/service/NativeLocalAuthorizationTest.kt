@@ -122,7 +122,7 @@ class NativeLocalAuthorizationTest {
         val secret = LocalProxyCredentials.generate()
         val config = XrayConfig(LOCAL_SOCKS5_PORT = port, LOCAL_API_PORT = port + 1,
             V2RAY_FULL_JSON_CONFIG = """{"API":{"tag":"caller-api","listen":"127.0.0.1:$port","services":["StatsService"]},
-              "Metric\u017f":{"tag":"caller-metrics","Li\u017ften":"127.0.0.1:${port + 1}"},
+              "Metric\u017f":{"tag":"caller-metrics","Li\u017ften":"127.0.0.1:+${port + 1}"},
               "Inbounds":[{"tag":"http","Protocol":"http","Listen":"127.0.0.1","Port":${port + 3},"Settings":{"accounts":[{"user":"imported-user","pass":"imported-password"}]}}],
               "outbounds":[{"tag":"proxy","protocol":"freedom"},{"tag":"fixture-blocked","protocol":"blackhole"}],
               "routing":{"rules":[{"type":"field","inboundTag":["flutter-vless-tun"],"outboundTag":"fixture-blocked"}]}}""")

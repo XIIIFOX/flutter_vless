@@ -1,6 +1,6 @@
 ## 1.1.7
 
-* Reserve caller metrics listener ports alongside API ports on Android, iOS, macOS and Windows, including Core's field aliases. Avoid metrics collisions with Windows proxy-only statistics; add shared allocation and real service/traffic regressions.
+* Reserve caller metrics listener ports alongside API ports on Android, iOS, macOS and Windows, including Core's field aliases and Go's optional leading plus on decimal ports. Avoid metrics collisions with Windows proxy-only statistics; add shared allocation and real service/traffic regressions.
 * Keep Android Quick Tile available to stop an accepted VPN during worker recovery. Refresh an already-listening or re-added tile with current native state; preserve cold-start single-flight and OS Always-on restrictions. Add real SystemUI recovery-stop and authenticated Apple reasserting-stop regressions.
 * Preserve caller API listeners/services alongside native macOS counters. Isolate Apple/Android profile-delay measurements from caller API/metrics listeners; add occupied-port runtime regressions for Apple.
 * Preserve bounded Android emulator startup/crash evidence and Apple synthetic runtime logs in CI. Keep unclassified VM disappearance and post-entry failures visible without retries.

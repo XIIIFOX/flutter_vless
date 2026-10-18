@@ -166,14 +166,17 @@ The pinned Core has no `tls://` DoT implementation. These limitations, arbitrary
 DNS record types and dual-stack/FakeDNS support remain open; this MVP does not
 complete item 1. Test compilation and runtime results are recorded separately.
 
-[CI on 7ec4636](https://github.com/XIIIFOX/flutter_vless/actions/runs/39171589801)
-qualifies the production C++ preparer on Linux/macOS and the Apple preparer on
+[CI on 6c19e2d](https://github.com/XIIIFOX/flutter_vless/actions/runs/39172041164)
+qualifies the production C++ preparer on Linux/macOS/Windows and the Apple preparer on
 macOS against ordinary pinned Core: TCP/UDP virtual DNS, numeric TCP/UDP and
 named h2c upstreams, per-domain tags, static hosts, endpoint pinning and HTTP
 bytes pass with no OS-resolver attempt. Source hashes match that commit.
-Windows stopped in a platform-dependent test mock before runtime; Android TUN
-and iOS simulator acceptance are recorded separately. This is targeted DNS
-acceptance, not a complete platform VPN or encrypted DoH/TLS qualification.
+Android's real TUN check on 7ec4636 passes both missing and localhost DNS with
+UDP/TCP queries, OS lookup, HTTP and clean Stop. Its controlled resolver fixture
+needed to refuse unrelated background Android names while retaining its worker;
+that test-only fix and its foreign-query-then-owned-query control require a new
+device run. iOS simulator acceptance is recorded separately. This is targeted
+DNS acceptance, not complete platform VPN or encrypted DoH/TLS qualification.
 
 Port grammar progress (2026-10-18): the Dart, Kotlin, Swift and C++ paths now
 share a 20-case corpus checked against the pinned Core decoder/build path.

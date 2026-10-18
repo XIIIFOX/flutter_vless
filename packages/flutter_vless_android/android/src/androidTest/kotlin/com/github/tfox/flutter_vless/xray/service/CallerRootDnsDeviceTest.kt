@@ -153,6 +153,27 @@ class CallerRootDnsDeviceTest {
     }
 
     @Test fun callerHostsPerDomainAndDnsTagsResolveViaProductionTun() {
+        // A VPN also carries Android background DNS. Prove that declining one
+        // unrelated name does not kill this same fixture worker before testing
+        // Core/TUN. This separate listener is never counted as VPN evidence.
+        DnsFixture().use { fixture ->
+            val owned = name("fixture-control")
+            for ((qname, expectedCode) in listOf("unrelated.fixture.invalid" to 5, owned to 0)) {
+                Socket().use { socket ->
+                    socket.soTimeout = 2000
+                    socket.connect(InetSocketAddress("127.0.0.1", fixture.port), 2000)
+                    val request = question(qname)
+                    DataOutputStream(socket.getOutputStream()).apply { writeShort(request.size); write(request); flush() }
+                    val input = DataInputStream(socket.getInputStream())
+                    val size = input.readUnsignedShort(); require(size in 12..4096)
+                    val reply = ByteArray(size).also(input::readFully)
+                    assertEquals("Fixture admission returned wrong DNS status", expectedCode, reply[3].toInt() and 15)
+                    if (expectedCode == 0) assertA(reply)
+                    else assertEquals("Declined fixture query had an answer", 0, reply[7].toInt() and 255)
+                }
+            }
+            assertEquals(listOf(owned to 1), fixture.observations())
+        }
         DnsFixture().use { general -> DnsFixture().use { perDomain ->
             val caller = name("caller"); val hosts = name("hosts")
             val root = JSONObject().put("tag", "caller-root-dns").put("queryStrategy", "UseIPv4")
@@ -244,14 +265,17 @@ class CallerRootDnsDeviceTest {
             }
             require(offset + 4 <= size)
             val type = ((question[offset].toInt() and 255) shl 8) or (question[offset + 1].toInt() and 255)
-            val qname = labels.joinToString("."); require(qname.endsWith("-$run.dns-audit.invalid"))
-            synchronized(lock) { seen.add(qname to type) }
+            val qname = labels.joinToString(".")
+            val controlled = qname.endsWith("-$run.dns-audit.invalid", ignoreCase = true)
+            if (controlled) synchronized(lock) { seen.add(qname.lowercase(java.util.Locale.ROOT) to type) }
             val reply = ByteArrayOutputStream()
             DataOutputStream(reply).use { output ->
-                output.write(question, 0, 2); output.writeShort(0x8180); output.writeShort(1)
-                output.writeShort(if (type == 1) 1 else 0); output.writeInt(0)
+                // REFUSED is an owned reply, never a resolver fallback or a
+                // reason to terminate the worker. Do not retain foreign names.
+                output.write(question, 0, 2); output.writeShort(if (controlled) 0x8180 else 0x8185); output.writeShort(1)
+                output.writeShort(if (controlled && type == 1) 1 else 0); output.writeInt(0)
                 output.write(question, 12, offset + 4 - 12)
-                if (type == 1) {
+                if (controlled && type == 1) {
                     output.writeShort(0xc00c); output.writeShort(1); output.writeShort(1)
                     output.writeInt(0); output.writeShort(4); output.write(byteArrayOf(10, 0, 2, 2))
                 }

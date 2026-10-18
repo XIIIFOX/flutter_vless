@@ -337,9 +337,14 @@ The b030db9 Android job exhausted its 45-minute limit while the example smoke
 wrapper was waiting for Flutter. No native security class ran and the wrapper
 had not persisted its buffered child output, so the underlying Flutter/build/app
 cause is unknown. The three scoped Core jobs, Apple job and Android's 105 native
-unit tests pass. The workflow keeps the five TUN cases disabled until ordinary
-Android acceptance succeeds; a new bounded smoke wrapper must preserve partial
-output and failure context before another run can qualify that gate.
+unit tests pass. The bounded smoke wrapper now retains live private output,
+enforces a 600-second attempt budget and requires entry, Core-version and exact
+three-test completion evidence. Read-only context precedes cleanup for child
+failures; cleanup failures remain failures. Synthetic controls cover timeouts,
+signals, inherited pipes, short writes and scoped cleanup. The five TUN cases
+run in the same job only after ordinary Android acceptance succeeds; the harness
+enforces that gate before installing the development VPN service. New actual
+Android results are still required.
 
 Session teardown progress: Android now closes callback admission before its final
 cleanup, so late network/worker events cannot enqueue into a stopped executor.
@@ -365,6 +370,15 @@ bytes and successful cleanup. The preceding device-CI accept timeout did not
 record the underlying Core outcome; its cause is still unproven. The handoff
 between releasing a reservation and Core binding remains a separate bind-race
 requirement, and the main VPN listener allocator is unchanged.
+
+Delivery order updated on 2026-10-19 at the owner's request: finish a minimal,
+broad DNS increment on all four platforms first, then protocol/transport
+adaptation, full-document handling, ports/addresses and assets/imports. Each
+increment starts with a failing regression, then implementation and focused
+runtime acceptance. Exhaustive protocol combinations and later edge-case
+qualification are deferred; they do not block delivering the qualified minimum.
+Explicit unsupported cases stay visible and are not counted as working. The
+eight longer-term compatibility requirements remain tracked below.
 
 Current implementation/acceptance status (1.1.7, unreleased):
 

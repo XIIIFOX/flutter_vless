@@ -299,10 +299,13 @@ CI waits for scoped Core runtime qualification on Windows, macOS and Ubuntu,
 including the Linux descriptor-ownership fixtures, before starting the Android
 job. The [b030db9 run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39164717739)
 passes those three Core jobs and Linux fixtures. The five mobile TUN scenarios
-remain disabled in the workflow until the ordinary Android suite succeeds.
+run in the same job only after the ordinary Android suite succeeds. The harness
+enforces that gate before building or installing the two-binary VPN test APK.
 That run exhausted the 45-minute job limit inside the example smoke wrapper,
 before any native security suite ran; the Flutter child's underlying outcome is
-unknown because its output was buffered until exit. The new TUN cases still
+unknown because its output was buffered until exit. The smoke wrapper now has
+a 600-second per-attempt bound, live private output, exact three-test completion
+checks and bounded owned-process cleanup. The new TUN cases still
 require their own actual runtime result. Compilation, JNI hashes and
 manifest presence do not qualify DNS, browser or handover traffic.
 

@@ -4,10 +4,16 @@ from pathlib import Path
 import shlex
 import stat
 import subprocess
+import signal
+import sys
 import tempfile
+import threading
+import time
 import unittest
+from unittest.mock import patch
 
-from capture_android_emulator_failure import collect, TEST_PACKAGE
+import capture_android_emulator_failure as collector
+from capture_android_emulator_failure import capture, collect, TEST_PACKAGE
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -217,6 +223,175 @@ class AndroidFailureCaptureTest(unittest.TestCase):
                 self.assertEqual(29, result.returncode, result.stderr)
                 self.assertFalse(any("logcat" in args or "exit-info" in args for args in self.recorded_calls()))
                 self.assertTrue(any("uninstall" in args for args in self.recorded_calls()))
+
+
+def executing(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    # A killed orphan waiting for init is no longer an executing child.
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                           capture_output=True, text=True, timeout=1).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def await_condition(predicate, seconds=3):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    raise AssertionError("Synthetic child did not reach the controlled boundary")
+
+
+class CaptureOwnershipTest(unittest.TestCase):
+    def test_short_output_write_records_actual_prefix_and_never_completes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory); output = folder / "out"; output.mkdir()
+            adb = folder / "adb"
+            adb.write_text("#!" + sys.executable + "\nprint('PRIVATE_PARTIAL',flush=True)\n")
+            adb.chmod(0o700)
+            original = os.fdopen
+            class ShortWriter:
+                def __init__(self, stream): self.stream = stream
+                def __enter__(self): return self
+                def __exit__(self, *args): return self.stream.__exit__(*args)
+                def write(self, value): return self.stream.write(value[:-1])
+            def opened(*args, **kwargs):
+                stream = original(*args, **kwargs)
+                return ShortWriter(stream) if args[1] == "wb" else stream
+            with patch.object(collector.os, "fdopen", opened):
+                report = collect(adb, "emulator-5554", TEST_PACKAGE, output, "synthetic-short-write")
+            self.assertFalse(report["complete"])
+            for item in report["captures"]:
+                self.assertEqual("OSError", item["error"])
+                self.assertGreater(item["bytes_written"], 0)
+                self.assertEqual(item["bytes_written"], (output / item["file"]).stat().st_size)
+                self.assertTrue(item["cleanup"]["leader_reaped"])
+                self.assertTrue(item["cleanup"]["pipe_closed"])
+
+    def test_selector_setup_failures_reap_owned_leader_and_descendant(self):
+        # The second case proves cleanup even after the group's leader exits;
+        # its independent descendant still owns the inherited stdout pipe.
+        for phase, exited in [("create", False), ("register", False), ("register", True)]:
+            with self.subTest(phase=phase, leader_exited=exited), tempfile.TemporaryDirectory() as directory:
+                folder = Path(directory); pidfile = folder / "pids.json"; processes = []
+                real_popen = subprocess.Popen
+                child = "import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)"
+                code = ("import os,subprocess,sys,json,pathlib,time,signal;"
+                        "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
+                        f"p=subprocess.Popen([sys.executable,'-c',{child!r}]);"
+                        f"pathlib.Path({str(pidfile)!r}).write_text(json.dumps([os.getpid(),p.pid]));"
+                        + ("raise SystemExit(0)" if exited else "time.sleep(60)"))
+                def start(*args, **kwargs):
+                    process = real_popen(*args, **kwargs); processes.append(process)
+                    await_condition(pidfile.exists)
+                    if exited:
+                        await_condition(lambda: process.poll() is not None)
+                    return process
+                class BrokenSelector:
+                    def register(self, *args):
+                        raise OSError("synthetic-register-failure")
+                    def close(self):
+                        raise ValueError("secondary-selector-close-failure")
+                def selector():
+                    if phase == "create":
+                        raise OSError("synthetic-selector-failure")
+                    return BrokenSelector()
+                try:
+                    with patch.object(collector.subprocess, "Popen", start), \
+                         patch.object(collector.selectors, "DefaultSelector", selector):
+                        report = capture([sys.executable, "-u", "-c", code], folder / "capture.log", timeout=30)
+                    self.assertEqual("OSError", report["error"])  # Primary, not selector.close.
+                    self.assertTrue(report["cleanup"]["leader_reaped"])
+                    self.assertTrue(report["cleanup"]["pipe_closed"])
+                    for pid in json.loads(pidfile.read_text()):
+                        await_condition(lambda pid=pid: not executing(pid))
+                finally:
+                    for process in processes:
+                        try: os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError: pass
+                        process.wait(timeout=2)
+                        process.stdout.close()
+
+    def test_parent_exit_and_inherited_pipe_remain_under_capture_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory); pidfile = folder / "child.pid"
+            code = ("import subprocess,sys,pathlib;"
+                    "p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+                    f"pathlib.Path({str(pidfile)!r}).write_text(str(p.pid));print('partial',flush=True)")
+            try:
+                report = capture([sys.executable, "-u", "-c", code], folder / "capture.log", timeout=1)
+                self.assertTrue(report["timed_out"]); self.assertEqual(0, report["returncode"])
+                self.assertLess(report["elapsed_seconds"], 3)
+                self.assertEqual(b"partial\n", (folder / "capture.log").read_bytes())
+                await_condition(lambda: not executing(int(pidfile.read_text())))
+            finally:
+                if pidfile.exists() and executing(int(pidfile.read_text())):
+                    os.kill(int(pidfile.read_text()), signal.SIGKILL)
+
+    def test_cancellation_during_running_capture_drains_before_natural_timeout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory); path = folder / "capture.log"; cancelled = threading.Event(); outcome = []
+            code = "import time;print('LIVE_PARTIAL',flush=True);time.sleep(60)"
+            worker = threading.Thread(target=lambda: outcome.append(capture(
+                [sys.executable, "-u", "-c", code], path, timeout=30, cancelled=cancelled.is_set)))
+            worker.start()
+            try:
+                await_condition(lambda: path.exists() and b"LIVE_PARTIAL" in path.read_bytes())
+                started = time.monotonic(); cancelled.set(); worker.join(2)
+                self.assertFalse(worker.is_alive()); self.assertLess(time.monotonic() - started, 2)
+                report = outcome[0]
+                self.assertTrue(report["cancelled"]); self.assertFalse(report["timed_out"])
+                self.assertTrue(report["cleanup"]["leader_reaped"])
+                self.assertTrue(report["cleanup"]["pipe_closed"])
+            finally:
+                cancelled.set(); worker.join(3)
+
+    def test_cancelled_before_spawn_never_creates_a_child(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(collector.subprocess, "Popen", side_effect=AssertionError("must not spawn")):
+            report = capture(["synthetic"], Path(directory) / "capture.log", cancelled=lambda: True)
+            self.assertTrue(report["cancelled"]); self.assertIsNone(report["returncode"])
+            self.assertIsNone(report["cleanup"])
+
+    def test_cli_sigterm_cleans_separate_diagnostic_group_and_preserves_signal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory); output = folder / "out"; output.mkdir(); pidfile = folder / "pids.json"
+            adb = folder / "adb"
+            child = "import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)"
+            adb.write_text("#!" + sys.executable + "\nimport os,json,pathlib,signal,subprocess,sys,time\n"
+                "signal.signal(signal.SIGTERM,signal.SIG_IGN)\n"
+                f"p=subprocess.Popen([sys.executable,'-c',{child!r}])\n"
+                f"pathlib.Path({str(pidfile)!r}).write_text(json.dumps([os.getpid(),p.pid]))\n"
+                "print('PRIVATE_PARTIAL',flush=True)\ntime.sleep(60)\n")
+            adb.chmod(0o700)
+            unrelated = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"])
+            process = subprocess.Popen([sys.executable, str(Path(collector.__file__)), "--adb", str(adb),
+                "--serial", "emulator-5554", "--package", TEST_PACKAGE, "--output", str(output), "--phase", "fixture"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+            try:
+                await_condition(lambda: pidfile.exists() and
+                    (output / "failure-context-crash.log").read_bytes() == b"PRIVATE_PARTIAL\n")
+                started = time.monotonic(); process.send_signal(signal.SIGTERM)
+                console = process.communicate(timeout=3)[0]
+                self.assertEqual(143, process.returncode); self.assertLess(time.monotonic() - started, 3)
+                self.assertNotIn(b"PRIVATE_PARTIAL", console)
+                report = json.loads((output / "failure-context.json").read_text())
+                self.assertTrue(report["cancelled"]); self.assertFalse(report["complete"])
+                self.assertTrue(all(item["cancelled"] for item in report["captures"]))
+                for pid in json.loads(pidfile.read_text()):
+                    await_condition(lambda pid=pid: not executing(pid))
+                self.assertIsNone(unrelated.poll())
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=2)
+                if pidfile.exists():
+                    for pid in json.loads(pidfile.read_text()):
+                        if executing(pid): os.kill(pid, signal.SIGKILL)
+                unrelated.kill(); unrelated.wait(timeout=2)
 
 
 if __name__ == "__main__":

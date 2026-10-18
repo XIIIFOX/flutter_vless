@@ -41,7 +41,7 @@ use a Core-only APK; a second APK adds the development VPN service immediately
 before its five TUN scenarios, preserving Android's app-wide Always-on semantics.
 CI depends on all three scoped Core jobs and the Linux descriptor fixtures;
 their success does not substitute for the separate Android runtime result.
-The workflow keeps the TUN option disabled until ordinary Android acceptance
-succeeds; compiling or verifying these payloads does not open that gate.
+The harness opens the TUN phase within the same job only after ordinary Android
+acceptance succeeds; compiling or verifying payloads does not open that gate.
 The existing dirty/opaque packaged
 forwarder is not claimed to be reproduced by this new pinned development copy.

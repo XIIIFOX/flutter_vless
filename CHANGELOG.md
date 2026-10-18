@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Scope Android protected system DNS and Android/Windows packet-path probes to the managed VPN input. Share the native DNS adapter identity across Android startup and recovery; retain imported input rules and test their blocking independently of VPN DNS.
 * Allocate private adapter/DNS/statistics tags against imported definitions and references, including API, reverse, balancers and nested dialers, across Android, iOS, macOS and Windows. Scope Apple's virtual DNS rule to the managed VPN input; add collision fixtures and real-Core traffic regressions.
 * Keep Windows VPN preflight documents and their Core image in the administrator-owned runtime directory; require filtered-token access checks and cleanup checks in Windows acceptance.
 * Accept Core-style JSON comments and a leading BOM in SDK configuration/import/subscription paths and the example routing editor, preserving quoted markers and unknown fields. Add a shared syntax corpus checked against pinned Core; keep trailing-document rejection explicit.

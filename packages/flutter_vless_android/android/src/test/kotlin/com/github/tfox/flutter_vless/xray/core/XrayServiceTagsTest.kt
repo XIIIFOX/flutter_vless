@@ -49,4 +49,32 @@ class XrayServiceTagsTest {
             assertEquals(before, source.toString())
         }
     }
+
+    @Test fun protectedDnsAndAdapterShareNativeIdentityIncludingRecoveryAndRejectMissingPreparation() {
+        val source = """{"inbounds":[{"tag":"flutter-vless-tun","protocol":"socks","port":10808}],
+          "outbounds":[{"tag":"proxy","protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":19000}]}}],
+          "routing":{"rules":[{"inboundTag":["flutter-vless-tun-1"],"outboundTag":"proxy"}]}}"""
+        val dns = AndroidTunnelDnsPolicy.prepare(source, "proxy")
+        assertEquals("flutter-vless-tun-2", dns.managedInboundTag)
+        val config = XrayConfig(V2RAY_FULL_JSON_CONFIG = dns.configJson, ANDROID_DNS_POLICY = "proxy")
+        val secret = LocalProxyCredentials("user", "password")
+        repeat(2) {
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(config.copy(), File("."), secret, dns)
+            val adapter = runtime.getJSONArray("inbounds").getJSONObject(1)
+            assertEquals(dns.managedInboundTag, adapter.getString("tag"))
+            val dnsRule = runtime.getJSONObject("routing").getJSONArray("rules").getJSONObject(2)
+            assertEquals(dns.managedInboundTag, dnsRule.getJSONArray("inboundTag").getString(0))
+            assertEquals("198.18.0.2/32", dnsRule.getJSONArray("ip").getString(0))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            XrayCoreManager.buildRuntimeConfigJson(config.copy(), File("."), secret)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            XrayCoreManager.buildRuntimeConfigJson(config.copy(V2RAY_FULL_JSON_CONFIG = source), File("."), secret, dns)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            XrayCoreManager.buildRuntimeConfigJson(config.copy(PROXY_ONLY = true), File("."), secret, dns)
+        }
+        XrayCoreManager.validateConfiguration(XrayConfig(V2RAY_FULL_JSON_CONFIG = source, ANDROID_DNS_POLICY = "proxy"))
+    }
 }

@@ -63,6 +63,7 @@ class AndroidTunnelDnsPolicyTest {
             val rules = output.getJSONObject("routing").getJSONArray("rules")
             assertEquals("proxy", rules.getJSONObject(0).getString("outboundTag"))
             assertEquals("198.18.0.2/32", rules.getJSONObject(1).getJSONArray("ip").getString(0))
+            assertEquals(prepared.managedInboundTag, rules.getJSONObject(1).getJSONArray("inboundTag").getString(0))
             assertEquals("tcp,udp", rules.getJSONObject(1).getString("network"))
             assertEquals(AndroidTunnelDnsPolicy.RELAY_TAG, rules.getJSONObject(1).getString("outboundTag"))
             assertEquals(originalUserRules.getJSONObject(0).toString(), rules.getJSONObject(2).toString())

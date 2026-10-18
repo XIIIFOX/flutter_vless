@@ -7,15 +7,17 @@ import java.net.Socket
 
 class SessionReadinessProbeTest {
     @Test fun probePreservesDefaultOutboundAndUserRulesAndCannotBeStalledByIdleClients() {
-        val source = JSONObject("""{"outbounds":[{"protocol":"blackhole","tag":"block"}],"routing":{"rules":[{"domain":["full:www.gstatic.com"],"outboundTag":"block"}]}}""")
+        val source = JSONObject("""{"inbounds":[{"tag":"fixture-tun","protocol":"socks","listen":"127.0.0.1","port":19000}],"outbounds":[{"protocol":"blackhole","tag":"block"}],"routing":{"rules":[{"domain":["full:www.gstatic.com"],"outboundTag":"block"}]}}""")
         val original = source.toString()
         SessionReadinessProbe(SessionReadinessProbe.selectHost(source)).use { probe ->
-            val runtime = probe.configure(source)
+            val runtime = probe.configure(source, 19000)
             assertEquals(original, source.toString())
             assertEquals("block", runtime.getJSONArray("outbounds").getJSONObject(0).getString("tag"))
             val rules = runtime.getJSONObject("routing").getJSONArray("rules")
             assertEquals(source.getJSONObject("routing").getJSONArray("rules").get(0).toString(), rules.get(1).toString())
             assertEquals("${probe.host}/32", rules.getJSONObject(0).getJSONArray("ip").getString(0))
+            assertEquals("fixture-tun", rules.getJSONObject(0).getJSONArray("inboundTag").getString(0))
+            assertThrows(NoSuchElementException::class.java) { probe.configure(source, 19001) }
             probe.verify { Socket("127.0.0.1", probe.port) }
             Socket("127.0.0.1", probe.port).use { idle ->
                 idle.soTimeout = 2000

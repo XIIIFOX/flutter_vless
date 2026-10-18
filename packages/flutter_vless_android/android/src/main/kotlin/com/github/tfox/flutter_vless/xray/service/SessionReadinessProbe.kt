@@ -2,6 +2,7 @@ package com.github.tfox.flutter_vless.xray.service
 
 import org.json.JSONArray
 import org.json.JSONObject
+import com.github.tfox.flutter_vless.xray.core.XrayServiceTags
 import java.io.Closeable
 import java.io.DataInputStream
 import java.net.InetAddress
@@ -33,13 +34,19 @@ internal class SessionReadinessProbe(val host: String) : Closeable {
         }
     }, "vpn-path-probe").apply { isDaemon = true; start() }
 
-    fun configure(source: JSONObject): JSONObject {
+    fun configure(source: JSONObject, managedPort: Int): JSONObject {
         val json = JSONObject(source.toString())
-        val tag = "flutter-vless-path-${UUID.randomUUID()}"
+        val inputs = json.getJSONArray("inbounds")
+        val managedTag = (0 until inputs.length()).map(inputs::getJSONObject).single {
+            it.optString("protocol") == "socks" && it.optInt("port") == managedPort && it.optString("listen") == "127.0.0.1"
+        }.getString("tag")
+        require(managedTag.isNotEmpty()) { "Private packet-path input is unavailable" }
+        val tag = XrayServiceTags(json).next("flutter-vless-path-${UUID.randomUUID()}")
         json.getJSONArray("outbounds").put(JSONObject().put("tag", tag).put("protocol", "freedom")
             .put("settings", JSONObject().put("redirect", "127.0.0.1:$port")))
         val routing = json.getJSONObject("routing")
-        val rules = JSONArray().put(JSONObject().put("type", "field").put("ip", JSONArray().put("$host/32"))
+        val rules = JSONArray().put(JSONObject().put("type", "field").put("inboundTag", JSONArray().put(managedTag))
+            .put("ip", JSONArray().put("$host/32"))
             .put("port", port.toString()).put("network", "tcp").put("outboundTag", tag))
         val existing = routing.getJSONArray("rules")
         for (index in 0 until existing.length()) rules.put(existing.get(index))

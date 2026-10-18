@@ -217,7 +217,7 @@ class XrayVPNService : VpnService() {
             }
             candidate.V2RAY_FULL_JSON_CONFIG = dns.configJson
             candidateDnsServers = dns.systemDnsServers
-            val runtime = XrayCoreManager.buildRuntimeConfigJson(candidate, noBackupFilesDir, secret)
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(candidate, noBackupFilesDir, secret, dns)
             require(XrayCoreManager.validateNative(this, runtime)) { "Native configuration rejected" }
             if (!candidate.PROXY_ONLY) SessionReadinessProbe.selectHost(runtime)
             runtime
@@ -274,7 +274,7 @@ class XrayVPNService : VpnService() {
                     XraySocketProtector.resolveBootstrapHostname(this, it)
                 }
                 current.V2RAY_FULL_JSON_CONFIG = dns.configJson
-                prepared = XrayCoreManager.buildRuntimeConfigJson(current, noBackupFilesDir, credentials)
+                prepared = XrayCoreManager.buildRuntimeConfigJson(current, noBackupFilesDir, credentials, dns)
                 dnsServers = dns.systemDnsServers
             }
             protector = if (current.PROXY_ONLY) null else XraySocketProtector(this).also {
@@ -282,7 +282,7 @@ class XrayVPNService : VpnService() {
             }
             val runtime = if (current.PROXY_ONLY) requireNotNull(prepared) else {
                 SessionReadinessProbe(SessionReadinessProbe.selectHost(requireNotNull(prepared)))
-                    .also { readinessProbe = it }.configure(requireNotNull(prepared))
+                    .also { readinessProbe = it }.configure(requireNotNull(prepared), current.LOCAL_SOCKS5_PORT)
             }
             val started = XrayCoreManager.startCore(this, current, runtime, protector, owner) { generation, code ->
                 worker.execute { if (recovery.owns(generation)) { event(Event.WORKER_EXIT, code.toLong()); recover(Event.WORKER_EXIT) } }

@@ -189,7 +189,7 @@ bool VpnService::StartWorkers() {
   auto config = xray_config::Parse(current_config_);
   for (auto& outbound : config["outbounds"]) Rebind(outbound, *underlay);
   packet_probe_ = std::make_unique<PacketPathProbe>();
-  if (!packet_probe_->Start() || !packet_probe_->Configure(config)) return fail("Cannot prepare the local packet-path probe");
+  if (!packet_probe_->Start() || !packet_probe_->Configure(config, socks_port_)) return fail("Cannot prepare the local packet-path probe");
   if (!private_runtime_ || !private_runtime_->WriteConfig(config.dump(), temp_config_path_)) return fail("Cannot write the private Xray configuration");
   xray_process_ = native::Launch(xray_executable_path_, {L"run", L"-config", temp_config_path_.wstring()});
   if (!xray_process_) return fail("Cannot launch the protected Xray process");

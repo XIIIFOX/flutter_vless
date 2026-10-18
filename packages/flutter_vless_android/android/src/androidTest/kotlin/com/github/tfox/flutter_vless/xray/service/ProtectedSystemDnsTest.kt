@@ -11,6 +11,7 @@ import android.net.VpnService
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
+import com.github.tfox.flutter_vless.xray.core.AuthenticatedSocksClient
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import org.json.JSONArray
 import org.json.JSONObject
@@ -47,10 +48,15 @@ class ProtectedSystemDnsTest {
         val port = mapOf("http" to 18280, "socks" to 18281, "vless" to 18282).getValue(protocol)
         val settings = JSONObject().put("address", "10.0.2.2").put("port", port)
         if (protocol == "vless") settings.put("id", "2bddfbd9-7d82-4698-9d39-1b8136b856de").put("encryption", "none")
-        val json = JSONObject().put("inbounds", JSONArray())
+        val json = JSONObject().put("inbounds", JSONArray().put(JSONObject().put("tag", "imported-dns-blocked")
+            .put("protocol", "socks").put("listen", "127.0.0.1").put("port", 18390)
+            .put("settings", JSONObject().put("auth", "noauth"))))
             .put("outbounds", JSONArray().put(JSONObject().put("tag", "proxy").put("protocol", protocol).put("settings", settings))
-                .put(JSONObject().put("tag", "direct").put("protocol", "freedom")))
+                .put(JSONObject().put("tag", "direct").put("protocol", "freedom"))
+                .put(JSONObject().put("tag", "fixture-blocked").put("protocol", "blackhole")))
             .put("routing", JSONObject().put("rules", JSONArray()
+                .put(JSONObject().put("type", "field").put("inboundTag", JSONArray().put("imported-dns-blocked"))
+                    .put("outboundTag", "fixture-blocked"))
                 .put(JSONObject().put("type", "field").put("network", "udp").put("outboundTag", "direct"))))
         val connecting = AtomicBoolean(false)
         val connected = CountDownLatch(1)
@@ -144,6 +150,18 @@ class ProtectedSystemDnsTest {
 
     private fun exercise(protocol: String) {
         start(protocol)
+        val imported = name("imported", protocol)
+        val importedAnswer = runCatching {
+            AuthenticatedSocksClient.connect(18390, null, "198.18.0.2", 53).use { socket ->
+                socket.soTimeout = 1500
+                val request = question(imported)
+                DataOutputStream(socket.getOutputStream()).apply { writeShort(request.size); write(request); flush() }
+                DataInputStream(socket.getInputStream()).let { input ->
+                    ByteArray(input.readUnsignedShort()).also { input.readFully(it) }
+                }
+            }
+        }.getOrNull()
+        assertNull("Private DNS must not override the imported input's blocking rule", importedAnswer)
         val udp = name("udp", protocol)
         val tcp = name("tcp", protocol)
         val system = name("system", protocol)
@@ -151,6 +169,9 @@ class ProtectedSystemDnsTest {
         awaitAnswer(tcp, true)
         assertTrue("System resolver did not use virtual VPN DNS", InetAddress.getAllByName(system).any { it.hostAddress == "203.0.113.42" })
         val events = fixtureEvents()
+        assertFalse("Imported blocked DNS reached the proxy", (0 until events.length()).any {
+            events.getJSONObject(it).optString("qname") == imported
+        })
         for (qname in listOf(udp, tcp, system)) {
             assertTrue("Missing selected-proxy TCP observation for $qname", (0 until events.length()).any {
                 val event = events.getJSONObject(it)

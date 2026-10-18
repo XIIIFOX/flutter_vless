@@ -63,13 +63,23 @@ void PacketPathProbe::Serve() {
     closesocket(client);
   }
 }
-bool PacketPathProbe::Configure(xray_config::Json& config) const {
-  if (!running_.load() || !config["outbounds"].is_array() || !config["routing"]["rules"].is_array()) return false;
+bool PacketPathProbe::Configure(xray_config::Json& config, uint16_t managed_port) const {
+  if (!running_.load() || !config["inbounds"].is_array() || !config["outbounds"].is_array() || !config["routing"]["rules"].is_array()) return false;
+  std::string managed_tag;
+  for (const auto& inbound : config["inbounds"]) {
+    if (inbound.value("protocol", "") != "socks" || inbound.value("listen", "") != "127.0.0.1" ||
+        xray_config::Port(inbound) != managed_port) continue;
+    if (!managed_tag.empty()) return false;
+    managed_tag = inbound.value("tag", "");
+    if (managed_tag.empty()) return false;
+  }
+  if (managed_tag.empty()) return false;
   const auto probe_tag = xray_config::UniqueTag(config, tag);
   config["outbounds"].push_back({{"tag", probe_tag}, {"protocol", "freedom"},
       {"settings", {{"redirect", "127.0.0.1:" + std::to_string(port_)}, {"domainStrategy", "ForceIPv4"}}}});
   config["routing"]["rules"].insert(config["routing"]["rules"].begin(), xray_config::Json{
-      {"type", "field"}, {"ip", xray_config::Json::array({std::string(address) + "/32"})},
+      {"type", "field"}, {"inboundTag", xray_config::Json::array({managed_tag})},
+      {"ip", xray_config::Json::array({std::string(address) + "/32"})},
       {"port", std::to_string(port_)}, {"network", "tcp"}, {"outboundTag", probe_tag}});
   return true;
 }

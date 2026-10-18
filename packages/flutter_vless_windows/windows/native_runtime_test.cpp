@@ -98,12 +98,15 @@ int main(int argc, char** argv) {
     flutter_vless::PacketPathProbe probe;
     assert(probe.Start());
     assert(probe.Check("127.0.0.1")); // test backend only; no TUN or external packet
-    auto config = flutter_vless::xray_config::Parse(R"({"outbounds":[],"routing":{"rules":[]}})");
-    assert(probe.Configure(config));
+    auto config = flutter_vless::xray_config::Parse(R"({"inbounds":[{"protocol":"socks","listen":"127.0.0.1","port":19000,"tag":"fixture-tun"}],"outbounds":[],"routing":{"rules":[]}})");
+    assert(!probe.Configure(config, 19001));
+    assert(probe.Configure(config, 19000));
     assert(config["routing"]["rules"][0]["ip"][0] == "198.18.0.3/32");
+    assert(config["routing"]["rules"][0]["inboundTag"][0] == "fixture-tun");
     assert(config["outbounds"][0]["settings"]["redirect"].get<std::string>().rfind("127.0.0.1:", 0) == 0);
     auto collision = flutter_vless::xray_config::Parse(R"({"outbounds":[{"protocol":"blackhole","tag":"flutter-vless-packet-probe"}],"routing":{"rules":[]}})");
-    assert(probe.Configure(collision));
+    collision["inbounds"] = config["inbounds"];
+    assert(probe.Configure(collision, 19000));
     assert(collision["outbounds"][0]["protocol"] == "blackhole");
     assert(collision["outbounds"][1]["tag"] == "flutter-vless-packet-probe-1");
     assert(collision["routing"]["rules"][0]["outboundTag"] == "flutter-vless-packet-probe-1");

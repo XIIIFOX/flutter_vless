@@ -18,7 +18,9 @@ internal object AndroidTunnelDnsPolicy {
         val configJson: String,
         val systemDnsServers: List<String>,
         val bootstrapHostnames: Set<String> = emptySet(),
-        val bootstrapAddresses: Set<String> = emptySet()
+        val bootstrapAddresses: Set<String> = emptySet(),
+        /** Native-only identity shared with the adapter builder, never imported from JSON. */
+        val managedInboundTag: String? = null
     )
 
     /** Perform preflight without querying DNS or modifying the caller's configuration. */
@@ -51,6 +53,7 @@ internal object AndroidTunnelDnsPolicy {
         val tags = outbounds.mapNotNull { optionalString(it, "tag")?.takeIf(String::isNotEmpty) }
         require(tags.distinct().size == tags.size) { "Duplicate outbound tag in proxy DNS configuration" }
         val serviceTags = XrayServiceTags(config)
+        val managedInboundTag = serviceTags.next("flutter-vless-tun")
         val relayTag = serviceTags.next(RELAY_TAG)
         val upstreamTag = serviceTags.next(UPSTREAM_TAG)
         val proxyTag = serviceTags.next(PROXY_TAG)
@@ -129,7 +132,8 @@ internal object AndroidTunnelDnsPolicy {
         }
         val serviceRules = JSONArray()
             .put(JSONObject().put("type", "field").put("inboundTag", JSONArray().put(upstreamTag)).put("outboundTag", selectedTag))
-            .put(JSONObject().put("type", "field").put("ip", JSONArray().put("$VIRTUAL_SERVER/32"))
+            .put(JSONObject().put("type", "field").put("inboundTag", JSONArray().put(managedInboundTag))
+                .put("ip", JSONArray().put("$VIRTUAL_SERVER/32"))
                 .put("port", "53").put("network", "tcp,udp").put("outboundTag", relayTag))
         userRules.forEach(serviceRules::put)
         routing.put("rules", serviceRules)
@@ -146,7 +150,7 @@ internal object AndroidTunnelDnsPolicy {
         // Explicit proxy policy owns system DNS. No local/+local/OS fallback is retained.
         config.put("dns", JSONObject().put("hosts", hosts).put("servers", JSONArray().put("tcp://1.1.1.1"))
             .put("tag", upstreamTag).put("queryStrategy", "UseIP").put("disableFallback", true))
-        return Prepared(config.toString(), listOf(VIRTUAL_SERVER), names, addresses)
+        return Prepared(config.toString(), listOf(VIRTUAL_SERVER), names, addresses, managedInboundTag)
     }
 
     private fun prepareStream(stream: JSONObject, pinEndpoint: (String) -> Unit) {

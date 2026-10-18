@@ -11,7 +11,7 @@ class PacketPathProbe {
   static constexpr const char* tag = "flutter-vless-packet-probe";
   ~PacketPathProbe();
   bool Start();
-  bool Configure(xray_config::Json& config) const;
+  bool Configure(xray_config::Json& config, uint16_t managed_port) const;
   bool Check(const char* destination = address) const;
  private:
   void Serve();

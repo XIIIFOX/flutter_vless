@@ -112,7 +112,16 @@ object XrayCoreManager {
     }
 
     internal fun buildRuntimeConfigJson(config: XrayConfig, filesDir: File,
-        credentials: LocalProxyCredentials? = null): JSONObject {
+        credentials: LocalProxyCredentials? = null, protectedDns: AndroidTunnelDnsPolicy.Prepared? = null): JSONObject {
+        // The DNS preparer chooses the adapter identity before adding its rule.
+        // Accept it only with the exact native-prepared document, including on
+        // recovery; guessing a tag from caller JSON could scope another input.
+        val dnsAdapterTag = if (config.ANDROID_DNS_POLICY == "proxy") {
+            require(!config.PROXY_ONLY && protectedDns?.configJson == config.V2RAY_FULL_JSON_CONFIG) {
+                "Protected DNS preparation is required"
+            }
+            requireNotNull(protectedDns?.managedInboundTag) { "Protected DNS adapter identity is unavailable" }
+        } else null
         val json = normalizeRuntimeConfig(JSONObject(config.V2RAY_FULL_JSON_CONFIG)) as JSONObject
         LocalProxyAccessPolicy.normalizeConfigInputs(json)
         normalizeVlessOutbounds(json)
@@ -137,7 +146,10 @@ object XrayCoreManager {
         // other listeners. Never reuse/rewrite them for the tunnel adapter.
         if (!config.PROXY_ONLY || !hasSocks) {
             config.LOCAL_SOCKS5_PORT = nextFreePort(config.LOCAL_SOCKS5_PORT, used)
-            inbounds.put(JSONObject().put("tag", serviceTags.next("flutter-vless-tun"))
+            require(dnsAdapterTag == null || (0 until inbounds.length()).none {
+                inbounds.getJSONObject(it).optString("tag") == dnsAdapterTag
+            }) { "Protected DNS adapter conflicts with imported input" }
+            inbounds.put(JSONObject().put("tag", dnsAdapterTag ?: serviceTags.next("flutter-vless-tun"))
                 .put("listen", "127.0.0.1").put("port", config.LOCAL_SOCKS5_PORT).put("protocol", "socks")
                 .put("settings", JSONObject().put("auth", "noauth").put("udp", true))
                 .put("sniffing", JSONObject().put("enabled", true).put("routeOnly", true)
@@ -178,7 +190,9 @@ object XrayCoreManager {
         require(!(config.PROXY_ONLY && config.ANDROID_DNS_POLICY == "proxy")) { "Proxy DNS requires VPN mode" }
         AndroidTunnelDnsPolicy.validate(config.V2RAY_FULL_JSON_CONFIG, config.ANDROID_DNS_POLICY,
             config.ANDROID_DNS_PROXY_OUTBOUND_TAG, config.BYPASS_SUBNETS)
-        buildRuntimeConfigJson(config.copy(), File("."), LocalProxyCredentials.generate())
+        // DNS structural validation above does not resolve endpoints. The final
+        // service preparation supplies the native DNS identity before Core test.
+        buildRuntimeConfigJson(config.copy(ANDROID_DNS_POLICY = "config"), File("."), LocalProxyCredentials.generate())
     }
 
     internal fun buildDelayConfigJson(configJson: String, proxyPort: Int, filesDir: File,

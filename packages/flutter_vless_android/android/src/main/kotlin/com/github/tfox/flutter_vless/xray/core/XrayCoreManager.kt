@@ -10,7 +10,6 @@ import com.github.tfox.flutter_vless.xray.utils.Utilities
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.net.ServerSocket
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -319,27 +318,49 @@ object XrayCoreManager {
     fun getServerDelay(context: Context, configJson: String, url: String): Long {
         var process: Process? = null
         val file = File(context.noBackupFilesDir, "delay-${UUID.randomUUID()}.json")
+        fun event(event: XrayDiagnosticsStore.Event, value: Long? = null) =
+            XrayDiagnosticsStore.event(context.filesDir, event, value = value)
         return try {
-            val port = ServerSocket(0).use { it.localPort }
+            event(XrayDiagnosticsStore.Event.DELAY_ALLOCATING_PORTS)
             val credentials = LocalProxyCredentials.generate()
-            val (json, socksPort) = buildDelayConfigJson(configJson, port, context.noBackupFilesDir, credentials)
-            file.writeText(json.toString())
-            Utilities.copyAssets(context)
-            val builder = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
-                "run", "-config", file.absolutePath).directory(context.noBackupFilesDir).redirectErrorStream(true)
-            builder.environment()["XRAY_LOCATION_ASSET"] = Utilities.getUserAssetsPath(context)
-            process = builder.start()
-            drain(process)
-            repeat(20) {
-                if (process?.isAlive != true) return -1
-                try { return AuthenticatedSocksClient.measure(socksPort, credentials, url) }
-                catch (_: Exception) { Thread.sleep(100) }
+            var socksPort = 0
+            val builder = DelayProbePortAllocator.reserve().use { ports ->
+                event(XrayDiagnosticsStore.Event.DELAY_PORTS_RESERVED)
+                val (json, selectedPort) = buildDelayConfigJson(configJson, ports.socksPort, context.noBackupFilesDir, credentials)
+                socksPort = selectedPort
+                file.writeText(json.toString())
+                Utilities.copyAssets(context)
+                ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
+                    "run", "-config", file.absolutePath).directory(context.noBackupFilesDir).redirectErrorStream(true).also {
+                    it.environment()["XRAY_LOCATION_ASSET"] = Utilities.getUserAssetsPath(context)
+                    event(XrayDiagnosticsStore.Event.DELAY_CONFIG_READY)
+                }
             }
+            // Core cannot inherit these listeners. Release both immediately before
+            // launch; another process can still win the unavoidable bind handoff race.
+            val child = builder.start()
+            process = child
+            event(XrayDiagnosticsStore.Event.DELAY_CORE_STARTED)
+            drain(child)
+            event(XrayDiagnosticsStore.Event.DELAY_MEASURING)
+            repeat(20) { attempt ->
+                if (!child.isAlive) {
+                    event(XrayDiagnosticsStore.Event.DELAY_CORE_EXIT, child.exitValue().toLong())
+                    return -1
+                }
+                try {
+                    val delay = AuthenticatedSocksClient.measure(socksPort, credentials, url)
+                    event(XrayDiagnosticsStore.Event.DELAY_COMPLETE)
+                    return delay
+                } catch (_: Exception) {
+                    event(XrayDiagnosticsStore.Event.DELAY_PROBE_FAILED, (attempt + 1).toLong())
+                    Thread.sleep(100)
+                }
+            }
+            event(XrayDiagnosticsStore.Event.DELAY_FAILED)
             -1
-        } catch (_: Exception) { -1 } finally {
-            process?.destroy()
-            if (process?.waitFor(1, TimeUnit.SECONDS) == false) process?.destroyForcibly()
-            file.delete()
+        } catch (_: Exception) { event(XrayDiagnosticsStore.Event.DELAY_FAILED); -1 } finally {
+            if (!DelayProbeCleanup.cleanup(process, file)) event(XrayDiagnosticsStore.Event.DELAY_CLEANUP_FAILED)
         }
     }
 

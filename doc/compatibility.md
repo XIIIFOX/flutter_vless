@@ -267,6 +267,16 @@ its retry slot for wake. Both actual provider implementations pass eight pure
 scenario groups; this is separate from physical sleep/wake acceptance.
 Actual Apple runtime/device acceptance of these changes is recorded separately.
 
+Android standalone delay probes now reserve their SOCKS/API listener pair while
+preparing the temporary runtime, with at most 32 allocation attempts. Interrupted
+cleanup retains a bounded child reap and always attempts private-file removal;
+only allowlisted stage/exit events are recorded. These changes have deterministic
+allocator/process tests and a compiled device fixture that requires real HTTP
+bytes and successful cleanup. The preceding device-CI accept timeout did not
+record the underlying Core outcome; its cause is still unproven. The handoff
+between releasing a reservation and Core binding remains a separate bind-race
+requirement, and the main VPN listener allocator is unchanged.
+
 Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |

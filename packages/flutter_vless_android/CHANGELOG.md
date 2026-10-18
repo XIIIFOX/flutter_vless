@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Reserve standalone delay SOCKS/API listener ports together until Core launch; bound allocation retries, retain cleanup on interruption and add private stage/exit diagnostics without native output.
 * Reserve caller API and metrics listener ports before allocating the private VPN adapter; preserve caller metrics settings and cover their listener alongside authenticated traffic. Full caller API passthrough remains separate work.
 * Reserve imported port lists/ranges and environment references when allocating private listeners; preserve Unix listeners and their authentication. Add real TUN/imported-listener HTTP regression coverage.
 * Add native Quick Settings Tile and Android 13+ add-tile dialog with encrypted no-backup quick profiles and independent automatic-restart authorization.

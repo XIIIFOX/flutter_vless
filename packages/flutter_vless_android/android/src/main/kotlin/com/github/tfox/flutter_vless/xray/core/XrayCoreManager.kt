@@ -130,7 +130,7 @@ object XrayCoreManager {
         json.put("log", JSONObject().put("loglevel", "none").put("access", "none").put("error", "none"))
         val inbounds = json.optJSONArray("inbounds") ?: JSONArray()
         val serviceTags = XrayServiceTags(json)
-        val used = XrayPortSpec.apiListenerPorts(json).toMutableSet()
+        val used = XrayPortSpec.serviceListenerPorts(json).toMutableSet()
         var hasSocks = false
         for (i in 0 until inbounds.length()) {
             val inbound = inbounds.getJSONObject(i)

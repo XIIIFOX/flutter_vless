@@ -185,6 +185,8 @@ inline bool AddApi(Json& config, uint16_t api_port) {
   return true;
 }
 
+inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t preferred);
+
 inline bool PrepareProxy(std::string& text,
                          const std::function<bool(uint16_t)>& is_free,
                          const std::function<uint16_t()>& free_port) {
@@ -199,9 +201,21 @@ inline bool PrepareProxy(std::string& text,
       inbound["port"] = replacement;
     }
   }
+  auto api_port = AvailablePort(config, 10085);
+  if (!api_port) return false;
+  if (!is_free(*api_port)) {
+    api_port.reset();
+    // An OS-free ephemeral port can still be declared by this not-yet-started
+    // document. Bound retries and fail if neither boundary can be satisfied.
+    for (unsigned attempt = 0; attempt < 32; ++attempt) {
+      const auto candidate = free_port();
+      if (!candidate) return false;
+      const auto available = AvailablePort(config, candidate);
+      if (available && *available == candidate && is_free(candidate)) { api_port = candidate; break; }
+    }
+  }
   config.erase("api");
-  uint16_t api_port = is_free(10085) ? 10085 : free_port();
-  if (!api_port || !AddApi(config, api_port)) return false;
+  if (!api_port || !AddApi(config, *api_port)) return false;
   text = config.dump();
   return SocksPort(text).has_value();
 }
@@ -287,11 +301,13 @@ inline std::optional<std::set<unsigned>> ReservedPorts(const Json& value,
   std::set<unsigned> occupied;
   if (value.is_number_unsigned()) {
     auto port = value.get<uint64_t>(); if (port > 65535) return std::nullopt;
-    if (port) occupied.insert(static_cast<unsigned>(port)); return occupied;
+    if (port) occupied.insert(static_cast<unsigned>(port));
+    return occupied;
   }
   if (value.is_number_integer()) {
     auto port = value.get<int64_t>(); if (port < 0 || port > 65535) return std::nullopt;
-    if (port) occupied.insert(static_cast<unsigned>(port)); return occupied;
+    if (port) occupied.insert(static_cast<unsigned>(port));
+    return occupied;
   }
   if (!value.is_string()) return std::nullopt;
   const auto text = value.get<std::string>();
@@ -330,14 +346,14 @@ inline std::optional<std::set<unsigned>> ReservedPorts(const Json& value,
   return occupied;
 }
 
-// Reserve numeric API.listen ports too. Hostnames are not resolved here;
+// Reserve numeric API/metrics listen ports too. Hostnames are not resolved here;
 // service names and Unix addresses remain untouched for Core/OS validation.
-inline std::set<unsigned> ApiListenerPorts(const Json& config) {
+inline std::set<unsigned> ListenerPorts(const Json& config, const std::set<std::string>& services) {
   std::set<unsigned> ports;
   if (!config.is_object()) return ports;
-  for (auto api = config.begin(); api != config.end(); ++api) {
-    if (Fold(api.key()) != "api" || !api->is_object()) continue;
-    for (auto listen = api->begin(); listen != api->end(); ++listen) {
+  for (auto service = config.begin(); service != config.end(); ++service) {
+    if (!services.count(Fold(service.key())) || !service->is_object()) continue;
+    for (auto listen = service->begin(); listen != service->end(); ++listen) {
       if (Fold(listen.key()) != "listen" || !listen->is_string()) continue;
       const auto address = listen->get<std::string>();
       if (address.empty() || address[0] == '/' || address[0] == '@') continue;
@@ -352,9 +368,11 @@ inline std::set<unsigned> ApiListenerPorts(const Json& config) {
   }
   return ports;
 }
+inline std::set<unsigned> ApiListenerPorts(const Json& config) { return ListenerPorts(config, {"api"}); }
+inline std::set<unsigned> ServiceListenerPorts(const Json& config) { return ListenerPorts(config, {"api", "metrics"}); }
 
 inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t preferred) {
-  auto occupied = ApiListenerPorts(config);
+  auto occupied = ServiceListenerPorts(config);
   if (config.contains("inbounds") && config["inbounds"].is_array()) for (const auto& inbound : config["inbounds"]) {
     if (inbound.contains("listen") && inbound["listen"].is_string()) {
       const auto listen = inbound["listen"].get<std::string>();

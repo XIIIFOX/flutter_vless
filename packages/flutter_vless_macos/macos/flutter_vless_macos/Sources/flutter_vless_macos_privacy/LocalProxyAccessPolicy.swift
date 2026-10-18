@@ -55,10 +55,20 @@ public enum XrayPortSpec {
     /// choosing a private adapter; Unix and dynamic port-zero listeners do not
     /// occupy a fixed TCP port. Named services remain Core/OS syntax, not errors.
     public static func apiListenerPorts(configuration: [String: Any]) -> Set<Int> {
+        listenerPorts(configuration: configuration, sections: ["api"])
+    }
+
+    /// Management services share the TCP port namespace with the private adapter.
+    /// Keep caller API/metrics fields intact, including Core's field aliases.
+    public static func serviceListenerPorts(configuration: [String: Any]) -> Set<Int> {
+        listenerPorts(configuration: configuration, sections: ["api", "metrics"])
+    }
+
+    private static func listenerPorts(configuration: [String: Any], sections: [String]) -> Set<Int> {
         var ports = Set<Int>()
-        for (key, value) in configuration where XrayJSONField.matches(key, "api") {
-            guard let api = value as? [String: Any] else { continue }
-            for (field, value) in api where XrayJSONField.matches(field, "listen") {
+        for (key, value) in configuration where sections.contains(where: { XrayJSONField.matches(key, $0) }) {
+            guard let service = value as? [String: Any] else { continue }
+            for (field, value) in service where XrayJSONField.matches(field, "listen") {
                 guard let listen = value as? String, !listen.hasPrefix("/"), !listen.hasPrefix("@"),
                       let colon = listen.lastIndex(of: ":") else { continue }
                 let digits = listen[listen.index(after: colon)...]
@@ -198,7 +208,7 @@ public enum LocalProxyAccessPolicy {
 
     private static func privatePort(configuration: [String: Any]) throws -> Int {
         let inbounds = configuration["inbounds"] as? [[String: Any]] ?? []
-        var used = XrayPortSpec.apiListenerPorts(configuration: configuration)
+        var used = XrayPortSpec.serviceListenerPorts(configuration: configuration)
         for inbound in inbounds {
             guard let proto = inbound["protocol"] as? String, !proto.isEmpty else {
                 throw LocalProxyAccessError.malformedConfiguration

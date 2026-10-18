@@ -1,0 +1,301 @@
+[
+  {
+    "name": "no-service-listeners",
+    "config": {},
+    "ports": []
+  },
+  {
+    "name": "metrics-ipv4",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:10808"
+      }
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "metrics-wildcard",
+    "config": {
+      "metrics": {
+        "listen": ":10808"
+      }
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "metrics-ipv6",
+    "config": {
+      "metrics": {
+        "listen": "[::1]:10808"
+      }
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "metrics-ipv6-zone",
+    "config": {
+      "metrics": {
+        "listen": "[fe80::1%en0]:10808"
+      }
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "metrics-hostname-without-lookup",
+    "config": {
+      "metrics": {
+        "listen": "metrics-listener.invalid:10808"
+      }
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "metrics-leading-zero",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:010808"
+      }
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "metrics-dynamic-zero",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:0"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "metrics-unix-path-deferred",
+    "config": {
+      "metrics": {
+        "listen": "/tmp/metrics:10808"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "metrics-unix-abstract-deferred",
+    "config": {
+      "metrics": {
+        "listen": "@metrics:10808"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "metrics-named-service-deferred",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:http"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "metrics-missing-port",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "metrics-empty-listen",
+    "config": {
+      "metrics": {
+        "listen": ""
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "metrics-negative-port",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:-1"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "metrics-out-of-range-port",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:65536"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "metrics-maximum-port",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:65535"
+      }
+    },
+    "ports": [
+      65535
+    ]
+  },
+  {
+    "name": "metrics-long-zero-prefix",
+    "config": {
+      "metrics": {
+        "listen": "127.0.0.1:00000000000000000010808"
+      }
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "metrics-non-string-listen",
+    "config": {
+      "metrics": {
+        "listen": 10808
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "metrics-ascii-alias",
+    "config": {
+      "METRICS": {
+        "LISTEN": ":10809"
+      }
+    },
+    "ports": [
+      10809
+    ]
+  },
+  {
+    "name": "metrics-go-simple-fold-alias",
+    "config": {
+      "Metricſ": {
+        "Liſten": "[::1]:10809"
+      }
+    },
+    "ports": [
+      10809
+    ]
+  },
+  {
+    "name": "api-and-metrics-union",
+    "config": {
+      "api": {
+        "listen": ":10808"
+      },
+      "metrics": {
+        "listen": ":10809"
+      }
+    },
+    "ports": [
+      10808,
+      10809
+    ]
+  },
+  {
+    "name": "api-and-metrics-shared-port",
+    "config": {
+      "API": {
+        "Liſten": ":10808"
+      },
+      "Metricſ": {
+        "LISTEN": ":10808"
+      }
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "api-only-still-reserved",
+    "config": {
+      "api": {
+        "listen": ":10810"
+      }
+    },
+    "ports": [
+      10810
+    ]
+  },
+  {
+    "name": "conservative-service-alias-union",
+    "config": {
+      "metrics": {
+        "listen": ":10808",
+        "LISTEN": ":10809"
+      },
+      "METRICS": {
+        "listen": ":10810"
+      },
+      "API": {
+        "listen": ":10811"
+      }
+    },
+    "ports": [
+      10808,
+      10809,
+      10810,
+      10811
+    ]
+  },
+  {
+    "name": "nested-listeners-are-not-root-services",
+    "config": {
+      "custom": {
+        "metrics": {
+          "listen": ":10808"
+        }
+      },
+      "api": {
+        "listen": ":10809"
+      }
+    },
+    "ports": [
+      10809
+    ]
+  },
+  {
+    "name": "non-object-service-ignored",
+    "config": {
+      "metrics": null,
+      "METRICS": []
+    },
+    "ports": []
+  },
+  {
+    "name": "non-go-service-spelling-ignored",
+    "config": {
+      "metrıcs": {
+        "listen": ":10808"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "non-go-listen-spelling-ignored",
+    "config": {
+      "metrics": {
+        "lısten": ":10808"
+      }
+    },
+    "ports": []
+  }
+]

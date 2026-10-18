@@ -2,6 +2,35 @@ import XCTest
 import flutter_vless_tunnel_support
 
 final class XrayPortSpecTests: XCTestCase {
+    func testSharedNumericMetricsListenerCorpusWithoutResolvingNamesOrChangingSource() throws {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/metrics-listeners.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf:
+            root.appendingPathComponent("tool/fixtures/compatibility/metrics-listeners.json"))) as? [[String: Any]])
+        for item in cases {
+            let config = try XCTUnwrap(item["config"] as? [String: Any])
+            let before = try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+            XCTAssertEqual(XrayPortSpec.serviceListenerPorts(configuration: config), Set(item["ports"] as? [Int] ?? []), item["name"] as? String ?? "")
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys]), before)
+        }
+    }
+
+    func testPrivateAdapterAvoidsBothManagementServicesAndImportedPorts() throws {
+        let api: [String: Any] = ["tag": "caller-api", "listen": "127.0.0.1:10808", "services": ["StatsService"]]
+        let metrics: [String: Any] = ["tag": "caller-metrics", "Liſten": "127.0.0.1:10809"]
+        var config: [String: Any] = ["api": api, "Metricſ": metrics,
+            "inbounds": [["protocol": "http", "port": "10810-10811"]]]
+        let port = try LocalProxyAccessPolicy.applyVPN(to: &config,
+            credentials: LocalProxyCredentials(username: "native-user", password: "native-password"))
+        XCTAssertEqual(port, 10812)
+        XCTAssertEqual(config["api"] as? NSDictionary, api as NSDictionary)
+        XCTAssertEqual(config["Metricſ"] as? NSDictionary, metrics as NSDictionary)
+        XCTAssertEqual(((config["inbounds"] as? [[String: Any]])?[1]["port"]) as? String, "10810-10811")
+    }
+
     func testSharedNumericAPIListenerCorpusWithoutResolvingNamesOrChangingSource() throws {
         var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         for _ in 0..<10 {

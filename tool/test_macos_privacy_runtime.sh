@@ -52,6 +52,7 @@ assert "RUNTIME=26.10.17" in text, "Unexpected embedded Xray version"
 assert 'MACOS_COUNTERS_AND_API_PASSTHROUGH_PASS' in text
 assert 'SERVICE_TAG_RUNTIME_PASS=0' in text and 'SERVICE_TAG_RUNTIME_PASS=1' in text
 assert 'API_PORT_RESERVATION_PASS=0' in text and 'API_PORT_RESERVATION_PASS=1' in text
+assert 'METRICS_PORT_RESERVATION_PASS=0' in text and 'METRICS_PORT_RESERVATION_PASS=1' in text
 assert 'DELAY_API_ISOLATION_PASS' in text
 assert 'METRICS_PASSTHROUGH_PASS=0' in text and 'METRICS_PASSTHROUGH_PASS=1' in text
 if os.environ.get('REQUIRE_CORE_PREFLIGHT') == '1':

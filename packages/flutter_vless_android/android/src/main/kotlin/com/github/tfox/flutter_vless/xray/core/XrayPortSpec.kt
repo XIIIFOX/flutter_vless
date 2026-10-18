@@ -7,15 +7,20 @@ import org.json.JSONObject
 internal object XrayPortSpec {
     /** API.listen is another listener: reserve numeric ports without resolving
      * hosts or rejecting Core/OS service-name and Unix-socket syntax. */
-    fun apiListenerPorts(configuration: JSONObject): Set<Int> {
-        fun field(key: String, name: String) = key.replace('\u017f', 's').replace('\u212a', 'k').lowercase(Locale.ROOT) == name
+    fun apiListenerPorts(configuration: JSONObject): Set<Int> = listenerPorts(configuration, setOf("api"))
+
+    /** Imported metrics.listen also binds TCP independently of inbounds. */
+    fun serviceListenerPorts(configuration: JSONObject): Set<Int> = listenerPorts(configuration, setOf("api", "metrics"))
+
+    private fun listenerPorts(configuration: JSONObject, services: Set<String>): Set<Int> {
+        fun field(key: String) = key.replace('\u017f', 's').replace('\u212a', 'k').lowercase(Locale.ROOT)
         val ports = mutableSetOf<Int>()
         configuration.keys().forEach { key ->
-            if (!field(key, "api")) return@forEach
-            val api = configuration.optJSONObject(key) ?: return@forEach
-            api.keys().forEach listenField@ { name ->
-                if (!field(name, "listen")) return@listenField
-                val listen = api.opt(name) as? String ?: return@listenField
+            if (field(key) !in services) return@forEach
+            val service = configuration.optJSONObject(key) ?: return@forEach
+            service.keys().forEach listenField@ { name ->
+                if (field(name) != "listen") return@listenField
+                val listen = service.opt(name) as? String ?: return@listenField
                 if (listen.startsWith('/') || listen.startsWith('@') || ':' !in listen) return@listenField
                 val digits = listen.substringAfterLast(':')
                 if (digits.isEmpty() || digits.any { it !in '0'..'9' }) return@listenField

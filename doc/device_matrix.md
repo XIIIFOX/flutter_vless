@@ -266,3 +266,15 @@ the provider also requires a healthy running session with reconnect enabled.
 Rejections, stale callbacks or timeouts do not prove a worker was stopped.
 The boundary's pure regression runs in `tool/test_apple_options.sh`, covering
 normal-build exclusion and refusing unhealthy, stopping or stale sessions.
+
+The next normal signed physical build checked a metrics collision using the
+first supplied profile plus API on 10809 and `Metricſ.Liſten` on 10810 (Core's
+case-folded field aliases). Provider diagnostics reported its private adapter
+on 10811 and preflight before routes. Fresh Safari pages at both IP sites
+showed 103.75.118.225 (Japan on tfox). Stop completed, the provider exited,
+fresh Safari returned 95.139.123.8 (Russia), and a cold app launch read
+`enabled=false status=1`. Reconnect, On Demand and quick access remained off;
+the task-owned app, controls process and USB forwarder were stopped. This is
+physical allocation/traffic acceptance; service HTTP responses are separately
+checked by the synthetic native runtime fixtures. The private screenshots and
+diagnostics use `build/ios-live-2026-10-18/metrics-*` paths.

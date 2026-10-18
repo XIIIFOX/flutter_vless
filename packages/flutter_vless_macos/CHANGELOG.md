@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Reserve caller metrics listener ports alongside API ports without rewriting their settings; cover simultaneous API, metrics and authenticated adapter traffic in runtime acceptance.
 * Wire Core decode/build preflight into app/provider startup for the unpublished preview runtime; preserve active sessions and expose redacted stage/index failures before route installation.
 * Bind port environment references before encrypted cross-process persistence and share Core port grammar/Unix-listener allocation checks with the other backends.
 * Apply configured diagnostic byte and line limits after assembling the complete snapshot, including provider metadata.

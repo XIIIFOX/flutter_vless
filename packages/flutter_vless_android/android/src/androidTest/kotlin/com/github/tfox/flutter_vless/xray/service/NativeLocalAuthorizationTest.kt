@@ -118,13 +118,21 @@ class NativeLocalAuthorizationTest {
     }
 
     @Test fun realXrayRequiresSessionAuthenticationAndTransfersApplicationBytes() {
-        val port = ServerSocket(0).use { it.localPort }
+        val port = 10809
         val secret = LocalProxyCredentials.generate()
         val config = XrayConfig(LOCAL_SOCKS5_PORT = port, LOCAL_API_PORT = port + 1,
-            V2RAY_FULL_JSON_CONFIG = """{"Inbounds":[{"tag":"http","Protocol":"http","Listen":"127.0.0.1","Port":${port + 2},"Settings":{"accounts":[{"user":"imported-user","pass":"imported-password"}]}}],
+            V2RAY_FULL_JSON_CONFIG = """{"API":{"tag":"caller-api","listen":"127.0.0.1:$port","services":["StatsService"]},
+              "Metric\u017f":{"tag":"caller-metrics","Li\u017ften":"127.0.0.1:${port + 1}"},
+              "Inbounds":[{"tag":"http","Protocol":"http","Listen":"127.0.0.1","Port":${port + 3},"Settings":{"accounts":[{"user":"imported-user","pass":"imported-password"}]}}],
               "outbounds":[{"tag":"proxy","protocol":"freedom"},{"tag":"fixture-blocked","protocol":"blackhole"}],
               "routing":{"rules":[{"type":"field","inboundTag":["flutter-vless-tun"],"outboundTag":"fixture-blocked"}]}}""")
+        val original = config.V2RAY_FULL_JSON_CONFIG
         val json = XrayCoreManager.buildRuntimeConfigJson(config, context.noBackupFilesDir, secret)
+        val socksPort = config.LOCAL_SOCKS5_PORT
+        assertEquals(10811, socksPort)
+        assertEquals(10813, config.LOCAL_API_PORT)
+        assertEquals(original, config.V2RAY_FULL_JSON_CONFIG)
+        assertEquals(JSONObject(original).getJSONObject("Metric\u017f").toString(), json.getJSONObject("Metric\u017f").toString())
         assertEquals("flutter-vless-tun-1", json.getJSONArray("inbounds").getJSONObject(1).getString("tag"))
         val file = File(context.noBackupFilesDir, "test-auth-${UUID.randomUUID()}.json")
         file.writeText(json.toString())
@@ -132,23 +140,31 @@ class NativeLocalAuthorizationTest {
             "run", "-config", file.absolutePath).redirectErrorStream(true).start()
         try {
             repeat(30) {
-                if (runCatching { Socket("127.0.0.1", port).close() }.isFailure) Thread.sleep(100)
+                if (runCatching { Socket("127.0.0.1", socksPort).close() }.isFailure) Thread.sleep(100)
             }
             assertTrue(process.isAlive)
-            Socket("127.0.0.1", port + 2).use { socket ->
+            Socket("127.0.0.1", port + 1).use { socket ->
+                socket.soTimeout = 3000
+                socket.getOutputStream().write("GET /debug/vars HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n".toByteArray())
+                val response = socket.getInputStream().bufferedReader().readText()
+                assertTrue("Caller metrics listener must serve HTTP at its original port", response.startsWith("HTTP/1.0 200 "))
+                val body = JSONObject(response.substringAfter("\r\n\r\n"))
+                assertTrue(body.has("stats"))
+            }
+            Socket("127.0.0.1", port + 3).use { socket ->
                 socket.soTimeout = 2000
                 socket.getOutputStream().write("GET http://127.0.0.1:9/ HTTP/1.1\r\nHost: target.test\r\nConnection: close\r\n\r\n".toByteArray())
                 val response = socket.getInputStream().bufferedReader().readText()
                 assertTrue("Imported HTTP input must keep its explicit authentication", response.contains(" 407 "))
             }
-            Socket("127.0.0.1", port).use { socket ->
+            Socket("127.0.0.1", socksPort).use { socket ->
                 socket.soTimeout = 2000
                 socket.getOutputStream().write(byteArrayOf(5, 1, 0))
                 assertEquals(5, socket.getInputStream().read())
                 assertEquals(255, socket.getInputStream().read())
             }
             assertThrows(Exception::class.java) {
-                AuthenticatedSocksClient.connect(port, LocalProxyCredentials(secret.username, "wrong-password"), "127.0.0.1", 80)
+                AuthenticatedSocksClient.connect(socksPort, LocalProxyCredentials(secret.username, "wrong-password"), "127.0.0.1", 80)
             }
             ServerSocket(0).use { server ->
                 val worker = Executors.newSingleThreadExecutor()
@@ -161,7 +177,7 @@ class NativeLocalAuthorizationTest {
                         socket.getOutputStream().write("HTTP/1.1 204 No Content\r\n\r\n".toByteArray())
                         text.toString()
                     } }
-                    assertTrue(AuthenticatedSocksClient.measure(port, secret, "http://127.0.0.1:${server.localPort}/") >= 0)
+                    assertTrue(AuthenticatedSocksClient.measure(socksPort, secret, "http://127.0.0.1:${server.localPort}/") >= 0)
                     val text = request.get(5, TimeUnit.SECONDS)
                     assertFalse(text.contains(secret.password)); assertFalse(text.contains("Proxy-Authorization"))
                 } finally { worker.shutdownNow() }

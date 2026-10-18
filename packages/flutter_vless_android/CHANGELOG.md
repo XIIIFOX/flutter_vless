@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Reserve caller API and metrics listener ports before allocating the private VPN adapter; preserve caller metrics settings and cover their listener alongside authenticated traffic. Full caller API passthrough remains separate work.
 * Reserve imported port lists/ranges and environment references when allocating private listeners; preserve Unix listeners and their authentication. Add real TUN/imported-listener HTTP regression coverage.
 * Add native Quick Settings Tile and Android 13+ add-tile dialog with encrypted no-backup quick profiles and independent automatic-restart authorization.
 * Implement notification actions/icons/labels, capped retry policy, diagnostics controls and OS Always-on/lockdown capability checks. Preserve active capture when retries stop; reject library Stop while system-managed policy requires VPN.

@@ -210,6 +210,18 @@ def config(reverse, external_address=None, direct_address="127.0.0.1"):
     return profile
 
 
+def check_metrics_listener(port):
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        connection.request("GET", "/debug/vars", headers={"Connection": "close"})
+        response = connection.getresponse()
+        body = response.read(262145)
+        assert response.status == 200 and len(body) <= 262144, "Caller metrics listener did not serve bounded HTTP JSON"
+        assert isinstance(json.loads(body).get("stats"), dict), "Caller metrics response is missing statistics"
+    finally:
+        connection.close()
+
+
 def protected_dns(tcp):
     name = f"{uuid.uuid4().hex}.invalid"
     question = b"".join(bytes([len(part)]) + part.encode() for part in name.split(".")) + b"\x00\x00\x01\x00\x01"
@@ -442,8 +454,12 @@ def main():
             label = ("vpn" if args.vpn else "proxy") + ("-reverse" if reverse else "") + ("-" + ending if ending != "stop" else "")
             profile = directory / (label + ".json")
             prepared = config(reverse, external_address, direct_address)
+            # Exercise both the managed VPN SOCKS candidate and the private
+            # stats API candidate, before either Core listener exists in the OS.
+            metrics_port = (10086 if reverse else 10807) if args.vpn else 10085
+            prepared["Metric\u017f"] = {"tag": "caller-metrics", "Li\u017ften": f"127.0.0.1:{metrics_port}"}
             imported_ports = {entry["port"] for entry in prepared["inbounds"]}
-            managed_port = next(port for port in range(10807, 65536) if port not in imported_ports)
+            managed_port = next(port for port in range(10807, 65536) if port not in imported_ports | {metrics_port})
             if not args.vpn:
                 with socket.socket() as candidate:
                     candidate.bind(("127.0.0.1", 0))
@@ -492,6 +508,8 @@ def main():
                             if process.poll() is not None or time.monotonic() >= deadline:
                                 raise RuntimeError("Proxy did not report forwarding readiness")
                             time.sleep(0.1)
+                    check_metrics_listener(metrics_port)
+                    results.append(dict(mode=label, check="caller metrics HTTP survives private listener allocation", passed=True))
                     # Submit a Core-invalid replacement to the same live manager.
                     # The real routing requests below must still use its original
                     # workers, with WFP retained in VPN mode.

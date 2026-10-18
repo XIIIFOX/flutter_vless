@@ -12,7 +12,10 @@
     "core/xray.go": "66edf1a9ed6b9683b4f668612e6c6e876830cffb07521517f03a21e630f7ef15",
     "app/proxyman/outbound/outbound.go": "dea17216b8c93544f8136047c11a77ceb7c684ecf0837117131c50eb956f0eea",
     "app/proxyman/inbound/inbound.go": "1bc6e0581f17379fb41e0f85aa6e29ac2f21ec87926dffcb3fb488cb64a19681",
-    "transport/internet/udp/dispatcher.go": "76bdf02b75c5c71c424bc177c4f6284d15b4b23c271b2b5653de0ced61b86dfe"
+    "transport/internet/udp/dispatcher.go": "76bdf02b75c5c71c424bc177c4f6284d15b4b23c271b2b5653de0ced61b86dfe",
+    "proxy/socks/protocol.go": "3b6723cb8c358da8ca26c7f4672b578a3e9de5bd30c291e7ee5da30df5195cbd",
+    "proxy/socks/server.go": "6247a63dc3d4d14f7e0d0cd52582692e9507bb85970ae3bdb67dd89537e1c363",
+    "proxy/socks/temp_udp_listen.go": "14ce91f83c617fce7c35b6cb668c2443a544c8b760bafb3b13a336caff06b34f"
   },
   "module": "github.com/xtls/xray-core",
   "module_version": "v1.260327.1-0.20261017152356-92ccc939aaf4",

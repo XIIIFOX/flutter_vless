@@ -47,12 +47,13 @@ type managedInput struct {
 	flows             map[*managedFlow]bool
 	workers           sync.WaitGroup
 	connections       map[*managedConnection]bool
+	udpPeers          map[netip.AddrPort]*managedConnection
 	connectionSlots   chan struct{}
 	connectionWorkers sync.WaitGroup
 }
 
 func newManagedInput(r *Runtime, c *core.Config, index int) *managedInput {
-	input := &managedInput{runtime: r, config: c, selected: c.Inbound[index], known: make(map[*core.InboundHandlerConfig]bool), handlers: make(map[*core.InboundHandlerConfig]featureinbound.Handler), slots: make(chan struct{}, maxManagedInputFlows), flows: make(map[*managedFlow]bool), connections: make(map[*managedConnection]bool), connectionSlots: make(chan struct{}, maxManagedInputFlows)}
+	input := &managedInput{runtime: r, config: c, selected: c.Inbound[index], known: make(map[*core.InboundHandlerConfig]bool), handlers: make(map[*core.InboundHandlerConfig]featureinbound.Handler), slots: make(chan struct{}, maxManagedInputFlows), flows: make(map[*managedFlow]bool), connections: make(map[*managedConnection]bool), udpPeers: make(map[netip.AddrPort]*managedConnection), connectionSlots: make(chan struct{}, maxManagedInputFlows)}
 	for _, key := range c.Inbound {
 		input.known[key] = true
 	}
@@ -142,8 +143,11 @@ func (input *managedInput) close() {
 }
 
 type managedConnectionKey struct{}
+type ownedInputConnectionKey struct{}
 type managedConnection struct {
 	input                  *managedInput
+	key                    *core.InboundHandlerConfig
+	udpPeer                netip.AddrPort // guarded by input.mu; retained until Process finalizer
 	ctx                    context.Context
 	cancel                 context.CancelFunc
 	conn                   net.Conn
@@ -178,7 +182,7 @@ func (input *managedInput) BeginInput(ctx context.Context, instance, key, handle
 		return nil, nil, ErrBusy
 	}
 	operation, cancel := context.WithCancel(ctx)
-	connection := &managedConnection{input: input, ctx: operation, cancel: cancel, conn: conn}
+	connection := &managedConnection{input: input, key: config, ctx: operation, cancel: cancel, conn: conn}
 	input.connections[connection] = true
 	input.connectionWorkers.Add(1)
 	input.mu.Unlock()
@@ -191,16 +195,51 @@ func (input *managedInput) BeginInput(ctx context.Context, instance, key, handle
 			connection.stopContext()
 			connection.close()
 			input.mu.Lock()
+			if input.udpPeers[connection.udpPeer] == connection {
+				delete(input.udpPeers, connection.udpPeer)
+			}
 			delete(input.connections, connection)
 			input.mu.Unlock()
 			<-input.connectionSlots
 			input.connectionWorkers.Done()
 		})
 	}
+	operation = context.WithValue(operation, ownedInputConnectionKey{}, connection)
 	if config == input.selected {
 		operation = context.WithValue(operation, managedConnectionKey{}, connection)
 	}
 	return operation, end, nil
+}
+
+// Called after SOCKS password authentication, before allocating its UDP hub.
+// Neither a tag nor the first UDP datagram may choose the private peer. Revoke
+// closes sockets immediately; tuple reuse waits for the whole SOCKS finalizer.
+func (input *managedInput) AuthorizeUDPAssociation(ctx context.Context, peer netip.AddrPort) error {
+	if ctx == nil || ctx.Err() != nil {
+		return routing.ErrNativeInput
+	}
+	connection, _ := ctx.Value(ownedInputConnectionKey{}).(*managedConnection)
+	inbound := session.InboundFromContext(ctx)
+	input.mu.Lock()
+	defer input.mu.Unlock()
+	if connection == nil || connection.input != input || !input.connections[connection] || connection.ctx.Err() != nil ||
+		inbound == nil || inbound.Conn != connection.conn || input.closed || !input.sealed ||
+		core.FromContext(ctx) != input.instance || !input.runtime.current() || !input.known[connection.key] {
+		return routing.ErrNativeInput
+	}
+	if connection.key != input.selected {
+		return nil // exact, construction-owned imported input keeps Core semantics
+	}
+	private, _ := ctx.Value(managedConnectionKey{}).(*managedConnection)
+	remote, ok := connection.conn.RemoteAddr().(*net.TCPAddr)
+	if private != connection || !ok || remote == nil || !remote.IP.Equal(net.IPv4(127, 0, 0, 1)) ||
+		!peer.IsValid() || peer.Addr() != netip.MustParseAddr("127.0.0.1") || peer.Port() == 0 ||
+		connection.udpPeer.IsValid() || input.udpPeers[peer] != nil {
+		return routing.ErrNativeInput
+	}
+	connection.udpPeer = peer
+	input.udpPeers[peer] = connection
+	return nil
 }
 
 type managedDispatcher struct {
@@ -222,12 +261,12 @@ func (d *managedDispatcher) authorized(ctx context.Context) bool {
 	}
 	connection, _ := ctx.Value(managedConnectionKey{}).(*managedConnection)
 	inbound := session.InboundFromContext(ctx)
-	return connection != nil && inbound != nil && inbound.Conn == connection.conn && connection.input == input && input.connections[connection] && connection.ctx.Err() == nil &&
+	return connection != nil && connection.key == input.selected && inbound != nil && inbound.Conn == connection.conn && connection.input == input && input.connections[connection] && connection.ctx.Err() == nil &&
 		input != nil && input.runtime != nil && input.sealed && !input.closed && input.selected == d.key &&
 		input.handlers[d.key] == d.handler && input.instance == d.instance && core.FromContext(ctx) == d.instance && input.runtime.current()
 }
 
-func (d *managedDispatcher) acquire(ctx context.Context, link *transport.Link) (*managedFlow, error) {
+func (d *managedDispatcher) acquire(ctx context.Context, link *transport.Link, udp bool) (*managedFlow, error) {
 	if ctx == nil || ctx.Err() != nil || link == nil || link.Reader == nil || link.Writer == nil {
 		return nil, routing.ErrNativeInput
 	}
@@ -242,6 +281,11 @@ func (d *managedDispatcher) acquire(ctx context.Context, link *transport.Link) (
 	input := d.input
 	input.mu.Lock()
 	if !d.authorized(ctx) {
+		input.mu.Unlock()
+		return nil, routing.ErrNativeInput
+	}
+	connection, _ := ctx.Value(managedConnectionKey{}).(*managedConnection)
+	if udp && (!connection.udpPeer.IsValid() || input.udpPeers[connection.udpPeer] != connection) {
 		input.mu.Unlock()
 		return nil, routing.ErrNativeInput
 	}
@@ -272,7 +316,7 @@ func (d *managedDispatcher) Dispatch(ctx context.Context, destination xnet.Desti
 	upReader, upWriter := pipe.New(options...)
 	downReader, downWriter := pipe.New(options...)
 	service := &transport.Link{Reader: upReader, Writer: downWriter}
-	flow, err := d.acquire(ctx, service)
+	flow, err := d.acquire(ctx, service, destination.Network == xnet.Network_UDP)
 	if err != nil {
 		common.Interrupt(upReader)
 		common.Interrupt(upWriter)
@@ -288,7 +332,7 @@ func (d *managedDispatcher) DispatchLink(ctx context.Context, destination xnet.D
 	if !destination.IsValid() || destination.Address == nil || destination.Address.String() == "v1.mux.cool" {
 		return routing.ErrNativeInput
 	}
-	flow, err := d.acquire(ctx, link)
+	flow, err := d.acquire(ctx, link, destination.Network == xnet.Network_UDP)
 	if err != nil {
 		return err
 	}

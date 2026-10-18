@@ -213,7 +213,8 @@ construction-only factory binds the clone's exact input pointer, actual Core and
 actual handler; the inbound manager seals membership before Start. Matching an
 empty/duplicate tag, equal protobuf, source input or request metadata cannot grant
 the private capability. A per-connection capsule also requires the exact current
-control socket. This mode is not exposed by the CLI or any ordinary native host.
+control socket. Ordinary native hosts do not enable this mode. The unpublished
+CLI can opt in only through a separate private policy document described below.
 
 The managed dispatcher consumes TCP DNS framing and checks every UDP payload's
 destination before invoking the wire engine. Core caches a UDP ray across changing
@@ -223,10 +224,16 @@ delegates to caller routing. Ordinary managed UDP is explicitly dropped and
 mux/XUDP is unavailable. This remains a restricted graph, not general UDP or
 system DNS support. Framing owns and releases partial/pipelined pooled buffers;
 the guarded Core UDP refusal path also releases an unadmitted payload.
-UDP Associate uses Core's standard temporary loopback listener after TCP password
-authentication, with its existing expected-peer IP/optional-port checks. This
-does not add per-datagram authentication or OS UID isolation; that native-host
-boundary must be qualified before exposing a system-facing UDP consumer.
+The selected input's UDP Associate requires password authentication followed by
+an exact, prebound `127.0.0.1:nonzero-port` declaration before creating its
+temporary listener. An opaque operation/connection grant admits one tuple per
+control; another active control cannot claim that tuple. Cancellation retains
+the reservation until the complete SOCKS callback finalizer has closed its UDP
+hub. A wildcard first-datagram grant is refused. Construction-owned imported
+inputs retain their original semantics without acquiring private DNS authority.
+This adds neither per-datagram authentication nor OS UID isolation. A native
+client must bind its UDP socket before the handshake; Windows competing-bind
+protection and the actual platform TUN consumer remain separate requirements.
 
 The preview admits at most four total accepted source/managed SOCKS callbacks,
 four managed rays and one outstanding root-lookup worker. Admission happens
@@ -243,6 +250,19 @@ SOCKS UDP DNS, caller-root answers, original-input denial, ordinary TCP routing,
 stalled-query shutdown, idle imported-socket EOF, UDP-port rebind and independent
 runtime survival. Local validation compiles it without starting Core; actual
 runtime and mobile TUN/native-host qualification remain separate gates.
+
+The opt-in CLI flags `--private-policy <absolute-file>` and
+`--policy-epoch <32-lowercase-hex>` must appear together. The bounded JSON file
+contains exactly `schema`, `capability`, `source_digest`, `epoch`, `virtual_ipv4`,
+`listen`, `username` and `password`. It binds trusted host metadata to the original
+source bytes and one fresh host-session nonce; check/run reuse that candidate's
+file and nonce. This is not a global replay registry. The file requires Unix
+owner-only 0600 permissions, no extended Darwin ACL (Darwin without cgo refuses),
+or a protected Windows DACL limited to its current owner and SYSTEM. Secrets are
+absent from argv and status output. Failure reports only a fixed stage; successful
+private-policy statuses echo the expected epoch. Full JSON/source routing remains
+unchanged, and no public plugin API or system DNS setting is enabled by these
+flags.
 
 ## Optional Android instrumentation composition
 

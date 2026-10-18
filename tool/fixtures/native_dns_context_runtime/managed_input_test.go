@@ -138,23 +138,23 @@ func managedTCPDNS(t *testing.T, port int, name, expected string) {
 	}
 	managedDNSResponse(t, packet, 0x4831, expected)
 }
-func managedUDPSend(t *testing.T, conn *net.UDPConn, target netip.AddrPort, id uint16, name string) {
+func managedUDPSend(t *testing.T, conn *net.UDPConn, relay, target netip.AddrPort, id uint16, name string) {
 	t.Helper()
 	packet := []byte{0, 0, 0, 1}
 	ip := target.Addr().As4()
 	packet = append(packet, ip[:]...)
 	packet = binary.BigEndian.AppendUint16(packet, target.Port())
 	packet = append(packet, managedDNSPacket(t, id, name)...)
-	if _, err := conn.Write(packet); err != nil {
+	if _, err := conn.WriteToUDPAddrPort(packet, relay); err != nil {
 		t.Fatal(err)
 	}
 }
-func managedUDPRead(t *testing.T, conn *net.UDPConn, id uint16, expected string) {
+func managedUDPRead(t *testing.T, conn *net.UDPConn, relay netip.AddrPort, id uint16, expected string) {
 	t.Helper()
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	packet := make([]byte, 4110)
-	size, err := conn.Read(packet)
-	if err != nil || size < 10 {
+	size, sender, err := conn.ReadFromUDPAddrPort(packet)
+	if err != nil || size < 10 || sender != relay {
 		t.Fatal("managed UDP DNS response missing", err)
 	}
 	packet = packet[:size]
@@ -162,6 +162,50 @@ func managedUDPRead(t *testing.T, conn *net.UDPConn, id uint16, expected string)
 		t.Fatal("managed UDP response lost exact virtual endpoint")
 	}
 	managedDNSResponse(t, packet[10:], id, expected)
+}
+
+func managedUDPRefused(t *testing.T, port int, peer netip.AddrPort) {
+	t.Helper()
+	control, err := managedAuth(port, "native-user", "native-password")
+	if err != nil {
+		t.Fatal("negative control did not authenticate", err)
+	}
+	defer control.Close()
+	packet := []byte{5, 3, 0, 1}
+	ip := peer.Addr().As4()
+	packet = append(packet, ip[:]...)
+	packet = binary.BigEndian.AppendUint16(packet, peer.Port())
+	if _, err := control.Write(packet); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, 10)
+	if _, err := io.ReadFull(control, reply); err != nil || reply[0] != 5 || reply[1] != 7 {
+		t.Fatal("invalid/reused private UDP peer was not explicitly refused", err)
+	}
+}
+
+func managedUDPIsolation(t *testing.T, port int, client *net.UDPConn, relay, peer netip.AddrPort) {
+	t.Helper()
+	t.Log("PHASE managed UDP: concrete prebound peer, wrong-port first packet and second-control tuple hijack refused")
+	managedUDPRefused(t, port, netip.MustParseAddrPort("0.0.0.0:0"))
+	managedUDPRefused(t, port, netip.MustParseAddrPort("127.0.0.1:0"))
+	managedUDPRefused(t, port, peer)
+	foreign, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer foreign.Close()
+	virtual := netip.MustParseAddrPort("198.18.0.53:53")
+	// Wrong-port datagram is sent FIRST. Receiving the legitimate response on
+	// the declared socket proves it did not latch onto the first sender.
+	managedUDPSend(t, foreign, relay, virtual, 0x7111, "same-wire.invalid.")
+	managedUDPSend(t, client, relay, virtual, 0x7112, "same-wire.invalid.")
+	managedUDPRead(t, client, relay, 0x7112, "127.0.0.7")
+	_ = foreign.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	var packet [4110]byte
+	if _, _, err := foreign.ReadFromUDP(packet[:]); err == nil {
+		t.Fatal("foreign source received private DNS response")
+	}
 }
 func startManagedRuntime(t *testing.T, source []byte, resolver *loopServer, port int) *nativeinstance.Runtime {
 	t.Helper()
@@ -267,22 +311,26 @@ func TestAcceptanceNativeDNSManagedInput(t *testing.T) {
 	if err != nil || string(body) != "MANAGED_ORDINARY_TCP" {
 		t.Fatal("ordinary managed TCP did not retain source routing")
 	}
-	control, udpEndpoint := managedConnect(t, ports[1], "native-user", "native-password", 3, netip.MustParseAddrPort("0.0.0.0:0"))
-	defer control.Close()
-	udpConn, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(udpEndpoint))
+	// Bind the client socket BEFORE authenticating/declaring its tuple. This is
+	// not a qualification of Windows competing-bind/UID isolation semantics.
+	udpConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer udpConn.Close()
+	peer := udpConn.LocalAddr().(*net.UDPAddr).AddrPort()
+	control, udpEndpoint := managedConnect(t, ports[1], "native-user", "native-password", 3, peer)
+	defer control.Close()
+	managedUDPIsolation(t, ports[1], udpConn, udpEndpoint, peer)
 	// A cached UDP ray must demux each packet, including ordinary→DNS→ordinary→DNS.
 	ordinary := netip.MustParseAddrPort("198.18.0.54:53")
 	virtual := netip.MustParseAddrPort("198.18.0.53:53")
-	managedUDPSend(t, udpConn, ordinary, 100, "same-wire.invalid.")
-	managedUDPSend(t, udpConn, virtual, 101, "same-wire.invalid.")
-	managedUDPRead(t, udpConn, 101, "127.0.0.7")
-	managedUDPSend(t, udpConn, ordinary, 102, "same-wire.invalid.")
-	managedUDPSend(t, udpConn, virtual, 103, "beta.invalid.")
-	managedUDPRead(t, udpConn, 103, "127.0.0.12")
+	managedUDPSend(t, udpConn, udpEndpoint, ordinary, 100, "same-wire.invalid.")
+	managedUDPSend(t, udpConn, udpEndpoint, virtual, 101, "same-wire.invalid.")
+	managedUDPRead(t, udpConn, udpEndpoint, 101, "127.0.0.7")
+	managedUDPSend(t, udpConn, udpEndpoint, ordinary, 102, "same-wire.invalid.")
+	managedUDPSend(t, udpConn, udpEndpoint, virtual, 103, "beta.invalid.")
+	managedUDPRead(t, udpConn, udpEndpoint, 103, "127.0.0.12")
 	// This authenticated imported source callback now stalls waiting for its
 	// SOCKS command. Core's listener Close alone does not own that accepted socket.
 	// The native wrapper must track it without granting any private DNS capsule.
@@ -294,7 +342,7 @@ func TestAcceptanceNativeDNSManagedInput(t *testing.T) {
 	defer idleCaller.Close()
 	t.Log("PHASE managed input: owner Close drains actual TCP control, UDP Associate listener and stalled resolver; owner B survives")
 	queryDeadline := time.Now().Add(4 * time.Second)
-	managedUDPSend(t, udpConn, virtual, 104, "stall.invalid.")
+	managedUDPSend(t, udpConn, udpEndpoint, virtual, 104, "stall.invalid.")
 	select {
 	case <-entered:
 	case <-time.After(2 * time.Second):

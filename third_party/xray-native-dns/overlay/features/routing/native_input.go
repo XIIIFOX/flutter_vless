@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 	"reflect"
 )
 
@@ -13,6 +14,13 @@ import (
 type NativeInputFactory interface {
 	BindInput(context.Context, any, any, any, Dispatcher) (Dispatcher, error)
 	BeginInput(context.Context, any, any, any, net.Conn) (context.Context, func(), error)
+}
+
+// Optional, construction-bound admission for a SOCKS UDP control connection.
+// Invalid AddrPort represents a nonliteral source. The exact imported callback
+// may retain legacy semantics; the selected private input requires a fixed peer.
+type NativeUDPAssociationAuthorizer interface {
+	AuthorizeUDPAssociation(context.Context, netip.AddrPort) error
 }
 
 type nativeInputFactoryKey struct{}

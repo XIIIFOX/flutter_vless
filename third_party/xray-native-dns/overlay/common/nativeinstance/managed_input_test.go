@@ -169,6 +169,15 @@ func managedContext(parent context.Context, conn *fakeManagedConn) context.Conte
 	return operation
 }
 
+func managedUDPContext(parent context.Context, conn *fakeManagedConn) context.Context {
+	ctx := managedContext(parent, conn)
+	factory, _ := routing.NativeInputFactoryFromContext(parent)
+	if factory.(*managedInput).AuthorizeUDPAssociation(ctx, netip.MustParseAddrPort("127.0.0.1:23457")) != nil {
+		panic("controlled native UDP association admission failed")
+	}
+	return ctx
+}
+
 func readManagedPacket(t *testing.T, link *transport.Link) *buf.Buffer {
 	t.Helper()
 	reader, ok := link.Reader.(buf.TimeoutReader)
@@ -242,7 +251,7 @@ func TestNativeManagedInputUDPChecksEveryPayloadMetadata(t *testing.T) {
 	f := &fakeCore{}
 	_, dispatcher, base, parent := managedRuntime(t, f)
 	conn := newFakeManagedConn()
-	ctx, cancel := context.WithTimeout(managedContext(parent, conn), time.Second)
+	ctx, cancel := context.WithTimeout(managedUDPContext(parent, conn), time.Second)
 	defer cancel()
 	ordinary := xnet.UDPDestination(xnet.LocalHostIP, 9999)
 	virtual := xnet.UDPDestination(xnet.ParseAddress("198.18.0.53"), 53)
@@ -279,7 +288,7 @@ func TestNativeManagedInputOwnedFlowBoundBeforeSpawnAndCancel(t *testing.T) {
 	r, dispatcher, _, parent := managedRuntime(t, &fakeCore{})
 	destination := xnet.UDPDestination(xnet.ParseAddress("198.18.0.53"), 53)
 	conn := newFakeManagedConn()
-	ctx := managedContext(parent, conn)
+	ctx := managedUDPContext(parent, conn)
 	for i := 0; i < maxManagedInputFlows; i++ {
 		if _, err := dispatcher.Dispatch(ctx, destination); err != nil {
 			t.Fatal(err)
@@ -482,7 +491,7 @@ func TestNativeManagedInputOwnsImportedCallbackWithoutGrantingCapability(t *test
 func TestNativeManagedInputConnectionCapsuleCannotReplaceControlSocket(t *testing.T) {
 	_, dispatcher, _, parent := managedRuntime(t, &fakeCore{})
 	conn := newFakeManagedConn()
-	ctx := managedContext(parent, conn)
+	ctx := managedUDPContext(parent, conn)
 	destination := xnet.UDPDestination(xnet.ParseAddress("198.18.0.53"), 53)
 	replacement := newFakeManagedConn()
 	borrowed := session.ContextWithInbound(ctx, &session.Inbound{Conn: replacement})
@@ -521,7 +530,7 @@ func TestNativeManagedInputUDPReleasesDataReturnedWithError(t *testing.T) {
 			destination := xnet.UDPDestination(xnet.ParseAddress("198.18.0.53"), 53)
 			packet.UDP = &destination
 			reader := &managedRetainedReader{packet: packet, err: terminal}
-			err := dispatcher.DispatchLink(managedContext(parent, newFakeManagedConn()), destination, &transport.Link{Reader: reader, Writer: &managedTestWriter{}})
+			err := dispatcher.DispatchLink(managedUDPContext(parent, newFakeManagedConn()), destination, &transport.Link{Reader: reader, Writer: &managedTestWriter{}})
 			if !errors.Is(terminal, io.EOF) && !errors.Is(err, ErrDNSQuery) {
 				t.Fatal("reader failure was masked")
 			}

@@ -35,6 +35,7 @@ type launcherResponse struct {
 	Status                 string `json:"status"`
 	Stage                  string `json:"stage"`
 	SourceDigest           string `json:"source_digest"`
+	PolicyEpoch            string `json:"policy_epoch"`
 	HostQualified          bool   `json:"host_qualified"`
 	SystemResolverAttempts int64  `json:"system_resolver_attempts"`
 }
@@ -51,6 +52,18 @@ func launcherArguments(command, path, resolver string) []string {
 	return []string{command, "--config", path, "--resolver", resolver, "--egress-index", "1", "--capability", nativeLauncherCapability, "--timeout-ms", "4000"}
 }
 
+func decodeLauncherResponse(data []byte, result *launcherResponse) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(result) != nil {
+		return errors.New("unexpected child response schema")
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return errors.New("unexpected child trailing output")
+	}
+	return nil
+}
+
 func launcherOnce(t *testing.T, binary string, args []string, expected string) launcherResponse {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
@@ -63,7 +76,7 @@ func launcherOnce(t *testing.T, binary string, args []string, expected string) l
 		t.Fatal("unexpected native preparation child exit")
 	}
 	var result launcherResponse
-	if json.Unmarshal(output.Bytes(), &result) != nil || stderr.Len() != 0 {
+	if decodeLauncherResponse(output.Bytes(), &result) != nil || stderr.Len() != 0 {
 		t.Fatal("native child exposed unstructured output")
 	}
 	requireLauncherResponse(t, result, expected)
@@ -83,12 +96,17 @@ type launcherChild struct {
 	reaped        bool
 	readerDrained bool
 	digest        string
+	epoch         string
 }
 
 func startLauncherChild(t *testing.T, binary, path, resolver, digest string) *launcherChild {
+	return startLauncherCommand(t, binary, launcherArguments("run", path, resolver), digest, "")
+}
+
+func startLauncherCommand(t *testing.T, binary string, arguments []string, digest, epoch string) *launcherChild {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	command := exec.CommandContext(ctx, binary, launcherArguments("run", path, resolver)...)
+	command := exec.CommandContext(ctx, binary, arguments...)
 	input, err := command.StdinPipe()
 	if err != nil {
 		cancel()
@@ -117,7 +135,7 @@ func startLauncherChild(t *testing.T, binary, path, resolver, digest string) *la
 		scanner.Buffer(make([]byte, 4096), 32768)
 		for scanner.Scan() {
 			var result launcherResponse
-			if json.Unmarshal(scanner.Bytes(), &result) != nil {
+			if decodeLauncherResponse(scanner.Bytes(), &result) != nil {
 				readEnded <- errors.New("unstructured child output")
 				return
 			}
@@ -131,7 +149,7 @@ func startLauncherChild(t *testing.T, binary, path, resolver, digest string) *la
 		readEnded <- scanner.Err()
 	}()
 	go func() { ended <- command.Wait() }()
-	child := &launcherChild{command: command, input: input, read: read, events: events, readEnded: readEnded, ended: ended, cancel: cancel, stderr: stderr, digest: digest}
+	child := &launcherChild{command: command, input: input, read: read, events: events, readEnded: readEnded, ended: ended, cancel: cancel, stderr: stderr, digest: digest, epoch: epoch}
 	t.Cleanup(func() {
 		if !child.stopped {
 			cancel()
@@ -158,8 +176,8 @@ func startLauncherChild(t *testing.T, binary, path, resolver, digest string) *la
 	})
 	result := child.next(t)
 	requireLauncherResponse(t, result, "started")
-	if result.SourceDigest != digest {
-		t.Fatal("prepared child source digest changed")
+	if result.SourceDigest != digest || result.PolicyEpoch != epoch {
+		t.Fatal("prepared child source/session binding changed")
 	}
 	return child
 }
@@ -198,7 +216,7 @@ func (child *launcherChild) awaitStop(t *testing.T, deadline time.Time) {
 	t.Helper()
 	result := child.nextBefore(t, deadline)
 	requireLauncherResponse(t, result, "stopped")
-	if result.SourceDigest != child.digest {
+	if result.SourceDigest != child.digest || result.PolicyEpoch != child.epoch {
 		t.Fatal("stopped response belongs to another prepared source")
 	}
 	select {
@@ -447,4 +465,5 @@ func TestAcceptanceNativeDNSLauncher(t *testing.T) {
 		}
 	}
 	t.Log("PHASE native launcher: bounded native stop drained stalled socket before natural timeout, B survived, child output EOF/reap, source unchanged")
+	t.Run("PrivateManagedPolicy", func(t *testing.T) { testLauncherPrivateManagedPolicy(t, binary) })
 }

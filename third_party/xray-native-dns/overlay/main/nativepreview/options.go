@@ -21,6 +21,8 @@ const (
 type commandOptions struct {
 	command     string
 	path        string
+	privatePath string
+	epoch       string
 	resolver    string
 	sourceIndex int
 	timeout     time.Duration
@@ -42,7 +44,7 @@ func parseOptions(args []string) (commandOptions, error) {
 		}
 		key := args[index]
 		switch key {
-		case "--config", "--resolver", "--egress-index", "--capability", "--timeout-ms":
+		case "--config", "--resolver", "--egress-index", "--capability", "--timeout-ms", "--private-policy", "--policy-epoch":
 		default:
 			return commandOptions{}, errArguments
 		}
@@ -52,6 +54,11 @@ func parseOptions(args []string) (commandOptions, error) {
 		values[key] = args[index+1]
 	}
 	if values["--capability"] != launcherCapability || !filepath.IsAbs(values["--config"]) {
+		return commandOptions{}, errArguments
+	}
+	privatePath, hasPrivate := values["--private-policy"]
+	epoch, hasEpoch := values["--policy-epoch"]
+	if hasPrivate != hasEpoch || hasPrivate && (!filepath.IsAbs(privatePath) || !lowerHex(epoch, 32)) {
 		return commandOptions{}, errArguments
 	}
 	host, portText, err := net.SplitHostPort(values["--resolver"])
@@ -75,6 +82,7 @@ func parseOptions(args []string) (commandOptions, error) {
 	}
 	return commandOptions{
 		command: args[0], path: filepath.Clean(values["--config"]),
+		privatePath: privatePath, epoch: epoch,
 		resolver: net.JoinHostPort(host, strconv.Itoa(port)), sourceIndex: sourceIndex,
 		timeout: time.Duration(timeout) * time.Millisecond,
 	}, nil

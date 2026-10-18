@@ -2,6 +2,32 @@
 
 
 def apply(root, replace):
+    replace('proxy/socks/protocol.go',
+            '\tlocalAddress net.Address\n',
+            '\tlocalAddress net.Address\n\tauthorizeUDP func(net.Address, net.Port) error\n')
+    replace('proxy/socks/server.go',
+            '\t\tlocalAddress: net.IPAddress(conn.LocalAddr().(*net.TCPAddr).IP),',
+            '''\t\tlocalAddress: net.IPAddress(conn.LocalAddr().(*net.TCPAddr).IP),
+        authorizeUDP: func(address net.Address, port net.Port) error {
+            return authorizeNativeUDP(ctx, address, port)
+        },''')
+    replace('proxy/socks/protocol.go',
+            '''\tif request.Command == protocol.RequestCommandUDP {
+\t\tif s.config.Address != nil {''',
+            '''\tif request.Command == protocol.RequestCommandUDP {
+        if s.authorizeUDP != nil && s.authorizeUDP(request.Address, request.Port) != nil {
+            _ = writeSocks5Response(writer, statusCmdNotSupport, net.AnyIP, net.Port(0))
+            return nil, nil, routing.ErrNativeInput
+        }
+\t\tif s.config.Address != nil {''')
+    replace('proxy/socks/protocol.go',
+            '\t"github.com/xtls/xray-core/transport/internet"',
+            '\t"github.com/xtls/xray-core/transport/internet"\n\t"github.com/xtls/xray-core/features/routing"')
+    # A revoked control socket can fail while writing the UDP Associate reply,
+    # before processTCP installs its idle timer. Cleanup must still close both.
+    replace('proxy/socks/temp_udp_listen.go',
+            '\tc.Timer.SetTimeout(0)\n',
+            '\tif c.Timer != nil { c.Timer.SetTimeout(0) }\n')
     path = 'app/proxyman/inbound/inbound.go'
     replace(path, 'type Manager struct {\n', 'type Manager struct {\n\tnativeInputSealed bool\n')
     replace(path,

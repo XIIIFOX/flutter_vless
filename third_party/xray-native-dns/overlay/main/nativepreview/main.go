@@ -29,6 +29,7 @@ type response struct {
 	Status                 string `json:"status"`
 	Stage                  string `json:"stage,omitempty"`
 	SourceDigest           string `json:"source_digest,omitempty"`
+	PolicyEpoch            string `json:"policy_epoch,omitempty"`
 	HostQualified          bool   `json:"host_qualified"`
 	SystemResolverAttempts int64  `json:"system_resolver_attempts"`
 }
@@ -46,10 +47,11 @@ func refuseSystemResolution() {
 	xnet.DefaultResolver.Dial = refuse
 }
 
-func emit(output io.Writer, status, stage, digest string) error {
+func emit(output io.Writer, status, stage, digest, epoch string) error {
 	return json.NewEncoder(output).Encode(response{
 		Schema: launcherSchema, Capability: launcherCapability, CoreCommit: coreCommit,
 		Status: status, Stage: stage, SourceDigest: digest, HostQualified: false,
+		PolicyEpoch:            epoch,
 		SystemResolverAttempts: systemResolverAttempts.Load(),
 	})
 }
@@ -90,7 +92,7 @@ func stopCommand(input io.Reader) bool {
 }
 
 func execute(ctx context.Context, args []string, input io.Reader, output io.Writer) int {
-	fail := func(stage string) int { _ = emit(output, "failed", stage, ""); return 1 }
+	fail := func(stage string) int { _ = emit(output, "failed", stage, "", ""); return 1 }
 	options, err := parseOptions(args)
 	if err != nil {
 		return fail("arguments")
@@ -100,7 +102,7 @@ func execute(ctx context.Context, args []string, input io.Reader, output io.Writ
 		return fail("capability")
 	}
 	if options.command == "capabilities" {
-		if emit(output, "available", "", "") != nil {
+		if emit(output, "available", "", "", "") != nil {
 			return 1
 		}
 		return 0
@@ -113,11 +115,19 @@ func execute(ctx context.Context, args []string, input io.Reader, output io.Writ
 	if err != nil {
 		return fail("policy")
 	}
-	refuseSystemResolution()
-	prepared, err := nativeinstance.PrepareJSON(data, nativeinstance.Policy{
+	policy := nativeinstance.Policy{
 		RequiredCapability: launcherCapability, Resolver: resolver,
 		DefaultOutboundIndex: options.sourceIndex, LookupTimeout: options.timeout,
-	})
+	}
+	if options.privatePath != "" {
+		private, err := readPrivatePolicy(options.privatePath, data, options.epoch)
+		if err != nil {
+			return fail("private-policy")
+		}
+		policy.SystemDNSBridge, policy.ManagedInput = private.bridge, private.input
+	}
+	refuseSystemResolution()
+	prepared, err := nativeinstance.PrepareJSON(data, policy)
 	if err != nil {
 		return fail("prepare")
 	}
@@ -125,7 +135,7 @@ func execute(ctx context.Context, args []string, input io.Reader, output io.Writ
 		return fail("prepare-system-resolver")
 	}
 	if options.command == "check" {
-		if emit(output, "prepared", "", prepared.SourceDigest()) != nil {
+		if emit(output, "prepared", "", prepared.SourceDigest(), options.epoch) != nil {
 			return 1
 		}
 		return 0
@@ -145,7 +155,7 @@ func execute(ctx context.Context, args []string, input io.Reader, output io.Writ
 		defer cancel()
 		return runtime.Close(deadline)
 	}
-	if emit(output, "started", "", prepared.SourceDigest()) != nil {
+	if emit(output, "started", "", prepared.SourceDigest(), options.epoch) != nil {
 		_ = closeRuntime()
 		return 1
 	}
@@ -165,7 +175,7 @@ func execute(ctx context.Context, args []string, input io.Reader, output io.Writ
 	if systemResolverAttempts.Load() != 0 {
 		return fail("system-resolver")
 	}
-	if emit(output, "stopped", "", prepared.SourceDigest()) != nil {
+	if emit(output, "stopped", "", prepared.SourceDigest(), options.epoch) != nil {
 		return 1
 	}
 	return 0

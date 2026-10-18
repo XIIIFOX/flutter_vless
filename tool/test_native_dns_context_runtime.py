@@ -245,6 +245,7 @@ def main():
                               ('inbound', 'app/proxyman/inbound'),
                               ('outbound', 'app/proxyman/outbound'),
                               ('freedom', 'proxy/freedom'),
+                              ('socks', 'proxy/socks'),
                               ('nativeconfig', 'common/nativeconfig'),
                               ('dnsfeature', 'features/dns'),
                               ('routingfeature', 'features/routing'),

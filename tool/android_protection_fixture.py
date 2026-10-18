@@ -11,10 +11,16 @@ import select
 import struct
 import ipaddress
 import argparse
+import collections
+import json
+import re
+from urllib.parse import parse_qs, urlsplit
 
 RELAY_READINESS = False
 
 MARKER = b"flutter-vless-protected-host"
+DIRECT_EVENTS = collections.deque(maxlen=512)
+DIRECT_LOCK = threading.Lock()
 
 def exact(sock, count):
     data = b""
@@ -120,9 +126,42 @@ class DirectProbe(socketserver.BaseRequestHandler):
     def handle(self):
         self.request.settimeout(2)
         try:
-            self.request.recv(1024)
-            self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 27\r\nConnection: close\r\n\r\nflutter-vless-direct-bypass")
-        except OSError:
+            request = b''
+            while b'\r\n\r\n' not in request:
+                chunk = self.request.recv(1024)
+                if not chunk:
+                    return
+                request += chunk
+                if len(request) > 8192:
+                    return
+            lines = request.split(b'\r\n')
+            method, path, _ = lines[0].decode('ascii').split(' ')
+            if method not in ('GET', 'HEAD') or len(path) > 2048:
+                return
+            hosts = [line.split(b':', 1)[1].strip().decode('ascii') for line in lines[1:] if line.lower().startswith(b'host:')]
+            if len(hosts) != 1:
+                return
+            parsed = urlsplit(path)
+            run = parse_qs(parsed.query).get('run', [''])[0]
+            controlled = bool(re.fullmatch('[a-f0-9]{12}', run))
+            body = b'flutter-vless-direct-bypass'
+            content_type = b'text/plain'
+            if method == 'GET' and parsed.path == '/native-tun' and controlled:
+                value = dict(event='native-tun-http', host=hosts[0], path=path, run=run)
+                with DIRECT_LOCK:
+                    DIRECT_EVENTS.append(value)
+                print(json.dumps(value, sort_keys=True), flush=True)
+                body = ('<!doctype html><html><body>flutter-vless-direct-bypass '
+                        'NATIVE_TUN_BROWSER_' + run + '</body></html>').encode('ascii')
+                content_type = b'text/html; charset=utf-8'
+            elif method == 'GET' and parsed.path == '/native-tun-events' and controlled:
+                with DIRECT_LOCK:
+                    body = json.dumps([row for row in DIRECT_EVENTS if row['run'] == run]).encode('ascii')
+                content_type = b'application/json'
+            self.request.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: ' + str(len(body)).encode('ascii') +
+                                 b'\r\nContent-Type: ' + content_type + b'\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n' +
+                                 (body if method == 'GET' else b''))
+        except (OSError, UnicodeError, ValueError):
             pass
 
 class Server(socketserver.ThreadingTCPServer):

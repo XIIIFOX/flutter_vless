@@ -91,27 +91,41 @@ android {
     }
 }
 
-// Explicit development-only instrumentation input. It is never added to main,
-// debug/release library artifacts, or an ordinary example build.
+// Core-only instrumentation remains available independently. The separate VPN
+// service/tests require both independently verified development executables.
 def nativeDnsPreviewInput = findProperty('flutterVlessNativeDnsPreviewDir')
+def nativeTunPreviewInput = findProperty('flutterVlessNativeTunPreviewDir')
+if (nativeTunPreviewInput && !nativeDnsPreviewInput) {
+    throw new GradleException('Native TUN preview also requires Native DNS preview')
+}
 if (nativeDnsPreviewInput) {
     def repositoryRoot = new File(projectDir, '../../..').canonicalFile
-    def previewDirectory = file(nativeDnsPreviewInput).canonicalFile
-    def verifier = new File(repositoryRoot, 'tool/verify_android_dns_preview.py')
-    def verification = new ProcessBuilder('python3', verifier.absolutePath,
-        '--directory', previewDirectory.absolutePath)
-        .directory(repositoryRoot).redirectErrorStream(true).start()
-    if (!verification.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
-        verification.destroyForcibly()
-        verification.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
-        throw new GradleException('Native DNS preview verification timed out')
+    def verifyPreview = { String input, String script, String label ->
+        def directory = file(input).canonicalFile
+        def verification = new ProcessBuilder('python3', new File(repositoryRoot, script).absolutePath,
+            '--directory', directory.absolutePath)
+            .directory(repositoryRoot).redirectErrorStream(true).start()
+        if (!verification.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
+            verification.destroyForcibly()
+            verification.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            throw new GradleException(label + ' verification timed out')
+        }
+        def verificationOutput = verification.inputStream.getText('UTF-8')
+        if (verification.exitValue() != 0) {
+            throw new GradleException(label + ' verification failed: ' + verificationOutput)
+        }
+        return directory
     }
-    def verificationOutput = verification.inputStream.getText('UTF-8')
-    if (verification.exitValue() != 0) {
-        throw new GradleException('Native DNS preview verification failed: ' + verificationOutput)
-    }
+    def previewDirectory = verifyPreview(nativeDnsPreviewInput.toString(), 'tool/verify_android_dns_preview.py', 'Native DNS preview')
     android.sourceSets.androidTest.jniLibs.srcDir(new File(previewDirectory, 'jniLibs'))
     android.sourceSets.androidTest.java.srcDir('src/nativeDnsPreviewTest/kotlin')
+    if (nativeTunPreviewInput) {
+        def tunDirectory = verifyPreview(nativeTunPreviewInput.toString(), 'tool/verify_android_tun_preview.py', 'Native TUN preview')
+        android.sourceSets.androidTest.jniLibs.srcDir(new File(tunDirectory, 'jniLibs'))
+        android.sourceSets.androidTest.java.srcDir('src/nativeDnsPreviewVpnTest/kotlin')
+        android.sourceSets.debug.java.srcDir('src/nativeDnsPreview/kotlin')
+        android.sourceSets.debug.manifest.srcFile('src/nativeDnsPreview/AndroidManifest.xml')
+    }
 }
 
 dependencies {

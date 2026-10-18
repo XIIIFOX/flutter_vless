@@ -1,0 +1,13 @@
+{
+  "module": "github.com/xjasonlyu/tun2socks/v2",
+  "module_version": "v2.6.1-0.20251120031959-57550350c847",
+  "module_sum": "h1:V7Z+E/MDHOl2s+FiMuaXYW6GAuUcntKJrI6LrIqKXP0=",
+  "commit": "57550350c847c469aaa26a4748f4e51b6629ee7b",
+  "published": false,
+  "capability": "native-tun-forwarder-preview-1",
+  "upstream_sha256": {
+    "go.mod": "4ea70fa06278cfb79ef8f00bb829f712a2a1ebc197bd062439e47f264719e5b7",
+    "proxy/socks5.go": "d7da52490b205d608ac0468164be624aa0cf06b402c0dc67b5c3b40c720f64a0",
+    "transport/socks5/socks5.go": "15828ef8f3fa840ba87f1badcfa2b80733921717a8fec4ea1f14647f0e31f190"
+  }
+}

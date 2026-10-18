@@ -273,6 +273,17 @@ explicit Gradle property `flutterVlessNativeDnsPreviewDir` adds only the test
 source set and test JNI library. Ordinary plugin AARs and example builds do not
 include this executable. An extra ABI/library or stale build is rejected.
 
+The separate property `flutterVlessNativeTunPreviewDir` additionally requires a
+verified [pinned development forwarder](../tun2socks-native/README.md). Both
+properties together compile a nonexported debug-only VPN service and five
+additional device scenarios; the two executables remain in the test APK. The
+service is absent when either opt-in is missing and never enters release builds.
+Its candidate/source/policy/process/network ownership is separate from the
+ordinary service. It retains failed cleanup owners and refuses restart until
+they drain. The current harness does not invoke these five scenarios: remote
+managed-UDP qualification is required before live TUN acceptance. Compilation,
+JNI hashes and manifest presence do not qualify DNS, browser or handover traffic.
+
 The two conditional device tests run the actual child entry through the strict
 captured-network broker. They require authenticated HTTP bytes, separately
 observed native-default and caller-domain DNS, local-host precedence and survival

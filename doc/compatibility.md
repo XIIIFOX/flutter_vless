@@ -304,7 +304,7 @@ only to a private compiled clone and authenticates construction/connection
 identity before consuming DNS. It checks each UDP packet rather than trusting a
 cached ray's first destination, and owns complete source/managed SOCKS callbacks
 through shutdown. Its four-connection/four-ray/one-lookup limits are explicit
-preview restrictions. Ordinary managed UDP remains unavailable; platform TUN
+preview restrictions. Ordinary managed UDP remains unavailable; production TUN
 hosts do not enable this component. The unpublished CLI now accepts a separate,
 permission-checked private policy bound to the source hash and session nonce.
 Selected UDP associations require a concrete prebound peer and a grant retained
@@ -313,6 +313,16 @@ through the full callback finalizer. Local validation passes 126 pure tests and
 The expanded actual-Core private-policy/UDP controls need a fresh CI result.
 See the [consumer boundary](../third_party/xray-native-dns/README.md#managed-input-consumer-preview).
 Items 1 and 2 remain pending.
+
+An explicit Android development host now compiles with separate verified Core
+and forwarder executables in the test APK. Five device scenarios cover the
+planned TUN DNS/HTTP, rejected-candidate survival, child recovery, controlled
+Wi-Fi/cellular replacement and fresh Chrome marker checks. They have not run
+yet: Windows private-policy/managed-UDP qualification must pass before opening
+this gate. Ordinary builds omit the service and executables. Synthetic forwarder
+tests prove password negotiation, prebound UDP tuple, exact relay-source filtering
+and descriptor cleanup without starting an engine/TUN; these are not mobile
+system-traffic acceptance. The eight statuses below remain unchanged.
 
 Session teardown progress: Android now closes callback admission before its final
 cleanup, so late network/worker events cannot enqueue into a stopped executor.

@@ -194,6 +194,22 @@ func runDomainRoutingChecks() throws {
     for generation in 0..<2 {
         var error: NSError?
         precondition(XRayStartPrivate(data, logger, &error))
+        // Core checks of both a valid occupied-listener config and an invalid
+        // candidate must preserve actual routing through the running instance.
+        if FLVlessHasCorePreflight() {
+            let accepted = try CorePreflightPolicy.validate(data, check: FLVlessCheckCorePrivate)
+            precondition(accepted)
+            let rejected = Data("{\"outbounds\":[{\"protocol\":\"privacy-canary.invalid\"}]}".utf8)
+            do {
+                try CorePreflightPolicy.validate(rejected, check: FLVlessCheckCorePrivate)
+                preconditionFailure("Invalid candidate accepted")
+            } catch let failure as CorePreflightError {
+                precondition(failure.stage == "build" && failure.section == "outbounds" && failure.index == 0)
+            }
+            print("PREFLIGHT_RUNNING_SESSION_PASS=\(generation)")
+        } else if ProcessInfo.processInfo.environment["REQUIRE_CORE_PREFLIGHT"] == "1" {
+            preconditionFailure("Runtime must expose Core preflight")
+        }
         for host in ["direct-site.invalid", "proxy-site.invalid"] {
             let beforeDirect = directOrigin.state().0, beforeProxy = proxyOrigin.state().0
             let fd = try LocalSOCKS5Client.openConnection(proxyPort: managedPort, credentials: credentials, host: host, port: 80)

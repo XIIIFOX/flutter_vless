@@ -35,14 +35,20 @@ for file in "$SOURCE"/flutter_vless_macos_tunnel_support/*.swift; do
     [[ "$(basename "$file")" == FlutterVlessPacketTunnelProvider.swift ]] || SUPPORT+=("$file")
 done
 xcrun swiftc "${COMMON[@]}" -parse-as-library -I "$OUT/modules" -module-name flutter_vless_macos_tunnel_support -emit-module -emit-object -whole-module-optimization -emit-module-path "$OUT/modules/flutter_vless_macos_tunnel_support.swiftmodule" "${SUPPORT[@]}" -o "$OUT/modules/support.o"
-xcrun swiftc "${COMMON[@]}" -I "$OUT/modules" -I "$SOURCE/CXRay/include" -framework AppKit -framework SystemConfiguration -framework NetworkExtension -lresolv "$OUT/main.swift" "$SOURCE/flutter_vless_macos/BoundedNativeLogStore.swift" "$OUT/modules/privacy.o" "$OUT/modules/support.o" "$ROOT/packages/flutter_vless_macos/macos/XRay.xcframework/macos-arm64_x86_64/libXRay.a" -o "$OUT/probe"
+COMPAT="$SOURCE/flutter_vless_macos_core_compat"
+xcrun clang -fobjc-arc -target "$(uname -m)-apple-macos13.0" -isysroot "$SDK" \
+    -c "$COMPAT/FlutterVlessCoreCompat.m" -o "$OUT/modules/compat.o"
+xcrun swiftc "${COMMON[@]}" -I "$OUT/modules" -I "$SOURCE/CXRay/include" -framework AppKit -framework SystemConfiguration -framework NetworkExtension -lresolv -import-objc-header "$COMPAT/include/FlutterVlessCoreCompat.h" "$OUT/main.swift" "$SOURCE/flutter_vless_macos/BoundedNativeLogStore.swift" "$OUT/modules/privacy.o" "$OUT/modules/support.o" "$OUT/modules/compat.o" "$ROOT/packages/flutter_vless_macos/macos/XRay.xcframework/macos-arm64_x86_64/libXRay.a" -o "$OUT/probe"
 "$OUT/probe" > "$OUT/runtime.log" 2>&1
 python3 - "$OUT/runtime.log" <<'PY'
 from pathlib import Path
-import sys
+import os, sys
 text=Path(sys.argv[1]).read_text()
 assert "RUNTIME=26.10.17" in text, "Unexpected embedded Xray version"
 assert 'MACOS_COUNTERS_AND_API_BOUNDARY_PASS' in text
+if os.environ.get('REQUIRE_CORE_PREFLIGHT') == '1':
+    for generation in [0,1]:
+        assert f'PREFLIGHT_RUNNING_SESSION_PASS={generation}' in text
 for marker in ['privacy-canary.invalid','synthetic-password-canary','d2719f44-f51f-4c35-aeae-246230d21f38','local-user-canary','local-password-canary']:
     assert marker not in text, 'Private marker escaped'
 for mode in ['tunnel','proxy-only','delay']:

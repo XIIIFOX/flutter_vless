@@ -13,7 +13,7 @@ macOS implementation of the flutter_vless plugin.
   cxray_pod_include_dir = '${PODS_TARGET_SRCROOT}/flutter_vless_macos/Sources/CXRay/include'
   cxray_user_include_dir = '${PODS_ROOT}/../Flutter/ephemeral/.symlinks/plugins/flutter_vless_macos/macos/flutter_vless_macos/Sources/CXRay/include'
 
-  s.source_files = 'flutter_vless_macos/Sources/flutter_vless_macos/**/*.swift', 'flutter_vless_macos/Sources/flutter_vless_macos_privacy/**/*.swift'
+  s.source_files = 'flutter_vless_macos/Sources/flutter_vless_macos/**/*.swift', 'flutter_vless_macos/Sources/flutter_vless_macos_privacy/**/*.swift', 'flutter_vless_macos/Sources/flutter_vless_macos_core_compat/**/*.{h,m}'
   s.dependency 'FlutterMacOS'
   s.platform = :osx, '13.0'
   s.osx.deployment_target = '13.0'

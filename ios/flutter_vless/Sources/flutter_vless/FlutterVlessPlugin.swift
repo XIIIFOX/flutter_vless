@@ -6,6 +6,9 @@ import UIKit
 import NetworkExtension
 import Combine
 import XRay
+#if canImport(flutter_vless_core_compat)
+import flutter_vless_core_compat
+#endif
 import os
 import CFNetwork
 import Darwin
@@ -608,6 +611,17 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return
         }
         let operation = commands.submit {
+            // Do not replace the app-process singleton or change its asset
+            // environment while a proxy-only session is still serving traffic.
+            guard !self.proxyOnlyRunner.isRunning else {
+                throw CorePreflightError.activeProxySession
+            }
+            if FLVlessHasCorePreflight() {
+                try configureXrayAssetLocation(geoAssetsDirectory)
+                try CorePreflightPolicy.validate(effectiveConfigData, check: FLVlessCheckCorePrivate)
+            } else {
+                pluginLog.warning("Core preflight unavailable in legacy runtime")
+            }
             if proxyOnly {
                 // Switching modes is an explicit request to release the system VPN.
                 try await self.packetTunnelManager?.stop(waitForDisconnect: true)
@@ -632,6 +646,9 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 try await operation.value
                 self.refreshRuntimePolling(reason: "startVless-success")
                 result(nil)
+            } catch let error as CorePreflightError {
+                result(FlutterError(code: "CORE_CONFIG_ERROR", message: error.localizedDescription, details: error.details))
+                self.refreshRuntimePolling(reason: "startVless-preflight-error")
             } catch {
                 pluginLog.error("Failed to start runtime: \(NativeLogPrivacy.operationError(error).localizedDescription, privacy: .public)")
                 result(FlutterError(code: error is TunnelSecretError ? "VPN_KEYCHAIN_ERROR" : (proxyOnly ? "PROXY_ONLY_ERROR" : "VPN_ERROR"),

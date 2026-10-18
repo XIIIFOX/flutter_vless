@@ -26,7 +26,23 @@ internal class EmulatorVpnPolicy {
     }
     private fun find(predicate: (AccessibilityNodeInfo) -> Boolean) = nodes(ui.rootInActiveWindow).firstOrNull(predicate)
     private fun waitFor(description: String, predicate: () -> Boolean) {
-        repeat(100) { if (predicate()) return; Thread.sleep(100) }
+        repeat(100) {
+            if (predicate()) return
+            // A slow hosted emulator can put its launcher ANR above Settings.
+            // Dismiss only this identified emulator launcher dialog. Unknown
+            // dialogs still fail with their visible tree instead of being
+            // acknowledged or mistaken for the VPN confirmation.
+            val current = nodes(ui.rootInActiveWindow)
+            if (current.any {
+                it.viewIdResourceName == "android:id/alertTitle" &&
+                    it.text?.toString() == "Pixel Launcher isn't responding"
+            }) {
+                current.firstOrNull {
+                    it.viewIdResourceName == "android:id/aerr_close" && it.isEnabled
+                }?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            }
+            Thread.sleep(100)
+        }
         val visible = nodes(ui.rootInActiveWindow).filter { it.text != null || it.isCheckable }
             .joinToString("; ") { "${it.viewIdResourceName}:${it.text}:checkable=${it.isCheckable}:checked=${it.isChecked}" }
         error("OS VPN Settings did not reach $description; visible=$visible")

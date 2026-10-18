@@ -98,6 +98,10 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     if (!protection_.Active()) protection_.Release();
     return false;
   }
+  if (!native::CheckConfig(*prepared, *xray)) {
+    Event("Xray configuration check rejected generated VPN document; active session preserved");
+    return false;
+  }
   auto runtime = std::make_unique<native::ProtectedRuntime>();
   if (!runtime->Create(*xray)) {
     Event("Cannot create private administrator-owned VPN runtime");

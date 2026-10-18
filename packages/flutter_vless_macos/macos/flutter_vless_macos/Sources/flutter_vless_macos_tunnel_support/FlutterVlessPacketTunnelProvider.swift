@@ -9,6 +9,7 @@ import NetworkExtension
 import flutter_vless_macos_privacy
 import Network
 import CXRay
+import flutter_vless_macos_core_compat
 import Tun2SocksKitC
 import HevSocks5Tunnel
 import Tun2SocksKit
@@ -197,6 +198,19 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             throw tunnelError("Tunnel preparation cancelled or incompatible")
         }
         let addresses = prepared.bootstrapAddresses
+
+        // Native Control Center/On Demand starts bypass the app entry point.
+        // Check the final generated document before installing protected routes.
+        if FLVlessHasCorePreflight() {
+            var assetError: NSError?
+            guard XRaySetAssetLocation(providerConfiguration["geoAssetsDirectory"] as? String ?? "", &assetError) else {
+                throw tunnelError("Xray asset configuration failed before route installation")
+            }
+            try CorePreflightPolicy.validate(prepared.data, check: FLVlessCheckCorePrivate)
+            rememberTunnelLog("Core configuration checked before route installation")
+        } else {
+            rememberTunnelLog("Core preflight unavailable in legacy runtime")
+        }
 
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "254.1.1.1")
         settings.mtu = NSNumber(value: tunnelMTU)

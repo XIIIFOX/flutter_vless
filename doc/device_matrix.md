@@ -136,3 +136,14 @@ subsequent stop/reinstall gates and normal-network checks passed.
 This is a partial acceptance record. Successful owner authentication, recovery
 from a running worker crash and the broader compatibility corpus are not implied
 by the successful cases above.
+
+The build-only Apple preflight preview was also installed on the physical iPhone.
+A synthetic unknown outbound was rejected as `outbounds[0]` at Core build before
+any tunnel process started. Fresh Safari requests retained the ordinary IP.
+All three original documents were then connected again: both websites reported
+103.75.118.225, 82.40.63.24 and 87.232.225.232 respectively, with the same country
+observations above. Each explicit Stop completed, preferences read back disabled,
+the provider exited, and a fresh ordinary-IP page loaded. Provider diagnostics
+confirmed that its final generated document passed Core checking before routes
+were installed. These previews are local test artifacts, not a published runtime
+or package release; the upstream Core revision remains unchanged.

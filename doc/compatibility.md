@@ -137,6 +137,24 @@ advertises TCP, while its HTTP inbound also supports Unix sockets. See the
 [pinned Core port parser](https://github.com/XTLS/Xray-core/blob/92ccc939aaf4f8965f369cf0b142e005aeaa11d5/infra/conf/common.go)
 and [inbound implementations](https://github.com/XTLS/Xray-core/tree/92ccc939aaf4f8965f369cf0b142e005aeaa11d5/proxy).
 
+Core preflight is now wired into both Apple app entry points and into the final
+provider configuration before route installation. The additive Go bridge decodes
+and builds with pinned Core without opening listeners. Closed numeric results
+identify privacy/decode/build failures and, where available, an inbound/outbound
+index. A failed candidate cannot stop the app's active proxy-only singleton or
+replace its saved VPN profile. `tool/build_apple_core_preview.sh ios|macos OUTPUT`
+builds the extended runtime locally without publishing anything; CI requires
+actual traffic through an existing session after valid and invalid checks.
+Published runtime artifacts/checksums remain unchanged: legacy Apple binaries
+explicitly report preflight unavailable and retain their previous startup path.
+This feature requires the build-only preview until its runtime artifacts are
+approved for release. Windows runs its bundled Core `run -test` against private,
+privacy-normalized temporary documents before session replacement and against
+the generated adapter config. Android already checks its final candidate with
+its bundled Core before the service transaction. Safe effective-config diffs,
+complete asset diagnostics, bind-race handling and rollback from later runtime
+failures are still pending; item 7 is not complete.
+
 1. **Preserve advanced DNS semantics.** Separate the OS-facing protected resolver
    from imported `dns` hosts, servers, per-domain rules, query strategies, DoH/DoT
    and DNS tags. Apple/Windows currently replace DNS for VPN protection; FakeDNS

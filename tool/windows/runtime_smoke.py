@@ -488,6 +488,19 @@ def main():
                             if process.poll() is not None or time.monotonic() >= deadline:
                                 raise RuntimeError("Proxy did not report forwarding readiness")
                             time.sleep(0.1)
+                    # Submit a Core-invalid replacement to the same live manager.
+                    # The real routing requests below must still use its original
+                    # workers, with WFP retained in VPN mode.
+                    rejection = Path(str(state_file) + ".reject")
+                    invalid = json.loads(json.dumps(prepared))
+                    invalid["outbounds"][0]["protocol"] = "private-preflight-canary"
+                    rejection.write_text(json.dumps(invalid))
+                    deadline = time.monotonic() + 25
+                    while "REJECTED_REPLACEMENT_PRESERVED=1" not in (directory / (label + ".log")).read_text(errors="replace"):
+                        if process.poll() is not None or time.monotonic() >= deadline:
+                            raise RuntimeError("Invalid replacement did not preserve the live session")
+                        time.sleep(0.1)
+                    results.append(dict(mode=label, check="Core-invalid replacement preserves live workers", passed=True))
                     for host in ("2ip.ru", "2ip.io", "myip.com"):
                         expected = "DIRECT-FIXTURE" if ((host == "myip.com") == reverse) else "PROXY-FIXTURE"
                         try:

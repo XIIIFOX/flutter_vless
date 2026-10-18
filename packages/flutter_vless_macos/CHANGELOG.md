@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Wire Core decode/build preflight into app/provider startup for the unpublished preview runtime; preserve active sessions and expose redacted stage/index failures before route installation.
 * Bind port environment references before encrypted cross-process persistence and share Core port grammar/Unix-listener allocation checks with the other backends.
 * Apply configured diagnostic byte and line limits after assembling the complete snapshot, including provider metadata.
 * Disable and verify the saved profile when a system control disconnects; report the actual On Demand policy in private provider diagnostics.

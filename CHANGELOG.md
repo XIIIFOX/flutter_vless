@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Add build-only Apple Core preflight previews with redacted stage/index errors before VPN routes, and Windows bundled-Core checks before session replacement. Preserve active sessions on rejected candidates; keep published runtime artifacts unchanged during acceptance.
 * Accept Core inbound port lists/ranges and zero in Dart; reserve native environment references and skip Unix-only listeners during private TCP port allocation. Bind Apple port references before saving cross-process sessions and report missing references without starting VPN. Add a shared corpus checked against pinned Core and native forwarding regressions.
 * Enforce Apple diagnostic byte and line limits on the complete response, including provider metadata and truncation markers. Explain disabled diagnostics in the example instead of asking the user to connect.
 * Disable and verify the Apple VPN profile on explicit Control Center Stop as well as app Stop. Report the actual On Demand policy in provider diagnostics when recovery is disabled.

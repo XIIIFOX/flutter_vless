@@ -193,7 +193,13 @@ jobs:
           cache-dependency-path: third_party/xray-mobile/go.sum
       - name: Check shared compatibility corpus against pinned Xray Core
         working-directory: third_party/xray-mobile
-        run: go test -count=1 -run '^TestCompatibilityPortCorpus$' .
+        run: go test -count=1 .
+      - name: Check optional bridge and build unpublished iOS Core preview
+        run: |
+          tool/test_apple_core_preflight_bridge.sh
+          tool/build_apple_core_preview.sh ios build/apple-core-preview/ios
+          rm -rf ios/XRay.xcframework
+          cp -R build/apple-core-preview/ios/XRay.xcframework ios/XRay.xcframework
       - name: Test iOS profile transactions and operation ordering
         run: |
           tool/test_ios_manager_policy.sh
@@ -212,7 +218,7 @@ jobs:
           trap 'xcrun simctl shutdown "$SIMULATOR_UDID"; xcrun simctl delete "$SIMULATOR_UDID"' EXIT
           xcrun simctl boot "$SIMULATOR_UDID"
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b
-          tool/test_ios_privacy_runtime.sh
+          REQUIRE_CORE_PREFLIGHT=1 tool/test_ios_privacy_runtime.sh
       - name: Test bounded Apple Xray diagnostics store and typed native options
         run: |
           tool/test_bounded_native_log_store.sh
@@ -230,6 +236,11 @@ jobs:
           xcodebuild -workspace example/ios/Runner.xcworkspace -scheme flutter-vless \
             -configuration Debug -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO \
             "FRAMEWORK_SEARCH_PATHS=\$(inherited) $FLUTTER_SDK/bin/cache/artifacts/engine/ios/Flutter.xcframework/ios-arm64" build
+      - name: Build unpublished macOS Core preview
+        run: |
+          tool/build_apple_core_preview.sh macos build/apple-core-preview/macos
+          rm -rf packages/flutter_vless_macos/macos/XRay.xcframework
+          cp -R build/apple-core-preview/macos/XRay.xcframework packages/flutter_vless_macos/macos/XRay.xcframework
       - name: Build example macOS app
         working-directory: example
         env:
@@ -241,7 +252,7 @@ jobs:
         run: |
           bash tool/test_macos_tunnel_support.sh
           bash tool/test_macos_manager_policy.sh
-          bash tool/test_macos_privacy_runtime.sh
+          REQUIRE_CORE_PREFLIGHT=1 bash tool/test_macos_privacy_runtime.sh
 
   windows:
     name: Windows native plugin build

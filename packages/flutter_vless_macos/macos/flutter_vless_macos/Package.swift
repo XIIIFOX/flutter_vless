@@ -37,12 +37,14 @@ let package = Package(
         .package(url: "https://github.com/EbrahimTahernejad/Tun2SocksKit", exact: "5.15.0")
     ],
     targets: [
+        .target(name: "flutter_vless_macos_core_compat", publicHeadersPath: "include"),
         .target(
             name: "flutter_vless_macos",
             dependencies: [
                 "XRay",
                 "CXRay",
-                "flutter_vless_macos_privacy"
+                "flutter_vless_macos_privacy",
+                "flutter_vless_macos_core_compat"
             ],
             linkerSettings: [
                 .linkedLibrary("resolv")
@@ -54,6 +56,7 @@ let package = Package(
                 "XRay",
                 "CXRay",
                 "flutter_vless_macos_privacy",
+                "flutter_vless_macos_core_compat",
                 .product(name: "Tun2SocksKit", package: "Tun2SocksKit"),
                 .product(name: "Tun2SocksKitC", package: "Tun2SocksKit")
             ],

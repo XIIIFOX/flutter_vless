@@ -1,4 +1,5 @@
 // Runs only child processes and private temporary files; no network settings.
+#include <winsock2.h>
 #include "native_runtime.h"
 #include "protected_runtime.h"
 #include "packet_path_probe.h"
@@ -6,6 +7,7 @@
 #include <cassert>
 #include <iostream>
 #include <fstream>
+#include <set>
 
 int main(int argc, char** argv) {
   using namespace flutter_vless::native;
@@ -110,6 +112,36 @@ int main(int argc, char** argv) {
   }
 
   const auto trusted = FindBundledFile(L"xray.exe");
+  if (trusted) {
+    const auto temporary_documents = [] {
+      std::set<fs::path> paths;
+      for (const auto& entry : fs::directory_iterator(fs::temp_directory_path())) {
+        if (entry.path().filename().wstring().rfind(L"flutter-vless-", 0) == 0
+            && entry.path().extension() == L".json") paths.insert(entry.path());
+      }
+      return paths;
+    };
+    const auto documents_before = temporary_documents();
+    WSADATA sockets{}; assert(WSAStartup(MAKEWORD(2,2), &sockets) == 0);
+    SOCKET occupied = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(occupied != INVALID_SOCKET);
+    sockaddr_in address{}; address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    assert(bind(occupied, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
+    int size = sizeof(address);
+    assert(getsockname(occupied, reinterpret_cast<sockaddr*>(&address), &size) == 0);
+    assert(listen(occupied, 1) == 0);
+    const auto configuration = std::string("{\"inbounds\":[{\"listen\":\"127.0.0.1\",\"protocol\":\"socks\",\"port\":")
+        + std::to_string(ntohs(address.sin_port)) + "}],\"outbounds\":[{\"protocol\":\"freedom\"}]}";
+    assert(CheckConfig(configuration, *trusted)); // Core must not bind the occupied listener.
+    assert(!CheckConfig("{\"outbounds\":[{\"protocol\":\"private-preflight-canary\"}]}", *trusted));
+    assert(!CheckConfig("not-json-private-canary", *trusted));
+    const auto missing = trusted->parent_path() / L"missing-preflight-runtime.exe";
+    assert(!fs::exists(missing) && !CheckConfig(configuration, missing));
+    assert(temporary_documents() == documents_before);
+    closesocket(occupied); WSACleanup();
+    std::cout << "PASS pinned Core preflight, occupied listener and closed candidate errors\n";
+  }
   const auto original = std::filesystem::current_path();
   const auto decoy = std::filesystem::temp_directory_path() / Wide(RandomHex(16));
   std::filesystem::create_directory(decoy);

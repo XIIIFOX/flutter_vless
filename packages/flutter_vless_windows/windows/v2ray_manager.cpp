@@ -1,6 +1,7 @@
 #include "v2ray_manager.h"
 #include "diagnostics_log.h"
 #include "xray_config.h"
+#include "native_runtime.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -81,19 +82,21 @@ V2rayManager& V2rayManager::GetInstance() {
 }
 
 bool V2rayManager::Start(const std::string& config, bool proxy_only, const flutter_vless::NativeOptions& options) try {
-  if (is_running_.load() && (proxy_only || proxy_only_)) Stop();
+  if (!ValidateConfig(config)) {
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "runtime", "Xray configuration check rejected candidate; active session preserved");
+    return false;
+  }
+  if (is_running_.load() && (proxy_only || proxy_only_)) {
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "runtime", "Stop the active session before changing proxy-only mode or configuration");
+    return false;
+  }
 
   flutter_vless::DiagnosticsLog::Instance().Reset();
   flutter_vless::DiagnosticsLog::Instance().Append(
       "runtime", proxy_only ? "Starting Windows proxy-only session"
                             : "Starting Windows VPN session");
-
-  if (!ValidateConfig(config)) {
-    std::cerr << "Invalid Xray configuration JSON" << std::endl;
-    flutter_vless::DiagnosticsLog::Instance().Append(
-        "runtime", "Invalid Xray configuration JSON");
-    return false;
-  }
 
   current_config_ = config;
   proxy_only_ = proxy_only;
@@ -221,7 +224,8 @@ void V2rayManager::GetTrafficStats(int64_t& upload, int64_t& download) {
 }
 
 bool V2rayManager::ValidateConfig(const std::string& config) {
-  return flutter_vless::xray_config::Parse(config).is_object();
+  const auto executable = flutter_vless::native::FindBundledFile(L"xray.exe");
+  return executable && flutter_vless::native::CheckConfig(config, *executable);
 }
 
 // Kept for reference but unused in VPN stub

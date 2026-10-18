@@ -433,10 +433,10 @@ void FlutterVlessPlugin::HandleMethodCall(
           LogMessage("Starting Xray...");
           const bool ready = V2rayManager::GetInstance().Start(config, proxy_only, options);
           const bool protecting = V2rayManager::GetInstance().IsProtecting();
-          is_running_ = ready || protecting;
-          if (proxy_only) quick_profile_.reset();
-          if (!proxy_only && is_running_ && options.quick_enabled && generation == options_generation_.load()) quick_profile_ = config;
-          if (is_running_) {
+          is_running_ = V2rayManager::GetInstance().IsRunning() || protecting;
+          if (ready && proxy_only) quick_profile_.reset();
+          if (ready && !proxy_only && options.quick_enabled && generation == options_generation_.load()) quick_profile_ = config;
+          if (ready) {
             start_time_ = std::chrono::steady_clock::now();
             StartStatusTimer();
           }

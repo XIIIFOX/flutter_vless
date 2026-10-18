@@ -121,7 +121,7 @@ bool ProxyService::Start(const std::string& config) {
   if (!flutter_vless::xray_config::PrepareProxy(prepared,
       [this](uint16_t port) { return IsPortFree(port); }, [this] { return FindFreePort(); })) return false;
   auto executable = FindXrayExecutable();
-  if (!executable) return false;
+  if (!executable || !flutter_vless::native::CheckConfig(prepared, *executable)) return false;
   Stop();
   xray_executable_path_ = *executable;
   current_config_ = prepared;

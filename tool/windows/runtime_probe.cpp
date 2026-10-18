@@ -208,8 +208,18 @@ int main(int argc,char** argv) {
   int seconds=argc>3?std::stoi(argv[3]):20;
   const std::filesystem::path stop_file = arguments.size() > 4 ? arguments[4] : L"";
   const std::filesystem::path state_file = arguments.size() > 5 ? arguments[5] : L"";
+  const std::filesystem::path reject_file = state_file.empty() ? L"" : state_file.wstring() + L".reject";
   for(int i=0;i<seconds;i++){
     if (!stop_file.empty() && std::filesystem::exists(stop_file)) break;
+    if (!reject_file.empty() && std::filesystem::exists(reject_file)) {
+      std::ifstream candidate(reject_file);
+      const std::string invalid((std::istreambuf_iterator<char>(candidate)), {});
+      candidate.close();
+      const bool rejected = !manager.Start(invalid, !vpn, options) && manager.IsRunning();
+      std::filesystem::remove(reject_file);
+      std::cout << "REJECTED_REPLACEMENT_PRESERVED=" << rejected << std::endl;
+      if (!rejected) { manager.Stop(); return 26; }
+    }
     if (!state_file.empty()) {
       std::ofstream state(state_file);
       state << "{\"running\":" << (manager.IsRunning()?"true":"false")

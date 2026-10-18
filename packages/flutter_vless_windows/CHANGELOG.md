@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Check original/generated documents with bundled Core before session replacement, remove private check files, and retain working state/quick profiles after rejection. Add live invalid-replacement workflow coverage.
 * Align private port reservations with Core lists/ranges, environment aliases and whitespace; keep Unix-only port lists out of TCP allocation.
 * Dispatch worker status events on the Flutter platform thread through the top-level window, with native message-pump tests for copied payloads, ordering and cancelled listeners.
 * Add native system-tray toggle/open-app actions, app/.ico presentation and explicit clearing of the in-memory quick profile.

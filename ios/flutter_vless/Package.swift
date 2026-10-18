@@ -38,11 +38,13 @@ let package = Package(
         .package(url: "https://github.com/EbrahimTahernejad/Tun2SocksKit", exact: "5.15.0")
     ],
     targets: [
+        .target(name: "flutter_vless_core_compat", publicHeadersPath: "include"),
         .target(
             name: "flutter_vless",
             dependencies: [
                 .product(name: "FlutterFramework", package: "FlutterFramework"),
                 "flutter_vless_privacy",
+                "flutter_vless_core_compat",
                 "XRay"
             ],
             linkerSettings: [
@@ -57,6 +59,7 @@ let package = Package(
             name: "flutter_vless_tunnel_support",
             dependencies: [
                 "flutter_vless_privacy",
+                "flutter_vless_core_compat",
                 "XRay",
                 .product(name: "Tun2SocksKit", package: "Tun2SocksKit"),
                 .product(name: "Tun2SocksKitC", package: "Tun2SocksKit")

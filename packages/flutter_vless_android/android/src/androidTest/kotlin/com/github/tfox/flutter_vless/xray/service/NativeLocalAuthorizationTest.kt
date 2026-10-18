@@ -195,7 +195,11 @@ class NativeLocalAuthorizationTest {
         val json = XrayCoreManager.buildRuntimeConfigJson(config, context.noBackupFilesDir, secret)
         val socksPort = config.LOCAL_SOCKS5_PORT
         assertEquals(10811, socksPort)
-        assertEquals(10813, config.LOCAL_API_PORT)
+        assertEquals(0, config.LOCAL_API_PORT)
+        val callerApi = JSONObject(original).getJSONObject("API")
+        assertEquals(callerApi.toString(), json.getJSONObject("api").toString())
+        assertEquals(2, json.getJSONArray("inbounds").length()) // Imported HTTP plus private SOCKS, no private API.
+        assertEquals(JSONObject(original).getJSONObject("routing").toString(), json.getJSONObject("routing").toString())
         assertEquals(original, config.V2RAY_FULL_JSON_CONFIG)
         assertEquals(JSONObject(original).getJSONObject("Metric\u017f").toString(), json.getJSONObject("Metric\u017f").toString())
         assertEquals("flutter-vless-tun-1", json.getJSONArray("inbounds").getJSONObject(1).getString("tag"))
@@ -248,7 +252,9 @@ class NativeLocalAuthorizationTest {
                 } finally { worker.shutdownNow() }
             }
             val statistics = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
-                "api", "statsquery", "--server=127.0.0.1:${config.LOCAL_API_PORT}", "--pattern", "outbound>>>proxy>>>")
+                // This fixture explicitly declares a caller StatsService and
+                // leaves stats/policy absent, so their defaults count traffic.
+                "api", "statsquery", "--server=${callerApi.getString("listen")}", "--pattern", "outbound>>>proxy>>>")
                 .redirectErrorStream(true).start()
             val captured = BoundedCoreCommand.capture(statistics)
             assertNotNull("Actual stats output must be captured on Android", captured)

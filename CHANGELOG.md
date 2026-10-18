@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Bind imported listener address environment references before native port allocation. Preserve Unix socket semantics, empty-value precedence and the editor's source; reject recursive references and add shared address/Core-build and Unix runtime regressions.
 * Retain caller API/services and existing stats/policy sections, including explicit null and disabled counters. Query only plugin-owned statistics endpoints on Android/Windows; add shared full-profile preparation and real API/traffic regressions.
 * Broaden protected preparation for MASQUE, caller DNS/loopback handlers and Core role aliases. Match effective XHTTP/null selection across platforms; add a shared seven-profile preparation/build corpus and keep live protocol qualification separate.
 * Preserve caller remote DNS hosts, servers, domain rules and tags in the VPN adapters. Use Core's DNS client for private system A queries; isolate Apple/Windows transport bootstrap from caller hosts. Keep the native localhost default and current IPv4 DNS limitations explicit.

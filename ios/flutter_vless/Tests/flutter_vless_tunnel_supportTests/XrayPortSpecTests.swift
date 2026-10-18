@@ -2,6 +2,93 @@ import XCTest
 import flutter_vless_tunnel_support
 
 final class XrayPortSpecTests: XCTestCase {
+    func testEnvironmentUnixListenerIsFrozenBeforePersistenceAndPortAllocation() throws {
+        let input: [String: Any] = ["protocol": "socks", "listen": "env:flutter.vless.fixture.listen", "port": "0-65535", "settings": ["auth": "password", "accounts": [["user": "caller", "pass": "caller-password"]]], "sniffing": ["enabled": true, "routeOnly": false]]
+        let source = try JSONSerialization.data(withJSONObject: ["inbounds": [input]], options: [.sortedKeys])
+        for address in ["/tmp/flutter-vless-env-listen.sock", "@flutter-vless-env-listen"] {
+            let bound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: ["flutter.vless.fixture.listen": address])
+            var config = try XCTUnwrap(JSONSerialization.jsonObject(with: bound) as? [String: Any])
+            let preparedInput = try XCTUnwrap((config["inbounds"] as? [[String: Any]])?.first)
+            var expected = input; expected["listen"] = address
+            XCTAssertEqual(preparedInput as NSDictionary, expected as NSDictionary)
+            XCTAssertEqual(try LocalProxyAccessPolicy.bindingPortEnvironment(configData: bound, environment: [:]), bound)
+            let privatePort = try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: LocalProxyCredentials(username: "private", password: "private-password"))
+            XCTAssertEqual(privatePort, 10808)
+            XCTAssertEqual(((config["inbounds"] as? [[String: Any]])?[1]) as? NSDictionary, expected as NSDictionary)
+        }
+        let original = try XCTUnwrap(JSONSerialization.jsonObject(with: source) as? [String: Any])
+        XCTAssertEqual(((original["inbounds"] as? [[String: Any]])?.first)?["listen"] as? String, "env:flutter.vless.fixture.listen")
+    }
+
+    func testListenerEnvironmentExactAliasEmptyMissingAndNonrecursiveSemantics() throws {
+        let cases: [(String, [String: String], String)] = [
+            ("127.0.0.1", [:], "127.0.0.1"),
+            ("env: listen.fixture ", ["LISTEN_FIXTURE": "127.0.0.1"], "127.0.0.1"),
+            ("env:listen.fixture", ["listen.fixture": "", "LISTEN_FIXTURE": "/tmp/unused.sock"], ""),
+            ("env:listen.fixture", [:], "")
+        ]
+        for (listen, environment, expected) in cases {
+            let source = try JSONSerialization.data(withJSONObject: ["inbounds": [["protocol": "socks", "listen": listen, "port": 10808]]], options: [.sortedKeys])
+            let bound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: environment)
+            var config = try XCTUnwrap(JSONSerialization.jsonObject(with: bound) as? [String: Any])
+            XCTAssertEqual(((config["inbounds"] as? [[String: Any]])?.first)?["listen"] as? String, expected)
+            XCTAssertEqual(try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: LocalProxyCredentials(username: "private", password: "private-password")), 10809)
+            if listen == expected { XCTAssertEqual(bound, source) }
+        }
+        let nested = try JSONSerialization.data(withJSONObject: ["inbounds": [["protocol": "socks", "listen": "env:FIRST", "port": 10808]]])
+        XCTAssertThrowsError(try LocalProxyAccessPolicy.bindingPortEnvironment(configData: nested, environment: ["FIRST": "env:SECOND", "SECOND": "/tmp/must-not-be-used.sock"]))
+    }
+
+    func testSharedListenerAddressEnvironmentCorpus() throws {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/listen-addresses.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/listen-addresses.json"))) as? [[String: Any]])
+        for item in cases {
+            let listen = try XCTUnwrap(item["listen"] as? String)
+            let port = try XCTUnwrap(item["port"])
+            let environment = try XCTUnwrap(item["environment"] as? [String: String])
+            let source = try JSONSerialization.data(withJSONObject: ["inbounds": [["protocol": "socks", "listen": listen, "port": port]]], options: [.sortedKeys])
+            if item["invalid"] as? Bool == true {
+                XCTAssertThrowsError(try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: environment))
+                continue
+            }
+            let bound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: environment)
+            var config = try XCTUnwrap(JSONSerialization.jsonObject(with: bound) as? [String: Any])
+            XCTAssertEqual(((config["inbounds"] as? [[String: Any]])?.first)?["listen"] as? String, item["resolved"] as? String)
+            let privatePort = try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: LocalProxyCredentials(username: "private", password: "private-password"))
+            XCTAssertEqual(privatePort, item["unix"] as? Bool == true ? 10808 : 10810)
+            XCTAssertEqual(try LocalProxyAccessPolicy.bindingPortEnvironment(configData: bound, environment: [:]), bound)
+            let original = try XCTUnwrap(JSONSerialization.jsonObject(with: source) as? [String: Any])
+            XCTAssertEqual(((original["inbounds"] as? [[String: Any]])?.first)?["listen"] as? String, listen)
+        }
+    }
+
+    func testEffectiveUnixListenerClassificationUsesCoreBracketsThenWhitespace() throws {
+        let addresses = [" \u{0085}/tmp/flutter-vless-listen.sock\u{00a0}", "[/tmp/flutter-vless-listen.sock]", "[ \u{0085}@flutter-vless-listen\u{00a0} ]"]
+        for address in addresses {
+            let source = try JSONSerialization.data(withJSONObject: ["inbounds": [["protocol": "socks", "listen": "env:FIXTURE", "port": "0-65535"]]])
+            let bound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: ["FIXTURE": address])
+            var config = try XCTUnwrap(JSONSerialization.jsonObject(with: bound) as? [String: Any])
+            XCTAssertEqual(((config["inbounds"] as? [[String: Any]])?.first)?["listen"] as? String, address)
+            let privatePort = try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: LocalProxyCredentials(username: "private", password: "private-password"))
+            XCTAssertEqual(privatePort, 10808)
+        }
+    }
+
+    func testUnicodeListenerEnvironmentKeysRequireExactLookupInsteadOfExpandingAnAlias() throws {
+        let source = try JSONSerialization.data(withJSONObject: ["inbounds": [["protocol": "socks", "listen": "env:listen.ß", "port": "0-65535"]]])
+        XCTAssertThrowsError(try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: ["LISTEN_SS": "127.0.0.1"]))
+        let path = "/tmp/flutter-vless-unicode-env-listen.sock"
+        let bound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: ["listen.ß": path, "LISTEN_SS": "127.0.0.1"])
+        var config = try XCTUnwrap(JSONSerialization.jsonObject(with: bound) as? [String: Any])
+        XCTAssertEqual(((config["inbounds"] as? [[String: Any]])?.first)?["listen"] as? String, path)
+        let privatePort = try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: LocalProxyCredentials(username: "private", password: "private-password"))
+        XCTAssertEqual(privatePort, 10808)
+    }
+
     func testSharedNumericMetricsListenerCorpusWithoutResolvingNamesOrChangingSource() throws {
         var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         for _ in 0..<10 {

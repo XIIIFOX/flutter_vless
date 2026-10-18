@@ -121,14 +121,15 @@ public enum XrayPortSpec {
 /// Owns only local listeners. Remote passwords, IDs, keys and user maps remain untouched.
 public enum LocalProxyAccessPolicy {
     /// A Packet Tunnel is a separate process and does not inherit Runner's
-    /// environment. Bind port references once before saving the immutable
-    /// session, so system/control restarts use the same effective port list.
+    /// environment. Bind listener addresses and port references once before
+    /// saving the immutable session, so system/control restarts keep their
+    /// effective listener type and port list.
     /// The caller's source JSON remains available in its own editor/model.
     public static func bindingPortEnvironment(configData: Data,
         environment: [String: String] = ProcessInfo.processInfo.environment) throws -> Data {
         var config = try normalizedConfig(configData: configData)
+        var changed = try bindListenerEnvironment(&config, environment: environment)
         guard var inputs = config["inbounds"] as? [[String: Any]] else { return configData }
-        var changed = false
         for index in inputs.indices {
             guard let value = inputs[index]["port"] as? String else { continue }
             let parts = value.split(separator: ",", omittingEmptySubsequences: false)
@@ -183,7 +184,8 @@ public enum LocalProxyAccessPolicy {
     public static let managedTagPrefix = "flutter-vless-tun"
 
     public static func validateVPN(configData: Data) throws {
-        let object = try normalizedConfig(configData: configData)
+        var object = try normalizedConfig(configData: configData)
+        _ = try bindListenerEnvironment(&object, environment: ProcessInfo.processInfo.environment)
         _ = try privatePort(configuration: object)
     }
 
@@ -193,6 +195,7 @@ public enum LocalProxyAccessPolicy {
     @discardableResult
     public static func applyVPN(to config: inout [String: Any], credentials: LocalProxyCredentials) throws -> Int {
         try normalizeLocalFields(&config)
+        _ = try bindListenerEnvironment(&config, environment: ProcessInfo.processInfo.environment)
         let imported = config["inbounds"] as? [[String: Any]] ?? []
         let port = try privatePort(configuration: config)
         var tags = XrayServiceTags(configuration: config)
@@ -208,6 +211,54 @@ public enum LocalProxyAccessPolicy {
         return port
     }
 
+    /// Address.UnmarshalJSON performs exactly one env lookup before deciding
+    /// whether listen is a Unix path or an IP. Freeze that same effective value
+    /// before port allocation and cross-process profile persistence.
+    private static func bindListenerEnvironment(_ config: inout [String: Any],
+                                                environment: [String: String]) throws -> Bool {
+        guard var inputs = config["inbounds"] as? [[String: Any]] else { return false }
+        var changed = false
+        for index in inputs.indices {
+            guard let listen = inputs[index]["listen"] as? String, listen.hasPrefix("env:") else { continue }
+            let name = String(listen.dropFirst(4))
+            let resolved: String
+            if let exact = environment[name] {
+                resolved = exact // LookupEnv preserves an explicitly empty value.
+            } else {
+                let trimmed = name.trimmingCharacters(in: goWhitespace)
+                // Swift full Unicode uppercasing can expand a scalar (ß -> SS),
+                // unlike Go's simple case mapping. Keep that alias boundary
+                // explicit while retaining exact Unicode environment keys.
+                guard trimmed.unicodeScalars.allSatisfy({ $0.isASCII }) else {
+                    throw LocalProxyAccessError.malformedConfiguration
+                }
+                let alternate = trimmed.uppercased().replacingOccurrences(of: ".", with: "_")
+                resolved = alternate.isEmpty ? "" : environment[alternate] ?? ""
+            }
+            // Core rejects this literal domain after its single lookup. Do not
+            // accidentally give it a second lookup when saved JSON is parsed.
+            guard !resolved.hasPrefix("env:") else { throw LocalProxyAccessError.malformedConfiguration }
+            inputs[index]["listen"] = resolved
+            changed = true
+        }
+        if changed { config["inbounds"] = inputs }
+        return changed
+    }
+
+    // strings.TrimSpace uses Go's Unicode White_Space table. Keep it explicit
+    // rather than Foundation's broader character classification.
+    private static let goWhitespace = CharacterSet(charactersIn:
+        "\u{0009}\u{000a}\u{000b}\u{000c}\u{000d} \u{0085}\u{00a0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}")
+
+    private static func isUnixListener(_ raw: String) -> Bool {
+        // ParseAddress removes one outer bracket pair before TrimSpace. This
+        // view is for classification only; retain the original effective text.
+        let unbracketed = raw.hasPrefix("[") && raw.hasSuffix("]")
+            ? String(raw.dropFirst().dropLast()) : raw
+        let address = unbracketed.trimmingCharacters(in: goWhitespace)
+        return address.hasPrefix("/") || address.hasPrefix("@")
+    }
+
     private static func privatePort(configuration: [String: Any]) throws -> Int {
         let inbounds = configuration["inbounds"] as? [[String: Any]] ?? []
         var used = XrayPortSpec.serviceListenerPorts(configuration: configuration)
@@ -217,7 +268,7 @@ public enum LocalProxyAccessPolicy {
             }
             let listen = inbound["listen"] as? String ?? ""
             // Core ignores PortList when this input listens on a Unix socket.
-            if listen.hasPrefix("/") || listen.hasPrefix("@") { continue }
+            if isUnixListener(listen) { continue }
             guard let value = inbound["port"] else { continue } // Unix/listener-free inputs.
             used.formUnion(try XrayPortSpec.reservedPorts(value))
         }

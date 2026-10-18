@@ -84,11 +84,98 @@ void OwnedApiPortCases() {
   Check(!OwnedApiPort(source.dump(), changed.dump()), "foreign private API shape accepted");
   Check(!OwnedApiPort(source.dump(), "{bad json}"), "invalid prepared document accepted");
 }
+void UnixInputProxyPreparationCases() {
+  for (const auto& listen : {std::string("@flutter-vless-unix-fixture"), std::string(" \t@flutter-vless-unix-fixture\n")}) {
+    auto profile = Parse(R"({"inbounds":[{"protocol":"http","port":18582},{"protocol":"socks","port":18580}],"outbounds":[{"protocol":"freedom"}]})");
+    profile["inbounds"][0]["listen"] = listen;
+    auto text = profile.dump(); unsigned unix_probes = 0, allocations = 0;
+    Check(PrepareProxy(text, [&](uint16_t port) { if (port == 18582) { ++unix_probes; return false; } return true; },
+        [&] { ++allocations; return uint16_t{0}; }), "Unix source listener was probed/remapped as a TCP port");
+    Check(unix_probes == 0 && allocations == 0, "Unix PortList triggered OS port allocation");
+    Check(Parse(text)["inbounds"][0] == profile["inbounds"][0], "Unix caller listener or ignored PortList changed");
+  }
+}
+void ListenAddressCases() {
+  std::ifstream input("tool/fixtures/compatibility/listen-addresses.json");
+  Check(input.good(), "shared listen address corpus is required");
+  Json cases; input >> cases;
+  Check(cases.size() == 6, "shared listen address corpus changed");
+  for (const auto& item : cases) {
+    auto environment = item["environment"];
+    auto expected = item["resolved"];
+#ifdef _WIN32
+    if (item.contains("windowsEnvironment")) environment = item["windowsEnvironment"];
+    if (item.contains("windowsResolved")) expected = item["windowsResolved"];
+#endif
+    std::vector<std::string> lookups;
+    PortEnvironmentReader read = [&](const std::string& name) -> std::optional<std::string> {
+      lookups.push_back(name);
+      return environment.contains(name) ? std::optional<std::string>{environment[name].get<std::string>()} : std::nullopt;
+    };
+    Json profile = {{"inbounds", Json::array({{{"protocol", "http"}, {"listen", item["listen"]}, {"port", item["port"]}, {"settings", {{"sentinel", "env:CALLER_SETTING"}}}}})},
+        {"outbounds", Json::array({{{"protocol", "freedom"}, {"settings", {{"redirect", "env:CALLER_ENDPOINT"}}}}})},
+        {"api", {{"listen", "env:CALLER_API"}}}};
+    const auto original = profile.dump();
+    const auto available = AvailablePort(profile, 10807, read);
+    auto normalized = profile;
+    lookups.clear();
+    const bool accepted = Normalize(normalized, read);
+    Check(profile.dump() == original, "resolved port view mutated the source document");
+    if (item.value("invalid", false)) {
+      Check(!accepted && !available, "nested env listener was reinterpreted instead of refused");
+      Check(lookups == std::vector<std::string>{"FLUTTER_VLESS_FIXTURE_LISTEN"}, "nested env lookup was recursive");
+      continue;
+    }
+    Check(accepted, item["name"].get<std::string>().c_str());
+    Check(available == (item["unix"].get<bool>() ? 10807 : 10810), "effective Unix/numeric listen PortList classification differs from Core");
+    Check(normalized["inbounds"][0]["listen"] == expected, "listen env value was not frozen exactly");
+    Check(normalized["inbounds"][0]["port"] == item["port"] && normalized["inbounds"][0]["settings"] == profile["inbounds"][0]["settings"]
+        && normalized["outbounds"] == profile["outbounds"] && normalized["api"] == profile["api"], "listen preparation changed an unrelated caller field");
+    if (item["name"] == "present_empty_wins_over_alias") Check(lookups == std::vector<std::string>{"flutter.vless.fixture.listen"}, "present empty exact env lost to its alias");
+    const auto frozen = normalized.dump();
+    unsigned later_lookups = 0;
+    Check(Normalize(normalized, [&](const std::string&) -> std::optional<std::string> { ++later_lookups; return "127.0.0.2"; })
+        && normalized.dump() == frozen && later_lookups == 0, "frozen listen depended on later child environment");
+  }
+  for (const auto& listen : {std::string(" \t@flutter-vless-listen-fixture\n"), std::string(u8"\u2003@flutter-vless-listen-fixture\u2003"), std::string("[ @flutter-vless-listen-fixture ]")})
+    Check(UnixInboundListen(listen), "Core address whitespace/bracket Unix classification mismatch");
+  auto folded = Parse(u8R"({"inbounds":[{"protocol":"http","Liſten":"env:fixture.listen","port":"0-65535"}],"outbounds":[{"protocol":"freedom"}]})");
+  const auto untouched = folded.dump();
+  PortEnvironmentReader read = [](const std::string& name) -> std::optional<std::string> { return name == "FIXTURE_LISTEN" ? std::optional<std::string>{"@fixture"} : std::nullopt; };
+  Check(AvailablePort(folded, 10807, read) == 10807 && folded.dump() == untouched, "folded listen view did not preserve source or reserve correctly");
+  Check(Normalize(folded, read) && folded["inbounds"][0]["listen"] == "@fixture", "folded listen env was not materialized");
+  Check(ResolveInboundListen(" ENV:fixture", read) == " ENV:fixture", "listen env prefix was made case/whitespace insensitive");
+  for (const auto& name : {std::string(u8"ß"), std::string(u8" ß ")}) {
+    std::vector<std::string> lookups;
+    PortEnvironmentReader unsupported = [&](const std::string& key) -> std::optional<std::string> {
+      lookups.push_back(key);
+      return key == "SS" ? std::optional<std::string>{"@foreign-alias"} : std::nullopt;
+    };
+    auto profile = Parse(R"({"inbounds":[{"protocol":"http","port":"10807-10809"}],"outbounds":[{"protocol":"freedom"}]})");
+    profile["inbounds"][0]["listen"] = "env:" + name;
+    Check(!AvailablePort(profile, 10807, unsupported), "unqualified Unicode env alias silently acquired a bind address");
+    Check(lookups == std::vector<std::string>{name}, "unqualified Unicode alias was looked up approximately");
+    lookups.clear();
+    Check(!Normalize(profile, unsupported), "unqualified Unicode env alias became an AnyIP listener");
+    Check(lookups == std::vector<std::string>{name}, "Unicode normalization performed an alias lookup");
+  }
+  PortEnvironmentReader exact_unicode = [](const std::string& name) -> std::optional<std::string> {
+    return name == u8"ß" ? std::optional<std::string>{"@exact-unicode-key"} : std::nullopt;
+  };
+  Check(ResolveInboundListen(u8"env:ß", exact_unicode) == "@exact-unicode-key", "exact Unicode env lookup was refused");
+  auto exact_profile = Parse(u8R"({"inbounds":[{"protocol":"http","listen":"env:ß","port":"0-65535"}],"outbounds":[{"protocol":"freedom"}]})");
+  Check(AvailablePort(exact_profile, 10807, exact_unicode) == 10807 && Normalize(exact_profile, exact_unicode)
+      && exact_profile["inbounds"][0]["listen"] == "@exact-unicode-key", "exact Unicode env binding did not preserve its value");
+}
 int main(int argc, char** argv) {
   if (argc == 2 && std::string(argv[1]) == "--caller-services") { CallerServicePreservationCases(); return 0; }
   if (argc == 2 && std::string(argv[1]) == "--owned-api") { OwnedApiPortCases(); return 0; }
+  if (argc == 2 && std::string(argv[1]) == "--unix-inputs") { UnixInputProxyPreparationCases(); return 0; }
+  if (argc == 2 && std::string(argv[1]) == "--listen-addresses") { ListenAddressCases(); return 0; }
   CallerServicePreservationCases();
   OwnedApiPortCases();
+  UnixInputProxyPreparationCases();
+  ListenAddressCases();
   std::ifstream api_input("tool/fixtures/compatibility/api-listeners.json");
   Check(api_input.good(), "shared API listener corpus is required");
   Json api_cases; api_input >> api_cases;

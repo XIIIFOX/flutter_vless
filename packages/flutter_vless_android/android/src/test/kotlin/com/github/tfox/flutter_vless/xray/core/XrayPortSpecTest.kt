@@ -6,6 +6,101 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class XrayPortSpecTest {
+    @Test fun environmentUnixListenDoesNotReserveEveryTcpPortAndIsFrozenBeforeLaunch() {
+        val source = """{"inbounds":[{"tag":"caller-unix","listen":"env:FLUTTER_VLESS_TEST_UNIX_LISTEN",
+          "port":"0-65535","protocol":"socks","settings":{"auth":"noauth","udp":false}}],
+          "outbounds":[{"protocol":"freedom"}]}"""
+        val config = com.github.tfox.flutter_vless.xray.dto.XrayConfig(V2RAY_FULL_JSON_CONFIG = source)
+        val output = XrayCoreManager.buildRuntimeConfigJson(config, java.io.File("."), LocalProxyCredentials("user", "password"),
+            environment = { if (it == "FLUTTER_VLESS_TEST_UNIX_LISTEN") "/tmp/flutter-vless-fixture.sock" else null })
+        assertEquals(10807, config.LOCAL_SOCKS5_PORT)
+        val expected = JSONObject(source).getJSONArray("inbounds").getJSONObject(0)
+            .put("listen", "/tmp/flutter-vless-fixture.sock")
+        assertEquals(expected.toString(), output.getJSONArray("inbounds").getJSONObject(0).toString())
+        assertEquals(source, config.V2RAY_FULL_JSON_CONFIG)
+    }
+
+    @Test fun listenEnvironmentUsesExactEmptyThenGoAliasWithoutRecursiveExpansion() {
+        val values = mapOf("listen.name" to "", "LISTEN_NAME" to "/tmp/alias.sock",
+            "\u00df_PORT" to "127.0.0.1", "SS_PORT" to "/tmp/wrong.sock",
+            "CONTROL" to "/tmp/not-trimmed.sock", "SECOND" to "/tmp/not-recursive.sock",
+            "FIRST" to "env:SECOND")
+        val lookup: (String) -> String? = values::get
+        assertEquals("", XrayPortSpec.bindListenEnvironment("env:listen.name", lookup))
+        assertEquals("/tmp/alias.sock", XrayPortSpec.bindListenEnvironment("env:\u0085 listen.name\u00a0", lookup))
+        assertEquals("127.0.0.1", XrayPortSpec.bindListenEnvironment("env:\u00df.port", lookup))
+        assertEquals("", XrayPortSpec.bindListenEnvironment("env:\u001ccontrol\u001c", lookup))
+        assertThrows(IllegalArgumentException::class.java) { XrayPortSpec.bindListenEnvironment("env:FIRST", lookup) }
+        assertEquals("", XrayPortSpec.bindListenEnvironment("env:MISSING", lookup))
+        assertEquals("ENV:FIRST", XrayPortSpec.bindListenEnvironment("ENV:FIRST", lookup))
+    }
+
+    @Test fun sharedListenAddressCorpusFreezesRuntimeWithoutChangingSource() {
+        val cases = JSONArray(requireNotNull(javaClass.getResource("/listen-addresses.json")).readText())
+        assertEquals(6, cases.length())
+        for (index in 0 until cases.length()) {
+            val item = cases.getJSONObject(index); val label = item.getString("name")
+            val environment = item.getJSONObject("environment")
+            val source = JSONObject().put("inbounds", JSONArray().put(JSONObject().put("protocol", "socks")
+                .put("tag", "caller-input").put("listen", item.getString("listen")).put("port", item.get("port"))))
+                .put("outbounds", JSONArray().put(JSONObject().put("protocol", "freedom")))
+            val before = source.toString()
+            val config = com.github.tfox.flutter_vless.xray.dto.XrayConfig(V2RAY_FULL_JSON_CONFIG = before)
+            val output = runCatching { XrayCoreManager.buildRuntimeConfigJson(config, java.io.File("."),
+                LocalProxyCredentials("user", "password"), environment = { environment.opt(it) as? String }) }
+            if (item.optBoolean("invalid")) assertTrue(label, output.exceptionOrNull() is IllegalArgumentException)
+            else {
+                val resolved = item.getString("resolved")
+                assertEquals(label, resolved, output.getOrThrow().getJSONArray("inbounds").getJSONObject(0).getString("listen"))
+                val expected = JSONObject(source.getJSONArray("inbounds").getJSONObject(0).toString()).put("listen", resolved)
+                assertEquals(label, expected.toString(), output.getOrThrow().getJSONArray("inbounds").getJSONObject(0).toString())
+                assertEquals(label, item.getBoolean("unix"), XrayPortSpec.isUnixListen(resolved))
+                val occupied = if (item.getBoolean("unix")) emptySet() else XrayPortSpec.reservedPorts(item.get("port"))
+                assertEquals(label, (10807..65535).first { it !in occupied }, config.LOCAL_SOCKS5_PORT)
+            }
+            assertEquals(label, before, source.toString())
+            assertEquals(label, before, config.V2RAY_FULL_JSON_CONFIG)
+        }
+    }
+
+    @Test fun boundIpEmptyAndMissingListenStillReserveTheirPortsAndPreserveSource() {
+        for (value in listOf<String?>("127.0.0.1", "", null)) {
+            val source = """{"inbounds":[{"tag":"caller-input","listen":"env:LISTEN_ADDR","port":"10807-10809","protocol":"http"}],"outbounds":[{"protocol":"freedom"}]}"""
+            val config = com.github.tfox.flutter_vless.xray.dto.XrayConfig(V2RAY_FULL_JSON_CONFIG = source)
+            val output = XrayCoreManager.buildRuntimeConfigJson(config, java.io.File("."), LocalProxyCredentials("user", "password"),
+                environment = { if (it == "LISTEN_ADDR") value else null })
+            assertEquals(10810, config.LOCAL_SOCKS5_PORT)
+            assertEquals(value ?: "", output.getJSONArray("inbounds").getJSONObject(0).getString("listen"))
+            assertEquals(source, config.V2RAY_FULL_JSON_CONFIG)
+        }
+    }
+
+    @Test fun unixListenUsesCoreAddressViewWhilePreservingResolvedWhitespaceAndBrackets() {
+        for (listen in listOf(" \t/tmp/flutter-vless-fixture.sock\u0085", "[/tmp/flutter-vless-fixture.sock]", " \t@flutter-vless-fixture ")) {
+            val source = """{"inbounds":[{"protocol":"socks","listen":"env:LISTEN_ADDR","port":"0-65535"}],"outbounds":[{"protocol":"freedom"}]}"""
+            val config = com.github.tfox.flutter_vless.xray.dto.XrayConfig(V2RAY_FULL_JSON_CONFIG = source)
+            val output = XrayCoreManager.buildRuntimeConfigJson(config, java.io.File("."), LocalProxyCredentials("user", "password"),
+                environment = { if (it == "LISTEN_ADDR") listen else null })
+            assertEquals(10807, config.LOCAL_SOCKS5_PORT)
+            assertEquals(listen, output.getJSONArray("inbounds").getJSONObject(0).getString("listen"))
+            assertEquals(source, config.V2RAY_FULL_JSON_CONFIG)
+        }
+        assertFalse(XrayPortSpec.isUnixListen("\u001c/tmp/not-go-whitespace"))
+        assertFalse(XrayPortSpec.isUnixListen(" [/tmp/not-unwrapped] "))
+    }
+
+    @Test fun proxyOnlyDoesNotSelectCredentialsFromAWhitespaceUnixListen() {
+        val source = """{"inbounds":[{"protocol":"socks","listen":"env:LISTEN_ADDR","port":10807,
+          "settings":{"auth":"password","accounts":[{"user":"unix-user","pass":"unix-password"}]}}],"outbounds":[{"protocol":"freedom"}]}"""
+        val config = com.github.tfox.flutter_vless.xray.dto.XrayConfig(V2RAY_FULL_JSON_CONFIG = source, PROXY_ONLY = true)
+        val output = XrayCoreManager.buildRuntimeConfigJson(config, java.io.File("."),
+            environment = { if (it == "LISTEN_ADDR") " \t/tmp/flutter-vless-fixture.sock " else null })
+        assertEquals(10807, config.LOCAL_SOCKS5_PORT)
+        assertEquals(3, output.getJSONArray("inbounds").length()) // Imported Unix, private SOCKS, owned API.
+        assertNull(LocalProxyAccessPolicy.credentialsForProxyOnly(output, config.LOCAL_SOCKS5_PORT))
+        assertEquals(source, config.V2RAY_FULL_JSON_CONFIG)
+    }
+
     @Test fun sharedNumericApiListenerCorpusWithoutResolvingNamesOrChangingSource() {
         val cases = JSONArray(requireNotNull(javaClass.getResource("/api-listeners.json")).readText())
         for (i in 0 until cases.length()) {

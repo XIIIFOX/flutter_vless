@@ -237,6 +237,27 @@ disabled; this increment's remote runtime result is still pending.
 This increment does not implement source-inbound context selection, explicit
 VPN default selection or isolation from caller prefix-based balancers.
 
+Listener address increment: native preparation now expands only imported
+`inbound.listen` environment references before deciding whether a listener
+occupies TCP ports. Apple also freezes that value before saving a profile for
+its separate extension process. The caller's source stays unchanged; the
+effective listener retains its other fields. Exact-name lookup precedes the
+normalized alias, an explicitly empty value wins, and missing values become
+Core's empty/AnyIP address. Unix listeners no longer consume or remap an ignored
+TCP PortList. Outer brackets and whitespace are interpreted for classification
+as Core does, without changing the stored resolved text.
+
+The [six-case address corpus](../tool/fixtures/compatibility/listen-addresses.json)
+is checked with pinned Core decode/build and native preparation. Recursive
+environment listener references are rejected: Core interprets the first result
+as an address, while freezing and reparsing it could otherwise expand it again.
+ASCII normalized aliases are qualified; Apple/Windows explicitly reject a
+non-ASCII alias when the exact key is absent. Wider Unicode alias parity remains
+separate work. Runtime acceptance additionally requires a real environment-based
+Unix SOCKS listener alongside the existing HTTP/DNS/API checks; the new remote
+result is pending. Other address fields and environment references are outside
+this increment.
+
 Port grammar progress (2026-10-18): the Dart, Kotlin, Swift and C++ paths now
 share a 20-case corpus checked against the pinned Core decoder/build path.
 It covers lists/ranges, numeric zero, native `env:` lookup and its normalized

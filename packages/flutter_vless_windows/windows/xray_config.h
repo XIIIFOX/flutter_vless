@@ -15,6 +15,11 @@
 
 namespace flutter_vless::xray_config {
 using Json = nlohmann::ordered_json;
+using PortEnvironmentReader = std::function<std::optional<std::string>(const std::string&)>;
+inline std::optional<std::string> PortEnvironment(const std::string& name);
+inline std::string PortTrimSpace(std::string text);
+inline std::optional<std::string> ResolveInboundListen(const std::string& text, const PortEnvironmentReader& read_environment);
+inline bool UnixInboundListen(std::string resolved);
 
 inline Json Parse(const std::string& text) {
   bool duplicate = false;
@@ -94,7 +99,7 @@ inline bool PrivateStream(Json& stream) {
   }
   return true;
 }
-inline bool Normalize(Json& config) {
+inline bool Normalize(Json& config, const PortEnvironmentReader& read_environment = PortEnvironment) {
   if (!Fields(config, {"inbounds", "outbounds", "dns", "routing", "log", "api", "policy", "stats", "fakeDns", "fakedns"})) return false;
   for (const auto* key : {"inbounds", "outbounds"}) {
     if (std::string(key) == "inbounds" && !config.contains(key)) config[key] = Json::array();
@@ -103,6 +108,13 @@ inline bool Normalize(Json& config) {
       if (!Fields(entry, {"protocol", "tag", "port", "listen", "settings", "streamSettings", "sniffing", "proxySettings"})) return false;
       if (!entry.contains("protocol") || !entry["protocol"].is_string()) return false;
       entry["protocol"] = Fold(entry["protocol"].get<std::string>());
+      // Freeze this Address field before the child environment is sanitized.
+      // Other strings and caller endpoint fields have their own semantics.
+      if (std::string(key) == "inbounds" && entry.contains("listen") && entry["listen"].is_string()) {
+        const auto resolved = ResolveInboundListen(entry["listen"].get<std::string>(), read_environment);
+        if (!resolved) return false;
+        entry["listen"] = *resolved;
+      }
       if (entry.contains("streamSettings") && !entry["streamSettings"].is_null() && !PrivateStream(entry["streamSettings"])) return false;
     }
   }
@@ -184,7 +196,8 @@ inline bool AddApi(Json& config, uint16_t api_port) {
   return true;
 }
 
-inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t preferred);
+inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t preferred,
+    const PortEnvironmentReader& read_environment = PortEnvironment);
 
 inline bool PrepareProxy(std::string& text,
                          const std::function<bool(uint16_t)>& is_free,
@@ -193,6 +206,8 @@ inline bool PrepareProxy(std::string& text,
   if (!Normalize(config) || !config.contains("inbounds") ||
       !config["inbounds"].is_array()) return false;
   for (auto& inbound : config["inbounds"]) {
+    if (inbound.contains("listen") && inbound["listen"].is_string()
+        && UnixInboundListen(inbound["listen"].get<std::string>())) continue;
     const auto port = Port(inbound);
     if (port && !is_free(*port)) {
       const auto replacement = free_port();
@@ -298,7 +313,34 @@ inline std::string PortTrimSpace(std::string text) {
   }
 }
 
-using PortEnvironmentReader = std::function<std::optional<std::string>(const std::string&)>;
+// Core's Address env lookup is exact-first, then its normalized alias, once.
+// Alias folding here covers ASCII environment names. Refuse an unqualified
+// Unicode alias instead of converting a missing lookup to an AnyIP listener.
+// Exact UTF-8 names are passed unchanged to the platform reader.
+inline std::optional<std::string> ResolveInboundListen(const std::string& text, const PortEnvironmentReader& read_environment) {
+  if (text.rfind("env:", 0) != 0) return text;
+  const auto name = text.substr(4);
+  auto resolved = read_environment(name);
+  if (!resolved) {
+    auto alternate = PortTrimSpace(name);
+    if (std::any_of(alternate.begin(), alternate.end(), [](unsigned char c) { return c >= 0x80; })) return std::nullopt;
+    for (auto& c : alternate) { if (c == '.') c = '_'; else if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A'); }
+    if (!alternate.empty()) resolved = read_environment(alternate);
+  }
+  if (!resolved) resolved = "";
+  // Writing a nested env: value would make the child's JSON decoder resolve a
+  // second time, whereas the source Address decoder resolves only once.
+  if (resolved->rfind("env:", 0) == 0) return std::nullopt;
+  return resolved;
+}
+inline bool UnixInboundListen(std::string resolved) {
+  // Match ParseAddress's bracket-removal-before-trim order for classification;
+  // preserve the raw resolved string in the generated document.
+  if (resolved.size() >= 2 && resolved.front() == '[' && resolved.back() == ']') resolved = resolved.substr(1, resolved.size() - 2);
+  resolved = PortTrimSpace(resolved);
+  return (!resolved.empty() && resolved[0] == '@') || std::filesystem::u8path(resolved).is_absolute();
+}
+
 inline std::optional<std::set<unsigned>> ReservedPorts(const Json& value,
     const PortEnvironmentReader& read_environment = PortEnvironment) {
   std::set<unsigned> occupied;
@@ -376,15 +418,18 @@ inline std::set<unsigned> ListenerPorts(const Json& config, const std::set<std::
 inline std::set<unsigned> ApiListenerPorts(const Json& config) { return ListenerPorts(config, {"api"}); }
 inline std::set<unsigned> ServiceListenerPorts(const Json& config) { return ListenerPorts(config, {"api", "metrics"}); }
 
-inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t preferred) {
+inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t preferred,
+    const PortEnvironmentReader& read_environment) {
   auto occupied = ServiceListenerPorts(config);
-  if (config.contains("inbounds") && config["inbounds"].is_array()) for (const auto& inbound : config["inbounds"]) {
+  if (config.contains("inbounds") && config["inbounds"].is_array()) for (auto inbound : config["inbounds"]) {
+    if (inbound.is_object() && !Fields(inbound, {"listen", "port"})) return std::nullopt;
     if (inbound.contains("listen") && inbound["listen"].is_string()) {
-      const auto listen = inbound["listen"].get<std::string>();
-      if ((!listen.empty() && listen[0] == '@') || std::filesystem::u8path(listen).is_absolute()) continue;
+      const auto listen = ResolveInboundListen(inbound["listen"].get<std::string>(), read_environment);
+      if (!listen) return std::nullopt;
+      if (UnixInboundListen(*listen)) continue;
     }
     if (!inbound.contains("port")) continue;
-    const auto ports = ReservedPorts(inbound["port"]);
+    const auto ports = ReservedPorts(inbound["port"], read_environment);
     if (!ports) return std::nullopt;
     occupied.insert(ports->begin(), ports->end());
   }
@@ -787,7 +832,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   for (const auto& rule : routing["rules"]) rules.push_back(rule);
   routing["rules"] = rules;
   const bool owned_api = !config.contains("api");
-  const auto api_port = owned_api ? AvailablePort(config, 10086) : std::optional<uint16_t>{0};
+  const auto api_port = owned_api ? AvailablePort(config, 10086) : std::optional<uint16_t>{uint16_t{0}};
   if (!api_port || !AddApi(config, *api_port)) return std::nullopt;
   if (owned_api) config["api"]["tag"] = service_tags.Next("flutter-vless-stats");
   return config.dump();

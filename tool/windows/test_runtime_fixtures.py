@@ -1,5 +1,9 @@
 """Fixture isolation checks run without Windows APIs or network access."""
 import unittest
+from pathlib import Path
+import subprocess
+import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import runtime_smoke as runtime
@@ -12,6 +16,74 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    def test_caller_api_case_is_optional_and_retains_disabled_counters(self):
+        ordinary = runtime.config(False)
+        for key in ("api", "stats", "policy"):
+            self.assertNotIn(key, ordinary)
+        profile = runtime.config(True, caller_api_port=19086)
+        self.assertEqual({"tag": "caller-api", "listen": "127.0.0.1:19086",
+                          "services": ["StatsService", "HandlerService"]}, profile["api"])
+        self.assertEqual({}, profile["stats"])
+        self.assertEqual({"system": {key: False for key in (
+            "statsInboundUplink", "statsInboundDownlink", "statsOutboundUplink", "statsOutboundDownlink")}}, profile["policy"])
+        self.assertEqual(runtime.config(True)["routing"], profile["routing"])
+
+    def test_caller_api_query_uses_known_runtime_and_fixture_port_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            for nested in (False, True):
+                executable = directory / "xray" / "xray.exe" if nested else directory / "xray.exe"
+                executable.parent.mkdir(exist_ok=True)
+                executable.touch()
+                for reply in ("{}", '{"stat": []}'):
+                    with self.subTest(nested=nested, reply=reply), patch.object(runtime.subprocess, "run") as run:
+                        run.return_value = subprocess.CompletedProcess([], 0, reply, "")
+                        runtime.check_caller_api(directory, 19086)
+                        self.assertEqual([str(executable), "api", "statsquery", "-server=127.0.0.1:19086", "-timeout=2"], run.call_args.args[0])
+                        self.assertEqual(3, run.call_args.kwargs["timeout"])
+                        self.assertEqual(directory, run.call_args.kwargs["cwd"])
+                        self.assertEqual("utf-8", run.call_args.kwargs["encoding"])
+                with patch.object(runtime.subprocess, "run") as run:
+                    run.return_value = subprocess.CompletedProcess([], 0, "{}", "")
+                    runtime.check_caller_api(directory, 19086, "owned-fixture-bottle")
+                    self.assertEqual(["/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine", "--bottle", "owned-fixture-bottle"], run.call_args.args[0][:3])
+                executable.unlink()
+
+    def test_caller_api_query_rejects_failure_or_nonempty_invalid_json(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp); (directory / "xray.exe").touch()
+            for code, stdout in ((1, "{}"), (0, ""), (0, "[]"), (0, '{"stat": null}'),
+                                 (0, '{"stat": [{"name": "inbound>>>caller>>>traffic>>>uplink", "value": "12"}]}'),
+                                 (0, '{"foreign": []}'), (0, '{"stat":[1],"stat":[]}'), (0, " " * 65537)):
+                with self.subTest(code=code, stdout=stdout[:80]), patch.object(runtime.subprocess, "run") as run:
+                    run.return_value = subprocess.CompletedProcess([], code, stdout, "")
+                    with self.assertRaises((AssertionError, ValueError)):
+                        runtime.check_caller_api(directory, 19086)
+                    self.assertEqual(1, run.call_count)
+            with patch.object(runtime.subprocess, "run", side_effect=subprocess.TimeoutExpired("known", 3)) as run:
+                with self.assertRaises(AssertionError):
+                    runtime.check_caller_api(directory, 19086)
+                self.assertEqual(1, run.call_count)
+
+    def test_caller_api_query_refuses_unqualified_port_or_missing_binary(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(runtime.subprocess, "run") as run:
+            for port in (0, 65536, True, "127.0.0.1:19086", "19086"):
+                with self.subTest(port=port), self.assertRaises((AssertionError, ValueError)):
+                    runtime.check_caller_api(Path(temp), port)
+            with self.assertRaises((AssertionError, ValueError)):
+                runtime.check_caller_api(Path(temp), 19086)
+            run.assert_not_called()
+
+    def test_full_vpn_guard_still_precedes_any_socket_or_child(self):
+        for name, environment in (("posix", {"GITHUB_ACTIONS": "true"}), ("nt", {})):
+            with self.subTest(name=name), patch.object(runtime, "os", SimpleNamespace(name=name, environ=environment)), \
+                    patch.object(runtime.sys, "argv", ["runtime_smoke.py", "--directory", "unused", "--vpn"]), \
+                    patch.object(runtime.socket, "socket") as socket, patch.object(runtime.subprocess, "Popen") as child:
+                with self.assertRaisesRegex(SystemExit, "disposable GitHub Windows runner"):
+                    runtime.main()
+                socket.assert_not_called()
+                child.assert_not_called()
+
     def test_synthetic_dns_is_scoped_and_other_names_use_encrypted_relay(self):
         with patch.object(runtime, "REAL_DNS", True), \
                 patch.object(runtime, "real_dns_response", return_value=b"relay") as relay:

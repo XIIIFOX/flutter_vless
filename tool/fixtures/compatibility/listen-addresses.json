@@ -1,0 +1,53 @@
+[
+  {
+    "name": "environment_unix_path",
+    "listen": "env:FLUTTER_VLESS_FIXTURE_LISTEN",
+    "environment": {"FLUTTER_VLESS_FIXTURE_LISTEN": "/tmp/flutter-vless-listen-fixture.sock"},
+    "windowsEnvironment": {"FLUTTER_VLESS_FIXTURE_LISTEN": "C:\\flutter-vless-listen-fixture.sock"},
+    "resolved": "/tmp/flutter-vless-listen-fixture.sock",
+    "windowsResolved": "C:\\flutter-vless-listen-fixture.sock",
+    "port": "0-65535",
+    "unix": true
+  },
+  {
+    "name": "normalized_alias_abstract_socket",
+    "listen": "env: flutter.vless.fixture.listen ",
+    "environment": {"FLUTTER_VLESS_FIXTURE_LISTEN": "@flutter-vless-listen-fixture"},
+    "resolved": "@flutter-vless-listen-fixture",
+    "port": "0-65535",
+    "unix": true
+  },
+  {
+    "name": "environment_numeric_ip_reserves_ports",
+    "listen": "env:FLUTTER_VLESS_FIXTURE_LISTEN",
+    "environment": {"FLUTTER_VLESS_FIXTURE_LISTEN": "127.0.0.1"},
+    "resolved": "127.0.0.1",
+    "port": "10807-10809",
+    "unix": false
+  },
+  {
+    "name": "present_empty_wins_over_alias",
+    "listen": "env:flutter.vless.fixture.listen",
+    "environment": {"flutter.vless.fixture.listen": "", "FLUTTER_VLESS_FIXTURE_LISTEN": "@ignored-alias"},
+    "resolved": "",
+    "port": "10807-10809",
+    "unix": false
+  },
+  {
+    "name": "missing_environment_means_any_ip",
+    "listen": "env:FLUTTER_VLESS_FIXTURE_LISTEN",
+    "environment": {},
+    "resolved": "",
+    "port": "10807-10809",
+    "unix": false
+  },
+  {
+    "name": "environment_lookup_is_not_recursive",
+    "listen": "env:FLUTTER_VLESS_FIXTURE_LISTEN",
+    "environment": {"FLUTTER_VLESS_FIXTURE_LISTEN": "env:FLUTTER_VLESS_FIXTURE_SECOND_LISTEN", "FLUTTER_VLESS_FIXTURE_SECOND_LISTEN": "127.0.0.1"},
+    "resolved": "env:FLUTTER_VLESS_FIXTURE_SECOND_LISTEN",
+    "port": "10807-10809",
+    "unix": false,
+    "invalid": true
+  }
+]

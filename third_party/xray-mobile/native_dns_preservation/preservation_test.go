@@ -525,6 +525,17 @@ func testNativeDNSPreservation(t *testing.T) {
 	betaPort := udpResolver(t, beta, "beta.invalid", "192.0.2.12")
 	gammaPort := h2cResolver(t, gamma)
 	proxyPort := socksMarker(t, origin)
+	unixDirectory, err := os.MkdirTemp("", "fv-listen-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(unixDirectory); err != nil {
+			t.Error(err)
+		}
+	})
+	unixAddress := filepath.Join(unixDirectory, "in.sock")
+	t.Setenv("FLUTTER_VLESS_FIXTURE_LISTEN", unixAddress)
 	// Keep the caller API separate from the adapter. Reserve its port through
 	// preparation so the native allocator must account for an existing service.
 	apiReservation, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -534,8 +545,10 @@ func testNativeDNSPreservation(t *testing.T) {
 	t.Cleanup(func() { _ = apiReservation.Close() })
 	apiAddress := apiReservation.Addr().String()
 	source := map[string]any{
-		"log":      map[string]any{"loglevel": "none"},
-		"inbounds": []any{},
+		"log": map[string]any{"loglevel": "none"},
+		"inbounds": []any{map[string]any{"tag": "caller-unix", "protocol": "socks",
+			"listen": "env:FLUTTER_VLESS_FIXTURE_LISTEN", "port": "0-65535",
+			"settings": map[string]any{"auth": "noauth", "udp": false}}},
 		"api": map[string]any{"tag": "caller-api", "listen": apiAddress,
 			"services": []string{"StatsService", "HandlerService", "LoggerService"}},
 		"stats": map[string]any{},
@@ -591,6 +604,22 @@ func testNativeDNSPreservation(t *testing.T) {
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)
 	}
+	unixClient, err := net.DialTimeout("unix", unixAddress, time.Second)
+	if err != nil {
+		t.Fatal("caller environment Unix listener did not bind", err)
+	}
+	defer unixClient.Close()
+	_ = unixClient.SetDeadline(time.Now().Add(time.Second))
+	if _, err := unixClient.Write([]byte{5, 1, 0}); err != nil {
+		t.Fatal(err)
+	}
+	var greeting [2]byte
+	if _, err := io.ReadFull(unixClient, greeting[:]); err != nil || greeting != [2]byte{5, 0} {
+		t.Fatal("caller environment Unix listener lost its SOCKS authentication", err)
+	}
+	if err := unixClient.Close(); err != nil {
+		t.Fatal(err)
+	}
 	for _, udp := range []bool{false, true} {
 		for name, want := range map[string]string{"alpha.invalid": "192.0.2.11", "beta.invalid": "192.0.2.12", "gamma.invalid": "192.0.2.13", "static.invalid": "192.0.2.14"} {
 			answer := query(t, port, udp, name, dns.TypeA)
@@ -643,5 +672,5 @@ func testNativeDNSPreservation(t *testing.T) {
 		t.Fatal("caller disabled counters were enabled by adaptation")
 	}
 	completed = true
-	t.Log("PASS actual native DNS: preserved root hosts/servers/tags/per-domain policy, TCP+UDP VIP, numeric TCP+UDP upstream, named h2c static host, AAAA NODATA, MX REFUSED, isolated endpoint pin and HTTP bytes; caller API/StatsService works with disabled counters; no OS resolver")
+	t.Log("PASS actual native DNS: preserved root hosts/servers/tags/per-domain policy, TCP+UDP VIP, numeric TCP+UDP upstream, named h2c static host, AAAA NODATA, MX REFUSED, isolated endpoint pin and HTTP bytes; caller API/StatsService works with disabled counters; environment Unix listener binds and keeps SOCKS authentication; no OS resolver")
 }

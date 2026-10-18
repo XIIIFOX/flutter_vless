@@ -140,6 +140,12 @@ The Windows backend does not download Xray automatically.
   cover API/services, explicit null and disabled statistics. Caller API and
   policy settings remain authoritative. With an imported API, Android/Windows
   do not use it for the example's counters; unavailable counters show zero.
+- Imported `inbound.listen` can use `env:NAME`. Native preparation snapshots
+  that address before listener allocation; Apple also freezes it before saving
+  the cross-process profile. The editor retains the original JSON. The
+  [shared address fixtures](../tool/fixtures/compatibility/listen-addresses.json)
+  cover Unix sockets, IP listeners and empty/missing values without starting
+  all ports in their synthetic ranges.
 - For the DNS preservation check, import full Xray JSON with `dns.hosts` and
   per-domain `dns.servers`, then keep Android's default `config` DNS policy.
   The explicit `proxy` policy intentionally overrides system DNS. See the

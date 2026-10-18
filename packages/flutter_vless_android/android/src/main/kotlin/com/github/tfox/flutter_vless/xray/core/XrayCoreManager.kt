@@ -111,7 +111,8 @@ object XrayCoreManager {
     }
 
     internal fun buildRuntimeConfigJson(config: XrayConfig, filesDir: File,
-        credentials: LocalProxyCredentials? = null, protectedDns: AndroidTunnelDnsPolicy.Prepared? = null): JSONObject {
+        credentials: LocalProxyCredentials? = null, protectedDns: AndroidTunnelDnsPolicy.Prepared? = null,
+        environment: (String) -> String? = System::getenv): JSONObject {
         // The DNS preparer chooses the adapter identity before adding its rule.
         // Accept it only with the exact native-prepared document, including on
         // recovery; guessing a tag from caller JSON could scope another input.
@@ -147,8 +148,9 @@ object XrayCoreManager {
         for (i in 0 until inbounds.length()) {
             val inbound = inbounds.getJSONObject(i)
             val port = inbound.optInt("port", -1)
-            val listen = inbound.optString("listen")
-            val unixSocket = File(listen).isAbsolute || listen.startsWith('@')
+            val listen = XrayPortSpec.bindListenEnvironment(inbound.optString("listen"), environment)
+            if (inbound.opt("listen") is String) inbound.put("listen", listen)
+            val unixSocket = XrayPortSpec.isUnixListen(listen)
             // Xray also accepts string port lists/ranges. Reserve every port
             // before allocating the private VPN listener.
             if (!unixSocket && inbound.has("port")) used.addAll(XrayPortSpec.reservedPorts(inbound.get("port")))

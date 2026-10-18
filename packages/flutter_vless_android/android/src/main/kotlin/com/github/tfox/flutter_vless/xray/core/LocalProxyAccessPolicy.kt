@@ -65,7 +65,7 @@ internal object LocalProxyAccessPolicy {
         for (i in 0 until inputs.length()) {
             val input = inputs.getJSONObject(i)
             val listen = input.optString("listen")
-            if (java.io.File(listen).isAbsolute || listen.startsWith('@')) continue
+            if (XrayPortSpec.isUnixListen(listen)) continue
             if (input.optString("protocol").lowercase() != "socks" || input.optInt("port") != port) continue
             val settings = input.optJSONObject("settings") ?: JSONObject()
             val auth = settings.optString("auth", "noauth")

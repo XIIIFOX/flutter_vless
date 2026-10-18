@@ -3,8 +3,42 @@ package com.github.tfox.flutter_vless.xray.core
 import java.util.Locale
 import org.json.JSONObject
 
-/** Imported Core syntax stays intact; only the private listener's occupied set is derived. */
+/** Derive private-listener reservations and freeze runtime listen env; imported source stays intact. */
 internal object XrayPortSpec {
+    /** Freeze only inbound Address env syntax before the child adds its private
+     * environment. Like Core, expand once, prefer an exact existing empty value,
+     * then try the normalized name; a missing address becomes an empty string. */
+    fun bindListenEnvironment(value: String, environment: (String) -> String? = System::getenv): String {
+        if (!value.startsWith("env:")) return value
+        val name = value.substring(4)
+        // Go strings.TrimSpace's Unicode White_Space set excludes Java's
+        // additional control separators. Go uppercasing is one rune at a time,
+        // so, for example, sharp-s must not expand to two ASCII letters.
+        val trimmed = trimGoSpace(name)
+        val alternate = StringBuilder()
+        var index = 0
+        while (index < trimmed.length) {
+            val codePoint = Character.codePointAt(trimmed, index)
+            alternate.appendCodePoint(if (codePoint == '.'.code) '_'.code else Character.toUpperCase(codePoint))
+            index += Character.charCount(codePoint)
+        }
+        val resolved = environment(name) ?: if (alternate.isNotEmpty()) environment(alternate.toString()) ?: "" else ""
+        // The original Address decoder expands once. Materializing another
+        // env: token would make the child's decoder expand it a second time.
+        require(!resolved.startsWith("env:")) { "Nested environment listen address is unavailable" }
+        return resolved
+    }
+
+    private fun trimGoSpace(value: String) = value.trim { c -> c in '\t'..'\r' || c == ' ' || c == '\u0085' || c == '\u00a0' ||
+        c == '\u1680' || c in '\u2000'..'\u200a' || c in '\u2028'..'\u2029' ||
+        c == '\u202f' || c == '\u205f' || c == '\u3000' }
+
+    /** Core ParseAddress removes an outer [] pair before trimming whitespace. */
+    fun isUnixListen(value: String): Boolean {
+        val address = trimGoSpace(if (value.startsWith('[') && value.endsWith(']')) value.substring(1, value.length - 1) else value)
+        return java.io.File(address).isAbsolute || address.startsWith('@')
+    }
+
     /** API.listen is another listener: reserve numeric ports without resolving
      * hosts or rejecting Core/OS service-name and Unix-socket syntax. */
     fun apiListenerPorts(configuration: JSONObject): Set<Int> = listenerPorts(configuration, setOf("api"))

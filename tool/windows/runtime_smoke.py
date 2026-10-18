@@ -175,7 +175,7 @@ def external_http(address, vpn=False):
         return "HTTP 200"
 
 
-def config(reverse, external_address=None, direct_address="127.0.0.1"):
+def config(reverse, external_address=None, direct_address="127.0.0.1", caller_api_port=None):
     profile = {
         "log": {"loglevel": "warning", "access": "none"},
         "dns": {"hosts": {h: direct_address for h in ("2ip.ru", "2ip.io", "myip.com")},
@@ -207,7 +207,47 @@ def config(reverse, external_address=None, direct_address="127.0.0.1"):
     profile["outbounds"].append({"protocol": "blackhole", "tag": "fixture-blocked"})
     profile["routing"]["rules"].insert(0, {"type": "field", "inboundTag": ["flutter-vless-tun"],
                                             "outboundTag": "fixture-blocked"})
+    if caller_api_port is not None:
+        assert type(caller_api_port) is int and 1 <= caller_api_port <= 65535, "Invalid fixture API port"
+        profile["api"] = {"tag": "caller-api", "listen": f"127.0.0.1:{caller_api_port}",
+                          "services": ["StatsService", "HandlerService"]}
+        profile["stats"] = {}
+        profile["policy"] = {"system": {key: False for key in (
+            "statsInboundUplink", "statsInboundDownlink", "statsOutboundUplink", "statsOutboundDownlink")}}
     return profile
+
+
+def check_caller_api(directory, port, wine_bottle=None):
+    # Only the fixture's own numeric port and verified bundled runtime are used;
+    # never discover a stats-query endpoint from imported configuration JSON.
+    assert type(port) is int and 1 <= port <= 65535, "Invalid fixture API port"
+    executable = directory / "xray.exe"
+    if not executable.is_file():
+        executable = directory / "xray" / "xray.exe"
+    assert executable.is_file(), "Verified fixture Xray runtime is missing"
+    command = (["/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine",
+                "--bottle", wine_bottle] if wine_bottle else [])
+    command += [str(executable), "api", "statsquery", f"-server=127.0.0.1:{port}", "-timeout=2"]
+    try:
+        completed = subprocess.run(command, cwd=directory, capture_output=True,
+                                   encoding="utf-8", errors="strict", timeout=3)
+    except subprocess.TimeoutExpired:
+        raise AssertionError("Caller API stats query exceeded its deadline") from None
+    assert completed.returncode == 0, "Caller StatsService query failed"
+    assert len(completed.stdout) <= 65536, "Caller StatsService reply exceeded fixture limit"
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate StatsService response field")
+            result[key] = value
+        return result
+
+    reply = json.loads(completed.stdout, object_pairs_hook=unique_object)
+    # Pinned Core omits a nil repeated field; an explicit empty list is valid
+    # too. Reject other shapes as well as any counter enabled by adaptation.
+    assert type(reply) is dict and (reply == {} or reply == {"stat": []}), "Caller disabled counters were changed or API reply is invalid"
 
 
 def check_metrics_listener(port):
@@ -453,12 +493,19 @@ def main():
         for reverse, ending in cases:
             label = ("vpn" if args.vpn else "proxy") + ("-reverse" if reverse else "") + ("-" + ending if ending != "stop" else "")
             profile = directory / (label + ".json")
-            prepared = config(reverse, external_address, direct_address)
+            caller_api_port = None
+            if reverse and ending == "stop":
+                with socket.socket() as candidate:
+                    candidate.bind(("127.0.0.1", 0))
+                    caller_api_port = candidate.getsockname()[1]
+            prepared = config(reverse, external_address, direct_address, caller_api_port)
             # Exercise both the managed VPN SOCKS candidate and the private
             # stats API candidate, before either Core listener exists in the OS.
             metrics_port = (10086 if reverse else 10807) if args.vpn else 10085
             prepared["Metric\u017f"] = {"tag": "caller-metrics", "Li\u017ften": f"127.0.0.1:+{metrics_port}"}
             imported_ports = {entry["port"] for entry in prepared["inbounds"]}
+            if caller_api_port is not None:
+                imported_ports.add(caller_api_port)
             managed_port = next(port for port in range(10807, 65536) if port not in imported_ports | {metrics_port})
             if not args.vpn:
                 with socket.socket() as candidate:
@@ -532,6 +579,10 @@ def main():
                         row = dict(mode=label, host=host, expected=expected, actual=actual, passed=actual == expected)
                         results.append(row)
                         print(json.dumps(row), flush=True)
+                    if caller_api_port is not None:
+                        assert all(row["passed"] for row in results if row.get("mode") == label and "host" in row), "Caller API case has no successful routing proof"
+                        check_caller_api(directory, caller_api_port, args.wine_bottle)
+                        results.append(dict(mode=label, check="caller StatsService survives invalid replacement and routed HTTP with disabled counters", passed=True))
                     if not args.vpn:
                         for host in ("2ip.ru", "myip.com"):
                             actual = request(host, False, proxy_port=secondary_port)

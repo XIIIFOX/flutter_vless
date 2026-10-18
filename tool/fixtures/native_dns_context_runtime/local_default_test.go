@@ -317,6 +317,7 @@ func TestAcceptanceNativeDNSLocalDefault(t *testing.T) {
 	if queryDeadline.IsZero() || time.Until(queryDeadline) < closeWait+500*time.Millisecond {
 		t.Fatal("insufficient remaining query deadline to prove owner-only cancellation")
 	}
+	closeStarted := time.Now()
 	closed := time.NewTimer(closeWait)
 	defer closed.Stop()
 	_ = missingA.engine.owner.Close()
@@ -332,6 +333,12 @@ func TestAcceptanceNativeDNSLocalDefault(t *testing.T) {
 	case <-stallEnded:
 	case <-closed.C:
 		t.Fatal("owned DNS TCP socket remained open")
+	}
+	// A scheduler pause can make the success and timer channels ready together.
+	// Check the elapsed budget too, so select cannot accidentally accept natural
+	// query expiry as proof of owner cancellation (or hide a blocking Close).
+	if time.Since(closeStarted) >= closeWait || time.Until(queryDeadline) <= 500*time.Millisecond {
+		t.Fatal("owner cancellation exceeded its independent deadline budget")
 	}
 	// Owner cancellation itself must close the real exchange. Closing the
 	// delegate before these assertions could mask a broken owner lifetime.

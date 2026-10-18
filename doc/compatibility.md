@@ -108,8 +108,9 @@ adapter for the VPN. Imported listeners, accounts, tags and sniffing remain in
 the runtime profile, including the common `socks-in` + `socks-direct` arrangement.
 Service ports and tags avoid profile collisions; adapters use HTTP/TLS/QUIC
 sniffing for VPN domain routing. Apple preparation also preserves an explicitly
-selected `routing.domainStrategy`. Isolated Apple delay probes open only their
-own temporary authenticated listener.
+selected `routing.domainStrategy`. Isolated Apple delay probes remove imported
+inbound, API and metrics listeners and open their own temporary authenticated
+listener. This measurement exception leaves normal VPN/proxy API settings intact.
 
 This fixes the extra-listener rejection. It does not establish compatibility
 with every feature or protocol accepted by the Xray command-line runtime.
@@ -130,7 +131,7 @@ with a redacted `inbounds[index].port` error before VPN startup.
 
 A physical iPhone check used both a literal port list/range and an environment
 range with a supplied VLESS profile and fresh Safari traffic. This is progress
-on item 5, not completion of it: OS bind races, API port reservations, remaining
+on item 5, not completion of it: OS bind races, remaining service-listener ports,
 tag namespaces and proxy-only selection still need acceptance. Parser/build
 acceptance is distinct from a functioning listener: this Core's SOCKS inbound
 advertises TCP, while its HTTP inbound also supports Unix sockets. See the
@@ -184,6 +185,14 @@ and are not yet resolved by this reservation helper. Apple runtime acceptance
 requires the original API to return an HTTP/2 SETTINGS frame while the separate
 authenticated SOCKS adapter transfers HTTP bytes. Android/Windows API
 passthrough is still item 4; reserving a source API port does not implement it.
+The physical iPhone example also retained a caller API on 10809 while its private
+adapter used 10810: both Safari sites showed the Japan proxy exit, and explicit
+Stop restored ordinary internet with disabled-profile readback. macOS now retains
+the caller's API alongside in-process counters; its runtime acceptance requires
+an HTTP/2 response. Isolated Apple/Android profile-delay documents omit caller
+API/metrics listeners to avoid rebinding an active session's sockets. Ordinary
+session metrics port allocation, caller stats/policy preservation and standalone
+Windows delay remain open.
 
 Current implementation/acceptance status (1.1.7, unreleased):
 
@@ -192,7 +201,7 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | 1. Advanced DNS | Pending | Current protection tests cover resolver isolation/refusal. Protected DNS policies still replace imported DNS; full hosts/server/FakeDNS semantics are not accepted yet. |
 | 2. IPv6 | Pending | Current tests prove blocking, not dual-stack forwarding, IPv6-only endpoint or NAT64 support. |
 | 3. Protocol/transport matrix | Pending | Supplied VLESS TCP/Reality profiles work on devices. Full pinned-Core transport/socket-protection coverage is still required. |
-| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS rules and packet-path probe rules are scoped to their adapters. API/services, source-inbound context and explicit VPN default selection remain open. |
+| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. Apple retains caller API/services; Android/Windows API, caller stats/policy, source-inbound context and explicit VPN default selection remain open. |
 | 5. Ports/addresses | Partial | Shared 20-case port, 12-case service-tag and 14-case numeric API-allocation fixtures pass pure native tests. Real Android/iPhone list/range/env/Unix and tag-collision cases pass. OS port checks, API service-name resolution, prefix-selector isolation, bind retries and proxy-only parity remain open. |
 | 6. Assets/import syntax | Partial | A shared 22-case JSON syntax corpus is checked against actual Core decoding. SDK start/delay/import/subscriptions and the example routing editor accept Core-style comments and a leading BOM. Device browser/routing checks pass. Portable cert/key/geodata assets and explicit multi-document merging remain open. |
 | 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |

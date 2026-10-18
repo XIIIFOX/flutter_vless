@@ -197,8 +197,24 @@ object XrayCoreManager {
 
     internal fun buildDelayConfigJson(configJson: String, proxyPort: Int, filesDir: File,
         credentials: LocalProxyCredentials): Pair<JSONObject, Int> {
-        // A standalone measurement owns a single temporary input; imported listeners never open.
-        val json = JSONObject(configJson).put("inbounds", JSONArray())
+        // A standalone measurement owns its temporary inputs. Caller API and
+        // metrics listeners may already be bound by the active session. Remove
+        // the whole services: clearing listen changes Core's outbound semantics.
+        val json = JSONObject(configJson)
+        LocalProxyAccessPolicy.normalizeConfigInputs(json)
+        fun serviceField(key: String) = key.replace('\u017f', 's').replace('\u212a', 'k')
+            .lowercase(java.util.Locale.ROOT)
+        val serviceKeys = json.keys().asSequence().toList().filter {
+            serviceField(it) in setOf("api", "metrics")
+        }
+        val seen = mutableSetOf<String>()
+        for (key in serviceKeys) {
+            // Match Go's service spelling, including long S. Reject ambiguous
+            // aliases rather than depend on JSONObject's iteration order.
+            require(seen.add(serviceField(key))) { "Duplicate native configuration field" }
+            json.remove(key)
+        }
+        json.put("inbounds", JSONArray())
         val config = XrayConfig(V2RAY_FULL_JSON_CONFIG = json.toString(), LOCAL_SOCKS5_PORT = proxyPort, LOCAL_API_PORT = proxyPort + 1)
         return buildRuntimeConfigJson(config, filesDir, credentials) to config.LOCAL_SOCKS5_PORT
     }

@@ -20,6 +20,11 @@ directory name.
 - Server core version display
 - Android `blockedApps`
 - Route/domain editing helpers in `lib/routing.dart`
+- `Delay` measures the current session when connected; `Profile delay` always
+  measures the editor's profile in an isolated native session. Apple/Android
+  omit imported API/metrics listeners in that temporary measurement to avoid
+  rebinding ports owned by the active VPN. Normal VPN profiles keep those fields.
+  Standalone profile delay on Windows is still unimplemented and returns `-1`.
 
 ## Android
 

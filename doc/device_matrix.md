@@ -186,3 +186,16 @@ proxy-only, VPN routing/recovery and example builds passed on Windows 2022 and
 2025 in [run 39090838143](https://github.com/XIIIFOX/flutter_vless/actions/runs/39090838143).
 Full advanced-DNS preservation, IPv6 forwarding, prefix-selector isolation and
 the remaining items in the compatibility table are still open.
+
+Numeric API allocation was exercised in the physical example with the first
+supplied profile plus `api.listen=127.0.0.1:10809`. Its original inputs retained
+10808/10820; provider diagnostics reported a separate authenticated adapter on
+10810 and Core preflight before routes. Fresh Safari tfox/2ip pages both showed
+103.75.118.225 (Japan on tfox). Explicit Stop completed, the provider exited,
+a cold app readback reported `enabled=false status=1`, and fresh Safari returned
+95.139.123.8 (Russia). Quick access, reconnect and On Demand were disabled.
+The task-owned app console/USB forwarder were stopped; unrelated phone apps
+were left running. This proves allocation/traffic, not all API RPC services or
+metrics listener allocation. Windows 2022/2025 native, proxy, VPN/recovery and
+example builds passed for the same allocator revision in
+[run 39091995713](https://github.com/XIIIFOX/flutter_vless/actions/runs/39091995713).

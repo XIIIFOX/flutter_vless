@@ -155,6 +155,28 @@ class _HomePageState extends State<HomePage> {
     await flutterVless.stopVless();
   }
 
+  Future<void> _measureDelay({bool isolatedProfile = false}) async {
+    try {
+      final connected = vlessStatus.value.state.toUpperCase() == 'CONNECTED';
+      final delay = connected && !isolatedProfile
+          ? await flutterVless.getConnectedServerDelay()
+          : await flutterVless.getServerDelay(config: config.text);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$delay ms')));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Unable to measure delay. Check the profile and connection.',
+          ),
+        ),
+      );
+    }
+  }
+
   Future<void> _showProviderDiagnostics() async {
     try {
       final snapshot = await flutterVless.getProviderDebugSnapshot();
@@ -517,21 +539,14 @@ class _HomePageState extends State<HomePage> {
               label: Text(proxyOnly ? 'Proxy Only' : 'VPN Mode'),
             ),
             ElevatedButton.icon(
-              onPressed: () async {
-                // Get server delay
-                int delay;
-                if ((vlessStatus.value.state).toUpperCase() == 'CONNECTED') {
-                  delay = await flutterVless.getConnectedServerDelay();
-                } else {
-                  delay =
-                      await flutterVless.getServerDelay(config: config.text);
-                }
-                if (!mounted) return;
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(SnackBar(content: Text('$delay ms')));
-              },
+              onPressed: _measureDelay,
               icon: const Icon(Icons.timer),
               label: const Text('Delay'),
+            ),
+            ElevatedButton.icon(
+              onPressed: () => _measureDelay(isolatedProfile: true),
+              icon: const Icon(Icons.timer_outlined),
+              label: const Text('Profile delay'),
             ),
             ElevatedButton.icon(
               onPressed: _showProviderDiagnostics,

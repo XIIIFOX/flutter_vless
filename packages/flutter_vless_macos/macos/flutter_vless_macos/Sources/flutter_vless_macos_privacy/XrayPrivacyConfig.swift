@@ -4,9 +4,8 @@ import Foundation
 public enum XrayPrivacyConfig {
     public static func apply(to config: inout [String: Any]) -> Bool {
         guard fields(&config, ["log", "inbounds", "outbounds", "api", "stats", "policy"]) else { return false }
-        // Imported management listeners could change enforced routing/listeners
-        // after startup. Native statistics use the in-process bridge instead.
-        config.removeValue(forKey: "api")
+        // Caller-owned services and API listeners are part of the profile.
+        // Native statistics use the in-process bridge alongside that API.
         guard config["policy"] == nil || config["policy"] is NSNull || config["policy"] is [String: Any] else { return false }
         var policy = config["policy"] as? [String: Any] ?? [:]
         guard fields(&policy, ["system"]), policy["system"] == nil || policy["system"] is NSNull || policy["system"] is [String: Any] else { return false }

@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve caller API listeners/services alongside native macOS counters. Isolate Apple/Android profile-delay measurements from caller API/metrics listeners; add occupied-port runtime regressions for Apple.
+* Preserve bounded Android emulator startup/crash evidence and Apple synthetic runtime logs in CI. Keep unclassified VM disappearance and post-entry failures visible without retries.
 * Reserve numeric `api.listen` TCP ports when choosing managed adapters on every native platform, including IPv6/host addresses and Core field aliases. Keep Unix/port-zero syntax intact; add shared allocation fixtures and an Apple runtime check for simultaneous API HTTP/2 and authenticated SOCKS traffic.
 * Scope Android protected system DNS and Android/Windows packet-path probes to the managed VPN input. Share the native DNS adapter identity across Android startup and recovery; retain imported input rules and test their blocking independently of VPN DNS.
 * Allocate private adapter/DNS/statistics tags against imported definitions and references, including API, reverse, balancers and nested dialers, across Android, iOS, macOS and Windows. Scope Apple's virtual DNS rule to the managed VPN input; add collision fixtures and real-Core traffic regressions.

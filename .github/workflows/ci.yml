@@ -253,6 +253,16 @@ jobs:
           bash tool/test_macos_tunnel_support.sh
           bash tool/test_macos_manager_policy.sh
           REQUIRE_CORE_PREFLIGHT=1 bash tool/test_macos_privacy_runtime.sh
+      - name: Preserve Apple synthetic runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-runtime-evidence
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            build/ios_privacy_runtime_probe/runtime.log
+            build/macos_privacy_runtime_probe/runtime.log
 
   windows:
     name: Windows native plugin build

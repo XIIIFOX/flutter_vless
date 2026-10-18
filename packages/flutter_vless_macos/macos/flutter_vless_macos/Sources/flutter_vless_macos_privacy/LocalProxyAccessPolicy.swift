@@ -156,8 +156,14 @@ public enum LocalProxyAccessPolicy {
                                        credentials: LocalProxyCredentials) throws {
         guard (1...65535).contains(port) else { throw LocalProxyAccessError.malformedConfiguration }
         try normalizeLocalFields(&config)
+        try normalize(&config, names: ["api", "metrics"])
         var tags = XrayServiceTags(configuration: config)
         let tag = tags.next("flutter-vless-delay")
+        // Only this isolated measurement core omits caller-owned management
+        // listeners, which may already belong to the running VPN provider.
+        // Clearing listen instead would install an API/metrics outbound by tag.
+        config.removeValue(forKey: "api")
+        config.removeValue(forKey: "metrics")
         config["inbounds"] = [["tag": tag, "listen": "127.0.0.1", "port": port, "protocol": "http",
             "settings": ["accounts": [["user": credentials.username, "pass": credentials.password]]]]]
     }

@@ -9,6 +9,8 @@ import 'package:flutter_vless_example/options_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  // ignore: avoid_print
+  print('ANDROID_XRAY_SMOKE_TEST_ENTRY');
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('Android Xray runtime reports v26.10.17', (tester) async {

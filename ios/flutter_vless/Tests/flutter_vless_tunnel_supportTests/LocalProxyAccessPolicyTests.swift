@@ -5,6 +5,66 @@ import Darwin
 final class LocalProxyAccessPolicyTests: XCTestCase {
     private let credentials = try! LocalProxyCredentials(username: "session-user", password: "session-password")
 
+    func testIsolatedDelayOmitsImportedManagementListenersWithoutChangingVPNOrSource() throws {
+        for (field, metricsField) in zip(["api", "API", "Api", "aPi"], ["metrics", "METRICS", "Metricſ", "metricS"]) {
+            // Core's field aliases must not cause a second management listener.
+            // Both tags deliberately match the actual outgoing proxy tag:
+            // clearing listen would install management outbounds under that tag.
+            let api: [String: Any] = ["tag": "proxy", "liſten": "127.0.0.1:10808",
+                                      "ſervices": ["StatsService", "HandlerService", "RoutingService"]]
+            let metrics: [String: Any] = ["tag": "proxy", "liſten": "127.0.0.1:18099"]
+            let source: [String: Any] = [
+                field: api,
+                metricsField: metrics,
+                "inbounds": [["protocol": "socks", "listen": "127.0.0.1", "port": 18095]],
+                "outbounds": [["tag": "proxy", "protocol": "freedom",
+                               "settings": ["redirect": "127.0.0.1:18096"],
+                               "streamSettings": ["sockopt": ["tcpFastOpen": true]]]],
+                "dns": ["hosts": ["probe.invalid": "127.0.0.1"], "queryStrategy": "UseIPv4"],
+                "routing": ["domainStrategy": "AsIs", "rules": [["type": "field",
+                    "domain": ["full:probe.invalid"], "outboundTag": "proxy"]]],
+                "stats": [String: Any](),
+                "policy": ["levels": ["0": ["handshake": 7]]]
+            ]
+            let before = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            var vpn = source
+            XCTAssertEqual(try LocalProxyAccessPolicy.applyVPN(to: &vpn, credentials: credentials), 10809)
+            XCTAssertEqual(vpn[field] as? NSDictionary, api as NSDictionary)
+            XCTAssertEqual(vpn[metricsField] as? NSDictionary, metrics as NSDictionary)
+            XCTAssertEqual(vpn["outbounds"] as? NSArray, source["outbounds"] as? NSArray)
+
+            var probe = source
+            try LocalProxyAccessPolicy.applyDelayProbe(to: &probe, port: 18097, credentials: credentials)
+            XCTAssertFalse(probe.keys.contains { XrayJSONField.matches($0, "api") || XrayJSONField.matches($0, "metrics") })
+            let inputs = try XCTUnwrap(probe["inbounds"] as? [[String: Any]])
+            XCTAssertEqual(inputs.count, 1)
+            XCTAssertEqual(inputs.first?["port"] as? Int, 18097)
+            XCTAssertEqual(inputs.first?["protocol"] as? String, "http")
+            // Everything other than the probe-owned listening surface survives.
+            var expected = source
+            expected.removeValue(forKey: field)
+            expected.removeValue(forKey: metricsField)
+            expected.removeValue(forKey: "inbounds")
+            probe.removeValue(forKey: "inbounds")
+            XCTAssertEqual(probe as NSDictionary, expected as NSDictionary)
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), before)
+        }
+    }
+
+    func testIsolatedDelayRejectsAmbiguousManagementAliases() {
+        for aliases in [["api", "API"], ["Api", "aPI"], ["metrics", "METRICS"], ["metrics", "Metricſ"]] {
+            var config: [String: Any] = [
+                aliases[0]: ["tag": "proxy", "listen": "127.0.0.1:10808"],
+                aliases[1]: ["tag": "other", "listen": "127.0.0.1:10809"]
+            ]
+            XCTAssertThrowsError(try LocalProxyAccessPolicy.applyDelayProbe(to: &config, port: 18097, credentials: credentials)) { error in
+                guard case LocalProxyAccessError.ambiguousField = error else {
+                    return XCTFail("Expected ambiguous management fields")
+                }
+            }
+        }
+    }
+
     func testSessionRotationAndRecoveryLeaveRemoteSecretsUntouched() throws {
         let one = try LocalProxyCredentials.generate()
         let two = try LocalProxyCredentials.generate()

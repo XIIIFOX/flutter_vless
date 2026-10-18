@@ -240,6 +240,53 @@ class XrayCoreManagerTest {
     }
 
     @Test
+    fun buildDelayConfigJson_discardsCallerServicesWithoutChangingOutboundsOrNormalSession() {
+        for ((apiKey, metricsKey) in listOf("api" to "metrics", "API" to "Metrics", "Api" to "METRICS", "api" to "Metric\u017f")) {
+            val source = JSONObject().put("Inbounds", JSONArray().put(JSONObject()
+                .put("protocol", "http").put("listen", "127.0.0.1").put("port", 18080)))
+                .put(apiKey, JSONObject().put("tag", "caller-api").put("listen", "127.0.0.1:18081")
+                    .put("services", JSONArray().put("StatsService")))
+                .put(metricsKey, JSONObject().put("tag", "caller-metrics").put("listen", "127.0.0.1:18082"))
+                .put("outbounds", JSONArray()
+                    .put(JSONObject().put("tag", "caller-api").put("protocol", "freedom"))
+                    .put(JSONObject().put("tag", "caller-metrics").put("protocol", "blackhole")))
+            val original = source.toString()
+            val (delay, port) = XrayCoreManager.buildDelayConfigJson(original, 19080,
+                File("build/test-files/android-delay-services"), credentials)
+            assertEquals(19080, port)
+            assertFalse(delay.keys().asSequence().any { it.equals("metrics", ignoreCase = true) })
+            assertFalse(delay.getJSONObject("api").has("listen"))
+            assertFalse(delay.getJSONObject("api").getString("tag") == "caller-api")
+            assertEquals(source.getJSONArray("outbounds").toString(), delay.getJSONArray("outbounds").toString())
+            val inputs = delay.getJSONArray("inbounds")
+            assertEquals(2, inputs.length()) // Owned SOCKS and native stats only.
+            assertFalse((0 until inputs.length()).any { inputs.getJSONObject(it).getInt("port") == 18080 })
+
+            val normal = XrayCoreManager.buildRuntimeConfigJson(XrayConfig(V2RAY_FULL_JSON_CONFIG = original),
+                File("build/test-files/android-normal-services"), credentials)
+            assertEquals(source.getJSONObject(metricsKey).toString(), normal.getJSONObject(metricsKey).toString())
+            assertEquals(source.getJSONArray("outbounds").toString(), normal.getJSONArray("outbounds").toString())
+            assertEquals(original, source.toString())
+        }
+    }
+
+    @Test
+    fun buildDelayConfigJson_rejectsAmbiguousServiceAliases() {
+        for (fields in listOf(
+            "\"api\":{},\"API\":{}",
+            "\"metrics\":{},\"Metrics\":{}",
+            "\"metrics\":{},\"Metric\u017f\":{}"
+        )) {
+            val original = """{$fields,"outbounds":[{"protocol":"freedom"}]}"""
+            try {
+                XrayCoreManager.buildDelayConfigJson(original, 19080,
+                    File("build/test-files/android-delay-service-aliases"), credentials)
+                org.junit.Assert.fail("Ambiguous native service fields must be rejected")
+            } catch (_: IllegalArgumentException) { }
+        }
+    }
+
+    @Test
     fun buildRuntimeConfigJson_normalizesXray26RuntimeAliases() {
         val filesDir = File("build/test-files/android-aliases")
         val config = XrayConfig(

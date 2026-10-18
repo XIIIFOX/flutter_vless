@@ -82,6 +82,7 @@ func runLocalAuthRuntimeChecks() async throws {
                       "protocol": "socks", "ſettings": ["auth": "noauth", "udp": true,
                           "accountſ": [["uſer": "old", "paſſ": "old"]]]]],
         "api": ["tag": "fixture-api", "listen": "127.0.0.1:10808", "services": ["StatsService"]],
+        "metrics": ["tag": "fixture-metrics", "listen": "127.0.0.1:18082"],
         "stats": [String: Any](),
         "outbounds": [["tag": "direct", "protocol": "freedom", "settings": ["redirect": "127.0.0.1:18096"]],
                       ["tag": "fixture-blocked", "protocol": "blackhole"]],
@@ -107,6 +108,11 @@ func runLocalAuthRuntimeChecks() async throws {
         let frame = LocalSOCKS5Client.receiveExactly(fd: api, count: 9) ?? []
         close(api)
         precondition(frame.count == 9 && frame[3] == 4 && frame.suffix(4).allSatisfy { $0 == 0 })
+        let metrics = openLoopback(18082)
+        precondition(LocalSOCKS5Client.sendAll(fd: metrics, bytes: Array("GET /debug/vars HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".utf8)))
+        let metricsResponse = LocalSOCKS5Client.receiveExactly(fd: metrics, count: 12) ?? []
+        close(metrics)
+        precondition(String(decoding: metricsResponse, as: UTF8.self).contains("200"))
         for secret in [nil, wrong] as [LocalProxyCredentials?] {
             let fd = openLoopback(managedPort)
             precondition(!LocalSOCKS5Client.authenticate(fd: fd, credentials: secret))
@@ -143,11 +149,38 @@ func runLocalAuthRuntimeChecks() async throws {
         print("AUTH_RUNTIME_PASS=\(generation)")
         print("SERVICE_TAG_RUNTIME_PASS=\(generation)")
         print("API_PORT_RESERVATION_PASS=\(generation)")
+        print("METRICS_PASSTHROUGH_PASS=\(generation)")
     }
+    // A real VPN provider holds the imported API in another process. Keep that
+    // socket occupied while the isolated measurement starts its own Core.
+    let occupiedAPI = socket(AF_INET, SOCK_STREAM, 0)
+    precondition(occupiedAPI >= 0)
+    var reuse: Int32 = 1
+    setsockopt(occupiedAPI, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+    var occupiedAddress = sockaddr_in()
+    occupiedAddress.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    occupiedAddress.sin_family = sa_family_t(AF_INET)
+    occupiedAddress.sin_port = UInt16(10808).bigEndian
+    inet_pton(AF_INET, "127.0.0.1", &occupiedAddress.sin_addr)
+    precondition(withUnsafePointer(to: &occupiedAddress) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(occupiedAPI, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    } == 0)
+    precondition(listen(occupiedAPI, 1) == 0)
+    let occupiedMetrics = socket(AF_INET, SOCK_STREAM, 0)
+    precondition(occupiedMetrics >= 0)
+    setsockopt(occupiedMetrics, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+    occupiedAddress.sin_port = UInt16(18082).bigEndian
+    precondition(withUnsafePointer(to: &occupiedAddress) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(occupiedMetrics, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    } == 0)
+    precondition(listen(occupiedMetrics, 1) == 0)
     let delay = await ServerDelayRunner().measure(config: String(decoding: source, as: UTF8.self),
         url: "http://probe.invalid/", geoAssetsDirectory: nil)
+    close(occupiedAPI)
+    close(occupiedMetrics)
     print("HTTP_DELAY_RESULT=\(delay)")
     precondition(delay >= 0, "Authenticated HTTP delay did not reach controlled origin")
+    print("DELAY_API_ISOLATION_PASS")
     var rotated = raw
     let nextCredentials = try LocalProxyCredentials.generate()
     try LocalProxyAccessPolicy.applyVPN(to: &rotated, credentials: nextCredentials)

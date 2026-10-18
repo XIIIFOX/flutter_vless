@@ -5,7 +5,7 @@ func runMacCounterChecks() async throws {
     let raw: [String: Any] = [
         "inbounds": [["protocol": "socks", "listen": "127.0.0.1", "port": 18095]],
         "outbounds": [["protocol": "freedom", "tag": "direct", "settings": ["redirect": "127.0.0.1:18096"]]],
-        "API": ["listen": "127.0.0.1:18081", "services": ["HandlerService", "RoutingService"]]
+        "API": ["tag": "fixture-management-api", "listen": "127.0.0.1:18081", "services": ["HandlerService", "RoutingService"]]
     ]
     let runner = ProxyOnlyRunner()
     try runner.start(configData: JSONSerialization.data(withJSONObject: raw), geoAssetsDirectory: nil)
@@ -21,12 +21,11 @@ func runMacCounterChecks() async throws {
         try await Task.sleep(nanoseconds: 50_000_000)
     }
     precondition(transferred, "Default proxy-only configuration must enable real traffic counters")
-    let api = socket(AF_INET, SOCK_STREAM, 0)
-    var address = sockaddr_in(); address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-    address.sin_family = sa_family_t(AF_INET); address.sin_port = UInt16(18081).bigEndian
-    inet_pton(AF_INET, "127.0.0.1", &address.sin_addr)
-    let connected = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(api, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+    let api = openLoopback(18081)
+    precondition(LocalSOCKS5Client.sendAll(fd: api, bytes: Array("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".utf8) + [0, 0, 0, 4, 0, 0, 0, 0, 0]))
+    let frame = LocalSOCKS5Client.receiveExactly(fd: api, count: 9) ?? []
     close(api)
-    precondition(connected != 0, "Imported management API must not open a listener")
-    print("MACOS_COUNTERS_AND_API_BOUNDARY_PASS")
+    precondition(frame.count == 9 && frame[3] == 4 && frame.suffix(4).allSatisfy { $0 == 0 },
+                 "Imported management API must remain available alongside native counters")
+    print("MACOS_COUNTERS_AND_API_PASSTHROUGH_PASS")
 }

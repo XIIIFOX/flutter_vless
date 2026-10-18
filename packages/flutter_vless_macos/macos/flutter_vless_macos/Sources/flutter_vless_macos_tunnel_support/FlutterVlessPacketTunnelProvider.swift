@@ -96,13 +96,13 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     private var watchdogSuspended = false
     private var watchdogInboundPort: Int?
     private var recoveryCheck: DispatchWorkItem?
-    private var watchdogGeneration = 0
+    private let sessionAdmission = TunnelSessionAdmission()
     private var watchdogInboundHealthy = false
     private let runtimeQueue = DispatchQueue(label: "dev.tfox.flutter-vless.macos-runtime")
     private let forwardingLock = NSLock()
     private var forwardingReady = false
-    private var startupPreparation: Task<TunnelPreparedConfig, Error>?
-    private var startupStopped = false
+    private var startupPreparation: (epoch: TunnelSessionAdmission.Epoch, task: Task<TunnelPreparedConfig, Error>)?
+    private var forwardingEpoch: TunnelSessionAdmission.Epoch?
     private var runtimeSpec: RuntimeSpec?
     private var runtimeRecoveryInFlight = false
     private var nativeOptions = try! VlessNativeOptions()
@@ -112,26 +112,32 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     // Accessed only on runtimeQueue.
     private var hasStartedHEV = false
     private var hevStopSignal: DispatchGroup?
+    private var nativeRuntimeEpoch: TunnelSessionAdmission.Epoch?
     private var packetBridge: TunnelPacketBridge?
+    private var packetBridgeEpoch: TunnelSessionAdmission.Epoch?
 
     private struct RuntimeSpec {
+        let epoch: TunnelSessionAdmission.Epoch
+        let options: VlessNativeOptions
         let config: Data
         let port: Int
         let geoAssetsDirectory: String?
         let credentials: LocalProxyCredentials
     }
 
-    private func setForwardingReady(_ ready: Bool) {
+    private func setForwardingReady(_ ready: Bool, epoch: TunnelSessionAdmission.Epoch) {
         forwardingLock.lock()
-        forwardingReady = ready && !startupStopped
-        // A late health-check callback must not reassert a stopping tunnel.
-        reasserting = !ready && !startupStopped
-        forwardingLock.unlock()
+        defer { forwardingLock.unlock() }
+        guard sessionAdmission.isCurrent(epoch) else { return }
+        forwardingEpoch = epoch
+        forwardingReady = ready
+        reasserting = !ready
     }
 
     private func isForwardingReady() -> Bool {
         forwardingLock.lock()
         defer { forwardingLock.unlock() }
+        guard let epoch = forwardingEpoch, sessionAdmission.isCurrent(epoch) else { return false }
         return forwardingReady && hevLifecycle.isRunning
     }
 
@@ -152,20 +158,19 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         let storedConfig = try TunnelSecretProfile.load(providerConfiguration,
             providerBundleIdentifier: configuration.providerBundleIdentifier ?? "")
         let config = try DesktopBypassPolicy.apply(to: storedConfig, cidrs: bypassSubnets)
-        nativeOptions = try VlessNativeOptions(providerConfiguration["options"] as? [String: Any])
-        recoveryFailures = 0; recoveryExhausted = false; initialRuntimeAttempted = false
-        TunnelDebugStore.shared.configure(groupIdentifier: providerConfiguration["groupIdentifier"] as? String, options: nativeOptions)
-        beginStartup()
-        setForwardingReady(false)
+        let options = try VlessNativeOptions(providerConfiguration["options"] as? [String: Any])
+        TunnelDebugStore.shared.configure(groupIdentifier: providerConfiguration["groupIdentifier"] as? String, options: options)
+        let epoch = sessionAdmission.begin()
+        setForwardingReady(false, epoch: epoch)
         rememberTunnelLog("Starting Xray packet tunnel")
         // A system-initiated Connect after a manual Stop must rearm crash
         // recovery even when the containing application is not running.
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             TunnelOnDemandPolicy.enableForStart(configuration: configuration,
-                isCancelled: { self.isStartupStopped() }) { result in
+                isCancelled: { !self.sessionAdmission.isCurrent(epoch) }) { result in
                 switch result {
                 case .success:
-                    rememberTunnelLog("On-demand recovery policy applied: enabled=\(self.nativeOptions.enableOnDemand)")
+                    rememberTunnelLog("On-demand recovery policy applied: enabled=\(options.enableOnDemand)")
                     continuation.resume()
                 case .failure:
                     rememberTunnelLog("Unable to arm on-demand recovery for tunnel session")
@@ -173,7 +178,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
                 }
             }
         }
-        guard !isStartupStopped() else { throw CancellationError() }
+        guard sessionAdmission.isCurrent(epoch) else { throw CancellationError() }
         // Endpoint bootstrap precedes virtual DNS installation. Reuse the
         // prepared endpoints when restarting workers within this same tunnel.
         let credentials = try LocalProxyCredentials.generate()
@@ -184,15 +189,16 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
                     return try await TunnelEndpointResolver.resolveIPv4($0, event: rememberTunnelLog)
                 })
         }
-        setStartupPreparation(preparation)
-        defer { setStartupPreparation(nil) }
+        setStartupPreparation(preparation, epoch: epoch)
+        defer { setStartupPreparation(nil, epoch: epoch) }
         let prepared: TunnelPreparedConfig
         do { prepared = try await preparation.value }
         catch {
+            if error is CancellationError || !sessionAdmission.isCurrent(epoch) { throw CancellationError() }
             rememberTunnelLog("Tunnel preparation failed before route installation")
             throw tunnelError("Unable to prepare tunnel configuration or resolve its endpoint")
         }
-        guard !preparation.isCancelled,
+        guard sessionAdmission.isCurrent(epoch), !preparation.isCancelled,
               let parsed = parseConfig(jsonData: prepared.data),
               TunnelDNSPolicy.allowsRouteExclusions(prepared.bootstrapAddresses.map { "\($0)/32" }) else {
             throw tunnelError("Tunnel preparation cancelled or incompatible")
@@ -224,26 +230,33 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         let dns = NEDNSSettings(servers: dnsServers)
         dns.matchDomains = [""]
         settings.dnsSettings = dns
+        guard sessionAdmission.isCurrent(epoch) else { throw CancellationError() }
         try await setTunnelNetworkSettings(settings)
-        guard !preparation.isCancelled else { throw CancellationError() }
+        guard sessionAdmission.isCurrent(epoch), !preparation.isCancelled else { throw CancellationError() }
         rememberTunnelLog("Protected tunnel routes and virtual DNS installed")
 
-        runtimeSpec = RuntimeSpec(config: prepared.data, port: parsed.inboundPort,
+        let spec = RuntimeSpec(epoch: epoch, options: options, config: prepared.data, port: parsed.inboundPort,
             geoAssetsDirectory: providerConfiguration["geoAssetsDirectory"] as? String, credentials: credentials)
-        startTunnelWatchdog(port: runtimeSpec?.port)
+        guard startTunnelWatchdog(spec) else { throw CancellationError() }
         // NE connected only means the routes are installed. The plugin
         // queries forwarding readiness before publishing CONNECTED.
-        watchdogQueue.async { self.scheduleNativeRecovery(after: 0) }
+        watchdogQueue.async { self.scheduleNativeRecovery(after: 0, epoch: epoch) }
     }
 
     open override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        let stoppedEpoch = sessionAdmission.revoke()
         forwardingLock.lock()
-        startupStopped = true
-        startupPreparation?.cancel()
+        let preparation = startupPreparation?.epoch == stoppedEpoch ? startupPreparation?.task : nil
+        if startupPreparation?.epoch == stoppedEpoch { startupPreparation = nil }
+        if forwardingEpoch == stoppedEpoch || sessionAdmission.currentEpoch == nil {
+            forwardingReady = false
+            forwardingEpoch = nil
+            reasserting = false
+        }
         forwardingLock.unlock()
+        preparation?.cancel()
         rememberTunnelLog("Stopping Xray packet tunnel, reason=\(reason.rawValue)")
-        setForwardingReady(false)
-        stopTunnelWatchdog()
+        stopTunnelWatchdog(epoch: stoppedEpoch)
         let teardown = DispatchGroup()
         teardown.enter()
         if let configuration = protocolConfiguration as? NETunnelProviderProtocol {
@@ -263,41 +276,47 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         }
         teardown.enter()
         runtimeQueue.async {
-            if self.stopNativeRuntime() {
+            guard stoppedEpoch != nil || self.sessionAdmission.currentEpoch == nil else {
+                teardown.leave()
+                return
+            }
+            if self.stopNativeRuntime(ownedBy: stoppedEpoch) {
                 self.packetBridge?.shutdown()
                 self.packetBridge = nil
+                self.packetBridgeEpoch = nil
             }
             teardown.leave()
         }
         teardown.notify(queue: .main, execute: completionHandler)
     }
 
-    private func setStartupPreparation(_ task: Task<TunnelPreparedConfig, Error>?) {
+    private func setStartupPreparation(_ task: Task<TunnelPreparedConfig, Error>?, epoch: TunnelSessionAdmission.Epoch) {
         forwardingLock.lock()
-        if startupStopped { task?.cancel() }
-        startupPreparation = task
+        let current = sessionAdmission.isCurrent(epoch)
+        if current {
+            if let task { startupPreparation = (epoch, task) }
+            else if startupPreparation?.epoch == epoch { startupPreparation = nil }
+        }
         forwardingLock.unlock()
+        if !current { task?.cancel() }
     }
 
-    private func isStartupStopped() -> Bool {
-        forwardingLock.lock()
-        defer { forwardingLock.unlock() }
-        return startupStopped
-    }
-
-    private func beginStartup() {
-        forwardingLock.lock()
-        startupStopped = false
-        forwardingLock.unlock()
-    }
+    private func isStartupStopped() -> Bool { sessionAdmission.currentEpoch == nil }
 
     private func startNativeRuntime(_ spec: RuntimeSpec) throws {
+        guard sessionAdmission.permitsRuntime(spec.epoch) else { throw CancellationError() }
+        nativeRuntimeEpoch = spec.epoch
         try startXRay(xrayConfig: spec.config, geoAssetsDirectory: spec.geoAssetsDirectory)
-        try startSocks5Tunnel(serverPort: spec.port, credentials: spec.credentials)
+        guard sessionAdmission.permitsRuntime(spec.epoch) else { throw CancellationError() }
+        try startSocks5Tunnel(serverPort: spec.port, credentials: spec.credentials, epoch: spec.epoch)
+        guard sessionAdmission.permitsRuntime(spec.epoch) else { throw CancellationError() }
     }
 
     /// Runs on runtimeQueue. A blocked native quit must not stall NE teardown.
-    private func stopNativeRuntime() -> Bool {
+    private func stopNativeRuntime(ownedBy epoch: TunnelSessionAdmission.Epoch? = nil) -> Bool {
+        // A delayed teardown from an old session cannot stop a newer runtime.
+        if let epoch, let running = nativeRuntimeEpoch, running != epoch { return false }
+        if let epoch, let bridgeEpoch = packetBridgeEpoch, bridgeEpoch != epoch { return false }
         packetBridge?.pause()
         var stopped = true
         if hasStartedHEV {
@@ -309,56 +328,58 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             }
         }
         stopXRay()
+        if stopped { nativeRuntimeEpoch = nil }
         if !stopped { rememberTunnelLog("Native shutdown pending; protected traffic remains blocked") }
         return stopped
     }
 
     /// Runs on watchdogQueue. Keep the NE routes/DNS installed during recovery.
-    private func scheduleNativeRecovery(after delay: TimeInterval) {
-        guard !watchdogSuspended, !runtimeRecoveryInFlight,
-              let spec = runtimeSpec else { return }
+    private func scheduleNativeRecovery(after delay: TimeInterval, epoch: TunnelSessionAdmission.Epoch) {
+        guard sessionAdmission.permitsRuntime(epoch), !watchdogSuspended, !runtimeRecoveryInFlight,
+              let spec = runtimeSpec, spec.epoch == epoch else { return }
         let isInitialLaunch = !initialRuntimeAttempted
         initialRuntimeAttempted = true
         guard isInitialLaunch || (!recoveryExhausted && nativeOptions.mayRetry(failures: recoveryFailures)) else {
             recoveryExhausted = true
-            setForwardingReady(false)
+            setForwardingReady(false, epoch: epoch)
             rememberTunnelLog("Native retry limit reached; protected traffic remains blocked")
             return
         }
         let retryDelay = isInitialLaunch ? 0 : nativeOptions.retryDelay(failures: recoveryFailures)
         if !isInitialLaunch { recoveryFailures += 1 }
         runtimeRecoveryInFlight = true
-        setForwardingReady(false)
-        let generation = watchdogGeneration
+        setForwardingReady(false, epoch: epoch)
         runtimeQueue.asyncAfter(deadline: .now() + retryDelay) {
-            guard self.watchdogQueue.sync(execute: {
-                guard self.watchdogGeneration == generation else { return false }
-                if self.watchdogSuspended {
-                    self.runtimeRecoveryInFlight = false
-                    return false
-                }
-                return true
-            }) else { return }
             var started = false
+            defer {
+                let runtimeStarted = started
+                self.watchdogQueue.async {
+                    guard self.sessionAdmission.isCurrent(epoch), self.runtimeSpec?.epoch == epoch else { return }
+                    self.runtimeRecoveryInFlight = false
+                    guard self.sessionAdmission.permitsRuntime(epoch), !self.watchdogSuspended else { return }
+                    self.watchdogPolicy.reset()
+                    if runtimeStarted {
+                        self.performTunnelHealthCheck(trigger: "native-restart", epoch: epoch)
+                    } else {
+                        self.scheduleNativeRecovery(after: 3, epoch: epoch)
+                    }
+                }
+            }
+            guard self.watchdogQueue.sync(execute: {
+                self.sessionAdmission.permitsRuntime(epoch)
+                    && self.runtimeSpec?.epoch == epoch && !self.watchdogSuspended
+            }) else { return }
             if self.stopNativeRuntime() {
+                // Stop can revoke this epoch while the native drain blocks.
+                guard self.sessionAdmission.permitsRuntime(epoch) else { return }
                 do {
                     try self.startNativeRuntime(spec)
                     started = true
+                } catch is CancellationError {
+                    _ = self.stopNativeRuntime(ownedBy: epoch)
                 } catch {
                     rememberTunnelLog("Native restart failed; protected traffic remains blocked")
-                    _ = self.stopNativeRuntime()
-                }
-            }
-            let runtimeStarted = started
-            self.watchdogQueue.async {
-                guard self.watchdogGeneration == generation else { return }
-                self.runtimeRecoveryInFlight = false
-                guard !self.watchdogSuspended else { return }
-                self.watchdogPolicy.reset()
-                if runtimeStarted {
-                    self.performTunnelHealthCheck(trigger: "native-restart")
-                } else {
-                    self.scheduleNativeRecovery(after: 3)
+                    _ = self.stopNativeRuntime(ownedBy: epoch)
                 }
             }
         }
@@ -407,9 +428,12 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     open override func sleep(completionHandler: @escaping () -> Void) {
         rememberTunnelLog("Packet tunnel sleep; suspending watchdog")
         tunnelLog.info("Packet tunnel sleep")
-        watchdogQueue.async {
-            self.watchdogSuspended = true
-            self.watchdogPolicy.reset()
+        if let epoch = sessionAdmission.currentEpoch, sessionAdmission.suspend(epoch) {
+            watchdogQueue.async {
+                guard self.sessionAdmission.isCurrent(epoch) else { return }
+                self.watchdogSuspended = true
+                self.watchdogPolicy.reset()
+            }
         }
         completionHandler()
     }
@@ -417,10 +441,12 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     open override func wake() {
         rememberTunnelLog("Packet tunnel wake; scheduling health check")
         tunnelLog.info("Packet tunnel wake")
+        guard let epoch = sessionAdmission.currentEpoch else { return }
         watchdogQueue.async {
+            guard self.sessionAdmission.resume(epoch), self.runtimeSpec?.epoch == epoch else { return }
             self.watchdogSuspended = false
             self.watchdogPolicy.reset()
-            self.scheduleTunnelHealthCheck(trigger: "wake", after: 1.5)
+            self.scheduleTunnelHealthCheck(trigger: "wake", after: 1.5, epoch: epoch)
         }
     }
 
@@ -441,7 +467,8 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    private func startSocks5Tunnel(serverPort port: Int, credentials: LocalProxyCredentials) throws {
+    private func startSocks5Tunnel(serverPort port: Int, credentials: LocalProxyCredentials, epoch: TunnelSessionAdmission.Epoch) throws {
+        guard sessionAdmission.permitsRuntime(epoch) else { throw CancellationError() }
         // HEV is the tun2socks bridge: it reads IP packets from NetworkExtension
         // and forwards them into the local SOCKS inbound opened by Xray.
         // Xray alone can start successfully while user traffic still cannot
@@ -466,28 +493,31 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         rememberTunnelLog("Starting HEV socks5 tunnel on 127.0.0.1:\(port), log=\(logURL.path)")
         tunnelLog.info("Starting HEV socks5 tunnel on 127.0.0.1:\(port, privacy: .public), mtu \(tunnelMTU, privacy: .public)")
         let bridge: TunnelPacketBridge
-        if let existing = packetBridge {
+        if let existing = packetBridge, packetBridgeEpoch == epoch {
             bridge = existing
         } else {
+            packetBridge?.shutdown()
             bridge = try TunnelPacketBridge(flow: packetFlow, mtu: tunnelMTU) { [weak self] in
                 self?.watchdogQueue.async { [weak self] in
-                    guard let self, !self.watchdogSuspended else { return }
-                    self.setForwardingReady(false)
+                    guard let self, self.sessionAdmission.permitsRuntime(epoch), !self.watchdogSuspended else { return }
+                    self.setForwardingReady(false, epoch: epoch)
                     rememberTunnelLog("Packet flow bridge failed; restarting protected native workers")
-                    self.scheduleNativeRecovery(after: 0)
+                    self.scheduleNativeRecovery(after: 0, epoch: epoch)
                 }
             }
             packetBridge = bridge
+            packetBridgeEpoch = epoch
         }
         bridge.start()
         rememberTunnelLog("Public packetFlow bridge ready for HEV")
+        guard sessionAdmission.permitsRuntime(epoch) else { throw CancellationError() }
         hasStartedHEV = true
         hevLifecycle.beginStart()
         DispatchQueue.global(qos: .userInitiated).async {
             defer { withExtendedLifetime(bridge) {} }
             tunnelLog.info("HEV socks5 tunnel thread entered")
             self.hevLifecycle.markThreadEntered()
-            guard !self.hevLifecycle.isStopRequested else {
+            guard self.sessionAdmission.permitsRuntime(epoch), !self.hevLifecycle.isStopRequested else {
                 self.hevLifecycle.markExited(code: 0)
                 return
             }
@@ -503,7 +533,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             if exitedUnexpectedly {
                 self.reportTerminalFailure(
                     "HEV socks5 tunnel exited unexpectedly with code \(exitCode)",
-                    code: Int(exitCode)
+                    code: Int(exitCode), epoch: epoch
                 )
             }
         }
@@ -590,11 +620,17 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         return routes
     }
 
-    private func startTunnelWatchdog(port: Int?) {
+    private func startTunnelWatchdog(_ spec: RuntimeSpec) -> Bool {
         watchdogQueue.sync {
-            watchdogGeneration += 1
+            guard sessionAdmission.activate(spec.epoch) else { return false }
+            let epoch = spec.epoch
+            runtimeSpec = spec
+            nativeOptions = spec.options
+            recoveryFailures = 0
+            recoveryExhausted = false
+            initialRuntimeAttempted = false
             runtimeRecoveryInFlight = false
-            watchdogInboundPort = port
+            watchdogInboundPort = spec.port
             watchdogPolicy.reset()
             watchdogInboundHealthy = false
             watchdogSuspended = false
@@ -607,7 +643,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
                 leeway: .seconds(5)
             )
             timer.setEventHandler { [weak self] in
-                self?.performTunnelHealthCheck(trigger: "periodic")
+                self?.performTunnelHealthCheck(trigger: "periodic", epoch: epoch)
             }
             watchdogTimer = timer
             timer.resume()
@@ -615,21 +651,24 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             pathMonitor?.cancel()
             let monitor = NWPathMonitor()
             monitor.pathUpdateHandler = { [weak self] path in
-                guard let self else { return }
+                guard let self, self.sessionAdmission.permitsRuntime(epoch) else { return }
                 rememberTunnelLog("Network path changed status=\(String(describing: path.status))")
                 if path.status == .satisfied {
                     self.watchdogPolicy.reset()
-                    self.scheduleTunnelHealthCheck(trigger: "path-change", after: 2)
+                    self.scheduleTunnelHealthCheck(trigger: "path-change", after: 2, epoch: epoch)
                 }
             }
             pathMonitor = monitor
             monitor.start(queue: watchdogQueue)
+            return sessionAdmission.isCurrent(epoch)
         }
     }
 
-    private func stopTunnelWatchdog() {
+    private func stopTunnelWatchdog(epoch: TunnelSessionAdmission.Epoch?) {
         watchdogQueue.sync {
-            watchdogGeneration += 1
+            if let current = runtimeSpec?.epoch, current != epoch { return }
+            runtimeSpec = nil
+            runtimeRecoveryInFlight = false
             recoveryCheck?.cancel()
             recoveryCheck = nil
             watchdogSuspended = true
@@ -643,20 +682,19 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     /// Must be called while already executing on `watchdogQueue`.
-    private func scheduleTunnelHealthCheck(trigger: String, after delay: TimeInterval) {
-        let generation = watchdogGeneration
+    private func scheduleTunnelHealthCheck(trigger: String, after delay: TimeInterval, epoch: TunnelSessionAdmission.Epoch) {
         watchdogQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard self?.watchdogGeneration == generation else { return }
-            self?.performTunnelHealthCheck(trigger: trigger)
+            guard self?.sessionAdmission.permitsRuntime(epoch) == true else { return }
+            self?.performTunnelHealthCheck(trigger: trigger, epoch: epoch)
         }
     }
 
-    private func scheduleRecoveryCheck() {
-        guard recoveryCheck == nil else { return }
+    private func scheduleRecoveryCheck(epoch: TunnelSessionAdmission.Epoch) {
+        guard sessionAdmission.permitsRuntime(epoch), recoveryCheck == nil else { return }
         let check = DispatchWorkItem { [weak self] in
-            guard let self else { return }
+            guard let self, self.sessionAdmission.permitsRuntime(epoch) else { return }
             self.recoveryCheck = nil
-            self.performTunnelHealthCheck(trigger: "recovery")
+            self.performTunnelHealthCheck(trigger: "recovery", epoch: epoch)
         }
         recoveryCheck = check
         watchdogQueue.asyncAfter(deadline: .now() + 3, execute: check)
@@ -666,16 +704,16 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     /// Recovery keeps protected sessions scoped to the tunnel. A dead local
     /// runtime is restarted by the saved on-demand policy.
     @discardableResult
-    private func performTunnelHealthCheck(trigger: String) -> Bool {
-        guard !watchdogSuspended,
+    private func performTunnelHealthCheck(trigger: String, epoch: TunnelSessionAdmission.Epoch) -> Bool {
+        guard sessionAdmission.permitsRuntime(epoch), runtimeSpec?.epoch == epoch, !watchdogSuspended,
               !runtimeRecoveryInFlight,
               let port = watchdogInboundPort,
               let credentials = runtimeSpec?.credentials else {
             return false
         }
         guard !hevLifecycle.isStopRequested, hevLifecycle.isRunning else {
-            setForwardingReady(false)
-            scheduleNativeRecovery(after: 3)
+            setForwardingReady(false, epoch: epoch)
+            scheduleNativeRecovery(after: 3, epoch: epoch)
             return false
         }
 
@@ -693,7 +731,8 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         rememberTunnelLog(
             "Watchdog \(trigger): success=\(success) inbound=[\(inboundResult)] connect=[\(connectResult)] http=[\(httpResult)]"
         )
-        setForwardingReady(success)
+        guard sessionAdmission.permitsRuntime(epoch) else { return false }
+        setForwardingReady(success, epoch: epoch)
         if success {
             recoveryFailures = 0
             tunnelLog.info("Tunnel watchdog \(trigger, privacy: .public) passed")
@@ -702,34 +741,34 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             rememberTunnelLog("Protected tunnel forwarding restored")
         } else {
             tunnelLog.warning("Tunnel watchdog \(trigger, privacy: .public) failed")
-            scheduleRecoveryCheck()
+            scheduleRecoveryCheck(epoch: epoch)
         }
 
         if watchdogPolicy.record(success: success) {
             reportTerminalFailure(
                 "Tunnel watchdog failed \(watchdogPolicy.consecutiveFailures) consecutive checks",
-                code: 2
+                code: 2, epoch: epoch
             )
         }
         return success
     }
 
-    private func reportTerminalFailure(_ message: NativeDiagnosticMessage, code: Int) {
+    private func reportTerminalFailure(_ message: NativeDiagnosticMessage, code: Int, epoch: TunnelSessionAdmission.Epoch) {
         watchdogQueue.async {
-            self.handleRuntimeFailure(message, code: code)
+            self.handleRuntimeFailure(message, code: code, epoch: epoch)
         }
     }
 
     /// Runs on the watchdog queue; native recovery retains the tunnel routes.
-    private func handleRuntimeFailure(_ message: NativeDiagnosticMessage, code: Int) {
-        guard !watchdogSuspended else { return }
-        setForwardingReady(false)
+    private func handleRuntimeFailure(_ message: NativeDiagnosticMessage, code: Int, epoch: TunnelSessionAdmission.Epoch) {
+        guard sessionAdmission.permitsRuntime(epoch), runtimeSpec?.epoch == epoch, !watchdogSuspended else { return }
+        setForwardingReady(false, epoch: epoch)
         if hevLifecycle.isRunning && watchdogInboundHealthy {
             rememberTunnelLog("Protected tunnel waiting for transport recovery")
             return
         }
         rememberTunnelLog("Restarting native workers inside the protected tunnel")
-        scheduleNativeRecovery(after: 0)
+        scheduleNativeRecovery(after: 0, epoch: epoch)
     }
 
     private func socksInboundHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String {

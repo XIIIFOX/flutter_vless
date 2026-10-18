@@ -16,6 +16,7 @@ struct FixtureOptions {
 }
 struct FixtureHEV: Equatable { var isRunning = true, isStopRequested = false }
 struct FixturePolicy: Equatable { var consecutiveFailures = 0 }
+struct FixtureSpec { var epoch = 7 }
 struct ProtectedState: Equatable {
     let hev: FixtureHEV
     let hasStartedHEV: Bool
@@ -32,11 +33,10 @@ final class FixtureProvider: @unchecked Sendable {
     var recoveryCheck: Bool?
     var watchdogPolicy = FixturePolicy()
     var initialRuntimeAttempted = true, watchdogInboundHealthy = true
-    var runtimeSpec: Bool? = true
+    var runtimeSpec: FixtureSpec? = FixtureSpec()
     var watchdogInboundPort: Int? = 10808
     var nativeOptions = FixtureOptions()
     var hevLifecycle = FixtureHEV()
-    var watchdogGeneration = 7
     var hasStartedHEV = true, startupStopped = false, forwardingReady = true
     var recoveryFailures = 5, stopCalls = 0
     func isStartupStopped() -> Bool { startupStopped }
@@ -47,7 +47,7 @@ final class FixtureProvider: @unchecked Sendable {
     }
     func protectedState() -> ProtectedState {
         ProtectedState(hev: hevLifecycle, hasStartedHEV: hasStartedHEV, ready: forwardingReady,
-            failures: recoveryFailures, policy: watchdogPolicy, generation: watchdogGeneration,
+            failures: recoveryFailures, policy: watchdogPolicy, generation: runtimeSpec?.epoch ?? -1,
             recovering: runtimeRecoveryInFlight)
     }
     // SOURCE_ACCEPTANCE_STATE
@@ -119,7 +119,7 @@ func request(_ provider: FixtureProvider, message: String = "acceptance-stop-cor
                 // Ordered after the initial watchdog reservation, before the
                 // queued runtime operation can check the same generation.
                 provider.watchdogQueue.async {
-                    if staleMode == 0 { provider.watchdogGeneration += 1 }
+                    if staleMode == 0 { provider.runtimeSpec?.epoch += 1 }
                     if staleMode == 1 { provider.runtimeRecoveryInFlight = true }
                     if staleMode == 2 { provider.startupStopped = true }
                     release.signal()

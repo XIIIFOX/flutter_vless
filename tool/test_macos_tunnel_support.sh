@@ -47,3 +47,5 @@ let package = Package(
 SWIFT
 
 swift test --package-path "$WORK_DIR" "$@"
+
+python3 "$ROOT_DIR/tool/test_apple_session_admission.py" --platform macos

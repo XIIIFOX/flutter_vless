@@ -114,14 +114,17 @@ if (nativeDnsPreviewInput) {
         if (verification.exitValue() != 0) {
             throw new GradleException(label + ' verification failed: ' + verificationOutput)
         }
-        return directory
+        return [directory: directory, metadata: new groovy.json.JsonSlurper().parseText(verificationOutput)]
     }
-    def previewDirectory = verifyPreview(nativeDnsPreviewInput.toString(), 'tool/verify_android_dns_preview.py', 'Native DNS preview')
-    android.sourceSets.androidTest.jniLibs.srcDir(new File(previewDirectory, 'jniLibs'))
+    def preview = verifyPreview(nativeDnsPreviewInput.toString(), 'tool/verify_android_dns_preview.py', 'Native DNS preview')
+    android.sourceSets.androidTest.jniLibs.srcDir(new File(preview.directory, 'jniLibs'))
     android.sourceSets.androidTest.java.srcDir('src/nativeDnsPreviewTest/kotlin')
     if (nativeTunPreviewInput) {
-        def tunDirectory = verifyPreview(nativeTunPreviewInput.toString(), 'tool/verify_android_tun_preview.py', 'Native TUN preview')
-        android.sourceSets.androidTest.jniLibs.srcDir(new File(tunDirectory, 'jniLibs'))
+        def tun = verifyPreview(nativeTunPreviewInput.toString(), 'tool/verify_android_tun_preview.py', 'Native TUN preview')
+        if (tun.metadata.arch != preview.metadata.arch) {
+            throw new GradleException('Native preview executables require the same ABI')
+        }
+        android.sourceSets.androidTest.jniLibs.srcDir(new File(tun.directory, 'jniLibs'))
         android.sourceSets.androidTest.java.srcDir('src/nativeDnsPreviewVpnTest/kotlin')
         android.sourceSets.debug.java.srcDir('src/nativeDnsPreview/kotlin')
         android.sourceSets.debug.manifest.srcFile('src/nativeDnsPreview/AndroidManifest.xml')

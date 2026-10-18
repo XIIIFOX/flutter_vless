@@ -148,6 +148,7 @@ jobs:
           python3 tool/test_android_native_dns_fixture.py
           python3 tool/test_verify_android_dns_preview.py
           python3 tool/test_verify_android_tun_preview.py
+          python3 tool/test_verify_android_preview_apk.py
           python3 tool/test_android_protection_fixture.py
           python3 tool/test_android_flutter_smoke_retry.py
           python3 tool/test_android_emulator_failure_capture.py
@@ -156,6 +157,7 @@ jobs:
 
   android-emulator:
     name: Android emulator security and runtime
+    needs: core-dns-context
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

@@ -7,9 +7,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CAPTURE_DNS=1
 NATIVE_DNS_PREVIEW=""
 NATIVE_DNS_PREVIEW_SHA=""
+NATIVE_TUN_PREVIEW=""
+NATIVE_TUN_PREVIEW_SHA=""
 usage() {
   cat <<'USAGE'
-Usage: tool/test_android_security_emulator.sh [--no-capture] [--native-dns-preview BUILD_DIRECTORY]
+Usage: tool/test_android_security_emulator.sh [--no-capture] [--native-dns-preview BUILD_DIRECTORY] [--native-tun-preview BUILD_DIRECTORY]
 
 Use an already booted, dedicated emulator. ANDROID_SERIAL selects it explicitly;
 otherwise exactly one online emulator must be present. Physical devices are refused.
@@ -21,6 +23,9 @@ Physical DNS needs a working emulator upstream resolver.
 The computer's current VPN must remain enabled.
 The optional preview is verified against this checkout and added only to the
 instrumentation APK, never to the ordinary plugin/runtime or release artifacts.
+The additional TUN preview requires both separately verified executables. It
+runs five actual TUN/browser scenarios on this emulator after the ordinary
+regression suites; the default and Core-only paths do not start this service.
 USAGE
 }
 while [ "$#" -gt 0 ]; do
@@ -31,11 +36,20 @@ while [ "$#" -gt 0 ]; do
       if [ "$#" -eq 0 ] || [ -z "$1" ]; then usage >&2; exit 2; fi
       NATIVE_DNS_PREVIEW="$1"
       ;;
+    --native-tun-preview)
+      shift
+      if [ "$#" -eq 0 ] || [ -z "$1" ]; then usage >&2; exit 2; fi
+      NATIVE_TUN_PREVIEW="$1"
+      ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
   shift
 done
+if [ -n "$NATIVE_TUN_PREVIEW" ] && [ -z "$NATIVE_DNS_PREVIEW" ]; then
+  echo "Native TUN preview requires --native-dns-preview." >&2
+  exit 2
+fi
 
 if [ -n "${FLUTTER_VLESS_ANDROID_RUNTIME_REPO:-}" ] ||
    [ -n "${ORG_GRADLE_PROJECT_flutterVlessAndroidRuntimeRepo:-}" ] ||
@@ -79,6 +93,8 @@ EMULATOR_VALIDATED=0
 ADVERSARY_INSTALLED=0
 CAPTURE_STARTED=0
 CAPTURE_WIFI_DISABLED=0
+TUN_BROWSER_OWNED=0
+TUN_WIFI_RESTORE=0
 CAPTURE_SOURCE_PATH="$OUT_DIR/physical-dns.pcap"
 CHECKS="$OUT_DIR/checks.tsv"
 : > "$CHECKS"
@@ -207,12 +223,6 @@ cleanup() {
       --adb "$ADB" --serial "$SERIAL" --package "$PACKAGE" --output "$OUT_DIR" --phase "$PHASE"
   fi
   if [ "$CAPTURE_STARTED" -eq 1 ]; then stop_capture; [ "$?" -eq 0 ] || result=1; fi
-  if [ "$CAPTURE_WIFI_DISABLED" -eq 1 ]; then
-    bounded 20 "$OUT_DIR/cleanup-wifi-enable.log" "$ADB" -s "$SERIAL" shell svc wifi enable
-    [ "$?" -eq 0 ] || result=1
-    bounded 20 "$OUT_DIR/cleanup-wifi-connect.log" "$ADB" -s "$SERIAL" shell cmd wifi connect-network AndroidWifi open
-    [ "$?" -eq 0 ] || result=1
-  fi
   if [ "$TEST_INSTALLED" -eq 1 ]; then
     # Stop our instrumentation and VPN before inspecting OS policy, so a timed
     # out test cannot enqueue another policy change during cleanup.
@@ -243,6 +253,20 @@ PY
     bounded 20 "$OUT_DIR/cleanup-vpn-permission.log" "$ADB" -s "$SERIAL" shell appops set "$PACKAGE" ACTIVATE_VPN default
     [ "$?" -eq 0 ] || result=1
   fi
+  if [ "$TUN_BROWSER_OWNED" -eq 1 ]; then
+    # The dedicated fixture proved Chrome had no process before its suite.
+    # A crashed instrumentation process cannot run its own @After cleanup.
+    bounded 20 "$OUT_DIR/cleanup-owned-browser.log" "$ADB" -s "$SERIAL" shell am force-stop com.android.chrome
+    [ "$?" -eq 0 ] || result=1
+  fi
+  if [ "$CAPTURE_WIFI_DISABLED" -eq 1 ] || [ "$TUN_WIFI_RESTORE" -eq 1 ]; then
+    # Stop instrumentation first: a timed-out handover test must not disable
+    # virtual Wi-Fi again after the harness has restored its owned baseline.
+    bounded 20 "$OUT_DIR/cleanup-wifi-enable.log" "$ADB" -s "$SERIAL" shell svc wifi enable
+    [ "$?" -eq 0 ] || result=1
+    bounded 20 "$OUT_DIR/cleanup-wifi-connect.log" "$ADB" -s "$SERIAL" shell cmd wifi connect-network AndroidWifi open
+    [ "$?" -eq 0 ] || result=1
+  fi
   if [ "$ADVERSARY_INSTALLED" -eq 1 ]; then
     # The standalone installer refuses existing packages. This flag is set only
     # after it confirms that this run successfully installed its disposable APK.
@@ -259,9 +283,9 @@ PY
   # even when a shell parser error leaves EXIT with a stale zero status.
   if [ "$result" -eq 0 ] && [ "$PHASE" != complete ]; then result=1; fi
   if [ "$original_result" -ne 0 ]; then result=$original_result; fi
-  python3 - "$OUT_DIR" "$SERIAL" "$result" "$PHASE" "$CAPTURE_DNS" <<'PY'
+  python3 - "$OUT_DIR" "$SERIAL" "$result" "$PHASE" "$CAPTURE_DNS" "$NATIVE_TUN_PREVIEW" <<'PY'
 import json, pathlib, sys
-output, serial, code, phase, capture = sys.argv[1:]
+output, serial, code, phase, capture, tun_requested = sys.argv[1:]
 checks = []
 for line in (pathlib.Path(output) / 'checks.tsv').read_text().splitlines():
     name, count, skipped = line.split('\t')
@@ -269,6 +293,8 @@ for line in (pathlib.Path(output) / 'checks.tsv').read_text().splitlines():
 summary = {'passed': code == '0', 'exit_code': int(code), 'emulator': serial,
            'checks': checks, 'dns_physical_capture_requested': capture == '1',
            'dns_physical_capture_verified': any(check['name'] == 'physical-dns-capture' for check in checks),
+           'native_tun_preview_requested': bool(tun_requested),
+           'native_tun_preview_verified': any(check['name'] == 'native-preview-vpn' and check['passed_tests'] == 5 and check['skipped_tests'] == 0 for check in checks),
            'instrumentation_passed_tests': sum(check['passed_tests'] for check in checks if check['name'] != 'physical-dns-capture'),
            'instrumentation_skipped_tests': sum(check['skipped_tests'] for check in checks),
            'last_phase': phase, 'artifacts': output}
@@ -334,6 +360,27 @@ PY
 )"
   PREVIEW_GRADLE_ARGS=("-PflutterVlessNativeDnsPreviewDir=$NATIVE_DNS_PREVIEW")
 fi
+if [ -n "$NATIVE_TUN_PREVIEW" ]; then
+  PHASE=verify-native-tun-preview
+  bounded 30 "$OUT_DIR/native-tun-preview-verification.json" python3 "$ROOT_DIR/tool/verify_android_tun_preview.py" --directory "$NATIVE_TUN_PREVIEW"
+  NATIVE_TUN_PREVIEW="$(python3 - "$NATIVE_TUN_PREVIEW" <<'PY'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).resolve())
+PY
+)"
+  NATIVE_TUN_PREVIEW_SHA="$(python3 - "$OUT_DIR/native-tun-preview-verification.json" "$OUT_DIR/native-preview-verification.json" <<'PY'
+import json,sys
+tun,core = [json.load(open(path)) for path in sys.argv[1:]]
+if tun['arch'] != core['arch']:
+    raise SystemExit('Native preview executables require the same ABI.')
+print(tun['artifact_sha256'])
+PY
+)"
+fi
+# Keep the ordinary APK's VPN service set intact. Android opts the entire app
+# out of Always-on if any declared VPN service opts out, as this private host
+# deliberately does. Only the final five-case suite receives the second APK.
 PHASE=build
 echo "Building the Android test APK with strict official-runtime verification..."
 (cd "$ROOT_DIR/example" && bounded 300 "$OUT_DIR/flutter-pub-get.log" flutter pub get)
@@ -343,6 +390,11 @@ echo "Building the Android test APK with strict official-runtime verification...
   -PflutterVlessOfficialRuntimeVerification=true --dependency-verification=strict --console=plain --stacktrace)
 APK="$ROOT_DIR/example/build/flutter_vless_android/outputs/apk/androidTest/debug/flutter_vless_android-debug-androidTest.apk"
 if [ ! -f "$APK" ]; then echo "Expected freshly built AndroidTest APK is missing: $APK" >&2; exit 1; fi
+if [ -n "$NATIVE_DNS_PREVIEW" ]; then
+  PHASE=verify-preview-apk
+  PREVIEW_APK_ARGS=(--apk "$APK" --core-verification "$OUT_DIR/native-preview-verification.json")
+  bounded 30 "$OUT_DIR/native-preview-apk-verification.json" python3 "$ROOT_DIR/tool/verify_android_preview_apk.py" "${PREVIEW_APK_ARGS[@]}"
+fi
 PHASE=install
 bounded 90 "$OUT_DIR/install.log" "$ADB" -s "$SERIAL" install -r -t "$APK"
 TEST_INSTALLED=1
@@ -541,4 +593,59 @@ fi
 instrument physical-dns "$HOST_CLASS#physicalNetworkResolverControl" 1 0 -e checkPhysicalDns true
 install_os_adversary
 instrument system-vpn-policy "$CLASS_PREFIX.SessionSystemPolicyDeviceTest" 4 0
+if [ -n "$NATIVE_TUN_PREVIEW" ]; then
+  # The preceding OS Forget test may revoke consent. Restore only this
+  # disposable package's explicitly authorized permission, never OS lockdown.
+  PHASE=native-preview-vpn-preconditions
+  bounded 20 "$OUT_DIR/native-preview-vpn-owner.log" "$ADB" -s "$SERIAL" shell settings --user 0 get secure always_on_vpn_app
+  python3 - "$OUT_DIR/native-preview-vpn-owner.log" <<'PY'
+import pathlib,sys
+if pathlib.Path(sys.argv[1]).read_text().strip() != 'null':
+    raise SystemExit('The ordinary OS-policy suite did not release its VPN owner.')
+PY
+  bounded 20 "$OUT_DIR/native-preview-vpn-stop-ordinary.log" "$ADB" -s "$SERIAL" shell am force-stop "$PACKAGE"
+  PHASE=native-preview-vpn-build
+  (cd "$ROOT_DIR/example/android" && bounded 1200 "$OUT_DIR/native-preview-vpn-gradle-build.log" ./gradlew \
+    :flutter_vless_android:assembleDebugAndroidTest \
+    "${PREVIEW_GRADLE_ARGS[@]}" "-PflutterVlessNativeTunPreviewDir=$NATIVE_TUN_PREVIEW" \
+    -PflutterVlessOfficialRuntimeVerification=true --dependency-verification=strict --console=plain --stacktrace)
+  PHASE=native-preview-vpn-verify-apk
+  bounded 30 "$OUT_DIR/native-preview-vpn-apk-verification.json" python3 "$ROOT_DIR/tool/verify_android_preview_apk.py" \
+    --apk "$APK" --core-verification "$OUT_DIR/native-preview-verification.json" \
+    --tun-verification "$OUT_DIR/native-tun-preview-verification.json"
+  PHASE=native-preview-vpn-install
+  bounded 90 "$OUT_DIR/native-preview-vpn-install.log" "$ADB" -s "$SERIAL" install -r -t "$APK"
+  bounded 20 "$OUT_DIR/native-preview-vpn-stop-updated.log" "$ADB" -s "$SERIAL" shell am force-stop "$PACKAGE"
+  bounded 20 "$OUT_DIR/native-preview-vpn-authorize.log" "$ADB" -s "$SERIAL" shell appops set "$PACKAGE" ACTIVATE_VPN allow
+  bounded 20 "$OUT_DIR/native-preview-vpn-permission.log" "$ADB" -s "$SERIAL" shell appops get "$PACKAGE" ACTIVATE_VPN
+  python3 - "$OUT_DIR/native-preview-vpn-permission.log" <<'PY'
+import pathlib,re,sys
+if not re.search(r'ACTIVATE_VPN:\s*allow\b', pathlib.Path(sys.argv[1]).read_text()):
+    raise SystemExit('The disposable TUN suite did not receive VPN consent.')
+PY
+  python3 - "$ADB" "$SERIAL" > "$OUT_DIR/native-preview-browser-ownership.json" <<'PY'
+import json,subprocess,sys
+result = subprocess.run([sys.argv[1], '-s', sys.argv[2], 'shell', 'ps', '-A', '-o', 'NAME'],
+                        text=True,capture_output=True,timeout=10)
+lines = result.stdout.splitlines()
+if result.returncode != 0 or result.stderr.strip() or not lines or lines[0].strip() != 'NAME':
+    raise SystemExit('The dedicated browser fixture could not inventory running process names.')
+if any(name.strip() == 'com.android.chrome' or name.strip().startswith('com.android.chrome:') for name in lines[1:]):
+    raise SystemExit('The dedicated browser fixture requires Chrome to have no existing process.')
+print(json.dumps({'package':'com.android.chrome','preexisting_process':False,'fixture_may_own_browser':True}))
+PY
+  bounded 20 "$OUT_DIR/native-preview-vpn-wifi-baseline.log" "$ADB" -s "$SERIAL" shell cmd wifi status
+  python3 - "$OUT_DIR/native-preview-vpn-wifi-baseline.log" <<'PY'
+import pathlib,sys
+text = pathlib.Path(sys.argv[1]).read_text()
+if 'Wifi is enabled' not in text or 'Wifi is connected to' not in text or 'AndroidWifi' not in text:
+    raise SystemExit('The dedicated TUN handover fixture requires its connected AndroidWifi baseline.')
+PY
+  TUN_BROWSER_OWNED=1
+  TUN_WIFI_RESTORE=1
+  instrument native-preview-vpn "$CLASS_PREFIX.NativePreviewVpnDeviceTest" 5 0 \
+    -e previewSha256 "$NATIVE_DNS_PREVIEW_SHA" -e forwarderSha256 "$NATIVE_TUN_PREVIEW_SHA"
+  bounded 20 "$OUT_DIR/native-preview-vpn-browser-stop.log" "$ADB" -s "$SERIAL" shell am force-stop com.android.chrome
+  TUN_BROWSER_OWNED=0
+fi
 PHASE=complete

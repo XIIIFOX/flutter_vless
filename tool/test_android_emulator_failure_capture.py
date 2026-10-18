@@ -125,7 +125,8 @@ class AndroidFailureCaptureTest(unittest.TestCase):
         self.assertFalse(self.calls.exists())
         self.assertEqual([], list(self.output.iterdir()))
 
-    def run_actual_cleanup(self, code, *, installed=1, validated=1):
+    def run_actual_cleanup(self, code, *, installed=1, validated=1, browser_owned=False, tun_requested=False,
+                           tun_wifi_restore=False):
         # Exercise the actual production cleanup and timeout functions without
         # sourcing the harness preflight/build/device actions.
         source = HARNESS.read_text()
@@ -138,12 +139,41 @@ class AndroidFailureCaptureTest(unittest.TestCase):
             "ADVERSARY_PACKAGE": "com.github.tfox.flutter_vless.adversary",
             "PHASE": "complete" if code == 0 else "system-vpn-policy",
             "CAPTURE_DNS": "1", "CAPTURE_STARTED": "0", "CAPTURE_WIFI_DISABLED": "0",
+            "NATIVE_TUN_PREVIEW": "/verified-preview" if tun_requested else "",
+            "TUN_BROWSER_OWNED": "1" if browser_owned else "0",
+            "TUN_WIFI_RESTORE": "1" if tun_wifi_restore else "0",
             "TEST_INSTALLED": str(installed), "EMULATOR_VALIDATED": str(validated),
             "ADVERSARY_INSTALLED": "1", "FIXTURE_PID": "", "DNS_PID": "",
         }
         script = "set -u\n" + "\n".join(f"{key}={shlex.quote(value)}" for key, value in variables.items())
         script += "\n" + bounded + "\n" + cleanup + f"\ntrap cleanup EXIT\nexit {code}\n"
         return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=15)
+
+    def test_browser_cleanup_requires_explicit_fixture_ownership(self):
+        for owned in (False, True):
+            with self.subTest(owned=owned):
+                self.output = self.base / ('browser-owned-' + str(owned))
+                self.output.mkdir(mode=0o700)
+                self.calls.unlink(missing_ok=True)
+                result = self.run_actual_cleanup(37, browser_owned=owned, tun_requested=True)
+                self.assertEqual(37, result.returncode, result.stderr)
+                browser_stops = [args for args in self.recorded_calls()
+                                 if args[2:] == ['shell', 'am', 'force-stop', 'com.android.chrome']]
+                self.assertEqual(1 if owned else 0, len(browser_stops))
+                report = json.loads((self.output / 'summary.json').read_text())
+                self.assertTrue(report['native_tun_preview_requested'])
+                self.assertFalse(report['native_tun_preview_verified'])
+
+    def test_tun_handover_crash_restores_wifi_after_stopping_instrumentation(self):
+        result = self.run_actual_cleanup(37, tun_requested=True, tun_wifi_restore=True)
+        self.assertEqual(37, result.returncode, result.stderr)
+        calls = self.recorded_calls()
+        stop = calls.index(['-s', 'emulator-5554', 'shell', 'am', 'force-stop', TEST_PACKAGE])
+        enable = calls.index(['-s', 'emulator-5554', 'shell', 'svc', 'wifi', 'enable'])
+        connect = calls.index(['-s', 'emulator-5554', 'shell', 'cmd', 'wifi', 'connect-network', 'AndroidWifi', 'open'])
+        self.assertLess(stop, enable)
+        self.assertLess(enable, connect)
+        self.assertLess(0, stop)  # Primary capture still precedes destructive cleanup.
 
     def test_capture_precedes_force_stop_uninstall_and_preserves_original_failure(self):
         os.environ["FAKE_ADB_MODE"] = "fail"

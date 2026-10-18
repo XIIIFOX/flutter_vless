@@ -310,7 +310,11 @@ permission-checked private policy bound to the source hash and session nonce.
 Selected UDP associations require a concrete prebound peer and a grant retained
 through the full callback finalizer. Local validation passes 126 pure tests and
 191 subtests plus fixture/launcher compilation (34 phases); it executes no Core.
-The expanded actual-Core private-policy/UDP controls need a fresh CI result.
+The [b030db9 CI run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39164717739)
+passes all five actual-Core fixtures, including private-policy/managed-UDP
+controls, on Windows, macOS and Ubuntu. Its source snapshots match that commit;
+Linux also passes the synthetic descriptor-ownership fixtures without opening a
+TUN or starting the forwarder engine.
 See the [consumer boundary](../third_party/xray-native-dns/README.md#managed-input-consumer-preview).
 Items 1 and 2 remain pending.
 
@@ -318,11 +322,24 @@ An explicit Android development host now compiles with separate verified Core
 and forwarder executables in the test APK. Five device scenarios cover the
 planned TUN DNS/HTTP, rejected-candidate survival, child recovery, controlled
 Wi-Fi/cellular replacement and fresh Chrome marker checks. They have not run
-yet: Windows private-policy/managed-UDP qualification must pass before opening
-this gate. Ordinary builds omit the service and executables. Synthetic forwarder
+yet. Their optional harness path is prepared after the three-system Core and
+Linux descriptor qualification gates. The harness checks actual APK payloads
+against both fresh binary reports before installation. It keeps the development
+service out of ordinary OS-policy tests because Android applies any service's
+Always-on opt-out to the whole app, then installs the two-binary APK for the five
+new cases. Owned browser/instrumentation cleanup precedes emulator Wi-Fi recovery
+after failures. Ordinary builds omit the service and executables. Synthetic forwarder
 tests prove password negotiation, prebound UDP tuple, exact relay-source filtering
 and descriptor cleanup without starting an engine/TUN; these are not mobile
 system-traffic acceptance. The eight statuses below remain unchanged.
+
+The b030db9 Android job exhausted its 45-minute limit while the example smoke
+wrapper was waiting for Flutter. No native security class ran and the wrapper
+had not persisted its buffered child output, so the underlying Flutter/build/app
+cause is unknown. The three scoped Core jobs, Apple job and Android's 105 native
+unit tests pass. The workflow keeps the five TUN cases disabled until ordinary
+Android acceptance succeeds; a new bounded smoke wrapper must preserve partial
+output and failure context before another run can qualify that gate.
 
 Session teardown progress: Android now closes callback admission before its final
 cleanup, so late network/worker events cannot enqueue into a stopped executor.
@@ -389,7 +406,12 @@ contracts; this does not implement Core multi-file override/merge semantics.
    into the private adapter; retaining the original rules alone does not make
    input-specific rules apply to that new adapter. Test profiles whose first
    outbound is not the intended VPN default. Preserve user fields outside the documented privacy
-   overrides for logs and native protection.
+   overrides for logs and native protection. Private traffic counters need an
+   exact, session-owned adapter source: the current Android literal `proxy`
+   lookup misses other egress tags, and Windows aggregation can include caller
+   inputs or count both inbound and outbound bytes. Distinguish adapter stream
+   bytes (which can include SOCKS framing) from TUN/application payload, and do
+   not enable caller-disabled policy counters merely to fill plugin totals.
 5. **Unify port/address handling.** Accept upstream string port lists, ranges,
    `env:` references, port zero and Unix sockets where supported. Align Dart and
    native validators. Private allocation must also check actual OS listeners,
@@ -400,6 +422,11 @@ contracts; this does not implement Core multi-file override/merge semantics.
    assets explicitly; a macOS absolute path cannot be assumed to exist on
    Android. Match JSON/JSONC/BOM/multiple-document support to the actual embedded
    core and preserve full JSON independently of share-link conversion.
+   Pinned Core resolves relative TLS certificate/key paths from its certificate
+   location or executable directory, separately from its GeoDAT asset location;
+   changing the config directory or Apple's geo option does not cover both.
+   Owned private asset copies must survive certificate reloads for the complete
+   session and remain isolated between an accepted owner and a rejected candidate.
 7. **Expose precise compatibility errors.** Run the pinned core's configuration
    check before replacing a working session. Report the failing feature/stage
    with redacted diagnostics and a safe original/effective-config comparison;

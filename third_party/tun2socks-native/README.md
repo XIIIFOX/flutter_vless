@@ -33,5 +33,15 @@ LOAD alignment. The verifier requires its exact current source snapshot,
 capability, module pin, checksum and one verified JNI payload.
 
 Actual TUN, system DNS, browser and handover acceptance is a separate gate after
-the scoped Core UDP controls pass remotely. The existing dirty/opaque packaged
+the scoped Core UDP controls pass remotely. The Android harness accepts this
+build through `--native-tun-preview BUILD_DIRECTORY` together with
+`--native-dns-preview BUILD_DIRECTORY`. It matches both packaged JNI payloads to
+fresh build verification reports before installation. Ordinary OS-policy tests
+use a Core-only APK; a second APK adds the development VPN service immediately
+before its five TUN scenarios, preserving Android's app-wide Always-on semantics.
+CI depends on all three scoped Core jobs and the Linux descriptor fixtures;
+their success does not substitute for the separate Android runtime result.
+The workflow keeps the TUN option disabled until ordinary Android acceptance
+succeeds; compiling or verifying these payloads does not open that gate.
+The existing dirty/opaque packaged
 forwarder is not claimed to be reproduced by this new pinned development copy.

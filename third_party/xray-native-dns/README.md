@@ -272,6 +272,8 @@ alignment and binary digest before adding it to the instrumentation APK. The
 explicit Gradle property `flutterVlessNativeDnsPreviewDir` adds only the test
 source set and test JNI library. Ordinary plugin AARs and example builds do not
 include this executable. An extra ABI/library or stale build is rejected.
+The packaged ZIP bytes are also matched to that fresh verification report before
+installation, including rejection of duplicate entries and path/ABI aliases.
 
 The separate property `flutterVlessNativeTunPreviewDir` additionally requires a
 verified [pinned development forwarder](../tun2socks-native/README.md). Both
@@ -280,9 +282,29 @@ additional device scenarios; the two executables remain in the test APK. The
 service is absent when either opt-in is missing and never enters release builds.
 Its candidate/source/policy/process/network ownership is separate from the
 ordinary service. It retains failed cleanup owners and refuses restart until
-they drain. The current harness does not invoke these five scenarios: remote
-managed-UDP qualification is required before live TUN acceptance. Compilation,
-JNI hashes and manifest presence do not qualify DNS, browser or handover traffic.
+they drain. The harness option `--native-tun-preview BUILD_DIRECTORY` requires
+the Core option too and invokes these five scenarios only after all ordinary
+regressions pass. It first installs a Core-only APK: Android treats an Always-on
+opt-out on any declared VPN service as an app-wide opt-out, so the development
+service must be absent during the ordinary OS-policy tests. After those tests
+release their VPN owner, the harness builds, verifies and installs the two-binary
+APK, restores only that disposable package's VPN consent and runs the five cases.
+It requires an unused Chrome process and connected emulator Wi-Fi baseline;
+crash cleanup stops its instrumentation/browser before restoring that Wi-Fi.
+Each case waits for a stable physical Wi-Fi default and IPv4 fixture route;
+handover teardown confirms Stop before reconnecting and settling that baseline.
+These are bounded fixture preconditions, not retries of protected operations.
+
+CI waits for scoped Core runtime qualification on Windows, macOS and Ubuntu,
+including the Linux descriptor-ownership fixtures, before starting the Android
+job. The [b030db9 run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39164717739)
+passes those three Core jobs and Linux fixtures. The five mobile TUN scenarios
+remain disabled in the workflow until the ordinary Android suite succeeds.
+That run exhausted the 45-minute job limit inside the example smoke wrapper,
+before any native security suite ran; the Flutter child's underlying outcome is
+unknown because its output was buffered until exit. The new TUN cases still
+require their own actual runtime result. Compilation, JNI hashes and
+manifest presence do not qualify DNS, browser or handover traffic.
 
 The two conditional device tests run the actual child entry through the strict
 captured-network broker. They require authenticated HTTP bytes, separately

@@ -6,6 +6,7 @@ import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.RouteInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -23,6 +24,7 @@ import java.io.DataOutputStream
 import java.io.File
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -68,16 +70,46 @@ class NativePreviewVpnDeviceTest {
     }
     private fun captured(): Boolean = manager.getNetworkCapabilities(manager.activeNetwork)
         ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
-    private fun physicalNetwork(): Network = NativePreviewFixtureNetwork.capture(context)
+    private fun settledWifiDefault(): Network {
+        var observed: Pair<Network, String>? = null
+        var since = 0L
+        var settled: Network? = null
+        // Only settle the fixture baseline. Never retry START or a protected
+        // socket/query, and never repair a network change inside a test case.
+        await(until(10000), "stable physical Wi-Fi default") {
+            val network = manager.activeNetwork
+            val caps = network?.let(manager::getNetworkCapabilities)
+            val links = network?.let(manager::getLinkProperties)
+            val routes = links?.routes.orEmpty().filter {
+                it.type == RouteInfo.RTN_UNICAST && it.destination.address is Inet4Address && it.matches(loopbackHost)
+            }
+            if (network == null || caps == null || links == null ||
+                !caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ||
+                !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+                links.linkAddresses.none { it.address is Inet4Address } || routes.isEmpty()) {
+                observed = null
+                false
+            } else {
+                val key = network to (links.linkAddresses.map { it.toString() }.sorted().toString() +
+                    routes.map { it.toString() }.sorted().toString())
+                if (observed != key) { observed = key; since = System.nanoTime() }
+                if (System.nanoTime() - since >= TimeUnit.MILLISECONDS.toNanos(250)) {
+                    settled = network; true
+                } else false
+            }
+        }
+        return requireNotNull(settled)
+    }
 
     @Before fun dedicatedEmulatorOnly() {
         check(Build.HARDWARE in setOf("ranchu", "goldfish"))
         assertNull("Test VPN consent must be prepared by the dedicated harness", VpnService.prepare(context))
         check(!captured()) { "Another VPN is active on the disposable emulator" }
         assertEquals("null", shell("settings --user 0 get secure always_on_vpn_app"))
-        physical = physicalNetwork()
-        assertTrue("A previous owned preview directory survived", ownedDirectories().isEmpty())
         wifiWasEnabled = shell("settings get global wifi_on") == "1"
+        check(wifiWasEnabled) { "Dedicated preview fixture requires its restored Wi-Fi baseline" }
+        physical = settledWifiDefault()
+        assertTrue("A previous owned preview directory survived", ownedDirectories().isEmpty())
     }
     private fun ownedDirectories() = context.noBackupFilesDir.listFiles().orEmpty().filter { it.name.startsWith("native-vpn-") }
 
@@ -118,7 +150,7 @@ class NativePreviewVpnDeviceTest {
                 .putExtra("previewSha256", requireNotNull(args.getString("previewSha256")))
                 .putExtra("forwarderSha256", requireNotNull(args.getString("forwarderSha256")))
                 .putExtra("resolver", "10.0.2.2:18284").putExtra("egressIndex", 1).putExtra("includeBrowser", browser)
-        }
+        }.also { if (it.code == 0) assertEquals("Start changed the fixture baseline", physical.networkHandle, it.state.getLong("networkHandle")) }
     }
     private fun running(value: Bundle, bytes: ByteArray) {
         assertEquals("RUNNING", value.getString("state")); assertTrue(value.getBoolean("coreAlive"))
@@ -294,6 +326,7 @@ class NativePreviewVpnDeviceTest {
         return listOf(node) + (0 until node.childCount).flatMap { visibleNodes(node.getChild(it)) }
     }
     @Test fun freshChromeSystemDnsAndOriginBytesThroughActualTun() {
+        check(shell("pidof com.android.chrome").isEmpty()) { "Dedicated browser fixture refuses a pre-existing Chrome process" }
         @Suppress("DEPRECATION")
         val chrome = context.packageManager.getPackageInfo("com.android.chrome", 0)
         check(chrome.applicationInfo?.enabled == true) { "Dedicated browser fixture requires installed enabled Chrome" }
@@ -339,8 +372,15 @@ class NativePreviewVpnDeviceTest {
             assertEquals(0, stopped.code); assertFalse(stopped.state.getBoolean("tunOwned")); started = false
         }
         if (browserLaunched) attempt { shell("am force-stop com.android.chrome"); browserLaunched = false }
-        if (wifiChanged) attempt { shell("svc wifi ${if (wifiWasEnabled) "enable" else "disable"}"); wifiChanged = false }
         attempt { await(description = "final owned TUN cleanup") { !captured() }; assertTrue(ownedDirectories().isEmpty()) }
+        if (wifiChanged) attempt {
+            check(!captured()) { "Stop must finish before restoring fixture Wi-Fi" }
+            check(wifiWasEnabled)
+            shell("svc wifi enable")
+            shell("cmd wifi connect-network AndroidWifi open")
+            settledWifiDefault()
+            wifiChanged = false
+        }
         primary?.let { throw it }
     }
 }

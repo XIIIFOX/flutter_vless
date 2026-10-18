@@ -305,3 +305,28 @@ Android's corresponding three-test real-Core authorization class also passed
 with positive-sign metrics, actual HTTP JSON and authenticated SOCKS bytes;
 its task-owned emulator was stopped. These checks are recorded in ignored
 `signed-port-*` and `android-positive-metrics-*` artifacts.
+
+The normal signed example was tested again after the Apple session-admission
+and sleep/wake fixes in `89d3059`. The three original JSON documents produced
+fresh Safari tfox results of Japan `103.75.118.225`, Poland `82.40.63.24`, and
+United States `87.232.225.232`; the third profile's Sweden remark still differs
+from the observed exit country. The example routing editor was exercised in
+both directions: tfox direct / 2ip proxy, then 2ip direct / tfox proxy. The 2ip
+direct rule includes both `2ip.ru` and its redirect target `2ip.io`.
+
+Device Hub's video stream stopped updating during these VPN sessions. Fresh,
+uniquely addressed Safari pages were loaded while connected and read back after
+explicit Stop without reloading them; frozen or black frames were not accepted.
+All seven accepted browser results and the final ordinary Russian connection
+are retained in ignored `apple-sleep-wake-*` evidence.
+
+With bounded Auto Reconnect enabled and On Demand disabled, a rapid Start/Stop
+cancelled a connection before `CONNECTED` (native states 2, 5, 1). More than
+116 seconds later it remained disconnected; a cold launch read back a disabled
+manager. A stopped extension process remained resident until that cold launch;
+process presence alone was not treated as an active VPN. No physical provider
+sleep/wake callbacks were observed, so the rare queue orderings remain qualified
+by the causal pure tests, separately from this device regression. Quick access,
+reconnect and On Demand were left disabled; all task-owned app/control/forwarding
+processes were stopped. A fresh Safari request after cleanup showed the ordinary
+Russian IP, and the Mac's VPN remained connected.

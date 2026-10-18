@@ -160,3 +160,29 @@ All test sessions were explicitly stopped, saved Apple recovery read back disabl
 and fresh ordinary-network pages loaded. The task-owned Android emulator was
 stopped, and the added iPhone Control Center test control was removed. Successful
 owner authentication and recovery from a running worker crash remain outstanding.
+
+Private service identifiers were then tested with a supplied-profile derivative:
+an imported rule blocks `flutter-vless-tun`, and four additional blackhole
+outbounds occupy the library's DNS/IPv6 preferred tags. The actual iPhone
+example connected with private tags allocated separately; fresh Safari tfox
+and 2ip pages both reported 103.75.118.225 (Japan on tfox). The example routing
+editor then applied direct tfox/proxy 2ip and the reverse policy. Browser pages
+showed 95.139.123.8 on the direct path and 103.75.118.225 on the proxy path in
+both directions. Editor readback retained the imported blocking rule, DNS and
+all outbound credentials/settings. Provider diagnostics confirmed Core preflight
+before routes and `On-demand recovery policy applied: enabled=false`.
+Each Stop completed with disabled-profile readback; final provider absence and
+a fresh Safari page with 95.139.123.8 (Russia) were verified. Quick access,
+automatic reconnect and On Demand were disabled during this acceptance.
+
+The Android native suite passed all 27 cases without skips after DNS/probe
+scoping, including blocked DNS through an imported input, working VPN DNS,
+worker recovery, routing, handover and physical DNS capture. Artifacts are in
+the ignored local `build/android-security-emulator.5UHS7XV2` directory; its
+task-owned emulator was stopped. Pure configuration suites passed 57 Android
+unit tests, 63 iOS support tests and 84 macOS support tests (one additional
+encrypted-bootstrap test requires an opt-in environment). Windows native,
+proxy-only, VPN routing/recovery and example builds passed on Windows 2022 and
+2025 in [run 39090838143](https://github.com/XIIIFOX/flutter_vless/actions/runs/39090838143).
+Full advanced-DNS preservation, IPv6 forwarding, prefix-selector isolation and
+the remaining items in the compatibility table are still open.

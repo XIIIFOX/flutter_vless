@@ -57,6 +57,23 @@ Map<String, dynamic> fixture() => {
     };
 
 void main() {
+  test(
+    'JSONC/BOM routing preserves imported fields and reads editor rules',
+    () {
+      final original = fixture()
+        ..['extension'] = {'url': 'https://example.invalid/#keep'};
+      final source =
+          '\uFEFF/* portable profile */\n${jsonEncode(original)}\n# end';
+      final result = routingConfig(config: source, selectedSites: ['tfox.dev']);
+      final decoded = jsonDecode(result) as Map<String, dynamic>;
+      expect(decoded['dns'], original['dns']);
+      expect(decoded['outbounds'], original['outbounds']);
+      expect(decoded['extension'], original['extension']);
+      expect(routingDomainsFromConfig('\uFEFF// saved profile\n$result'), [
+        'domain:tfox.dev',
+      ]);
+    },
+  );
   testWidgets('Reopening routing shows the applied domains', (tester) async {
     await tester.pumpWidget(const MaterialApp(
       home: Routing(

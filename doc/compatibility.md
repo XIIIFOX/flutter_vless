@@ -155,6 +155,26 @@ its bundled Core before the service transaction. Safe effective-config diffs,
 complete asset diagnostics, bind-race handling and rollback from later runtime
 failures are still pending; item 7 is not complete.
 
+Current implementation/acceptance status (1.1.7, unreleased):
+
+| Item | Status | Evidence and remaining work |
+| --- | --- | --- |
+| 1. Advanced DNS | Pending | Current protection tests cover resolver isolation/refusal. Apple/Windows still replace imported DNS; full hosts/server/FakeDNS semantics are not accepted yet. |
+| 2. IPv6 | Pending | Current tests prove blocking, not dual-stack forwarding, IPv6-only endpoint or NAT64 support. |
+| 3. Protocol/transport matrix | Pending | Supplied VLESS TCP/Reality profiles work on devices. Full pinned-Core transport/socket-protection coverage is still required. |
+| 4. Passthrough and VPN routing context | Pending | Imported listeners/authentication remain intact. API/services, source-inbound context and explicit VPN default selection remain open. |
+| 5. Ports/addresses | Partial | Shared 20-case port corpus, native tests and real Android/iPhone list/range/env/Unix cases pass. OS/API reservations, complete tag namespaces, bind retries and proxy-only parity remain open. |
+| 6. Assets/import syntax | Partial | A shared 22-case JSON syntax corpus is checked against actual Core decoding. SDK start/delay/import/subscriptions and the example routing editor accept Core-style comments and a leading BOM. Device browser/routing checks pass. Portable cert/key/geodata assets and explicit multi-document merging remain open. |
+| 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39086489552) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39086530395) pass for the preflight change, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |
+| 8. Runtime corpus | Partial | Shared port/syntax fixtures and platform/device HTTP, DNS, routing and recovery checks exist. The complete ECH/DoH/QUIC/protocol corpus and remaining physical options acceptance are not complete. |
+
+Comment filtering follows the [pinned Core local-file reader](https://github.com/XTLS/Xray-core/blob/92ccc939aaf4f8965f369cf0b142e005aeaa11d5/infra/conf/json/reader.go),
+including its LF handling. Quoted URLs/headers/comment markers are preserved.
+The leading BOM is an SDK import extension; the core receives canonical JSON.
+Single-document APIs reject trailing documents/data instead of silently ignoring
+them. Subscription arrays use the existing explicit `parseMany`/first-profile
+contracts; this does not implement Core multi-file override/merge semantics.
+
 1. **Preserve advanced DNS semantics.** Separate the OS-facing protected resolver
    from imported `dns` hosts, servers, per-domain rules, query strategies, DoH/DoT
    and DNS tags. Apple/Windows currently replace DNS for VPN protection; FakeDNS

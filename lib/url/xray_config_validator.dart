@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'package:flutter_vless/url/xray_json.dart';
 
 class XrayConfigValidator {
   const XrayConfigValidator();
@@ -21,7 +21,7 @@ class XrayConfigValidator {
 
   Object? _decodeJson(String config) {
     try {
-      return jsonDecode(config);
+      return decodeXrayJson(config);
     } on FormatException {
       throw ArgumentError('The provided string is not valid JSON');
     }

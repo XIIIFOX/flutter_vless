@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_vless/url/url.dart';
 import 'package:flutter_vless/url/xray_config_model.dart';
 import 'package:flutter_vless/url/xray_config_validator.dart';
+import 'package:flutter_vless/url/xray_json.dart';
 
 /// Raw Xray JSON import wrapper.
 ///
@@ -35,7 +36,7 @@ class XrayJsonConfig extends FlutterVlessURL {
 
   dynamic _decodeJsonConfig(String rawJson) {
     try {
-      return jsonDecode(rawJson.trim());
+      return decodeXrayJson(rawJson);
     } catch (_) {
       throw ArgumentError('JSON config is invalid');
     }

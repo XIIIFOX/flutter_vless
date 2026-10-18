@@ -1,11 +1,15 @@
-import 'dart:convert';
 import 'package:flutter_vless/flutter_vless.dart';
+import 'package:flutter_vless/url/xray_json.dart';
 
 /// Keep full Xray JSON intact; share links use the existing protocol parser.
 ({String config, String? remark}) importProfile(String input) {
   final text = input.trim();
-  if (text.startsWith('{') || text.startsWith('[')) {
-    final decoded = jsonDecode(text);
+  if (text.startsWith('{') ||
+      text.startsWith('[') ||
+      text.startsWith('//') ||
+      text.startsWith('/*') ||
+      text.startsWith('#')) {
+    final decoded = decodeXrayJson(text);
     if (decoded is Map<String, dynamic>) {
       final titles = ['remarks', 'remark', 'ps']
           .map((key) => decoded[key])

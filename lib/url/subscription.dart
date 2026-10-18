@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter_vless/url/url.dart';
+import 'package:flutter_vless/url/xray_json.dart';
 import 'package:yaml/yaml.dart';
 
 typedef FlutterVlessUrlParser = FlutterVlessURL Function(String url);
@@ -101,7 +102,7 @@ class VlessSubscriptionParser {
 
   static dynamic _tryJsonDecode(String input) {
     try {
-      return jsonDecode(input);
+      return decodeXrayJson(input);
     } catch (_) {
       return null;
     }

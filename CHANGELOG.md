@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Accept Core-style JSON comments and a leading BOM in SDK configuration/import/subscription paths and the example routing editor, preserving quoted markers and unknown fields. Add a shared syntax corpus checked against pinned Core; keep trailing-document rejection explicit.
+
 * Add build-only Apple Core preflight previews with redacted stage/index errors before VPN routes, and Windows bundled-Core checks before session replacement. Preserve active sessions on rejected candidates; keep published runtime artifacts unchanged during acceptance.
 * Accept Core inbound port lists/ranges and zero in Dart; reserve native environment references and skip Unix-only listeners during private TCP port allocation. Bind Apple port references before saving cross-process sessions and report missing references without starting VPN. Add a shared corpus checked against pinned Core and native forwarding regressions.
 * Enforce Apple diagnostic byte and line limits on the complete response, including provider metadata and truncation markers. Explain disabled diagnostics in the example instead of asking the user to connect.

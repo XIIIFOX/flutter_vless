@@ -1,0 +1,134 @@
+[
+  {
+    "name": "json",
+    "input": "{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]}",
+    "coreDecode": true,
+    "wrapperDecode": true
+  },
+  {
+    "name": "java-line",
+    "input": "// profile\n{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]}",
+    "coreDecode": true,
+    "wrapperDecode": true
+  },
+  {
+    "name": "java-block",
+    "input": "/* profile\n portable */{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]}",
+    "coreDecode": true,
+    "wrapperDecode": true
+  },
+  {
+    "name": "python-line",
+    "input": "# profile\n{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]}\n# end",
+    "coreDecode": true,
+    "wrapperDecode": true
+  },
+  {
+    "name": "inline-block",
+    "input": "{\"inbounds\":[],/* profile */\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]}",
+    "coreDecode": true,
+    "wrapperDecode": true
+  },
+  {
+    "name": "quoted-markers",
+    "input": "{\"remarks\": \"https://example.invalid/a#b /* literal */ escaped \\\" and \\\\\", \"inbounds\": [], \"outbounds\": [{\"protocol\": \"freedom\", \"tag\": \"direct\"}]}",
+    "coreDecode": true,
+    "wrapperDecode": true
+  },
+  {
+    "name": "utf8-quoted",
+    "input": "{\"remarks\": \"Тест 日本語 // # /* */\", \"inbounds\": [], \"outbounds\": [{\"protocol\": \"freedom\"}]}",
+    "coreDecode": true,
+    "wrapperDecode": true
+  },
+  {
+    "name": "leading-bom",
+    "input": "﻿{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]}",
+    "coreDecode": false,
+    "wrapperDecode": true
+  },
+  {
+    "name": "trailing-comma",
+    "input": "{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}],}",
+    "coreDecode": false,
+    "wrapperDecode": false
+  },
+  {
+    "name": "single-quotes",
+    "input": "{\"inbounds\":[],\"outbounds\":[{'protocol':\"freedom\",\"tag\":\"direct\"}]}",
+    "coreDecode": false,
+    "wrapperDecode": false
+  },
+  {
+    "name": "unterminated-trailing-comment",
+    "input": "{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]}/* unfinished",
+    "coreDecode": true,
+    "wrapperDecode": true
+  },
+  {
+    "name": "unterminated-string",
+    "input": "{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}],\"remarks\":\"unfinished",
+    "coreDecode": false,
+    "wrapperDecode": false
+  },
+  {
+    "name": "two-documents",
+    "input": "{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]}\n{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]}",
+    "coreDecode": true,
+    "wrapperDecode": false
+  },
+  {
+    "name": "trailing-data",
+    "input": "{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]} private-canary",
+    "coreDecode": true,
+    "wrapperDecode": false
+  },
+  {
+    "name": "comment-inside-number",
+    "input": "{\"inbounds\":[{\"protocol\":\"socks\",\"port\":10/*x*/808}],\"outbounds\":[{\"protocol\":\"freedom\"}]}",
+    "coreDecode": true,
+    "wrapperDecode": true
+  },
+  {
+    "name": "newline-inside-number",
+    "input": "{\"inbounds\":[{\"protocol\":\"socks\",\"port\":10/*\n*/808}],\"outbounds\":[{\"protocol\":\"freedom\"}]}",
+    "coreDecode": false,
+    "wrapperDecode": false
+  },
+  {
+    "name": "carriage-return-does-not-end-comment",
+    "input": "// profile\r{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]}",
+    "coreDecode": false,
+    "wrapperDecode": false
+  },
+  {
+    "name": "comment-between-keys",
+    "input": "{\"inbounds\":[],\"out/*keep*/bounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]}",
+    "coreDecode": true,
+    "wrapperDecode": true
+  },
+  {
+    "name": "escaped-json-string",
+    "input": "{\"remarks\": \"\\\\\\\" // # \\\\\\\" /* */\", \"inbounds\": [], \"outbounds\": [{\"protocol\": \"freedom\"}]}",
+    "coreDecode": true,
+    "wrapperDecode": true
+  },
+  {
+    "name": "star-run",
+    "input": "/****/{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]}",
+    "coreDecode": true,
+    "wrapperDecode": true
+  },
+  {
+    "name": "star-lf-slash",
+    "input": "/* prefix *\n/{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]}",
+    "coreDecode": true,
+    "wrapperDecode": true
+  },
+  {
+    "name": "star-cr-slash",
+    "input": "/* prefix *\r/{\"inbounds\":[],\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"}]}",
+    "coreDecode": false,
+    "wrapperDecode": false
+  }
+]

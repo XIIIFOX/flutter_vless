@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter_vless/url/xray_json.dart';
 
 const exampleBypassRuleTag = 'flutter-vless-example-domain-bypass';
 
@@ -7,11 +8,12 @@ String routingConfig({
   required String config,
   List<String> selectedSites = const [],
 }) {
-  final configMap = jsonDecode(config) as Map<String, dynamic>;
+  final configMap = decodeXrayJson(config) as Map<String, dynamic>;
   final routing = Map<String, dynamic>.from(configMap['routing'] ?? {});
   final rules = List<dynamic>.from(routing['rules'] ?? [])
     ..removeWhere(
-        (rule) => rule is Map && rule['ruleTag'] == exampleBypassRuleTag);
+      (rule) => rule is Map && rule['ruleTag'] == exampleBypassRuleTag,
+    );
   final domains = selectedSites
       .map(normalizeDomainEntry)
       .where((domain) => domain.isNotEmpty)
@@ -20,12 +22,15 @@ String routingConfig({
 
   if (domains.isNotEmpty) {
     final outbounds = configMap['outbounds'] as List? ?? [];
-    if (!outbounds.any((outbound) =>
-        outbound is Map &&
-        outbound['tag'] == 'direct' &&
-        outbound['protocol'] == 'freedom')) {
+    if (!outbounds.any(
+      (outbound) =>
+          outbound is Map &&
+          outbound['tag'] == 'direct' &&
+          outbound['protocol'] == 'freedom',
+    )) {
       throw const FormatException(
-          'Domain bypass requires a freedom outbound tagged "direct".');
+        'Domain bypass requires a freedom outbound tagged "direct".',
+      );
     }
     // An IP can serve unrelated domains. DNS resolution must never turn a
     // selected domain into an address-wide exception to the VPN.
@@ -65,10 +70,11 @@ String routingConfig({
 /// Read back the editor's rule after pasting a previously generated config.
 List<String>? routingDomainsFromConfig(String config) {
   try {
-    final map = jsonDecode(config) as Map<String, dynamic>;
+    final map = decodeXrayJson(config) as Map<String, dynamic>;
     final rules = (map['routing'] as Map?)?['rules'] as List? ?? [];
     final owned = rules.where(
-        (rule) => rule is Map && rule['ruleTag'] == exampleBypassRuleTag);
+      (rule) => rule is Map && rule['ruleTag'] == exampleBypassRuleTag,
+    );
     if (owned.isEmpty) return null;
     return owned
         .expand((rule) => List<String>.from(rule['domain'] ?? []))
@@ -89,7 +95,7 @@ String normalizeDomainEntry(String raw) {
     'domain:',
     'full:',
     'regexp:',
-    'keyword:'
+    'keyword:',
   ]) {
     if (raw.startsWith(prefix)) return raw;
   }

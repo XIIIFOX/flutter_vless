@@ -147,3 +147,16 @@ the provider exited, and a fresh ordinary-IP page loaded. Provider diagnostics
 confirmed that its final generated document passed Core checking before routes
 were installed. These previews are local test artifacts, not a published runtime
 or package release; the upstream Core revision remains unchanged.
+
+The JSONC/BOM SDK path was exercised through the actual example editor on the
+Android emulator and iPhone, retaining the full first supplied profile. Both
+websites loaded through Xray. iPhone retained the earlier Japan exit; the Android
+session used a different Japan IPv4 also returned by its original SOCKS input.
+Runtime inspection confirmed the same server/credential/flow/transport and zero
+traffic on the direct outbound in that initial all-proxy session. The example
+routing editor then applied direct tfox/proxy 2ip and the reverse policy on both
+devices; fresh browser pages showed the respective underlay/proxy addresses.
+All test sessions were explicitly stopped, saved Apple recovery read back disabled,
+and fresh ordinary-network pages loaded. The task-owned Android emulator was
+stopped, and the added iPhone Control Center test control was removed. Successful
+owner authentication and recovery from a running worker crash remain outstanding.

@@ -51,6 +51,13 @@ void main() {
     expect(() => importProfile('{invalid}'), throwsFormatException);
     expect(() => importProfile('[]'), throwsFormatException);
   });
+  test('JSONC/BOM imports keep the full source and quoted comment markers', () {
+    const source =
+        '// profile\n{"remarks":"JSONC // # /* */","outbounds":[{"protocol":"freedom"}],"extension":{"keep":true}}';
+    final imported = importProfile('\uFEFF$source');
+    expect(imported.remark, 'JSONC // # /* */');
+    expect(imported.config, source);
+  });
   test('Share links continue to use the protocol parser', () {
     final imported = importProfile(
       'vless://22222222-2222-4222-8222-222222222222@example.com:443?security=tls&type=tcp#Example',

@@ -26,12 +26,11 @@ import com.google.gson.Gson
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /** Owns the session and TUN. Worker failures never deactivate established protection. */
 class XrayVPNService : VpnService() {
-    private val worker = Executors.newSingleThreadScheduledExecutor()
+    private val worker = SessionWorkQueue()
     private val recovery = SessionRecoveryPolicy()
     private val requests = java.util.concurrent.atomic.AtomicLong()
     private var interfaceSignature: String? = null
@@ -448,8 +447,7 @@ class XrayVPNService : VpnService() {
         recovery.disarm()
         if (currentRecovery === recovery) currentRecovery = null
         networkCallback?.let { runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) } }
-        worker.execute { deactivateSession() }
-        worker.shutdown()
+        worker.close { deactivateSession() }
         super.onDestroy()
     }
 

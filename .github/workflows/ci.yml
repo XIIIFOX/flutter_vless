@@ -140,6 +140,7 @@ jobs:
           python3 tool/test_verify_android_dns_capture.py
           python3 tool/test_android_dns_fixture.py
           python3 tool/test_android_flutter_smoke_retry.py
+          python3 tool/test_android_emulator_failure_capture.py
       - name: Verify Maven Central Android runtime resolution
         run: tool/test_android_maven_runtime.sh
 

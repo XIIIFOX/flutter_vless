@@ -65,6 +65,7 @@ SERIAL=""
 FIXTURE_PID=""
 DNS_PID=""
 TEST_INSTALLED=0
+EMULATOR_VALIDATED=0
 ADVERSARY_INSTALLED=0
 CAPTURE_STARTED=0
 CAPTURE_WIFI_DISABLED=0
@@ -185,8 +186,16 @@ PY
 
 cleanup() {
   local result=$?
+  local original_result=$result
   trap - EXIT INT TERM
   set +e
+  if [ "$original_result" -ne 0 ] && [ "$TEST_INSTALLED" -eq 1 ] && [ "$EMULATOR_VALIDATED" -eq 1 ]; then
+    # Preserve primary crash/ANR evidence before force-stop/uninstall can erase
+    # live context. Each read is bounded and failures never skip cleanup or
+    # change the original test failure. The collector never prints raw logs.
+    bounded 40 "$OUT_DIR/failure-capture-command.log" python3 "$ROOT_DIR/tool/capture_android_emulator_failure.py" \
+      --adb "$ADB" --serial "$SERIAL" --package "$PACKAGE" --output "$OUT_DIR" --phase "$PHASE"
+  fi
   if [ "$CAPTURE_STARTED" -eq 1 ]; then stop_capture; [ "$?" -eq 0 ] || result=1; fi
   if [ "$CAPTURE_WIFI_DISABLED" -eq 1 ]; then
     bounded 20 "$OUT_DIR/cleanup-wifi-enable.log" "$ADB" -s "$SERIAL" shell svc wifi enable
@@ -239,6 +248,7 @@ PY
   # An interrupted/incomplete script must never become a successful report,
   # even when a shell parser error leaves EXIT with a stale zero status.
   if [ "$result" -eq 0 ] && [ "$PHASE" != complete ]; then result=1; fi
+  if [ "$original_result" -ne 0 ]; then result=$original_result; fi
   python3 - "$OUT_DIR" "$SERIAL" "$result" "$PHASE" "$CAPTURE_DNS" <<'PY'
 import json, pathlib, sys
 output, serial, code, phase, capture = sys.argv[1:]
@@ -288,6 +298,7 @@ if '[ro.kernel.qemu]: [1]' not in text and '[ro.boot.qemu]: [1]' not in text:
 if '[sys.boot_completed]: [1]' not in text:
     raise SystemExit('Selected emulator has not completed boot.')
 PY
+EMULATOR_VALIDATED=1
 
 # Connect only the dedicated emulator to its standard virtual access point.
 # Physical resolver and handover tests must not inherit a disconnected Wi-Fi

@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Bind port environment references before encrypted cross-process persistence and share Core port grammar/Unix-listener allocation checks with the other backends.
 * Apply configured diagnostic byte and line limits after assembling the complete snapshot, including provider metadata.
 * Disable and verify the saved profile when a system control disconnects; report the actual On Demand policy in private provider diagnostics.
 * Wait for full tunnel teardown after explicit Stop, verify that recovery is disabled, and keep live configuration/options changes explicit. Check forwarding readiness even with On Demand disabled.

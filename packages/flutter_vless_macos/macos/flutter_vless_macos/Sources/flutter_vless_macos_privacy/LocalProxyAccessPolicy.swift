@@ -34,6 +34,7 @@ public struct LocalProxyCredentials: Equatable, Sendable, CustomStringConvertibl
 
 public enum LocalProxyAccessError: Error, LocalizedError {
     case malformedConfiguration, ambiguousField, incompatibleInbounds, invalidCredentials, randomGenerationFailed
+    case portEnvironment(Int)
 
     public var errorDescription: String? {
         switch self {
@@ -42,12 +43,86 @@ public enum LocalProxyAccessError: Error, LocalizedError {
         case .incompatibleInbounds: return "No free port is available for the private VPN adapter."
         case .invalidCredentials: return "Local proxy credentials must contain 1–255 UTF-8 bytes without control characters"
         case .randomGenerationFailed: return "Unable to generate local proxy session credentials"
+        case .portEnvironment(let index): return "Unable to resolve inbounds[\(index)].port from the application environment."
         }
+    }
+}
+
+/// Reserve imported listener ports without rewriting their Core syntax.
+/// Environment references belong to the native process, never the Dart host.
+public enum XrayPortSpec {
+    public static func reservedPorts(_ value: Any,
+        environment: (String) -> String? = { ProcessInfo.processInfo.environment[$0] }) throws -> Set<Int> {
+        if let number = value as? NSNumber {
+            guard CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  !["f", "d"].contains(String(cString: number.objCType)),
+                  (0...65535).contains(number.intValue) else { throw LocalProxyAccessError.malformedConfiguration }
+            return number.intValue == 0 ? [] : [number.intValue]
+        }
+        guard let text = value as? String else { throw LocalProxyAccessError.malformedConfiguration }
+        var ports = Set<Int>()
+        for raw in text.split(separator: ",", omittingEmptySubsequences: false) {
+            var part = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if part.isEmpty { continue } // Core ignores empty list entries.
+            let fromEnvironment = part.hasPrefix("env:")
+            if fromEnvironment {
+                let name = String(part.dropFirst(4))
+                let alternate = name.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().replacingOccurrences(of: ".", with: "_")
+                guard let resolved = environment(name) ?? environment(alternate) else { throw LocalProxyAccessError.malformedConfiguration }
+                part = resolved
+            }
+            let limits = part.split(separator: "-", omittingEmptySubsequences: false)
+            guard (1...2).contains(limits.count) else { throw LocalProxyAccessError.malformedConfiguration }
+            func number(_ text: Substring) throws -> Int {
+                guard !text.isEmpty, text.utf8.allSatisfy({ (48...57).contains($0) }),
+                      fromEnvironment || limits.count == 2 || text == "0" || !text.hasPrefix("0"),
+                      let result = Int(text), (0...65535).contains(result) else { throw LocalProxyAccessError.malformedConfiguration }
+                return result
+            }
+            let first = try number(limits[0]), last = try number(limits.last!)
+            // Core's PortList treats a descending range as an empty selection.
+            if first <= last { ports.formUnion((first...last).filter { $0 != 0 }) }
+        }
+        return ports
     }
 }
 
 /// Owns only local listeners. Remote passwords, IDs, keys and user maps remain untouched.
 public enum LocalProxyAccessPolicy {
+    /// A Packet Tunnel is a separate process and does not inherit Runner's
+    /// environment. Bind port references once before saving the immutable
+    /// session, so system/control restarts use the same effective port list.
+    /// The caller's source JSON remains available in its own editor/model.
+    public static func bindingPortEnvironment(configData: Data,
+        environment: [String: String] = ProcessInfo.processInfo.environment) throws -> Data {
+        var config = try normalizedConfig(configData: configData)
+        guard var inputs = config["inbounds"] as? [[String: Any]] else { return configData }
+        var changed = false
+        for index in inputs.indices {
+            guard let value = inputs[index]["port"] as? String else { continue }
+            let parts = value.split(separator: ",", omittingEmptySubsequences: false)
+            guard parts.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("env:") }) else { continue }
+            do {
+                _ = try XrayPortSpec.reservedPorts(value, environment: { environment[$0] })
+                inputs[index]["port"] = try parts.map { raw -> String in
+                    let part = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard part.hasPrefix("env:") else { return String(raw) }
+                    let name = String(part.dropFirst(4))
+                    let alternate = name.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().replacingOccurrences(of: ".", with: "_")
+                    guard let resolved = environment[name] ?? environment[alternate] else { throw LocalProxyAccessError.portEnvironment(index) }
+                    // Validation above uses this same immutable environment.
+                    // Canonical decimal tokens also retain env: leading-zero
+                    // semantics when Core parses the resulting ordinary list.
+                    return resolved.split(separator: "-", omittingEmptySubsequences: false).map { String(Int($0)!) }.joined(separator: "-")
+                }.joined(separator: ",")
+                changed = true
+            } catch { throw LocalProxyAccessError.portEnvironment(index) }
+        }
+        guard changed else { return configData }
+        config["inbounds"] = inputs
+        return try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+    }
+
     public static func normalizedConfig(configData: Data) throws -> [String: Any] {
         guard var object = try JSONSerialization.jsonObject(with: configData) as? [String: Any] else {
             throw LocalProxyAccessError.malformedConfiguration
@@ -109,21 +184,11 @@ public enum LocalProxyAccessPolicy {
             guard let proto = inbound["protocol"] as? String, !proto.isEmpty else {
                 throw LocalProxyAccessError.malformedConfiguration
             }
+            let listen = inbound["listen"] as? String ?? ""
+            // Core ignores PortList when this input listens on a Unix socket.
+            if listen.hasPrefix("/") || listen.hasPrefix("@") { continue }
             guard let value = inbound["port"] else { continue } // Unix/listener-free inputs.
-            if let number = value as? NSNumber {
-                guard CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue == Double(number.intValue),
-                      (0...65535).contains(number.intValue) else { throw LocalProxyAccessError.malformedConfiguration }
-                used.insert(number.intValue)
-            } else if let text = value as? String {
-                for part in text.split(separator: ",", omittingEmptySubsequences: false) {
-                    let limits = part.trimmingCharacters(in: .whitespaces).split(separator: "-", omittingEmptySubsequences: false)
-                    guard (1...2).contains(limits.count), let first = Int(limits[0]), let last = Int(limits.last!),
-                          (0...65535).contains(first), (first...65535).contains(last) else {
-                        throw LocalProxyAccessError.malformedConfiguration
-                    }
-                    used.formUnion(first...last)
-                }
-            } else { throw LocalProxyAccessError.malformedConfiguration }
+            used.formUnion(try XrayPortSpec.reservedPorts(value))
         }
         guard let port = (10808...65535).first(where: { !used.contains($0) }) ?? (1024..<10808).first(where: { !used.contains($0) }) else {
             throw LocalProxyAccessError.incompatibleInbounds

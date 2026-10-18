@@ -118,6 +118,25 @@ with every feature or protocol accepted by the Xray command-line runtime.
 
 These are implementation and acceptance tasks, not supported-feature claims.
 
+Port grammar progress (2026-10-18): the Dart, Kotlin, Swift and C++ paths now
+share a 20-case corpus checked against the pinned Core decoder/build path.
+It covers lists/ranges, numeric zero, native `env:` lookup and its normalized
+alias, Unicode whitespace, empty lists and malformed values. Private allocation
+does not reserve ignored TCP ports for Unix listeners. Apple binds environment
+port references from the containing application's environment before encrypted
+session persistence, so a separately launched provider does not need that
+environment. The caller's source document is unchanged; missing references fail
+with a redacted `inbounds[index].port` error before VPN startup.
+
+A physical iPhone check used both a literal port list/range and an environment
+range with a supplied VLESS profile and fresh Safari traffic. This is progress
+on item 5, not completion of it: OS bind races, API port reservations, remaining
+tag namespaces and proxy-only selection still need acceptance. Parser/build
+acceptance is distinct from a functioning listener: this Core's SOCKS inbound
+advertises TCP, while its HTTP inbound also supports Unix sockets. See the
+[pinned Core port parser](https://github.com/XTLS/Xray-core/blob/92ccc939aaf4f8965f369cf0b142e005aeaa11d5/infra/conf/common.go)
+and [inbound implementations](https://github.com/XTLS/Xray-core/tree/92ccc939aaf4f8965f369cf0b142e005aeaa11d5/proxy).
+
 1. **Preserve advanced DNS semantics.** Separate the OS-facing protected resolver
    from imported `dns` hosts, servers, per-domain rules, query strategies, DoH/DoT
    and DNS tags. Apple/Windows currently replace DNS for VPN protection; FakeDNS

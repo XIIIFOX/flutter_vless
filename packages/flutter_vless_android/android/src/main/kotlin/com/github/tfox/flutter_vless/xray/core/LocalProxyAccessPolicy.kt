@@ -64,6 +64,8 @@ internal object LocalProxyAccessPolicy {
         }
         for (i in 0 until inputs.length()) {
             val input = inputs.getJSONObject(i)
+            val listen = input.optString("listen")
+            if (java.io.File(listen).isAbsolute || listen.startsWith('@')) continue
             if (input.optString("protocol").lowercase() != "socks" || input.optInt("port") != port) continue
             val settings = input.optJSONObject("settings") ?: JSONObject()
             val auth = settings.optString("auth", "noauth")
@@ -82,7 +84,7 @@ internal object LocalProxyAccessPolicy {
      * Imported listeners and their explicit authentication belong to the caller. */
     fun apply(inbounds: JSONArray, credentials: LocalProxyCredentials, managedPort: Int) {
         val matches = (0 until inbounds.length()).map(inbounds::getJSONObject).filter {
-            it.optString("protocol") == "socks" && it.optInt("port") == managedPort
+            it.optString("protocol") == "socks" && it.optInt("port") == managedPort && it.optString("listen") == "127.0.0.1"
         }
         require(matches.size == 1 && matches[0].optString("listen") == "127.0.0.1") {
             "Private VPN SOCKS listener is unavailable"

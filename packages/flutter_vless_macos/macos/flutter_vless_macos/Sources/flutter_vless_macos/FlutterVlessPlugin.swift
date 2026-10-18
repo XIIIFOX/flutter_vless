@@ -1089,13 +1089,20 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         guard !hasBypassArgument || bypassSubnets != nil else {
             result(FlutterError(code: "INCOMPATIBLE_ROUTING", message: "bypassSubnets must be a list of IPv4 CIDRs", details: nil)); return
         }
+        let effectiveConfigData: Data
         do {
+            effectiveConfigData = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: configData)
             try DesktopBypassPolicy.validate(bypassSubnets ?? [])
             if proxyOnly {
-                _ = try ProxyOnlyRunner.buildProxyOnlyConfigData(configData: configData)
+                _ = try ProxyOnlyRunner.buildProxyOnlyConfigData(configData: effectiveConfigData)
             } else {
-                try LocalProxyAccessPolicy.validateVPN(configData: configData)
+                try LocalProxyAccessPolicy.validateVPN(configData: effectiveConfigData)
             }
+        } catch LocalProxyAccessError.portEnvironment(let index) {
+            result(FlutterError(code: "PORT_ENVIRONMENT_ERROR",
+                message: LocalProxyAccessError.portEnvironment(index).localizedDescription,
+                details: ["stage": "port-environment", "inboundIndex": index]))
+            return
         } catch {
             result(FlutterError(code: "INCOMPATIBLE_LOCAL_PROXY",
                 message: "Unable to prepare the local adapter for this configuration.", details: nil))
@@ -1106,7 +1113,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 // Switching modes is an explicit request to release the system VPN.
                 try await self.packetTunnelManager?.stop(waitForDisconnect: true)
                 if let group = self.controlGroup { VlessSystemControl.clear(group: group) }
-                try self.proxyOnlyRunner.start(configData: configData, geoAssetsDirectory: geoAssetsDirectory)
+                try self.proxyOnlyRunner.start(configData: effectiveConfigData, geoAssetsDirectory: geoAssetsDirectory)
             } else {
                 guard let manager = self.packetTunnelManager else {
                     throw NSError(domain: "VPN", code: 1, userInfo: nil)
@@ -1114,7 +1121,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 self.proxyOnlyRunner.stop()
                 self.proxyOnlyRunner.clearDiagnostics()
                 manager.remark = remark
-                manager.xrayConfig = configData
+                manager.xrayConfig = effectiveConfigData
                 manager.bypassSubnets = bypassSubnets ?? []
                 manager.proxyOnly = false
                 manager.geoAssetsDirectory = geoAssetsDirectory

@@ -1,0 +1,155 @@
+[
+  {
+    "name": "integer",
+    "value": 10808,
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "zero",
+    "value": 0,
+    "ports": []
+  },
+  {
+    "name": "string-zero",
+    "value": "0",
+    "ports": []
+  },
+  {
+    "name": "list-range",
+    "value": "10808, 10810-10812,65535",
+    "ports": [
+      10808,
+      10810,
+      10811,
+      10812,
+      65535
+    ]
+  },
+  {
+    "name": "empty-list",
+    "value": " , ",
+    "ports": []
+  },
+  {
+    "name": "unicode-space",
+    "value": "10808 , 10820　",
+    "ports": [
+      10808,
+      10820
+    ]
+  },
+  {
+    "name": "environment-range",
+    "value": "env:flutter.vless.fixture.ports",
+    "environment": {
+      "flutter.vless.fixture.ports": "10808-10810"
+    },
+    "ports": [
+      10808,
+      10809,
+      10810
+    ]
+  },
+  {
+    "name": "environment-alias",
+    "value": "env:flutter.vless.fixture.ports",
+    "environment": {
+      "FLUTTER_VLESS_FIXTURE_PORTS": "10808-10810"
+    },
+    "ports": [
+      10808,
+      10809,
+      10810
+    ]
+  },
+  {
+    "name": "environment-precedence",
+    "value": "env:flutter.vless.fixture.ports",
+    "environment": {
+      "flutter.vless.fixture.ports": "10808",
+      "FLUTTER_VLESS_FIXTURE_PORTS": "10820"
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "environment-in-list",
+    "value": "10807,env:flutter.vless.fixture.ports,10812",
+    "environment": {
+      "flutter.vless.fixture.ports": "10808-10810"
+    },
+    "ports": [
+      10807,
+      10808,
+      10809,
+      10810,
+      10812
+    ]
+  },
+  {
+    "name": "missing-environment",
+    "value": "env:flutter.vless.fixture.ports",
+    "invalid": true,
+    "dartSyntaxValid": true
+  },
+  {
+    "name": "environment-list-is-not-a-range",
+    "value": "env:flutter.vless.fixture.ports",
+    "environment": {
+      "flutter.vless.fixture.ports": "10808,10820"
+    },
+    "invalid": true,
+    "dartSyntaxValid": true
+  },
+  {
+    "name": "invalid-range-token",
+    "value": "10808-x",
+    "invalid": true
+  },
+  {
+    "name": "boolean",
+    "value": true,
+    "invalid": true
+  },
+  {
+    "name": "fractional",
+    "value": 10808.5,
+    "invalid": true
+  },
+  {
+    "name": "descending-range",
+    "value": "10810-10808",
+    "ports": []
+  },
+  {
+    "name": "range-leading-zero",
+    "value": "010808-010810",
+    "ports": [
+      10808,
+      10809,
+      10810
+    ]
+  },
+  {
+    "name": "string-leading-zero",
+    "value": "010808",
+    "invalid": true
+  },
+  {
+    "name": "whole-float",
+    "value": 10808.0,
+    "invalid": true
+  },
+  {
+    "name": "environment-empty",
+    "value": "env:flutter.vless.fixture.ports",
+    "environment": {
+      "flutter.vless.fixture.ports": ""
+    },
+    "invalid": true,
+    "dartSyntaxValid": true
+  }
+]

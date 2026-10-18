@@ -11,6 +11,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class XrayCoreManagerTest {
+    @Test fun unixPortListDoesNotConsumeTcpPortsOrReceivePrivateAuthentication() {
+        val input = JSONObject("""{"protocol":"socks","listen":"/tmp/flutter-vless-port-corpus.sock","port":"0-65535","settings":{"auth":"password","accounts":[{"user":"caller","pass":"caller-password"}]}}""")
+        val profile = JSONObject().put("inbounds", JSONArray().put(input)).put("outbounds", JSONArray().put(JSONObject().put("protocol", "freedom")))
+        val config = XrayConfig(LOCAL_SOCKS5_PORT = 10807, V2RAY_FULL_JSON_CONFIG = profile.toString())
+        val output = XrayCoreManager.buildRuntimeConfigJson(config, File("build/test-files/ports"), credentials)
+        assertEquals(10807, config.LOCAL_SOCKS5_PORT)
+        assertEquals(input.toString(), output.getJSONArray("inbounds").getJSONObject(0).toString())
+    }
+
     @Test
     fun protectedVpnRejectsUncontrolledIcmpSocketsButKeepsNormalTransports() {
         XrayCoreManager.requireProtectedSocketSupport(JSONObject("""{"streamSettings":{"network":"tcp"}}"""))

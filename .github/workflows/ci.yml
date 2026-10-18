@@ -187,6 +187,13 @@ jobs:
         run: flutter pub get
       - name: Test PacketTunnel Swift helper
         run: tool/test_ios_tunnel_support.sh
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: third_party/xray-mobile/go.mod
+          cache-dependency-path: third_party/xray-mobile/go.sum
+      - name: Check shared compatibility corpus against pinned Xray Core
+        working-directory: third_party/xray-mobile
+        run: go test -count=1 -run '^TestCompatibilityPortCorpus$' .
       - name: Test iOS profile transactions and operation ordering
         run: |
           tool/test_ios_manager_policy.sh

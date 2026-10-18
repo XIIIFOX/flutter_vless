@@ -8,6 +8,7 @@
 #include <set>
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
 #include "third_party/nlohmann/json.hpp"
 
 namespace flutter_vless::xray_config {
@@ -234,49 +235,92 @@ inline std::string UniqueTag(const Json& config, const std::string& preferred) {
   return tag;
 }
 
-inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t preferred) {
-  std::set<unsigned> occupied;
-  if (config.contains("inbounds") && config["inbounds"].is_array()) for (const auto& inbound : config["inbounds"]) {
-    if (!inbound.contains("port")) continue;
-    const auto& value = inbound["port"];
-    if (value.is_number_integer()) {
-      auto number = value.get<int64_t>(); if (number >= 0 && number <= 65535) occupied.insert(static_cast<unsigned>(number));
-      continue;
-    }
-    if (!value.is_string()) return std::nullopt;
-    auto text = value.get<std::string>();
-    if (text.rfind("env:", 0) == 0) {
+inline std::optional<std::string> PortEnvironment(const std::string& name) {
 #ifdef _WIN32
-        char* environment_value = nullptr;
-        size_t environment_size = 0;
-        if (_dupenv_s(&environment_value, &environment_size, text.substr(4).c_str()) != 0 || !environment_value) return std::nullopt;
-        text = environment_value;
-        std::free(environment_value);
+  char* value = nullptr; size_t size = 0;
+  if (_dupenv_s(&value, &size, name.c_str()) != 0 || !value) return std::nullopt;
+  std::string result(value); std::free(value); return result;
 #else
-        const auto* environment_value = std::getenv(text.substr(4).c_str());
-        if (!environment_value) return std::nullopt;
-        text = environment_value;
+  const auto* value = std::getenv(name.c_str());
+  return value ? std::optional<std::string>{value} : std::nullopt;
 #endif
+}
+
+inline std::string PortTrimSpace(std::string text) {
+  // Unicode White_Space, matching Go strings.TrimSpace for valid UTF-8.
+  for (;;) {
+    bool changed = false;
+    for (const std::string space : {"\t", "\n", "\v", "\f", "\r", " ", "\xc2\x85", "\xc2\xa0",
+        "\xe1\x9a\x80", "\xe2\x80\x80", "\xe2\x80\x81", "\xe2\x80\x82", "\xe2\x80\x83", "\xe2\x80\x84",
+        "\xe2\x80\x85", "\xe2\x80\x86", "\xe2\x80\x87", "\xe2\x80\x88", "\xe2\x80\x89", "\xe2\x80\x8a",
+        "\xe2\x80\xa8", "\xe2\x80\xa9", "\xe2\x80\xaf", "\xe2\x81\x9f", "\xe3\x80\x80"}) {
+      if (text.size() >= space.size() && text.compare(0, space.size(), space) == 0) { text.erase(0, space.size()); changed = true; }
+      if (text.size() >= space.size() && text.compare(text.size()-space.size(), space.size(), space) == 0) { text.resize(text.size()-space.size()); changed = true; }
     }
-    size_t offset = 0;
-    while (offset < text.size()) {
-      auto comma = text.find(',', offset);
-      auto part = text.substr(offset, comma == std::string::npos ? comma : comma - offset);
-      part.erase(std::remove_if(part.begin(), part.end(), [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }), part.end());
+    if (!changed) return text;
+  }
+}
+
+using PortEnvironmentReader = std::function<std::optional<std::string>(const std::string&)>;
+inline std::optional<std::set<unsigned>> ReservedPorts(const Json& value,
+    const PortEnvironmentReader& read_environment = PortEnvironment) {
+  std::set<unsigned> occupied;
+  if (value.is_number_unsigned()) {
+    auto port = value.get<uint64_t>(); if (port > 65535) return std::nullopt;
+    if (port) occupied.insert(static_cast<unsigned>(port)); return occupied;
+  }
+  if (value.is_number_integer()) {
+    auto port = value.get<int64_t>(); if (port < 0 || port > 65535) return std::nullopt;
+    if (port) occupied.insert(static_cast<unsigned>(port)); return occupied;
+  }
+  if (!value.is_string()) return std::nullopt;
+  const auto text = value.get<std::string>();
+  size_t offset = 0;
+  while (offset < text.size()) {
+    auto comma = text.find(',', offset);
+    auto part = PortTrimSpace(text.substr(offset, comma == std::string::npos ? comma : comma - offset));
+    if (!part.empty()) {
+      bool environment = part.rfind("env:", 0) == 0;
+      if (environment) {
+        auto name = part.substr(4); auto resolved = read_environment(name);
+        if (!resolved) {
+          auto alternate = PortTrimSpace(name);
+          for (auto& c : alternate) { if (c == '.') c = '_'; else if (c >= 'a' && c <= 'z') c = static_cast<char>(c-'a'+'A'); }
+          resolved = read_environment(alternate);
+        }
+        if (!resolved) return std::nullopt;
+        part = *resolved;
+      }
       auto dash = part.find('-');
-      auto number = [](const std::string& digits) -> std::optional<unsigned> {
-        if (digits.empty() || digits.size() > 5 || digits.find_first_not_of("0123456789") != std::string::npos) return std::nullopt;
-        auto result = static_cast<unsigned>(std::stoul(digits)); return result <= 65535 ? std::optional<unsigned>{result} : std::nullopt;
+      auto number = [&](const std::string& digits) -> std::optional<unsigned> {
+        if (digits.empty() || digits.find_first_not_of("0123456789") != std::string::npos ||
+            (!environment && dash == std::string::npos && digits.size() > 1 && digits[0] == '0')) return std::nullopt;
+        unsigned result = 0;
+        for (char c : digits) { result = result*10+static_cast<unsigned>(c-'0'); if (result > 65535) return std::nullopt; }
+        return result;
       };
       auto first = number(part.substr(0, dash));
       auto last = dash == std::string::npos ? first : number(part.substr(dash + 1));
-      if (!part.empty()) {
-        if (!first || !last || *first > *last) return std::nullopt;
-        for (unsigned port = *first; port <= *last; ++port) occupied.insert(port);
-      }
-      if (comma == std::string::npos) break;
-      offset = comma + 1;
+      if (!first || !last) return std::nullopt;
+      for (unsigned port = *first; port <= *last; ++port) if (port) occupied.insert(port);
     }
+    if (comma == std::string::npos) break;
+    offset = comma + 1;
+  }
+  return occupied;
+}
+
+inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t preferred) {
+  std::set<unsigned> occupied;
+  if (config.contains("inbounds") && config["inbounds"].is_array()) for (const auto& inbound : config["inbounds"]) {
+    if (inbound.contains("listen") && inbound["listen"].is_string()) {
+      const auto listen = inbound["listen"].get<std::string>();
+      if ((!listen.empty() && listen[0] == '@') || std::filesystem::u8path(listen).is_absolute()) continue;
+    }
+    if (!inbound.contains("port")) continue;
+    const auto ports = ReservedPorts(inbound["port"]);
+    if (!ports) return std::nullopt;
+    occupied.insert(ports->begin(), ports->end());
   }
   for (unsigned port = preferred; port <= 65535; ++port) if (!occupied.count(port)) return static_cast<uint16_t>(port);
   for (unsigned port = 1024; port < preferred; ++port) if (!occupied.count(port)) return static_cast<uint16_t>(port);

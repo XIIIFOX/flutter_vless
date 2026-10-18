@@ -143,18 +143,12 @@ object XrayCoreManager {
         for (i in 0 until inbounds.length()) {
             val inbound = inbounds.getJSONObject(i)
             val port = inbound.optInt("port", -1)
-            if (port > 0) used.add(port)
+            val listen = inbound.optString("listen")
+            val unixSocket = File(listen).isAbsolute || listen.startsWith('@')
             // Xray also accepts string port lists/ranges. Reserve every port
             // before allocating the private VPN listener.
-            (inbound.opt("port") as? String)?.split(',')?.forEach { part ->
-                val limits = part.trim().split('-').map { it.toIntOrNull() }
-                val first = limits.firstOrNull()
-                val last = limits.lastOrNull()
-                if (first != null && last != null && first in 1..65535 && last in first..65535) {
-                    used.addAll(first..last)
-                }
-            }
-            if (inbound.optString("protocol") == "socks" && port == config.LOCAL_SOCKS5_PORT) hasSocks = true
+            if (!unixSocket && inbound.has("port")) used.addAll(XrayPortSpec.reservedPorts(inbound.get("port")))
+            if (!unixSocket && inbound.optString("protocol") == "socks" && port == config.LOCAL_SOCKS5_PORT) hasSocks = true
         }
         // A full Xray profile may contain several intentional SOCKS/HTTP or
         // other listeners. Never reuse/rewrite them for the tunnel adapter.

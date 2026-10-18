@@ -1,12 +1,30 @@
 #include "xray_config.h"
 #include <iostream>
 #include <stdexcept>
+#include <fstream>
 
 using namespace flutter_vless::xray_config;
 void Check(bool ok, const char* message) {
   if (!ok) throw std::runtime_error(message);
 }
 int main() {
+  std::ifstream input("tool/fixtures/compatibility/ports.json");
+  Check(input.good(), "shared port corpus is required");
+  Json cases; input >> cases;
+  for (const auto& item : cases) {
+    auto environment = item.value("environment", Json::object());
+    auto ports = ReservedPorts(item["value"], [&](const std::string& name) -> std::optional<std::string> {
+      return environment.contains(name) ? std::optional<std::string>{environment[name].get<std::string>()} : std::nullopt;
+    });
+    if (item.value("invalid", false)) Check(!ports, item["name"].get<std::string>().c_str());
+    else Check(ports && *ports == item["ports"].get<std::set<unsigned>>(), item["name"].get<std::string>().c_str());
+  }
+  auto unix_profile = Parse(R"({"inbounds":[{"protocol":"http","listen":"@flutter-vless-port-corpus","port":"0-65535"}]})");
+  Check(AvailablePort(unix_profile, 10808) == 10808, "Unix PortList must not reserve TCP ports");
+#ifdef _WIN32
+  auto unicode_unix_profile = Parse(u8R"({"inbounds":[{"protocol":"http","listen":"C:\\тест\\socket","port":"0-65535"}]})");
+  Check(AvailablePort(unicode_unix_profile, 10808) == 10808, "UTF-8 Windows Unix path must be classified without opening it");
+#endif
   const std::string original = R"({
     "outbounds":[{"protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":18582}]},"tag":"proxy"},{"tag":"direct","protocol":"freedom"}],
     "inbounds":[{"port":18580,"settings":{"nested":{"port":18582}},"protocol":"socks","tag":"socks-in"}],

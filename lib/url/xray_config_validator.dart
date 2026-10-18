@@ -109,12 +109,29 @@ class XrayConfigValidator {
   }
 
   bool _isValidPort(Object value) {
-    final port = switch (value) {
-      int raw => raw,
-      num raw => raw.toInt(),
-      String raw => int.tryParse(raw),
-      _ => null,
-    };
-    return port != null && port > 0 && port <= 65535;
+    if (value is int) return value >= 0 && value <= 65535;
+    if (value is! String) return false;
+    for (final raw in value.split(',')) {
+      final part = raw.trim();
+      if (part.isEmpty) continue; // Core ignores empty list entries.
+      if (part.startsWith('env:')) {
+        // Presence/value belong to the native Core process environment.
+        // Do not resolve them using the development computer's environment.
+        if (part.length == 4) return false;
+        continue;
+      }
+      final limits = part.split('-');
+      if (limits.length > 2) return false;
+      for (final text in limits) {
+        final syntax = limits.length == 1
+            ? RegExp(r'^(0|[1-9][0-9]*)$')
+            : RegExp(r'^[0-9]+$');
+        final number = int.tryParse(text);
+        if (!syntax.hasMatch(text) || number == null || number > 65535) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 }

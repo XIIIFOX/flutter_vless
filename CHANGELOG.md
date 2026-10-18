@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Accept Core inbound port lists/ranges and zero in Dart; reserve native environment references and skip Unix-only listeners during private TCP port allocation. Bind Apple port references before saving cross-process sessions and report missing references without starting VPN. Add a shared corpus checked against pinned Core and native forwarding regressions.
 * Enforce Apple diagnostic byte and line limits on the complete response, including provider metadata and truncation markers. Explain disabled diagnostics in the example instead of asking the user to connect.
 * Disable and verify the Apple VPN profile on explicit Control Center Stop as well as app Stop. Report the actual On Demand policy in provider diagnostics when recovery is disabled.
 * Await Apple tunnel teardown after disabling and reading back recovery preferences before returning from Stop. Reject live configuration/options replacement and verify forwarding independently of On Demand, including when reconnect is disabled.

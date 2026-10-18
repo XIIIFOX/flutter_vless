@@ -245,6 +245,10 @@ cancellation after Core's DNS context detachment. Pure tests cover these paths
 using actual DNS framing over memory pipes. CI acceptance additionally requires
 unchanged missing/empty/localhost and mixed roots, actual A/AAAA and HTTP bytes,
 owner-only cancellation of a stalled exchange, and another owner's survival.
+The [b315a65 CI run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39150730894)
+passed both actual DNS acceptance fixtures on Windows, macOS and Ubuntu with
+unchanged compiled roots, complete output capture and matching source hashes.
+This remains a preview qualification; production builders do not enable it.
 Protected proxy egress, OS DNS semantics, DoH/DoT, FakeDNS and physical native
 socket protection remain separate work; this does not complete item 1.
 
@@ -256,8 +260,12 @@ system Forget scenario. The previous CI crash lacked a primary crash log; the
 pass does not prove its cause. Failure capture now runs before emulator cleanup.
 Both Apple providers also use session epochs to reject stale recovery/wake and
 startup callbacks after Stop; controlled pure tests cover Stop during drain and
-between native stages. Actual Apple runtime/device acceptance of that follow-up
-is recorded separately.
+between native stages. Follow-up controls also cover queued sleep/wake callbacks
+in both orders and a recovery check firing while asleep: callback admission
+follows the latest synchronous sleep/wake decision, and a sleeping check releases
+its retry slot for wake. Both actual provider implementations pass eight pure
+scenario groups; this is separate from physical sleep/wake acceptance.
+Actual Apple runtime/device acceptance of these changes is recorded separately.
 
 Current implementation/acceptance status (1.1.7, unreleased):
 

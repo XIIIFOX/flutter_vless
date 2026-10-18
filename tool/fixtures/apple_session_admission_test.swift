@@ -93,7 +93,7 @@ final class FixtureProvider: @unchecked Sendable {
     // Read counters only after their owner queue is drained.
     var coreStarts = 0, workerStarts = 0, coreStops = 0, healthChecks = 0
     var drainHook: (() -> Void)?, coreHook: (() -> Void)?, workerHook: (() -> Void)?
-    var rejectCore = false
+    var rejectCore = false, rejectHealth = false
     func startXRay(xrayConfig: Data, geoAssetsDirectory: String?) throws {
         coreStarts += 1
         coreHook?()
@@ -111,7 +111,7 @@ final class FixtureProvider: @unchecked Sendable {
         hook?()
     }
     func requestHEVStop() { _ = hevLifecycle.requestStop(); hevLifecycle.markExited(code: 0) }
-    func socksInboundHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String { healthChecks += 1; return "ok" }
+    func socksInboundHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String { healthChecks += 1; return rejectHealth ? "fixture unavailable" : "ok" }
     func socksConnectHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String { "ok" }
     func socksHTTPHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String { "ok" }
     // SOURCE_PROVIDER_METHODS
@@ -186,6 +186,84 @@ final class FixtureProvider: @unchecked Sendable {
         precondition(sleeping.coreStarts == 1 && sleeping.workerStarts == 1 && sleeping.isForwardingReady())
         await sleeping.stop()
         print("PASS sleep during drain releases recovery admission for a valid wake")
+
+        // Hold both owner queues so an earlier wake cannot run until after
+        // the later sleep callback has synchronously suspended admission.
+        let supersededWake = FixtureProvider(), supersededSpec = supersededWake.begin(options: FixtureOptions(retries: 2))
+        let supersededDrainEntered = DispatchSemaphore(value: 0), supersededDrainRelease = DispatchSemaphore(value: 0)
+        let watchdogEntered = DispatchSemaphore(value: 0), watchdogRelease = DispatchSemaphore(value: 0)
+        supersededWake.drainHook = {
+            supersededDrainEntered.signal()
+            precondition(supersededDrainRelease.wait(timeout: .now() + 3) == .success)
+        }
+        supersededWake.recover(supersededSpec.epoch)
+        precondition(supersededDrainEntered.wait(timeout: .now() + 3) == .success)
+        supersededWake.watchdogQueue.async {
+            watchdogEntered.signal()
+            precondition(watchdogRelease.wait(timeout: .now() + 3) == .success)
+        }
+        precondition(watchdogEntered.wait(timeout: .now() + 3) == .success)
+        supersededWake.wake()
+        supersededWake.sleep {}
+        let suspendedImmediately = !supersededWake.sessionAdmission.permitsRuntime(supersededSpec.epoch)
+        watchdogRelease.signal()
+        supersededWake.watchdogQueue.sync {}
+        let remainsSuspended = !supersededWake.sessionAdmission.permitsRuntime(supersededSpec.epoch)
+            && supersededWake.watchdogSuspended
+        supersededDrainRelease.signal(); supersededWake.flush()
+        let noWorkerRestart = supersededWake.coreStarts == 0 && supersededWake.workerStarts == 0
+        await supersededWake.stop()
+        guard suspendedImmediately && remainsSuspended && noWorkerRestart else {
+            print("FAIL queued earlier wake overrode later sleep or admitted workers after drain")
+            exit(1)
+        }
+        // Reverse callback order must also retain the latest wake, including
+        // when the earlier sleep's queued mirror has not executed yet.
+        let supersededSleep = FixtureProvider(), awakeSpec = supersededSleep.begin()
+        let sleepQueueEntered = DispatchSemaphore(value: 0), sleepQueueRelease = DispatchSemaphore(value: 0)
+        supersededSleep.watchdogQueue.async {
+            sleepQueueEntered.signal()
+            precondition(sleepQueueRelease.wait(timeout: .now() + 3) == .success)
+        }
+        precondition(sleepQueueEntered.wait(timeout: .now() + 3) == .success)
+        supersededSleep.sleep {}
+        supersededSleep.wake()
+        let awakeImmediately = supersededSleep.sessionAdmission.permitsRuntime(awakeSpec.epoch)
+        sleepQueueRelease.signal(); supersededSleep.watchdogQueue.sync {}
+        let remainsAwake = supersededSleep.sessionAdmission.permitsRuntime(awakeSpec.epoch) && !supersededSleep.watchdogSuspended
+        supersededSleep.recover(awakeSpec.epoch); supersededSleep.flush()
+        let awakeWorkerStarted = supersededSleep.coreStarts == 1 && supersededSleep.workerStarts == 1
+        await supersededSleep.stop()
+        guard awakeImmediately && remainsAwake && awakeWorkerStarted else {
+            print("FAIL queued earlier sleep overrode the latest wake or blocked its workers")
+            exit(1)
+        }
+        print("PASS queued sleep/wake mirrors retain latest admission and workers stay stopped after final sleep")
+
+        // A pending check owns a scheduling slot, not permission to do runtime
+        // work. Firing during sleep must release that slot for the valid wake.
+        let sleptCheck = FixtureProvider(), checkSpec = sleptCheck.begin(options: FixtureOptions(retries: 2))
+        sleptCheck.recover(checkSpec.epoch); sleptCheck.flush()
+        sleptCheck.rejectHealth = true
+        sleptCheck.watchdogQueue.sync { _ = sleptCheck.performTunnelHealthCheck(trigger: "before-sleep", epoch: checkSpec.epoch) }
+        let sleepingCheck = sleptCheck.recoveryCheck
+        precondition(sleepingCheck != nil)
+        sleptCheck.sleep {}
+        let checksBeforeSleep = sleptCheck.healthChecks
+        sleptCheck.watchdogQueue.sync { sleepingCheck?.perform() }
+        sleepingCheck?.cancel()
+        let slotClearedWhileSleeping = sleptCheck.recoveryCheck == nil && sleptCheck.healthChecks == checksBeforeSleep
+        sleptCheck.wake()
+        sleptCheck.watchdogQueue.sync { _ = sleptCheck.performTunnelHealthCheck(trigger: "after-wake", epoch: checkSpec.epoch) }
+        let rearmedCheck = sleptCheck.recoveryCheck
+        let rearmedAfterWake = rearmedCheck != nil && rearmedCheck !== sleepingCheck
+            && sleptCheck.healthChecks == checksBeforeSleep + 1
+        await sleptCheck.stop()
+        guard slotClearedWhileSleeping && rearmedAfterWake else {
+            print("FAIL recovery check firing during sleep stranded the retry slot after wake")
+            exit(1)
+        }
+        print("PASS recovery check firing during sleep releases its slot and valid wake rearms failed health retry")
 
         // Stop in an already admitted Core call cannot preempt that native call;
         // its completion must skip HEV and clean the candidate before NE finish.

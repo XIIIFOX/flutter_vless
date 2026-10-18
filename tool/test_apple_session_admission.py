@@ -46,6 +46,15 @@ def check_wiring(source):
     stop = block(source, '    ' + ('open override' if '    open override func stopTunnel' in source else 'override') + ' func stopTunnel')
     assert stop.index('sessionAdmission.revoke()') < stop.index('stopTunnelWatchdog') < stop.index('runtimeQueue.async')
     assert 'ownedBy: stoppedEpoch' in stop
+    sleep = block(source, '    ' + ('open override' if '    open override func sleep' in source else 'override') + ' func sleep')
+    assert sleep.index('sessionAdmission.suspend(epoch)') < sleep.index('watchdogQueue.async')
+    assert '!self.sessionAdmission.permitsRuntime(epoch)' in sleep
+    wake = block(source, '    ' + ('open override' if '    open override func wake' in source else 'override') + ' func wake')
+    assert wake.index('sessionAdmission.resume(epoch)') < wake.index('watchdogQueue.async')
+    assert 'guard self.sessionAdmission.permitsRuntime(epoch)' in wake
+    recovery = block(source, '    private func scheduleRecoveryCheck')
+    assert recovery.index('self.sessionAdmission.isCurrent(epoch)') < recovery.index('self.recoveryCheck = nil')
+    assert recovery.index('self.recoveryCheck = nil') < recovery.index('guard self.sessionAdmission.permitsRuntime(epoch)')
     assert 'watchdogGeneration' not in source and 'startupStopped' not in source
 
 
@@ -83,7 +92,7 @@ def main():
     (output / 'probe.log').write_text(result.stdout + result.stderr)
     print(result.stdout, end='')
     assert result.returncode == 0, (result.returncode, result.stderr)
-    assert len([line for line in result.stdout.splitlines() if line.startswith('PASS ')]) == 6
+    assert len([line for line in result.stdout.splitlines() if line.startswith('PASS ')]) == 8
     assert PROVIDERS[args.platform].read_text() == source and GATES[args.platform].read_bytes() == gate
     assert fixture_path.read_text() == fixture_source, 'Source changed during verification'
     (output / 'result.json').write_text(json.dumps({

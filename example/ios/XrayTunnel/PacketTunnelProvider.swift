@@ -475,7 +475,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         tunnelLog.info("Packet tunnel sleep")
         if let epoch = sessionAdmission.currentEpoch, sessionAdmission.suspend(epoch) {
             watchdogQueue.async {
-                guard self.sessionAdmission.isCurrent(epoch) else { return }
+                guard self.sessionAdmission.isCurrent(epoch), !self.sessionAdmission.permitsRuntime(epoch) else { return }
                 self.watchdogSuspended = true
                 self.watchdogPolicy.reset()
             }
@@ -486,9 +486,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     override func wake() {
         rememberTunnelLog("Packet tunnel wake; scheduling health check")
         tunnelLog.info("Packet tunnel wake")
-        guard let epoch = sessionAdmission.currentEpoch else { return }
+        // Admission follows callback entry order, independently of a blocked
+        // watchdog queue. Queued work only mirrors the latest sleep/wake state.
+        guard let epoch = sessionAdmission.currentEpoch, sessionAdmission.resume(epoch) else { return }
         watchdogQueue.async {
-            guard self.sessionAdmission.resume(epoch), self.runtimeSpec?.epoch == epoch else { return }
+            guard self.sessionAdmission.permitsRuntime(epoch), self.runtimeSpec?.epoch == epoch else { return }
             self.watchdogSuspended = false
             self.watchdogPolicy.reset()
             self.scheduleTunnelHealthCheck(trigger: "wake", after: 1.5, epoch: epoch)
@@ -714,8 +716,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func scheduleRecoveryCheck(epoch: TunnelSessionAdmission.Epoch) {
         guard sessionAdmission.permitsRuntime(epoch), recoveryCheck == nil else { return }
         let check = DispatchWorkItem { [weak self] in
-            guard let self, self.sessionAdmission.permitsRuntime(epoch) else { return }
+            guard let self, self.sessionAdmission.isCurrent(epoch), self.runtimeSpec?.epoch == epoch else { return }
+            // Sleep blocks runtime work but must release this session's slot
+            // so a subsequent wake can schedule a fresh failed-health retry.
             self.recoveryCheck = nil
+            guard self.sessionAdmission.permitsRuntime(epoch) else { return }
             self.performTunnelHealthCheck(trigger: "recovery", epoch: epoch)
         }
         recoveryCheck = check

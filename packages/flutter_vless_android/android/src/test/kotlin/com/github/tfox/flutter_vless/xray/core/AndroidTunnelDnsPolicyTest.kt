@@ -96,12 +96,8 @@ class AndroidTunnelDnsPolicyTest {
         assertEquals("proxy", conventional.getJSONArray("outbounds").getJSONObject(3).getJSONObject("streamSettings").getJSONObject("sockopt").getString("dialerProxy"))
     }
 
-    @Test fun reservedTagsAndVirtualEndpointRoutingConflictsRejectBeforeResolution() {
+    @Test fun virtualEndpointRoutingConflictsRejectBeforeResolution() {
         val invalid = mutableListOf<JSONObject>()
-        for (tag in listOf(AndroidTunnelDnsPolicy.PROXY_TAG, AndroidTunnelDnsPolicy.RELAY_TAG, AndroidTunnelDnsPolicy.UPSTREAM_TAG)) {
-            invalid.add(config(outbound(tag = tag)))
-            invalid.add(config(outbound()).also { it.getJSONArray("inbounds").getJSONObject(0).put("tag", tag) })
-        }
         invalid.add(config(outbound(), outbound("socks")))
         invalid.add(config(outbound(address = "198.18.0.2")))
         invalid.add(config(outbound(address = "::ffff:198.18.0.2")))

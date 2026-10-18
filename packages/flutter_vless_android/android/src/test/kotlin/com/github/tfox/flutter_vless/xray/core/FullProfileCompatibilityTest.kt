@@ -28,14 +28,14 @@ class FullProfileCompatibilityTest {
             assertEquals(original.getJSONArray("inbounds").getJSONObject(index).toString(), inputs.getJSONObject(index).toString())
         }
         val managed = inputs.getJSONObject(3)
-        assertEquals("flutter-vless-tun_1", managed.getString("tag"))
+        assertEquals("flutter-vless-tun-1", managed.getString("tag"))
         assertEquals(10810, config.LOCAL_SOCKS5_PORT)
         assertEquals("password", managed.getJSONObject("settings").getString("auth"))
         assertEquals("native-password", managed.getJSONObject("settings").getJSONArray("accounts").getJSONObject(0).getString("pass"))
         val rules = result.getJSONObject("routing").getJSONArray("rules")
         assertEquals(original.getJSONObject("routing").getJSONArray("rules").getJSONObject(0).toString(), rules.getJSONObject(1).toString())
-        assertEquals("flutter-vless-stats_1", result.getJSONObject("api").getString("tag"))
-        assertEquals("flutter-vless-stats_1", rules.getJSONObject(0).getString("outboundTag"))
+        assertEquals("flutter-vless-stats-1", result.getJSONObject("api").getString("tag"))
+        assertEquals("flutter-vless-stats-1", rules.getJSONObject(0).getString("outboundTag"))
         assertEquals(raw, config.V2RAY_FULL_JSON_CONFIG)
     }
 

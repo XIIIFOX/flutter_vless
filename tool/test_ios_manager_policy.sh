@@ -40,6 +40,7 @@ xcrun swiftc -O -parse-as-library \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/VlessNativeOptions.swift" \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/TunnelSecretStore.swift" \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/LocalProxyAccessPolicy.swift" \
+  "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/XrayServiceTags.swift" \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/XrayPrivacyConfig.swift" \
   "$ROOT_DIR/tool/fixtures/ios_manager_policy/Keychain.swift" \
   "$PROBE_DIR/Manager.swift" \

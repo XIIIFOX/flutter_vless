@@ -137,6 +137,32 @@ inline std::optional<uint16_t> SocksPort(const std::string& text) {
   return first;
 }
 
+// Reserve references as well as definitions so adding an adapter cannot make a
+// previously dangling user rule, chain, API, DNS or reverse tag target a service.
+class ServiceTags {
+ public:
+  explicit ServiceTags(const Json& config) { Collect(config); }
+  std::string Next(const std::string& preferred) {
+    auto candidate = preferred;
+    for (unsigned suffix = 1; used_.count(candidate); ++suffix) candidate = preferred + "-" + std::to_string(suffix);
+    used_.insert(candidate);
+    return candidate;
+  }
+ private:
+  std::set<std::string> used_;
+  void Collect(const Json& value) {
+    if (value.is_object()) for (auto it = value.begin(); it != value.end(); ++it) {
+      const auto field = Fold(it.key());
+      if (field == "tag" || field == "inboundtag" || field == "outboundtag" ||
+          field == "balancertag" || field == "dialerproxy" || field == "fallbacktag") {
+        if (it->is_string()) used_.insert(it->get<std::string>());
+        if (it->is_array()) for (const auto& tag : *it) if (tag.is_string()) used_.insert(tag.get<std::string>());
+      }
+      Collect(*it);
+    } else if (value.is_array()) for (const auto& child : value) Collect(child);
+  }
+};
+
 inline bool AddApi(Json& config, uint16_t api_port) {
   if (!config.is_object()) return false;
   if (!config.contains("stats")) config["stats"] = Json::object();
@@ -152,7 +178,7 @@ inline bool AddApi(Json& config, uint16_t api_port) {
   // Xray's API listen creates its own listener. No duplicate routing block,
   // synthetic catch-all rule, or tag-dependent inbound is needed.
   if (!config.contains("api")) {
-    config["api"] = {{"tag", "api"},
+    config["api"] = {{"tag", ServiceTags(config).Next("api")},
       {"listen", "127.0.0.1:" + std::to_string(api_port)},
       {"services", Json::array({"StatsService"})}};
   }
@@ -226,13 +252,7 @@ inline constexpr const char* kIpv6Block = "flutter-vless-ipv6-block";
 inline constexpr const char* kManagedInbound = "flutter-vless-tun";
 
 inline std::string UniqueTag(const Json& config, const std::string& preferred) {
-  std::set<std::string> tags;
-  for (const auto* key : {"inbounds", "outbounds"}) if (config.contains(key) && config[key].is_array()) {
-    for (const auto& entry : config[key]) if (entry.contains("tag") && entry["tag"].is_string()) tags.insert(entry["tag"].get<std::string>());
-  }
-  auto tag = preferred;
-  for (unsigned suffix = 1; tags.count(tag); ++suffix) tag = preferred + "-" + std::to_string(suffix);
-  return tag;
+  return ServiceTags(config).Next(preferred);
 }
 
 inline std::optional<std::string> PortEnvironment(const std::string& name) {
@@ -387,19 +407,20 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   auto config = Parse(text);
   if (username.empty() || password.empty() || username.size() > 255 || password.size() > 255 || interface_name.empty()
       || !Normalize(config) || config.contains("fakeDns") || config.contains("fakedns")) return std::nullopt;
+  ServiceTags service_tags(config);
   auto& inbounds = config["inbounds"];
   // Keep every imported listener intact. tun2socks gets a separate loopback
   // listener with native session authentication, never a caller's public input.
   auto port = AvailablePort(config, 10807);
   if (!port) return std::nullopt;
-  auto managed_tag = UniqueTag(config, kManagedInbound);
+  auto managed_tag = service_tags.Next(kManagedInbound);
   Json inbound = {{"tag", managed_tag}, {"protocol", "socks"}, {"listen", "127.0.0.1"}, {"port", *port},
       {"settings", {{"auth", "password"}, {"accounts", Json::array({{{"user", username}, {"pass", password}}})}, {"udp", true}, {"ip", "127.0.0.1"}}},
       {"sniffing", {{"enabled", true}, {"routeOnly", true}, {"destOverride", Json::array({"http", "tls", "quic"})}}}};
   inbounds.insert(inbounds.begin(), inbound);
-  const auto relay_tag = UniqueTag(config, kDnsRelay);
-  const auto upstream_tag = UniqueTag(config, kDnsUpstream);
-  const auto ipv6_tag = UniqueTag(config, kIpv6Block);
+  const auto relay_tag = service_tags.Next(kDnsRelay);
+  const auto upstream_tag = service_tags.Next(kDnsUpstream);
+  const auto ipv6_tag = service_tags.Next(kIpv6Block);
   std::string proxy;
   Json hosts = Json::object();
   for (auto& outbound : config["outbounds"]) {
@@ -414,7 +435,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
     }
     if (!std::set<std::string>{"vless","vmess","trojan","shadowsocks","socks","http","hysteria","wireguard"}.count(protocol)) return std::nullopt;
     if (!outbound.contains("tag") || outbound["tag"] == "") {
-      outbound["tag"] = UniqueTag(config, "flutter-vless-proxy");
+      outbound["tag"] = service_tags.Next("flutter-vless-proxy");
     }
     if (proxy.empty() || outbound["tag"] == "proxy") proxy = outbound["tag"].get<std::string>();
     if (!Object(outbound, "settings") || !Fields(outbound["settings"], {"address", "vnext", "servers", "peers"})) return std::nullopt;
@@ -469,7 +490,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   config.erase("api");
   auto api_port = AvailablePort(config, 10086);
   if (!api_port || !AddApi(config, *api_port)) return std::nullopt;
-  config["api"]["tag"] = UniqueTag(config, "flutter-vless-stats");
+  config["api"]["tag"] = service_tags.Next("flutter-vless-stats");
   return config.dump();
 }
 
@@ -489,12 +510,7 @@ inline std::optional<std::string> ApplyBypass(const std::string& text, const std
   auto& routing = config["routing"];
   if (!routing.contains("rules")) routing["rules"] = Json::array();
   if (!routing["rules"].is_array()) return std::nullopt;
-  std::set<std::string> tags;
-  for (auto& outbound : config["outbounds"]) {
-    if (outbound.contains("tag") && outbound["tag"].is_string()) tags.insert(outbound["tag"].get<std::string>());
-  }
-  std::string tag = "flutter-vless-subnet-direct";
-  while (tags.count(tag)) tag += "-";
+  const auto tag = UniqueTag(config, "flutter-vless-subnet-direct");
   config["outbounds"].push_back({{"tag", tag}, {"protocol", "freedom"}});
   routing["rules"].insert(routing["rules"].begin(), Json{{"type", "field"}, {"ip", cidrs}, {"outboundTag", tag}});
   return config.dump();

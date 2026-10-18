@@ -1,0 +1,251 @@
+[
+  {
+    "name": "empty",
+    "config": {},
+    "requests": [
+      "private",
+      "private"
+    ],
+    "expected": [
+      "private",
+      "private-1"
+    ]
+  },
+  {
+    "name": "inbound",
+    "config": {
+      "inbounds": [
+        {
+          "tag": "private"
+        }
+      ]
+    },
+    "requests": [
+      "private"
+    ],
+    "expected": [
+      "private-1"
+    ]
+  },
+  {
+    "name": "outbound-suffix",
+    "config": {
+      "outbounds": [
+        {
+          "tag": "private"
+        },
+        {
+          "tag": "private-1"
+        },
+        {
+          "tag": "private-3"
+        }
+      ]
+    },
+    "requests": [
+      "private",
+      "private"
+    ],
+    "expected": [
+      "private-2",
+      "private-4"
+    ]
+  },
+  {
+    "name": "api-dns",
+    "config": {
+      "api": {
+        "tag": "private"
+      },
+      "dns": {
+        "tag": "private-1"
+      }
+    },
+    "requests": [
+      "private"
+    ],
+    "expected": [
+      "private-2"
+    ]
+  },
+  {
+    "name": "reverse",
+    "config": {
+      "reverse": {
+        "bridges": [
+          {
+            "tag": "private"
+          }
+        ],
+        "portals": [
+          {
+            "tag": "private-1"
+          }
+        ]
+      }
+    },
+    "requests": [
+      "private"
+    ],
+    "expected": [
+      "private-2"
+    ]
+  },
+  {
+    "name": "balancer-fallback",
+    "config": {
+      "routing": {
+        "balancers": [
+          {
+            "tag": "private",
+            "fallbackTag": "private-1"
+          }
+        ]
+      }
+    },
+    "requests": [
+      "private"
+    ],
+    "expected": [
+      "private-2"
+    ]
+  },
+  {
+    "name": "dangling-inbound",
+    "config": {
+      "routing": {
+        "rules": [
+          {
+            "inboundTag": [
+              "private",
+              "private-1"
+            ]
+          }
+        ]
+      }
+    },
+    "requests": [
+      "private"
+    ],
+    "expected": [
+      "private-2"
+    ]
+  },
+  {
+    "name": "dangling-outbound-balancer",
+    "config": {
+      "routing": {
+        "rules": [
+          {
+            "outboundTag": "private"
+          },
+          {
+            "balancerTag": "private-1"
+          }
+        ]
+      }
+    },
+    "requests": [
+      "private"
+    ],
+    "expected": [
+      "private-2"
+    ]
+  },
+  {
+    "name": "nested-dialer",
+    "config": {
+      "outbounds": [
+        {
+          "streamSettings": {
+            "xhttpSettings": {
+              "extra": {
+                "downloadSettings": {
+                  "sockopt": {
+                    "dialerProxy": "private"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "requests": [
+      "private"
+    ],
+    "expected": [
+      "private-1"
+    ]
+  },
+  {
+    "name": "go-field-aliases",
+    "config": {
+      "API": {
+        "TaG": "private"
+      },
+      "routing": {
+        "rules": [
+          {
+            "INBOUNDTAG": "private-1"
+          },
+          {
+            "outboundTAG": "private-2"
+          }
+        ]
+      },
+      "stream": {
+        "sockopt": {
+          "DIALERPROXY": "private-3"
+        }
+      }
+    },
+    "requests": [
+      "private"
+    ],
+    "expected": [
+      "private-4"
+    ]
+  },
+  {
+    "name": "case-sensitive-values",
+    "config": {
+      "inbounds": [
+        {
+          "tag": "PRIVATE"
+        }
+      ],
+      "remarks": "private",
+      "headers": {
+        "X-Test": "private"
+      }
+    },
+    "requests": [
+      "private"
+    ],
+    "expected": [
+      "private"
+    ]
+  },
+  {
+    "name": "unknown-tag-conservative",
+    "config": {
+      "futureExtension": {
+        "tag": "private"
+      },
+      "routing": {
+        "rules": [
+          {
+            "ruleTag": "private-1"
+          }
+        ]
+      }
+    },
+    "requests": [
+      "private"
+    ],
+    "expected": [
+      "private-1"
+    ]
+  }
+]

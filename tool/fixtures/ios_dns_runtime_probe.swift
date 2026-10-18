@@ -188,13 +188,15 @@ func runDNSRuntimeChecks() throws {
         let upstream = DNSControlledProxy(port: 18103, proto: proto)
         defer { upstream.stop() }
         let raw: [String: Any] = [
-            "inbounds": [["tag": "in_proxy", "protocol": "socks", "listen": "127.0.0.1", "port": 18098]],
+            "inbounds": [["tag": "in_proxy", "protocol": "socks", "listen": "127.0.0.1", "port": 18098,
+                "settings": ["auth": "password", "accounts": [["user": credentials.username, "pass": credentials.password]]]]],
             "outbounds": [
                 ["tag": "direct", "protocol": "freedom", "settings": ["redirect": "127.0.0.1:18104"]],
                 ["tag": "proxy", "protocol": proto, "settings": ["servers": [["address": "127.0.0.1", "port": 18103,
                     "users": [["user": "remote-dns-user", "pass": "remote-dns-password"]]]]]],
                 ["tag": "block", "protocol": "blackhole"]],
-            "routing": ["rules": [["type": "field", "network": "udp", "outboundTag": "direct"]]]]
+            "routing": ["rules": [["type": "field", "inboundTag": ["in_proxy"], "outboundTag": "block"],
+                ["type": "field", "network": "udp", "outboundTag": "direct"]]]]
         guard let prepared = TunnelXrayConfigPreparer.prepare(jsonData: try JSONSerialization.data(withJSONObject: raw), credentials: credentials) else {
             preconditionFailure("DNS fixture preparation failed")
         }
@@ -204,6 +206,11 @@ func runDNSRuntimeChecks() throws {
             var error: NSError?
             precondition(XRayStartPrivate(prepared.data, ProbeLogger(), &error))
             defer { XRayStop() }
+            let beforeImported = upstream.state().0
+            let importedAnswer = try? queryVirtualDNS(proxyPort: 18098, credentials: credentials, udp: false, id: 0x4700)
+            precondition(importedAnswer == nil, "Private DNS rule must not override an imported input's blocking rule")
+            precondition(upstream.state().0 == beforeImported)
+            print("DNS_IMPORTED_CONTEXT_PASS=\(proto);GENERATION=\(generation)")
             for udp in [false, true] {
                 let id = UInt16(0x4300 + generation * 2 + (udp ? 1 : 0))
                 guard let answer = try queryVirtualDNS(proxyPort: managedPort, credentials: credentials, udp: udp, id: id) else {

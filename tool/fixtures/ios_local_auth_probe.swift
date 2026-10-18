@@ -81,11 +81,15 @@ func runLocalAuthRuntimeChecks() async throws {
         "inbounds": [["tag": "in_proxy", "liſten": "127.0.0.1", "port": 18095,
                       "protocol": "socks", "ſettings": ["auth": "noauth", "udp": true,
                           "accountſ": [["uſer": "old", "paſſ": "old"]]]]],
-        "outbounds": [["tag": "direct", "protocol": "freedom", "settings": ["redirect": "127.0.0.1:18096"]]]
+        "outbounds": [["tag": "direct", "protocol": "freedom", "settings": ["redirect": "127.0.0.1:18096"]],
+                      ["tag": "fixture-blocked", "protocol": "blackhole"]],
+        // This user's dormant rule must never capture a newly injected adapter.
+        "routing": ["rules": [["type": "field", "inboundTag": ["flutter-vless-tun"], "outboundTag": "fixture-blocked"]]]
     ]
     let source = try JSONSerialization.data(withJSONObject: raw)
     var protected = raw
     let managedPort = try LocalProxyAccessPolicy.applyVPN(to: &protected, credentials: credentials)
+    precondition((protected["inbounds"] as? [[String: Any]])?.first?["tag"] as? String == "flutter-vless-tun-1")
     precondition(XrayPrivacyConfig.apply(to: &protected))
     let prepared = try JSONSerialization.data(withJSONObject: protected)
     let logger = ProbeLogger()
@@ -127,6 +131,7 @@ func runLocalAuthRuntimeChecks() async throws {
         precondition(wrongHTTP == nil)
         XRayStop()
         print("AUTH_RUNTIME_PASS=\(generation)")
+        print("SERVICE_TAG_RUNTIME_PASS=\(generation)")
     }
     let delay = await ServerDelayRunner().measure(config: String(decoding: source, as: UTF8.self),
         url: "http://probe.invalid/", geoAssetsDirectory: nil)

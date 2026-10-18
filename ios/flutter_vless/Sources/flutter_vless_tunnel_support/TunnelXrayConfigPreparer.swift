@@ -128,7 +128,7 @@ public enum TunnelXrayConfigPreparer {
                 }
             }
 
-            guard let bootstrapAddresses = TunnelDNSPolicy.apply(to: &configJSON, resolveIPv4: resolveIPv4) else {
+            guard let bootstrapAddresses = TunnelDNSPolicy.apply(to: &configJSON, managedInboundTag: managedTag, resolveIPv4: resolveIPv4) else {
                 return nil
             }
             messages.append("Configured system DNS over TCP through the selected proxy")

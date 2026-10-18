@@ -8,6 +8,16 @@ void Check(bool ok, const char* message) {
   if (!ok) throw std::runtime_error(message);
 }
 int main() {
+  std::ifstream tag_input("tool/fixtures/compatibility/tags.json");
+  Check(tag_input.good(), "shared tag corpus is required");
+  Json tag_cases; tag_input >> tag_cases;
+  for (const auto& item : tag_cases) {
+    const auto before = item["config"].dump();
+    ServiceTags tags(item["config"]);
+    for (size_t i = 0; i < item["requests"].size(); ++i)
+      Check(tags.Next(item["requests"][i].get<std::string>()) == item["expected"][i], item["name"].get<std::string>().c_str());
+    Check(item["config"].dump() == before, "tag allocation mutated user config");
+  }
   std::ifstream input("tool/fixtures/compatibility/ports.json");
   Check(input.good(), "shared port corpus is required");
   Json cases; input >> cases;

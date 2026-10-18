@@ -75,6 +75,8 @@ final class TunnelDNSPolicyTests: XCTestCase {
             XCTAssertEqual(rules[1]["outboundTag"] as? String, "proxy")
             XCTAssertEqual(rules[2]["ip"] as? [String], ["198.18.0.2/32"])
             XCTAssertEqual(rules[2]["network"] as? String, "tcp,udp")
+            let managed = try XCTUnwrap((output["inbounds"] as? [[String: Any]])?.first?["tag"] as? String)
+            XCTAssertEqual(rules[2]["inboundTag"] as? [String], [managed])
             XCTAssertEqual(rules.last! as NSDictionary, applicationRule as NSDictionary)
             XCTAssertEqual(prepared.bootstrapAddresses, ["203.0.113.7"])
             if let directory = ProcessInfo.processInfo.environment["TUNNEL_DNS_FIXTURES"] {
@@ -83,11 +85,12 @@ final class TunnelDNSPolicyTests: XCTestCase {
         }
     }
 
-    func testBootstrapFailureAndTagCollisionsRejectPreparation() {
+    func testBootstrapFailureRejectsButTagCollisionsAllocatePrivateNames() {
         var config: [String: Any] = ["outbounds": [["protocol": "http", "settings": ["address": "unresolved.example", "port": 443]]]]
-        XCTAssertNil(TunnelDNSPolicy.apply(to: &config, resolveIPv4: { _ in nil }))
+        XCTAssertNil(TunnelDNSPolicy.apply(to: &config, managedInboundTag: "fixture-tun", resolveIPv4: { _ in nil }))
         config["inbounds"] = [["tag": "flutter-vless-dns-upstream"]]
-        XCTAssertNil(TunnelDNSPolicy.apply(to: &config, resolveIPv4: { _ in "203.0.113.7" }))
+        XCTAssertNotNil(TunnelDNSPolicy.apply(to: &config, managedInboundTag: "fixture-tun", resolveIPv4: { _ in "203.0.113.7" }))
+        XCTAssertEqual((config["dns"] as? [String: Any])?["tag"] as? String, "flutter-vless-dns-upstream-1")
     }
 
     func testNestedXHTTPDownloadBootstrapAndCredentialsStayIntact() throws {
@@ -98,7 +101,7 @@ final class TunnelDNSPolicyTests: XCTestCase {
             ]]]]
         ]]]
         var resolved: [String] = []
-        XCTAssertNotNil(TunnelDNSPolicy.apply(to: &config, resolveIPv4: { host in
+        XCTAssertNotNil(TunnelDNSPolicy.apply(to: &config, managedInboundTag: "fixture-tun", resolveIPv4: { host in
             resolved.append(host)
             return "203.0.113.7"
         }))
@@ -123,7 +126,7 @@ final class TunnelDNSPolicyTests: XCTestCase {
             ["endpoint": "[2001:db8::1]:51820", "publicKey": "second-key"]
         ]]
         var config: [String: Any] = ["outbounds": [["protocol": "wireguard", "settings": settings]]]
-        XCTAssertEqual(TunnelDNSPolicy.apply(to: &config, resolveIPv4: { _ in "203.0.113.7" }),
+        XCTAssertEqual(TunnelDNSPolicy.apply(to: &config, managedInboundTag: "fixture-tun", resolveIPv4: { _ in "203.0.113.7" }),
                        ["2001:db8::1", "203.0.113.7"])
         let outbounds = try XCTUnwrap(config["outbounds"] as? [[String: Any]])
         XCTAssertEqual(outbounds[0]["settings"] as? NSDictionary, settings as NSDictionary)
@@ -131,7 +134,7 @@ final class TunnelDNSPolicyTests: XCTestCase {
 
     func testAbsoluteDNSNameMatchesXrayHostLookup() throws {
         var config: [String: Any] = ["outbounds": [["protocol": "http", "settings": ["address": "Proxy.Example.", "port": 443]]]]
-        XCTAssertNotNil(TunnelDNSPolicy.apply(to: &config, resolveIPv4: { _ in "203.0.113.7" }))
+        XCTAssertNotNil(TunnelDNSPolicy.apply(to: &config, managedInboundTag: "fixture-tun", resolveIPv4: { _ in "203.0.113.7" }))
         let dns = try XCTUnwrap(config["dns"] as? [String: Any])
         XCTAssertEqual(dns["hosts"] as? [String: String], ["proxy.example": "203.0.113.7"])
         let outbounds = try XCTUnwrap(config["outbounds"] as? [[String: Any]])
@@ -148,7 +151,7 @@ final class TunnelDNSPolicyTests: XCTestCase {
             ]]
         ]]]
         var resolved: [String] = []
-        XCTAssertNotNil(TunnelDNSPolicy.apply(to: &config, resolveIPv4: { host in
+        XCTAssertNotNil(TunnelDNSPolicy.apply(to: &config, managedInboundTag: "fixture-tun", resolveIPv4: { host in
             resolved.append(host)
             return host.hasPrefix("active") ? "203.0.113.7" : nil
         }))

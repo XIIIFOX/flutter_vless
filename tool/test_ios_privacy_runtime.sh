@@ -51,6 +51,7 @@ assert 'LOCAL_ACCESS_PROBE_DONE' in text
 assert 'BUILD_RESULT=false; ERROR=Xray startup failed: build configuration' in text
 assert 'RUNNER_SNAPSHOT_AND_DELAY_PASS' in text
 assert 'AUTH_RUNTIME_PASS=0' in text and 'AUTH_RUNTIME_PASS=1' in text
+assert 'SERVICE_TAG_RUNTIME_PASS=0' in text and 'SERVICE_TAG_RUNTIME_PASS=1' in text
 assert 'AUTH_ORIGIN_HEADERS_PRIVATE_PASS' in text
 assert 'AUTH_ROTATION_PASS' in text
 assert 'RUNNER_DEFAULTS_AND_EXPLICIT_AUTH_PASS' in text
@@ -59,6 +60,7 @@ for proxy in ['http', 'socks']:
  for generation in [0, 1]:
   assert f'DNS_RUNTIME_PASS={proxy};GENERATION={generation}' in text
   assert f'DNS_IPV4_ONLY_PASS={proxy};GENERATION={generation}' in text
+  assert f'DNS_IMPORTED_CONTEXT_PASS={proxy};GENERATION={generation}' in text
  assert f'DNS_REFUSAL_NO_FALLBACK_PASS={proxy}' in text
 print('PASS: actual runtime stdout/callback, 12 preparation/runtime cases, proxy snapshot, standalone delay runner')
 PY

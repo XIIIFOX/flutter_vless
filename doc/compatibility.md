@@ -158,6 +158,19 @@ its bundled Core before the service transaction. Safe effective-config diffs,
 complete asset diagnostics, bind-race handling and rollback from later runtime
 failures are still pending; item 7 is not complete.
 
+Service identifier progress (2026-10-18): Android, both Apple packages and
+Windows reserve definitions and exact references before allocating private
+adapter, DNS, statistics and delay tags. This includes API/DNS tags, reverse
+bridges/portals, balancers/fallback tags and nested dialer chains. A dormant
+imported rule must not begin matching the adapter just because it uses a
+library-preferred name. A shared 12-case corpus checks allocation and input
+preservation. Apple's system DNS rule is now scoped to its managed input;
+runtime fixtures require imported-input blocking rules to retain their effect.
+Android's isolated native authorization fixture transfers actual HTTP bytes
+with a deliberately conflicting imported rule. Prefix selectors in
+balancers/observatory, Android virtual-DNS rule scoping, API passthrough and
+the source-inbound routing context remain separate work.
+
 Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |
@@ -165,10 +178,10 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | 1. Advanced DNS | Pending | Current protection tests cover resolver isolation/refusal. Apple/Windows still replace imported DNS; full hosts/server/FakeDNS semantics are not accepted yet. |
 | 2. IPv6 | Pending | Current tests prove blocking, not dual-stack forwarding, IPv6-only endpoint or NAT64 support. |
 | 3. Protocol/transport matrix | Pending | Supplied VLESS TCP/Reality profiles work on devices. Full pinned-Core transport/socket-protection coverage is still required. |
-| 4. Passthrough and VPN routing context | Pending | Imported listeners/authentication remain intact. API/services, source-inbound context and explicit VPN default selection remain open. |
-| 5. Ports/addresses | Partial | Shared 20-case port corpus, native tests and real Android/iPhone list/range/env/Unix cases pass. OS/API reservations, complete tag namespaces, bind retries and proxy-only parity remain open. |
+| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; Apple's private DNS rule is scoped to its adapter. API/services, Android DNS scoping, source-inbound context and explicit VPN default selection remain open. |
+| 5. Ports/addresses | Partial | Shared 20-case port and 12-case service-tag corpora, native tests and real Android/iPhone list/range/env/Unix cases pass. OS/API port reservations, prefix-selector isolation, bind retries and proxy-only parity remain open. |
 | 6. Assets/import syntax | Partial | A shared 22-case JSON syntax corpus is checked against actual Core decoding. SDK start/delay/import/subscriptions and the example routing editor accept Core-style comments and a leading BOM. Device browser/routing checks pass. Portable cert/key/geodata assets and explicit multi-document merging remain open. |
-| 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39086489552) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39086530395) pass for the preflight change, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |
+| 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |
 | 8. Runtime corpus | Partial | Shared port/syntax fixtures and platform/device HTTP, DNS, routing and recovery checks exist. The complete ECH/DoH/QUIC/protocol corpus and remaining physical options acceptance are not complete. |
 
 Comment filtering follows the [pinned Core local-file reader](https://github.com/XTLS/Xray-core/blob/92ccc939aaf4f8965f369cf0b142e005aeaa11d5/infra/conf/json/reader.go),

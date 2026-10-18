@@ -24,8 +24,11 @@ class NativeLocalAuthorizationTest {
         val port = ServerSocket(0).use { it.localPort }
         val secret = LocalProxyCredentials.generate()
         val config = XrayConfig(LOCAL_SOCKS5_PORT = port, LOCAL_API_PORT = port + 1,
-            V2RAY_FULL_JSON_CONFIG = """{"Inbounds":[{"tag":"http","Protocol":"http","Listen":"127.0.0.1","Port":${port + 2},"Settings":{"accounts":[{"user":"imported-user","pass":"imported-password"}]}}],"outbounds":[{"tag":"proxy","protocol":"freedom"}]}""")
+            V2RAY_FULL_JSON_CONFIG = """{"Inbounds":[{"tag":"http","Protocol":"http","Listen":"127.0.0.1","Port":${port + 2},"Settings":{"accounts":[{"user":"imported-user","pass":"imported-password"}]}}],
+              "outbounds":[{"tag":"proxy","protocol":"freedom"},{"tag":"fixture-blocked","protocol":"blackhole"}],
+              "routing":{"rules":[{"type":"field","inboundTag":["flutter-vless-tun"],"outboundTag":"fixture-blocked"}]}}""")
         val json = XrayCoreManager.buildRuntimeConfigJson(config, context.noBackupFilesDir, secret)
+        assertEquals("flutter-vless-tun-1", json.getJSONArray("inbounds").getJSONObject(1).getString("tag"))
         val file = File(context.noBackupFilesDir, "test-auth-${UUID.randomUUID()}.json")
         file.writeText(json.toString())
         val process = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,

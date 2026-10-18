@@ -203,6 +203,10 @@ def config(reverse, external_address=None, direct_address="127.0.0.1"):
             {"type": "field", "domain": ["full:api.ipify.org"], "outboundTag": "external-direct"})
         profile["routing"]["rules"].append(
             {"type": "field", "network": "tcp,udp", "outboundTag": "external-direct"})
+    # A dormant imported rule must not acquire the managed VPN input's traffic.
+    profile["outbounds"].append({"protocol": "blackhole", "tag": "fixture-blocked"})
+    profile["routing"]["rules"].insert(0, {"type": "field", "inboundTag": ["flutter-vless-tun"],
+                                            "outboundTag": "fixture-blocked"})
     return profile
 
 

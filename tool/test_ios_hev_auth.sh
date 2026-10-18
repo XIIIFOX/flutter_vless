@@ -18,6 +18,7 @@ let config = TunnelHEVConfiguration.make(port: 18099, credentials: credentials, 
 try Data(config.utf8).write(to: URL(fileURLWithPath: CommandLine.arguments[1]))
 SWIFT
 xcrun swiftc "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/LocalProxyAccessPolicy.swift" \
+  "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/XrayServiceTags.swift" \
   "$ROOT/ios/flutter_vless/Sources/flutter_vless_tunnel_support/TunnelHEVLogPolicy.swift" "$OUT/main.swift" -o "$OUT/config"
 "$OUT/config" "$OUT/config.yml"
 cat > "$OUT/probe.c" <<'C'

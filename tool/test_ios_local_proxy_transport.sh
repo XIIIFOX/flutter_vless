@@ -19,6 +19,7 @@ LocalProxyDelayClient.measure(url: URL(string: CommandLine.arguments[3])!,
 if group.wait(timeout: .now() + 20) != .success { exit(2) }
 SWIFT
 xcrun swiftc -O "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/LocalProxyAccessPolicy.swift" \
+  "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/XrayServiceTags.swift" \
   "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/LocalSOCKS5Client.swift" \
   "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/LocalHTTPProxyClient.swift" \
   "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/LocalProxyDelayClient.swift" \

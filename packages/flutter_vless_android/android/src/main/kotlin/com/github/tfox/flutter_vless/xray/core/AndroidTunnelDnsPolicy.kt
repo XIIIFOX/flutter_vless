@@ -12,7 +12,6 @@ internal object AndroidTunnelDnsPolicy {
     const val RELAY_TAG = "flutter-vless-system-dns"
     const val UPSTREAM_TAG = "flutter-vless-dns-upstream"
     const val PROXY_TAG = "flutter-vless-dns-proxy"
-    private val reservedTags = setOf(RELAY_TAG, UPSTREAM_TAG, PROXY_TAG)
     private val endpointProtocols = setOf("http", "socks", "vless", "vmess", "trojan", "shadowsocks", "hysteria", "wireguard")
 
     data class Prepared(
@@ -51,9 +50,10 @@ internal object AndroidTunnelDnsPolicy {
         inbounds.forEach { canonicalize(it, "tag") }
         val tags = outbounds.mapNotNull { optionalString(it, "tag")?.takeIf(String::isNotEmpty) }
         require(tags.distinct().size == tags.size) { "Duplicate outbound tag in proxy DNS configuration" }
-        require((tags + inbounds.mapNotNull { optionalString(it, "tag") }).none { it in reservedTags }) {
-            "Configuration collides with a reserved DNS tag"
-        }
+        val serviceTags = XrayServiceTags(config)
+        val relayTag = serviceTags.next(RELAY_TAG)
+        val upstreamTag = serviceTags.next(UPSTREAM_TAG)
+        val proxyTag = serviceTags.next(PROXY_TAG)
         val candidates = outbounds.filter { protocol(it) in endpointProtocols }
         val selected = if (proxyOutboundTag != null) {
             require(proxyOutboundTag.isNotBlank()) { "DNS proxy outbound tag is empty" }
@@ -64,7 +64,7 @@ internal object AndroidTunnelDnsPolicy {
                 ?: candidates.singleOrNull()
                 ?: throw IllegalArgumentException("DNS proxy outbound is ambiguous or missing; specify its tag")
         }
-        val selectedTag = optionalString(selected, "tag")?.takeIf(String::isNotEmpty) ?: PROXY_TAG.also { selected.put("tag", it) }
+        val selectedTag = optionalString(selected, "tag")?.takeIf(String::isNotEmpty) ?: proxyTag.also { selected.put("tag", it) }
         val hosts = JSONObject()
         val names = linkedSetOf<String>()
         val addresses = linkedSetOf<String>()
@@ -116,20 +116,9 @@ internal object AndroidTunnelDnsPolicy {
         }
         val routing = objectValue(config, "routing") ?: JSONObject()
         canonicalize(routing, "rules", "domainStrategy", "balancers")
-        objects(routing, "balancers").forEach { balancer ->
-            canonicalize(balancer, "tag")
-            require(optionalString(balancer, "tag") !in reservedTags) { "Routing balancer collides with a reserved DNS tag" }
-        }
         val userRules = objects(routing, "rules")
         userRules.forEach { rule ->
             canonicalize(rule, "ip", "inboundTag", "outboundTag", "balancerTag")
-            require(optionalString(rule, "outboundTag") !in reservedTags && optionalString(rule, "balancerTag") !in reservedTags) {
-                "Routing rule references a reserved DNS tag"
-            }
-            val inboundTags = rule.optJSONArray("inboundTag")
-            if (inboundTags != null) for (i in 0 until inboundTags.length()) {
-                require(inboundTags.optString(i) !in reservedTags) { "Routing rule references a reserved DNS tag" }
-            }
             val ips = rule.optJSONArray("ip")
             if (ips != null) for (i in 0 until ips.length()) {
                 val entry = ips.optString(i)
@@ -139,13 +128,13 @@ internal object AndroidTunnelDnsPolicy {
             }
         }
         val serviceRules = JSONArray()
-            .put(JSONObject().put("type", "field").put("inboundTag", JSONArray().put(UPSTREAM_TAG)).put("outboundTag", selectedTag))
+            .put(JSONObject().put("type", "field").put("inboundTag", JSONArray().put(upstreamTag)).put("outboundTag", selectedTag))
             .put(JSONObject().put("type", "field").put("ip", JSONArray().put("$VIRTUAL_SERVER/32"))
-                .put("port", "53").put("network", "tcp,udp").put("outboundTag", RELAY_TAG))
+                .put("port", "53").put("network", "tcp,udp").put("outboundTag", relayTag))
         userRules.forEach(serviceRules::put)
         routing.put("rules", serviceRules)
         config.put("routing", routing)
-        val relay = JSONObject().put("tag", RELAY_TAG).put("protocol", "dns")
+        val relay = JSONObject().put("tag", relayTag).put("protocol", "dns")
             .put("settings", JSONObject().put("rewriteNetwork", "tcp").put("rewriteAddress", "1.1.1.1")
                 // The VPN service blocks IPv6. Raw DNS relay bypasses the
                 // internal queryStrategy, so answer AAAA with NOERROR/NODATA.
@@ -156,7 +145,7 @@ internal object AndroidTunnelDnsPolicy {
         config.put("outbounds", JSONArray(outbounds).put(relay))
         // Explicit proxy policy owns system DNS. No local/+local/OS fallback is retained.
         config.put("dns", JSONObject().put("hosts", hosts).put("servers", JSONArray().put("tcp://1.1.1.1"))
-            .put("tag", UPSTREAM_TAG).put("queryStrategy", "UseIP").put("disableFallback", true))
+            .put("tag", upstreamTag).put("queryStrategy", "UseIP").put("disableFallback", true))
         return Prepared(config.toString(), listOf(VIRTUAL_SERVER), names, addresses)
     }
 

@@ -24,7 +24,8 @@ public enum TunnelIPv6Policy {
         // address pools are incompatible with this literal-IP block policy.
         guard !config.keys.contains(where: { XrayJSONField.matches($0, "fakeDns") }) else { return false }
         var outbounds = config["outbounds"] as? [[String: Any]] ?? []
-        guard !outbounds.contains(where: { ($0["tag"] as? String) == blockTag }) else { return false }
+        var serviceTags = XrayServiceTags(configuration: config)
+        let blockTag = serviceTags.next(Self.blockTag)
         outbounds.append(["tag": blockTag, "protocol": "blackhole"])
         config["outbounds"] = outbounds
         var routing = config["routing"] as? [String: Any] ?? [:]

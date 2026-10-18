@@ -54,7 +54,7 @@ int main() {
   auto extra = source;
   extra["inbounds"].push_back({{"tag", "socks-direct"}, {"protocol", "socks"}, {"listen", "127.0.0.1"}, {"port", 10820}, {"settings", {{"auth", "noauth"}}}});
   extra["inbounds"].push_back({{"tag", "custom-http"}, {"protocol", "http"}, {"listen", "127.0.0.1"}, {"port", "10807-10810"}, {"settings", {{"accounts", Json::array({{{"user", "app"}, {"pass", "app-secret"}}})}}}});
-  extra["routing"]["rules"].insert(extra["routing"]["rules"].begin(), {{"inboundTag", Json::array({"socks-direct"})}, {"outboundTag", "direct"}});
+  extra["routing"]["rules"].insert(extra["routing"]["rules"].begin(), Json{{"inboundTag", Json::array({"socks-direct"})}, {"outboundTag", "direct"}});
   auto multiple = prepare(extra); Require(multiple.has_value(), "full multi-listener profile rejected");
   auto multi = Parse(*multiple);
   Require(Port(multi["inbounds"][0]) == 10811, "private adapter collided with user port range");
@@ -68,6 +68,16 @@ int main() {
   auto bad = source; bad["outbounds"][0]["tag"] = kDnsRelay;
   auto reserved = prepare(bad); Require(reserved.has_value(), "caller DNS tag rejected");
   Require(Parse(*reserved)["outbounds"][2]["tag"] == std::string(kDnsRelay) + "-1", "DNS relay overwrote caller tag");
+  auto service_references = source;
+  service_references["api"] = {{"tag", kManagedInbound}};
+  service_references["reverse"] = {{"portals", Json::array({{{"tag", kIpv6Block}}})}};
+  service_references["routing"]["rules"].insert(service_references["routing"]["rules"].begin(),
+      Json{{"type", "field"}, {"inboundTag", Json::array({std::string(kManagedInbound) + "-1"})}, {"outboundTag", kDnsRelay}});
+  auto isolated = prepare(service_references); Require(isolated.has_value(), "service references rejected");
+  auto protected_references = Parse(*isolated);
+  Require(protected_references["inbounds"][0]["tag"] == std::string(kManagedInbound) + "-2", "adapter inherited user reference/API tag");
+  Require(protected_references["routing"]["rules"][0]["outboundTag"] == std::string(kIpv6Block) + "-1", "IPv6 service inherited reverse tag");
+  Require(protected_references["routing"]["rules"][2]["outboundTag"] == std::string(kDnsRelay) + "-1", "DNS service inherited user reference");
   bad = source; bad["outbounds"][0]["settings"]["vnext"][0]["address"] = "2001:db8::1"; Require(!prepare(bad), "unsupported IPv6 endpoint accepted");
   bad = source; bad["outbounds"][0]["streamSettings"]["sockopt"] = {{"addressPortStrategy", "srv"}}; Require(!prepare(bad), "system SRV resolver accepted");
   auto aliases = source;

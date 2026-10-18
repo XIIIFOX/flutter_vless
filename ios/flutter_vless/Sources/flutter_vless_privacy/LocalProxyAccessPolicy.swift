@@ -137,12 +137,8 @@ public enum LocalProxyAccessPolicy {
                                        credentials: LocalProxyCredentials) throws {
         guard (1...65535).contains(port) else { throw LocalProxyAccessError.malformedConfiguration }
         try normalizeLocalFields(&config)
-        let entries = (config["inbounds"] as? [[String: Any]] ?? []) + (config["outbounds"] as? [[String: Any]] ?? [])
-        let tags = Set(entries.compactMap { $0["tag"] as? String })
-        let prefix = "flutter-vless-delay"
-        var tag = prefix
-        var suffix = 0
-        while tags.contains(tag) { suffix += 1; tag = "\(prefix)-\(suffix)" }
+        var tags = XrayServiceTags(configuration: config)
+        let tag = tags.next("flutter-vless-delay")
         config["inbounds"] = [["tag": tag, "listen": "127.0.0.1", "port": port, "protocol": "http",
             "settings": ["accounts": [["user": credentials.username, "pass": credentials.password]]]]]
     }
@@ -162,11 +158,8 @@ public enum LocalProxyAccessPolicy {
         try normalizeLocalFields(&config)
         let imported = config["inbounds"] as? [[String: Any]] ?? []
         let port = try privatePort(inbounds: imported)
-        let allEntries = imported + (config["outbounds"] as? [[String: Any]] ?? [])
-        let tags = Set(allEntries.compactMap { $0["tag"] as? String })
-        var tag = managedTagPrefix
-        var suffix = 0
-        while tags.contains(tag) { suffix += 1; tag = "\(managedTagPrefix)-\(suffix)" }
+        var tags = XrayServiceTags(configuration: config)
+        let tag = tags.next(managedTagPrefix)
         let managed: [String: Any] = [
             "tag": tag, "listen": "127.0.0.1", "port": port, "protocol": "socks",
             "settings": ["auth": "password", "accounts": [["user": credentials.username, "pass": credentials.password]],

@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import flutter_vless_privacy
 
 /// Packet-tunnel DNS must reach the selected proxy even when it only carries TCP.
 /// Bootstrap resolution runs before NetworkExtension installs any routes. Keep
@@ -16,6 +17,7 @@ public enum TunnelDNSPolicy {
 
     static func apply(
         to config: inout [String: Any],
+        managedInboundTag: String,
         resolveIPv4: (String) -> String?
     ) -> [String]? {
         guard var outbounds = config["outbounds"] as? [[String: Any]],
@@ -25,9 +27,11 @@ public enum TunnelDNSPolicy {
                   endpointProtocols.contains(($0["protocol"] as? String ?? "").lowercased())
               }) else { return nil }
         let tags = outbounds.compactMap { $0["tag"] as? String }
-        let inboundTags = (config["inbounds"] as? [[String: Any]] ?? []).compactMap { $0["tag"] as? String }
-        guard Set(tags).count == tags.count,
-              Set(tags + inboundTags).isDisjoint(with: [relayTag, upstreamTag, proxyTag]) else { return nil }
+        guard Set(tags).count == tags.count else { return nil }
+        var serviceTags = XrayServiceTags(configuration: config)
+        let relayTag = serviceTags.next(Self.relayTag)
+        let upstreamTag = serviceTags.next(Self.upstreamTag)
+        let proxyTag = serviceTags.next(Self.proxyTag)
         if (outbounds[primary]["tag"] as? String ?? "").isEmpty {
             outbounds[primary]["tag"] = proxyTag
         }
@@ -91,7 +95,7 @@ public enum TunnelDNSPolicy {
         var rules = routing["rules"] as? [[String: Any]] ?? []
         rules.insert(contentsOf: [
             ["type": "field", "inboundTag": [upstreamTag], "outboundTag": selectedTag],
-            ["type": "field", "ip": [virtualServer + "/32"], "port": "53",
+            ["type": "field", "inboundTag": [managedInboundTag], "ip": [virtualServer + "/32"], "port": "53",
              "network": "tcp,udp", "outboundTag": relayTag]
         ], at: 0)
         routing["rules"] = rules

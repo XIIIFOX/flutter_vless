@@ -29,7 +29,9 @@ final class TunnelIPv6PolicyTests: XCTestCase {
         XCTAssertEqual(rules.last! as NSDictionary, direct as NSDictionary)
         let inbound = try XCTUnwrap((config["inbounds"] as? [[String: Any]])?.first)
         XCTAssertEqual((inbound["sniffing"] as? [String: Any])?["routeOnly"] as? Bool, true)
-        XCTAssertFalse(TunnelIPv6Policy.apply(to: &config), "A conflicting block tag must fail preparation")
+        XCTAssertTrue(TunnelIPv6Policy.apply(to: &config), "An imported tag must be isolated")
+        let second = try XCTUnwrap((config["routing"] as? [String: Any])?["rules"] as? [[String: Any]])
+        XCTAssertEqual(second[0]["outboundTag"] as? String, TunnelIPv6Policy.blockTag + "-1")
     }
 
     func testFakeDNSCannotReplaceIPv6TargetDuringSniffing() {

@@ -254,9 +254,14 @@ as an address, while freezing and reparsing it could otherwise expand it again.
 ASCII normalized aliases are qualified; Apple/Windows explicitly reject a
 non-ASCII alias when the exact key is absent. Wider Unicode alias parity remains
 separate work. Runtime acceptance additionally requires a real environment-based
-Unix SOCKS listener alongside the existing HTTP/DNS/API checks; the new remote
+Unix HTTP listener alongside the existing HTTP/DNS/API checks; the new remote
 result is pending. Other address fields and environment references are outside
 this increment.
+
+Core decode/build acceptance alone does not establish a listening protocol:
+the pinned SOCKS handler advertises TCP, while its HTTP handler advertises TCP
+and Unix. The pure address corpus checks Core's port semantics; the runtime
+Unix fixture deliberately uses HTTP.
 
 Port grammar progress (2026-10-18): the Dart, Kotlin, Swift and C++ paths now
 share a 20-case corpus checked against the pinned Core decoder/build path.

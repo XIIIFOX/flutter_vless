@@ -517,7 +517,7 @@ func testNativeDNSPreservation(t *testing.T) {
 			}
 		}
 		queries, failures := origin.snapshot()
-		if !reflect.DeepEqual(queries, []string{"HTTP remote-marker.invalid"}) || len(failures) != 0 {
+		if !reflect.DeepEqual(queries, []string{"HTTP remote-marker.invalid", "HTTP remote-marker.invalid"}) || len(failures) != 0 {
 			t.Error("physical endpoint/Host proof failed", queries, failures)
 		}
 	})
@@ -546,9 +546,9 @@ func testNativeDNSPreservation(t *testing.T) {
 	apiAddress := apiReservation.Addr().String()
 	source := map[string]any{
 		"log": map[string]any{"loglevel": "none"},
-		"inbounds": []any{map[string]any{"tag": "caller-unix", "protocol": "socks",
+		"inbounds": []any{map[string]any{"tag": "caller-unix", "protocol": "http",
 			"listen": "env:FLUTTER_VLESS_FIXTURE_LISTEN", "port": "0-65535",
-			"settings": map[string]any{"auth": "noauth", "udp": false}}},
+			"settings": map[string]any{}}},
 		"api": map[string]any{"tag": "caller-api", "listen": apiAddress,
 			"services": []string{"StatsService", "HandlerService", "LoggerService"}},
 		"stats": map[string]any{},
@@ -604,18 +604,42 @@ func testNativeDNSPreservation(t *testing.T) {
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)
 	}
+	api, err := grpc.NewClient(apiAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer api.Close()
+	queryCallerCounters := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		statistics, err := statscommand.NewStatsServiceClient(api).QueryStats(ctx, &statscommand.QueryStatsRequest{})
+		if err != nil {
+			t.Fatal("caller StatsService is unavailable after native preparation", err)
+		}
+		if len(statistics.Stat) != 0 {
+			t.Fatal("caller disabled counters were enabled by adaptation")
+		}
+	}
+	// A successful RPC also establishes that Commander's asynchronous Serve
+	// goroutine entered before a later fixture failure can close the engine.
+	queryCallerCounters()
 	unixClient, err := net.DialTimeout("unix", unixAddress, time.Second)
 	if err != nil {
 		t.Fatal("caller environment Unix listener did not bind", err)
 	}
 	defer unixClient.Close()
-	_ = unixClient.SetDeadline(time.Now().Add(time.Second))
-	if _, err := unixClient.Write([]byte{5, 1, 0}); err != nil {
+	_ = unixClient.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.WriteString(unixClient, "GET http://remote-marker.invalid/proof HTTP/1.1\r\nHost: remote-marker.invalid\r\nConnection: close\r\n\r\n"); err != nil {
 		t.Fatal(err)
 	}
-	var greeting [2]byte
-	if _, err := io.ReadFull(unixClient, greeting[:]); err != nil || greeting != [2]byte{5, 0} {
-		t.Fatal("caller environment Unix listener lost its SOCKS authentication", err)
+	unixResponse, err := http.ReadResponse(bufio.NewReader(unixClient), nil)
+	if err != nil {
+		t.Fatal("caller environment Unix HTTP listener is unavailable", err)
+	}
+	unixBody, err := io.ReadAll(io.LimitReader(unixResponse.Body, 1024))
+	_ = unixResponse.Body.Close()
+	if err != nil || string(unixBody) != "PINNED_ENDPOINT_OK" {
+		t.Fatal("caller environment Unix HTTP listener did not carry routed bytes", err)
 	}
 	if err := unixClient.Close(); err != nil {
 		t.Fatal(err)
@@ -657,20 +681,7 @@ func testNativeDNSPreservation(t *testing.T) {
 	if err != nil || string(body) != "PINNED_ENDPOINT_OK" {
 		t.Fatal("proxy HTTP marker missing", err)
 	}
-	api, err := grpc.NewClient(apiAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer api.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	statistics, err := statscommand.NewStatsServiceClient(api).QueryStats(ctx, &statscommand.QueryStatsRequest{})
-	if err != nil {
-		t.Fatal("caller StatsService is unavailable after native preparation", err)
-	}
-	if len(statistics.Stat) != 0 {
-		t.Fatal("caller disabled counters were enabled by adaptation")
-	}
+	queryCallerCounters()
 	completed = true
-	t.Log("PASS actual native DNS: preserved root hosts/servers/tags/per-domain policy, TCP+UDP VIP, numeric TCP+UDP upstream, named h2c static host, AAAA NODATA, MX REFUSED, isolated endpoint pin and HTTP bytes; caller API/StatsService works with disabled counters; environment Unix listener binds and keeps SOCKS authentication; no OS resolver")
+	t.Log("PASS actual native DNS: preserved root hosts/servers/tags/per-domain policy, TCP+UDP VIP, numeric TCP+UDP upstream, named h2c static host, AAAA NODATA, MX REFUSED, isolated endpoint pin and HTTP bytes; caller API/StatsService works with disabled counters; environment Unix HTTP listener carries routed bytes; no OS resolver")
 }

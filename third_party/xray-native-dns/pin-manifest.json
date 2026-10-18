@@ -10,7 +10,9 @@
     "app/dns/nameserver.go": "ed7a8438714e9e3a2f84e164aa5719e6ab948afe01a49ce71e8767b71ed2ee68",
     "app/dns/dns.go": "51675585d892f1dceeb0d2520303ac73ef0084e58af4414e52f86bf9b2bd5fef",
     "core/xray.go": "66edf1a9ed6b9683b4f668612e6c6e876830cffb07521517f03a21e630f7ef15",
-    "app/proxyman/outbound/outbound.go": "dea17216b8c93544f8136047c11a77ceb7c684ecf0837117131c50eb956f0eea"
+    "app/proxyman/outbound/outbound.go": "dea17216b8c93544f8136047c11a77ceb7c684ecf0837117131c50eb956f0eea",
+    "app/proxyman/inbound/inbound.go": "1bc6e0581f17379fb41e0f85aa6e29ac2f21ec87926dffcb3fb488cb64a19681",
+    "transport/internet/udp/dispatcher.go": "76bdf02b75c5c71c424bc177c4f6284d15b4b23c271b2b5653de0ced61b86dfe"
   },
   "module": "github.com/xtls/xray-core",
   "module_version": "v1.260327.1-0.20261017152356-92ccc939aaf4",

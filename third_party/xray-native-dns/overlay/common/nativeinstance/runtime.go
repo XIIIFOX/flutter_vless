@@ -11,7 +11,9 @@ import (
 	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/core"
 	featuredns "github.com/xtls/xray-core/features/dns"
+	featureinbound "github.com/xtls/xray-core/features/inbound"
 	"github.com/xtls/xray-core/features/outbound"
+	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/transport/internet"
 )
 
@@ -27,6 +29,16 @@ type runtimeCore interface {
 type coreFactory func(context.Context, *core.Config) (runtimeCore, error)
 
 type liveCore struct{ instance *core.Instance }
+type nativeInputCore interface {
+	nativeInputIdentity() any
+	nativeInputManager() featureinbound.Manager
+}
+
+func (c *liveCore) nativeInputIdentity() any { return c.instance }
+func (c *liveCore) nativeInputManager() featureinbound.Manager {
+	manager, _ := c.instance.GetFeature(featureinbound.ManagerType()).(featureinbound.Manager)
+	return manager
+}
 
 func (c *liveCore) seal(owner *internet.NativeDNSOwner) error {
 	manager, ok := c.instance.GetFeature(outbound.ManagerType()).(outbound.Manager)
@@ -74,6 +86,7 @@ type Runtime struct {
 	workers      sync.WaitGroup
 	slot         chan struct{}
 	timeout      time.Duration
+	input        *managedInput
 	bridge       *systemDNSBinding
 }
 
@@ -100,6 +113,9 @@ func (p *Prepared) start(ctx context.Context, factory coreFactory) (result *Runt
 	if p.policy.SystemDNSBridge != nil {
 		r.bridge = &systemDNSBinding{identity: configuration, owner: owner, virtual: p.policy.SystemDNSBridge.VirtualIPv4}
 	}
+	if p.policy.ManagedInput != nil {
+		r.input = newManagedInput(r, configuration, len(p.blueprint.Inbound))
+	}
 	// The callback revokes while construction may still be blocked. Cleanup waits
 	// for buildDone so a Core returned late is still closed exactly once.
 	context.AfterFunc(life, func() { r.beginClose() })
@@ -113,6 +129,9 @@ func (p *Prepared) start(ctx context.Context, factory coreFactory) (result *Runt
 		}
 	}()
 	scoped := featuredns.ContextWithNativeLocalResolver(internet.ContextWithNativeDNSOwner(life, owner), resolver)
+	if r.input != nil {
+		scoped = routing.ContextWithNativeInputFactory(scoped, r.input)
+	}
 	instance, err := factory(scoped, configuration)
 	r.mu.Lock()
 	r.core = instance
@@ -123,6 +142,12 @@ func (p *Prepared) start(ctx context.Context, factory coreFactory) (result *Runt
 	}
 	if instance.seal(owner) != nil || !r.current() {
 		return nil, ErrStart
+	}
+	if r.input != nil {
+		candidate, ok := instance.(nativeInputCore)
+		if !ok || r.input.seal(candidate.nativeInputIdentity(), candidate.nativeInputManager()) != nil || !r.current() {
+			return nil, ErrStart
+		}
 	}
 	if instance.bind(resolver) != nil || !r.current() {
 		return nil, ErrStart
@@ -156,6 +181,9 @@ func (r *Runtime) beginClose() {
 		go func() {
 			<-r.buildDone
 			failed := r.resolver.Close() != nil
+			if r.input != nil {
+				r.input.close()
+			}
 			r.mu.Lock()
 			instance := r.core
 			r.mu.Unlock()

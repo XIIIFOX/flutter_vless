@@ -3,6 +3,7 @@ package com.github.tfox.flutter_vless.xray.service
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.github.tfox.flutter_vless.xray.core.AuthenticatedSocksClient
+import com.github.tfox.flutter_vless.xray.core.BoundedCoreCommand
 import com.github.tfox.flutter_vless.xray.core.LocalProxyCredentials
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
@@ -18,10 +19,74 @@ import java.net.Socket
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
 class NativeLocalAuthorizationTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
+
+    @Test fun stalledActualStatsCommandIsTerminatedBeforeItsOwnDeadline() {
+        val worker = Executors.newSingleThreadExecutor()
+        val listener = ServerSocket(0, 1, InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)))
+        val stopping = AtomicBoolean()
+        val acceptedSocket = AtomicReference<Socket?>()
+        var process: Process? = null
+        var primary: Throwable? = null
+        try {
+            val accepted = worker.submit<Socket> {
+                listener.accept().also {
+                    acceptedSocket.set(it)
+                    if (stopping.get()) it.close()
+                }
+            }
+            val command = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
+                "api", "statsquery", "--server=127.0.0.1:${listener.localPort}", "--timeout=10")
+                .redirectErrorStream(true).start()
+            process = command
+            accepted.get(3, TimeUnit.SECONDS).use { socket ->
+                assertTrue("Actual Core stats CLI must reach the stalled API", command.isAlive)
+                val started = System.nanoTime()
+                assertNull(BoundedCoreCommand.capture(command, timeoutMillis = 200))
+                assertFalse("Owned stats CLI survived capture cancellation", command.isAlive)
+                assertTrue("The ten-second Core timeout cannot stand in for bounded capture",
+                    System.nanoTime() - started < TimeUnit.SECONDS.toNanos(2))
+                socket.soTimeout = 1000
+                val bytes = ByteArray(4096)
+                var total = 0
+                while (true) {
+                    val count = socket.inputStream.read(bytes)
+                    if (count < 0) break
+                    total += count
+                    check(total <= 16384) { "Stalled API fixture exceeded its byte bound" }
+                }
+            }
+        } catch (error: Throwable) { primary = error; throw error }
+        finally {
+            var cleanup: Throwable? = null
+            fun attempt(action: () -> Unit) {
+                try { action() } catch (error: Throwable) {
+                    if (primary != null) primary!!.addSuppressed(error)
+                    else if (cleanup == null) cleanup = error else cleanup!!.addSuppressed(error)
+                }
+            }
+            stopping.set(true)
+            attempt { listener.close() }
+            attempt {
+                process?.let {
+                    if (it.isAlive) it.destroyForcibly()
+                    assertTrue("Owned stats CLI did not reap", it.waitFor(2, TimeUnit.SECONDS))
+                }
+            }
+            attempt { process?.outputStream?.close() }
+            attempt { process?.inputStream?.close() }
+            attempt { process?.errorStream?.close() }
+            attempt { worker.shutdownNow() }
+            attempt { assertTrue("Owned API fixture worker did not exit", worker.awaitTermination(2, TimeUnit.SECONDS)) }
+            attempt { acceptedSocket.getAndSet(null)?.close() }
+            cleanup?.let { throw it }
+        }
+    }
 
     @Test fun isolatedDelayTransfersBytesWhileCallerApiAndMetricsPortsRemainOccupied() {
         val loopback = InetAddress.getByName("127.0.0.1")
@@ -182,6 +247,15 @@ class NativeLocalAuthorizationTest {
                     assertFalse(text.contains(secret.password)); assertFalse(text.contains("Proxy-Authorization"))
                 } finally { worker.shutdownNow() }
             }
+            val statistics = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
+                "api", "statsquery", "--server=127.0.0.1:${config.LOCAL_API_PORT}", "--pattern", "outbound>>>proxy>>>")
+                .redirectErrorStream(true).start()
+            val captured = BoundedCoreCommand.capture(statistics)
+            assertNotNull("Actual stats output must be captured on Android", captured)
+            val counters = JSONObject(requireNotNull(captured).toString(Charsets.UTF_8)).getJSONArray("stat")
+            assertTrue("Authenticated HTTP transfer must produce real traffic counters",
+                (0 until counters.length()).any { counters.getJSONObject(it).optLong("value") > 0 })
+            assertFalse(statistics.isAlive)
         } finally {
             process.destroy(); process.waitFor(3, TimeUnit.SECONDS); file.delete()
         }

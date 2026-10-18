@@ -476,7 +476,7 @@ instrument native-preview-broker "$CLASS_PREFIX.NativePreviewBrokerDeviceTest" 4
 if [ -n "$NATIVE_DNS_PREVIEW" ]; then
   instrument native-preview-runtime "$CLASS_PREFIX.NativePreviewRuntimeDeviceTest" 2 0 -e previewSha256 "$NATIVE_DNS_PREVIEW_SHA"
 fi
-instrument native-authorization "$CLASS_PREFIX.NativeLocalAuthorizationTest" 3 0
+instrument native-authorization "$CLASS_PREFIX.NativeLocalAuthorizationTest" 4 0
 instrument session-recovery "$CLASS_PREFIX.SessionRecoveryDeviceTest" 3 0
 instrument session-replacement "$CLASS_PREFIX.SessionReplacementDeviceTest" 1 0
 instrument port-compatibility "$CLASS_PREFIX.PortCompatibilityDeviceTest" 1 0

@@ -290,6 +290,25 @@ The optional Android fixture additionally requires real brokered Core HTTP/DNS
 traffic and causal stalled-query cleanup. It still does not qualify system DNS,
 proxy bootstrap, IPv6 or arbitrary imported graphs; item 1 remains pending.
 
+The subsequent [c291989 CI run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39159134068)
+passes all eight jobs: all four actual DNS fixtures on three desktop systems,
+Apple native runtime checks, 99 Android unit tests, 35 native emulator tests and
+three example tests. The four broker and two composed-runtime device cases pass;
+the observed stalled DNS socket closes about 0.53 seconds after entering its
+stalled stage, before its four-second natural bound. This qualifies that preview
+composition only. It still creates no system DNS consumer or production host
+integration, and does not complete advanced DNS compatibility.
+
+The following unpublished managed-input consumer appends an authenticated input
+only to a private compiled clone and authenticates construction/connection
+identity before consuming DNS. It checks each UDP packet rather than trusting a
+cached ray's first destination, and owns complete source/managed SOCKS callbacks
+through shutdown. Its four-connection/four-ray/one-lookup limits are explicit
+preview restrictions. Ordinary managed UDP remains unavailable; neither the CLI
+nor platform TUN hosts enable this component. Its additional actual-Core fixture
+needs its own CI result. See the [consumer boundary](../third_party/xray-native-dns/README.md#managed-input-consumer-preview).
+Items 1 and 2 remain pending.
+
 Session teardown progress: Android now closes callback admission before its final
 cleanup, so late network/worker events cannot enqueue into a stopped executor.
 [Android CI on 9a6b595](https://github.com/XIIIFOX/flutter_vless/actions/runs/39147429528)

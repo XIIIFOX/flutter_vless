@@ -224,7 +224,8 @@ def main():
         report['module_sum'] = metadata['Sum']
         report['apply_sha256'] = hashlib.sha256((CAPABILITY / 'apply.py').read_bytes()).hexdigest()
         report['patch_modules_sha256'] = {
-            'local_resolver_patch.py': hashlib.sha256((CAPABILITY / 'local_resolver_patch.py').read_bytes()).hexdigest()}
+            path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(CAPABILITY.glob('*_patch.py'))}
         report['overlay_sha256'] = {
             str(path.relative_to(CAPABILITY / 'overlay')).replace(os.sep, '/'):
             hashlib.sha256(path.read_bytes()).hexdigest()
@@ -240,10 +241,13 @@ def main():
         fixture = core / 'native_dns_context_runtime'
         shutil.copytree(ROOT / 'tool/fixtures/native_dns_context_runtime', fixture)
         for name, package in [('internet', 'transport/internet'),
+                              ('internetudp', 'transport/internet/udp'),
+                              ('inbound', 'app/proxyman/inbound'),
                               ('outbound', 'app/proxyman/outbound'),
                               ('freedom', 'proxy/freedom'),
                               ('nativeconfig', 'common/nativeconfig'),
                               ('dnsfeature', 'features/dns'),
+                              ('routingfeature', 'features/routing'),
                               ('localdns', 'features/dns/localdns'),
                               ('appdns', 'app/dns'),
                               ('core', 'core'),
@@ -267,8 +271,8 @@ def main():
         report['native_launcher_sha256'] = hashlib.sha256(launcher.read_bytes()).hexdigest()
         if arguments.run_runtime:
             runtime_environment = dict(environment, FLUTTER_VLESS_NATIVE_PREVIEW=str(launcher.resolve()))
-            selected_tests = ['TestAcceptanceNativeDNSRuntime', 'TestAcceptanceNativeDNSLocalDefault', 'TestAcceptanceNativeDNSLauncher', 'TestAcceptanceNativeDNSSystemBridge']
-            checked('runtime-loopback', [str(binary), '-test.run', '^TestAcceptanceNativeDNS(Runtime|LocalDefault|Launcher|SystemBridge)$', '-test.v', '-test.timeout=75s'],
+            selected_tests = ['TestAcceptanceNativeDNSRuntime', 'TestAcceptanceNativeDNSLocalDefault', 'TestAcceptanceNativeDNSLauncher', 'TestAcceptanceNativeDNSSystemBridge', 'TestAcceptanceNativeDNSManagedInput']
+            checked('runtime-loopback', [str(binary), '-test.run', '^TestAcceptanceNativeDNS(Runtime|LocalDefault|Launcher|SystemBridge|ManagedInput)$', '-test.v', '-test.timeout=75s'],
                     cwd=core, environment=runtime_environment, seconds=90, results=results)
             for name in selected_tests:
                 require_selected_test_pass((EVIDENCE / 'runtime-loopback.log').read_text(encoding='utf-8'), name)
@@ -290,8 +294,9 @@ def main():
         report['source_snapshot_unchanged'] = True
         if hashlib.sha256((CAPABILITY / 'apply.py').read_bytes()).hexdigest() != report['apply_sha256']:
             raise RuntimeError('Overlay application source changed during verification')
-        if any(hashlib.sha256((CAPABILITY / path).read_bytes()).hexdigest() != digest
-               for path, digest in report['patch_modules_sha256'].items()):
+        current_patch_modules = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                                 for path in sorted(CAPABILITY.glob('*_patch.py'))}
+        if current_patch_modules != report['patch_modules_sha256']:
             raise RuntimeError('Overlay patch module changed during verification')
         if any(hashlib.sha256((core / path).read_bytes()).hexdigest() != digest
                for path, digest in report['patched_source_sha256'].items()):

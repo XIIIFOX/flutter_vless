@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Enforce the command deadline while stdout remains available. Add actual stalled-child, output-cap and failed-command checks, with a separate process-only build for CrossOver validation.
 * Reserve caller metrics ports for private VPN/statistics allocation and proxy-only statistics, retaining bounded OS availability checks and caller metrics settings.
 * Check original/generated documents with bundled Core before session replacement, remove private check files, and retain working state/quick profiles after rejection. Add live invalid-replacement workflow coverage.
 * Align private port reservations with Core lists/ranges, environment aliases and whitespace; keep Unix-only port lists out of TCP allocation.

@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Add an unpublished construction-bound managed DNS input with per-packet UDP destination checks and owned connection/pipe shutdown. Keep its restricted graph and connection limits separate from production platform integration.
+* Bound Android statistics command output before reading it, including stalled APIs, cancellation and process cleanup. Check Windows command deadlines during continuous output; add process-only regression coverage.
 * Add an unpublished per-runtime DNS wire-message primitive that retains caller hosts, per-domain servers and DNS tags. Add actual-Core and optional Android composition fixtures; system VPN DNS integration remains pending.
 * Wake blocked Android development-broker accepts/reads during shutdown and reject unexpected test socket errors. Verify preview provenance and package it only in explicitly enabled instrumentation builds.
 * Add an unpublished retained native DNS entry with per-instance ownership, private capability/preparation/status messages and bounded Stop/parent-EOF cleanup. Add a separate Android build path and development-only captured-network FD broker; keep official runtimes and ordinary launchers unchanged while qualification continues.

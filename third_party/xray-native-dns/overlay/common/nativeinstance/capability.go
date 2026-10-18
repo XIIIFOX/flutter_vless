@@ -33,6 +33,7 @@ type Policy struct {
 	DefaultOutboundIndex int
 	LookupTimeout        time.Duration
 	SystemDNSBridge      *SystemDNSBridgePolicy
+	ManagedInput         *ManagedInputPolicy
 }
 
 // Errors are a closed vocabulary; source credentials/decoder/Core errors are
@@ -70,6 +71,14 @@ func checkedPolicy(policy Policy) (Policy, error) {
 			return Policy{}, ErrPolicy
 		}
 		policy.SystemDNSBridge = &bridge
+	}
+	if policy.ManagedInput != nil {
+		input := *policy.ManagedInput
+		if policy.SystemDNSBridge == nil || !input.Listen.IsValid() || input.Listen.Addr() != netip.MustParseAddr("127.0.0.1") || input.Listen.Port() == 0 ||
+			len(input.Username) < 1 || len(input.Username) > 255 || len(input.Password) < 1 || len(input.Password) > 255 {
+			return Policy{}, ErrPolicy
+		}
+		policy.ManagedInput = &input
 	}
 	return policy, nil
 }

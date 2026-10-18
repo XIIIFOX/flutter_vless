@@ -15,6 +15,7 @@ import (
 	"github.com/xtls/xray-core/app/router"
 	"github.com/xtls/xray-core/common/nativeconfig"
 	xnet "github.com/xtls/xray-core/common/net"
+	commonserial "github.com/xtls/xray-core/common/serial"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf"
 	"github.com/xtls/xray-core/infra/conf/serial"
@@ -234,6 +235,12 @@ func admitCompiled(c *core.Config, p Policy) error {
 		if !admitInbound(item) {
 			return ErrUnsupported
 		}
+		if p.ManagedInput != nil {
+			receiver, _ := item.ReceiverSettings.GetInstance()
+			if receiver.(*proxyman.ReceiverConfig).PortList.Range[0].From == uint32(p.ManagedInput.Listen.Port()) {
+				return ErrPolicy
+			}
+		}
 	}
 	return nil
 }
@@ -312,6 +319,13 @@ func (p *Prepared) clone() (*core.Config, []internet.NativeDNSBinding, error) {
 		return nil, nil, ErrDocument
 	}
 	c := proto.Clone(p.blueprint).(*core.Config)
+	if p.policy.ManagedInput != nil {
+		policy := p.policy.ManagedInput
+		c.Inbound = append(c.Inbound, &core.InboundHandlerConfig{
+			ReceiverSettings: commonserial.ToTypedMessage(&proxyman.ReceiverConfig{Listen: xnet.NewIPOrDomain(xnet.IPAddress([]byte{127, 0, 0, 1})), PortList: &xnet.PortList{Range: []*xnet.PortRange{{From: uint32(policy.Listen.Port()), To: uint32(policy.Listen.Port())}}}}),
+			ProxySettings:    commonserial.ToTypedMessage(&socks.ServerConfig{AuthType: socks.AuthType_PASSWORD, Accounts: map[string]string{policy.Username: policy.Password}, UdpEnabled: true}),
+		})
+	}
 	bindings := make([]internet.NativeDNSBinding, 0, len(c.Outbound))
 	for index, item := range c.Outbound {
 		plan, err := nativeconfig.AnalyzeOutbound(index, item)

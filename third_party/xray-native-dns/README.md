@@ -201,8 +201,48 @@ Close behavior still apply to the context-free Core lookup API.
 owners, original hosts/default/per-domain DNS, tag-dependent routing, UDP/TCP
 message framing, non-A refusal without resolver traffic, NXDOMAIN and owner
 shutdown. Local checks compile this fourth fixture without running Core; runtime
-qualification belongs to CI. A managed input/outbound consumer with exact config
-pointer provenance is still required before any system traffic can use it.
+qualification belongs to CI. The construction-bound consumer below is a separate
+component; no native host currently connects system traffic to it.
+
+## Managed input consumer preview
+
+The next optional `ManagedInputPolicy` appends one authenticated IPv4 loopback
+SOCKS input to each private start clone. It preserves the compiled source-input,
+outbound, DNS and routing prefixes and adds no tags, rules or outbounds. A
+construction-only factory binds the clone's exact input pointer, actual Core and
+actual handler; the inbound manager seals membership before Start. Matching an
+empty/duplicate tag, equal protobuf, source input or request metadata cannot grant
+the private capability. A per-connection capsule also requires the exact current
+control socket. This mode is not exposed by the CLI or any ordinary native host.
+
+The managed dispatcher consumes TCP DNS framing and checks every UDP payload's
+destination before invoking the wire engine. Core caches a UDP ray across changing
+packet destinations, so classifying only the first packet would be incorrect.
+Only the trusted virtual IPv4 address on port 53 is consumed; ordinary TCP still
+delegates to caller routing. Ordinary managed UDP is explicitly dropped and
+mux/XUDP is unavailable. This remains a restricted graph, not general UDP or
+system DNS support. Framing owns and releases partial/pipelined pooled buffers;
+the guarded Core UDP refusal path also releases an unadmitted payload.
+UDP Associate uses Core's standard temporary loopback listener after TCP password
+authentication, with its existing expected-peer IP/optional-port checks. This
+does not add per-datagram authentication or OS UID isolation; that native-host
+boundary must be qualified before exposing a system-facing UDP consumer.
+
+The preview admits at most four total accepted source/managed SOCKS callbacks,
+four managed rays and one outstanding root-lookup worker. Admission happens
+before creating a managed worker. Close revokes all admission, closes owned
+control sockets and pipes, and waits for complete SOCKS callbacks, including
+temporary UDP-listener cleanup. Imported sockets are tracked for shutdown but
+receive no private DNS capsule. The connection limit is an explicit preview
+restriction; this does not qualify unrestricted caller concurrency.
+
+Pure tests cover identity forgery, packet destination changes, admission limits,
+buffer ownership and causal cancellation. The fifth actual-Core fixture,
+`TestAcceptanceNativeDNSManagedInput`, additionally requires authenticated TCP and
+SOCKS UDP DNS, caller-root answers, original-input denial, ordinary TCP routing,
+stalled-query shutdown, idle imported-socket EOF, UDP-port rebind and independent
+runtime survival. Local validation compiles it without starting Core; actual
+runtime and mobile TUN/native-host qualification remain separate gates.
 
 ## Optional Android instrumentation composition
 

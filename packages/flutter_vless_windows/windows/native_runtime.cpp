@@ -164,6 +164,8 @@ bool Command(const fs::path& exe, const std::vector<std::wstring>& arguments,
   auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout);
   HANDLE read = reinterpret_cast<HANDLE>(process->hStdOutRead);
   for (;;) {
+    // Continuous output must not postpone the same command deadline.
+    if (std::chrono::steady_clock::now() >= deadline) return false;
     DWORD available = 0;
     if (PeekNamedPipe(read, nullptr, 0, nullptr, &available, nullptr) && available) {
       char buffer[4096]; DWORD count = 0;
@@ -176,7 +178,6 @@ bool Command(const fs::path& exe, const std::vector<std::wstring>& arguments,
       DWORD code = 1; GetExitCodeProcess(reinterpret_cast<HANDLE>(process->hProcess), &code);
       return code == 0;
     }
-    if (std::chrono::steady_clock::now() >= deadline) return false;
     Sleep(10);
   }
 }

@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Bound statistics collection while reading, rather than waiting for EOF before applying its timeout. Cap captured bytes, reject unsuccessful commands and terminate/reap owned children on timeout or cancellation.
 * Shut down development-broker sockets before closing them so blocked accepts/reads drain. Strengthen rejection checks and add an opt-in, provenance-verified instrumentation APK for actual composed Core DNS/HTTP and bounded parent-EOF cleanup; ordinary runtime packaging is unchanged.
 * Add an opt-in development socket broker requiring both VPN protection and binding of transferred descriptors to a captured physical Network. Revoke new acknowledgements on generation closure and refuse legacy/system DNS commands; ordinary VPN startup retains its existing path.
 * Reserve standalone delay SOCKS/API listener ports together until Core launch; bound allocation retries, retain cleanup on interruption and add private stage/exit diagnostics without native output.

@@ -8,9 +8,23 @@
 #include <iostream>
 #include <fstream>
 #include <set>
+#include <chrono>
 
 int main(int argc, char** argv) {
   using namespace flutter_vless::native;
+  if (argc > 1 && std::string(argv[1]) == "capture-hang") {
+    std::cout << "READY:" << GetCurrentProcessId() << std::flush;
+    Sleep(60000);
+    return 0;
+  }
+  if (argc > 1 && std::string(argv[1]) == "capture-overflow") {
+    std::cout << std::string(129 * 1024, 'x') << std::flush;
+    return 0;
+  }
+  if (argc > 1 && std::string(argv[1]) == "capture-failure") {
+    std::cout << "unsuccessful-command";
+    return 7;
+  }
   if (argc > 1 && std::string(argv[1]) == "child") {
     wchar_t system_directory[MAX_PATH + 1]{}, child_path[32768]{};
     const bool trusted_path = GetSystemDirectoryW(system_directory, MAX_PATH)
@@ -38,6 +52,29 @@ int main(int argc, char** argv) {
   SetEnvironmentVariableW(L"SSLKEYLOGFILE", nullptr);
   SetEnvironmentVariableW(L"xray.location.asset", nullptr);
   SetEnvironmentVariableW(L"XRAY_BROWSER_DIALER", nullptr);
+
+  const auto capture_start = std::chrono::steady_clock::now();
+  assert(!Command(self, {L"capture-hang"}, output, 1000));
+  const auto capture_elapsed = std::chrono::steady_clock::now() - capture_start;
+  assert(output.rfind("READY:", 0) == 0); // Child actually entered the stalled stage.
+  assert(capture_elapsed < std::chrono::seconds(5)); // Cannot be the 60-second natural exit.
+  const DWORD stalled_pid = static_cast<DWORD>(std::stoul(output.substr(6)));
+  if (HANDLE stalled = OpenProcess(SYNCHRONIZE, FALSE, stalled_pid)) {
+    assert(WaitForSingleObject(stalled, 1000) == WAIT_OBJECT_0);
+    CloseHandle(stalled);
+  } else assert(GetLastError() == ERROR_INVALID_PARAMETER);
+  assert(!Command(self, {L"capture-overflow"}, output, 10000));
+  assert(output.size() <= 128 * 1024);
+  assert(!Command(self, {L"capture-failure"}, output, 10000));
+  std::cout << "PASS bounded command output, actual stalled-child termination and nonzero exit\n";
+  // CrossOver can run this process-only subset without Core, listeners, WFP,
+  // TUN, administrator changes, system proxy or any VPN configuration.
+#ifdef FLUTTER_VLESS_PROCESS_CAPTURE_ONLY
+  std::cout << "PASS process-only build boundary\n";
+  return 0;
+#else
+  if (argc == 2 && std::string(argv[1]) == "--process-capture-only") return 0;
+#endif
 
   std::filesystem::path first, second;
   assert(WritePrivateConfig("private-config-canary", first));

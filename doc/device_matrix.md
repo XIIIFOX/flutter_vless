@@ -90,6 +90,15 @@ disabled there. CrossOver observations do not establish Windows Wintun/WFP,
 system routing, DNS protection or recovery behavior; verify those separately in
 the real Windows runtime workflow or on a Windows device.
 
+A subsequent process-only native regression ran successfully in CrossOver on
+2026-10-18. The `FLUTTER_VLESS_PROCESS_CAPTURE_ONLY` build returns before private
+file, listener, Core, ACL or packet-path tests, regardless of command arguments.
+Actual self-children prove bounded stalled-command termination, the output cap
+and nonzero-exit refusal. The task's existing test bottle was shut down afterward;
+no CrossOver/Wine/test processes remained and the Mac VPN stayed connected.
+This checks process management only; it does not add example UI or VPN acceptance.
+The ignored evidence is `build/ios-live-2026-10-18/bounded-command-windows/`.
+
 ## iPhone acceptance, 2026-10-18 (1.1.7 / Core 26.10.17)
 
 Physical iPhone 13 Pro Max over USB, iOS 27.0.1, signed Profile build of the

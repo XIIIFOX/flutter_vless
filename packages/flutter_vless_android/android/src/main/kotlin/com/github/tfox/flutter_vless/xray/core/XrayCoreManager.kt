@@ -296,10 +296,11 @@ object XrayCoreManager {
         if (xrayProcess?.isAlive != true) return longArrayOf(0, 0, 0, 0)
         return try {
             val process = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
-                "api", "statsquery", "--server=127.0.0.1:${AppConfigs.V2RAY_CONFIG?.LOCAL_API_PORT ?: 10809}", "--pattern", "outbound>>>proxy>>>").start()
+                "api", "statsquery", "--server=127.0.0.1:${AppConfigs.V2RAY_CONFIG?.LOCAL_API_PORT ?: 10809}", "--pattern", "outbound>>>proxy>>>")
+                .redirectErrorStream(true).start()
             // Stats are bounded and parsed locally; never included in diagnostics.
-            val output = process.inputStream.bufferedReader().readText().take(64 * 1024)
-            if (!process.waitFor(2, TimeUnit.SECONDS)) { process.destroyForcibly(); return longArrayOf(0, 0, 0, 0) }
+            val output = BoundedCoreCommand.capture(process)?.toString(Charsets.UTF_8)
+                ?: return longArrayOf(0, 0, 0, 0)
             val stats = JSONObject(output).optJSONArray("stat") ?: JSONArray()
             var up = 0L; var down = 0L
             for (i in 0 until stats.length()) {

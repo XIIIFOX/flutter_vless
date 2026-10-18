@@ -45,7 +45,8 @@ def owned(command, *, cwd, environment, seconds, capture=False):
 
 
 def input_hashes():
-    paths = [CAPABILITY / name for name in ('apply.py', 'local_resolver_patch.py', 'pin-manifest.json')]
+    paths = [CAPABILITY / name for name in ('apply.py', 'pin-manifest.json')]
+    paths += sorted(CAPABILITY.glob('*_patch.py'))
     paths += sorted((CAPABILITY / 'overlay').rglob('*.go'))
     paths += [path for path in sorted(PROTECTION.glob('*')) if path.is_file()]
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}

@@ -266,6 +266,12 @@ func LookupForIP(domain string, strategy DomainStrategy, localAddr net.Address) 
     spec.loader.exec_module(module)
     module.apply(root, replace)
 
+    input_patch = here / 'managed_input_patch.py'
+    spec = importlib.util.spec_from_file_location('native_dns_input_patch', input_patch)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.apply(root, replace)
+
     for source in sorted((here / 'overlay').rglob('*.go')):
         target = root / source.relative_to(here / 'overlay')
         if target.exists():

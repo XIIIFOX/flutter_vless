@@ -17,7 +17,8 @@ existing destinations, module-cache locations and symlink source trees. It never
 patches an existing shared checkout or Go module-cache source. The acceptance
 runner also verifies the exact module version and module checksum before copying.
 The manifest records `published: false`; normal Apple/Android/Windows builders
-have no dependency on this directory yet.
+have no dependency on this directory yet. A separate development-only Android
+builder is described below; it does not replace the packaged executable.
 
 ## Implemented boundary
 
@@ -87,7 +88,8 @@ rewrites, custom TCP headers, socket options and other transports are refused.
 That intentionally narrow qualification does not establish a protected default
 through a proxy, DoH/DoT, or every freedom option. Native socket protection still
 belongs to the host; numeric loopback acceptance cannot establish underlay bypass.
-No native builder installs this delegate yet.
+Ordinary plugin launchers do not install this delegate; the separate development
+entry below owns its first restricted native integration.
 
 Each lookup creates its own cache-disabled Core TCP name server and query-scoped
 dispatcher. Even a cache-disabled upstream server otherwise coalesces same-name
@@ -115,7 +117,69 @@ construction failure closes partial features and unadded handlers; legacy
 construction behavior is unchanged. The native caller closes its owner/delegate
 separately before Core.
 
-## Required native integration contract (not implemented)
+## Retained native entry preview
+
+`common/nativeinstance` now supplies a private retained preparation and runtime
+API. `PrepareJSON` normalizes private log/security sinks, decodes/builds once,
+and admits an explicitly limited graph before any Core construction. Source
+bytes and their digest remain separate from the normalized compiled blueprint.
+Every `Prepared.Start` clones that blueprint, binds the clone's exact outbound
+pointers to a fresh owner/delegate, seals the manager and starts its own Core.
+There is no process-global Core singleton or legacy bridge fallback.
+
+This first development graph permits authenticated TCP SOCKS on IPv4 loopback,
+simple caller freedom with explicit UseIPv4, a separate plain freedom selected
+by source index for numeric TCP DNS, and blackhole. Root hosts and implicit,
+empty, explicit localhost or numeric IPv4 TCP servers remain caller-owned.
+Unsupported transports, endpoints, independent apps, scripts, socket options,
+server callbacks and DNS capabilities are refused in this preview. Environment
+mutation is refused before Core's configuration builder applies it. These gates
+are qualification boundaries for the unpublished entry, not changes to ordinary
+plugin configuration support or completion of the full compatibility plan.
+
+`Runtime.Close` revokes admission synchronously, then owns delegate/Core cleanup
+and outstanding lookup work. Its wait is bounded and reports incomplete cleanup;
+a timed-out wait does not relinquish cleanup ownership. `LookupIPv4` uses the
+caller root DNS, including hosts/per-domain rules. That pinned root API is
+context-free: cancellation bounds the caller's wait, while at most one tracked
+worker remains outstanding until the actual lookup ends. It does not promise
+immediate cancellation of a remote caller DNS request. There is no Stats API in
+this preview.
+
+`main/nativepreview` is a separate executable with `capabilities`, `check` and
+`run` commands. Check/run require the exact `native-instance-preview-1`
+capability, an absolute private `--config` path, numeric IPv4 `--resolver`,
+`--egress-index` and an optional bounded `--timeout-ms` (at most 4000). It emits
+closed JSON statuses and an exact source digest, never decoder/Core text. Both
+preparation and runtime trap unintended system resolver attempts. `run` accepts
+one private stdin `stop\n` command; parent EOF also stops and drains the runtime.
+The `started` status establishes native startup only. Every response explicitly
+reports `host_qualified: false`; it is not tunnel/packet-path readiness.
+
+The separate Android command requires a development-only S/Q FD broker. A
+legacy H/P broker cannot acknowledge that capability. The strict contract
+requires protect and binding to the captured physical Network, permanently
+revocable admission, and no D/system-resolver delegation. Generation revocation
+does not retroactively close an already acknowledged Core socket: its native
+host must also close the owner/runtime on network replacement or Stop. Ordinary
+Android launchers continue to use the existing legacy path.
+
+`python3 tool/build_android_dns_preview.py --ndk NDK --output NEW_DIRECTORY`
+composes both pinned overlays in a disposable copy and builds only
+`libxray_dns_preview.so` for the selected ABI (`--arch`, default x86_64). It never
+installs, runs, publishes or replaces an official artifact. The build report
+records source and output hashes, verifies unchanged inputs/cache, and keeps
+production/host qualification false. Go 1.27+ can be selected with `--go`.
+
+The CI-only launcher fixture checks the actual child entry, separate resolver
+observations, authenticated HTTP bytes, static-host precedence, rejected
+candidate preparation, bounded stalled-socket Stop, independent runtime
+survival, parent EOF, output EOF and process reaping. Compiling that fixture
+locally is distinct from a remote runtime PASS. Native mobile host wiring and
+the OS-facing DNS bridge remain pending; none of this establishes browser DNS
+compatibility, DoH/DoT/FakeDNS or full dual stack.
+
+## Required native host integration contract (partial)
 
 1. Freeze a candidate's compiled config once, then enumerate **that exact
    config's** `Outbound[i]` pointers. Construct one binding for every outbound,
@@ -126,7 +190,7 @@ separately before Core.
    for the allowlisted VLESS/VMess/Trojan/SOCKS/HTTP/Shadowsocks roles. Its native
    metadata carries source index, expected type/tag, network/host/port and IPs.
    It is privileged side data, never an accepted caller JSON policy key. The companion common/nativeconfig preparation helper is unpublished too;
-   no native bridge or privileged transport implementation is enabled. Additional proxy protocols remain unsupported.
+   ordinary platform bridges do not enable it. Additional proxy protocols remain unsupported.
 3. Prepare endpoint IPs through a protected pre-tunnel bootstrap resolver. The
    imported `dns.hosts` must remain unchanged and retain its Core semantics;
    endpoint static-host/alias precedence must be explicitly defined and tested
@@ -143,8 +207,8 @@ separately before Core.
    resolver/socket seams are implemented; they must not silently fall back to
    physical DNS. `common/nativeconfig.AnalyzeRootDNS` classifies these compiled
    requirements and `ValidateRootDNSCapabilities` rejects an unqualified set.
-   That pure strict gate is now present, but no native builder calls it. No
-   production host installs the scoped localhost implementation, and no QUIC
+   The development entry gates its restricted graph; ordinary plugin launchers
+   do not enable it. No production host installs the scoped localhost implementation, and no QUIC
    capability is qualified. Preserving arbitrary root
    DNS is **not safe to enable** from this patch alone.
 5. Construct using owner context + `core.NewWithContext`. `NewHandler` now uses
@@ -221,6 +285,8 @@ until mKCP UDP endpoint roles/lifetime are qualified. There is no unreachable
 From the repository root, `python3 tool/test_native_dns_context_runtime.py`
 creates `build/native_dns_context_runtime/Core`, compiles/runs only the pure
 policy tests, and **compiles without running** the actual Core acceptance test.
+The retained native API and launcher policy tests are pure too; the separate
+launcher and actual fixture are compiled without starting Core locally.
 Go 1.27+ is required; `--go /path/to/go` selects an existing toolchain. It never
 changes the selected toolchain. A rerun refuses to overwrite the earlier Core
 copy; use a fresh CI checkout or explicitly preserve/remove the owned build

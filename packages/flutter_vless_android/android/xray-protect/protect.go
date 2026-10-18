@@ -55,11 +55,27 @@ func protect(path string, command byte, raw syscall.RawConn) error {
 // Configure is called once before core startup. The existing resolver object is
 // mutated because Xray common/net retains a pointer alias to DefaultResolver.
 func Configure(path string) error {
+	return configure(path, false)
+}
+
+// ConfigureNumericOnly is for the separate, unpublished scoped native entry.
+// A legacy H/P broker cannot grant this mode. The S/Q protocol requires native
+// protect+captured-network binding; resolver delegation via D is unavailable.
+// Controllers are process-global, so a host uses a fresh dedicated process.
+func ConfigureNumericOnly(path string) error {
+	return configure(path, true)
+}
+
+func configure(path string, strict bool) error {
+	command, handshake := byte('P'), byte('H')
+	if strict {
+		command, handshake = 'Q', 'S'
+	}
 	control := func(network, address string, raw syscall.RawConn) error {
 		if network == "unix" || network == "unixpacket" {
 			return nil
 		}
-		return protect(path, 'P', raw)
+		return protect(path, command, raw)
 	}
 	if err := internet.RegisterDialerController(control); err != nil {
 		return err
@@ -68,7 +84,11 @@ func Configure(path string) error {
 		return err
 	}
 	net.DefaultResolver.PreferGo = true
-	net.DefaultResolver.Dial = resolverDial(path)
+	if strict {
+		net.DefaultResolver.Dial = refuseResolverDial
+	} else {
+		net.DefaultResolver.Dial = resolverDial(path)
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = (&net.Dialer{Control: control, Timeout: 16 * time.Second}).DialContext
 	http.DefaultTransport = transport
@@ -78,7 +98,7 @@ func Configure(path string) error {
 		return err
 	}
 	defer syscall.Close(fd)
-	conn, err := exchange(path, 'H', fd)
+	conn, err := exchange(path, handshake, fd)
 	if err != nil {
 		return err
 	}
@@ -88,6 +108,10 @@ func Configure(path string) error {
 		return errors.New("socket protection capability check failed")
 	}
 	return nil
+}
+
+func refuseResolverDial(context.Context, string, string) (net.Conn, error) {
+	return nil, errors.New("system resolver unavailable in scoped native runtime")
 }
 
 func resolverDial(path string) func(context.Context, string, string) (net.Conn, error) {

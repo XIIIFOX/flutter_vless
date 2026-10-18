@@ -247,7 +247,9 @@ def main():
                               ('localdns', 'features/dns/localdns'),
                               ('appdns', 'app/dns'),
                               ('core', 'core'),
-                              ('nativednsruntime', 'common/nativednsruntime')]:
+                              ('nativednsruntime', 'common/nativednsruntime'),
+                              ('nativeinstance', 'common/nativeinstance'),
+                              ('nativepreview', 'main/nativepreview')]:
             binary = EVIDENCE / (name + ('.test.exe' if os.name == 'nt' else '.test'))
             checked(name + '-compile', [arguments.go, 'test', '-c', '-o', str(binary), './' + package],
                     cwd=core, environment=environment, seconds=300, results=results)
@@ -259,13 +261,19 @@ def main():
         binary = EVIDENCE / ('acceptance.test.exe' if os.name == 'nt' else 'acceptance.test')
         checked('runtime-compile', [arguments.go, 'test', '-c', '-o', str(binary), './native_dns_context_runtime'],
                 cwd=core, environment=environment, seconds=300, results=results)
+        launcher = EVIDENCE / ('native-preview.exe' if os.name == 'nt' else 'native-preview')
+        checked('native-launcher-build', [arguments.go, 'build', '-trimpath', '-buildvcs=false', '-o', str(launcher), './main/nativepreview'],
+                cwd=core, environment=environment, seconds=300, results=results)
+        report['native_launcher_sha256'] = hashlib.sha256(launcher.read_bytes()).hexdigest()
         if arguments.run_runtime:
-            checked('runtime-loopback', [str(binary), '-test.run', '^TestAcceptanceNativeDNS(Runtime|LocalDefault)$', '-test.v', '-test.timeout=75s'],
-                    cwd=core, environment=environment, seconds=90, results=results)
-            for name in ['TestAcceptanceNativeDNSRuntime', 'TestAcceptanceNativeDNSLocalDefault']:
+            runtime_environment = dict(environment, FLUTTER_VLESS_NATIVE_PREVIEW=str(launcher.resolve()))
+            selected_tests = ['TestAcceptanceNativeDNSRuntime', 'TestAcceptanceNativeDNSLocalDefault', 'TestAcceptanceNativeDNSLauncher']
+            checked('runtime-loopback', [str(binary), '-test.run', '^TestAcceptanceNativeDNS(Runtime|LocalDefault|Launcher)$', '-test.v', '-test.timeout=75s'],
+                    cwd=core, environment=runtime_environment, seconds=90, results=results)
+            for name in selected_tests:
                 require_selected_test_pass((EVIDENCE / 'runtime-loopback.log').read_text(encoding='utf-8'), name)
             results[-1]['selected_test_pass'] = True
-            results[-1]['selected_tests'] = ['TestAcceptanceNativeDNSRuntime', 'TestAcceptanceNativeDNSLocalDefault']
+            results[-1]['selected_tests'] = selected_tests
         report['module_cache_targeted_sources_unchanged'] = all(
             hashlib.sha256((source / path).read_bytes()).hexdigest() == expected
             for path, expected in MANIFEST['upstream_sha256'].items())

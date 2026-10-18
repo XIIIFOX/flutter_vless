@@ -438,6 +438,7 @@ PY
 
 instrument native-options "$CLASS_PREFIX.NativeOptionsDeviceTest" 2 0
 instrument native-quick-tile "$CLASS_PREFIX.NativeQuickTileDeviceTest" 3 0
+instrument native-preview-broker "$CLASS_PREFIX.NativePreviewBrokerDeviceTest" 4 0
 instrument native-authorization "$CLASS_PREFIX.NativeLocalAuthorizationTest" 3 0
 instrument session-recovery "$CLASS_PREFIX.SessionRecoveryDeviceTest" 3 0
 instrument session-replacement "$CLASS_PREFIX.SessionReplacementDeviceTest" 1 0

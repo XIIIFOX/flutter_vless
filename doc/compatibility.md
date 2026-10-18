@@ -226,7 +226,7 @@ classifies routed/local resolver modes, implicit system-DNS defaults, resolver
 names, FakeDNS, system-family queries and scripts into explicit native
 requirements. A transport scope alone cannot authorize these separate paths.
 
-This source capability is not enabled in native builders or published artifacts.
+This source capability is not enabled in production native builders or published artifacts.
 Its pure preparation checks do not establish protected socket behavior or full
 DNS support. A separate CI-only real-Core fixture checks concurrent owners,
 caller hosts, per-domain tagged TCP DNS, rejected candidates and owner shutdown;
@@ -249,6 +249,22 @@ The [b315a65 CI run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39150
 passed both actual DNS acceptance fixtures on Windows, macOS and Ubuntu with
 unchanged compiled roots, complete output capture and matching source hashes.
 This remains a preview qualification; production builders do not enable it.
+
+The retained native-entry increment now keeps an immutable decoded/build
+blueprint and creates a fresh scoped owner/delegate for each start. A separate
+unpublished executable accepts explicit native policy, traps system resolution
+during both preparation and runtime, and owns bounded Stop/parent-EOF cleanup.
+Its first graph admits authenticated loopback SOCKS and simple IPv4 freedom
+with a numeric TCP default resolver; unsupported capabilities remain rejected
+in that development path. Ordinary plugin builders and official artifacts do
+not enable it. The Android S/Q development broker additionally requires actual
+descriptor protection and binding to a captured physical Network, with
+permanent generation revocation. Neither an acknowledged descriptor nor a
+`started` child status establishes VPN readiness, DNS bridge support, network
+handover or retroactive closure of already acknowledged sockets. The host must
+also close its runtime on network replacement. See the
+[native-entry contract](../third_party/xray-native-dns/README.md#retained-native-entry-preview)
+for the exact qualification boundary and runtime checks. Item 1 remains pending.
 Protected proxy egress, OS DNS semantics, DoH/DoT, FakeDNS and physical native
 socket protection remain separate work; this does not complete item 1.
 

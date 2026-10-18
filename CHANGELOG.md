@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Add an unpublished retained native DNS entry with per-instance ownership, private capability/preparation/status messages and bounded Stop/parent-EOF cleanup. Add a separate Android build path and development-only captured-network FD broker; keep official runtimes and ordinary launchers unchanged while qualification continues.
 * Reject stale Apple startup/recovery callbacks after Stop; preserve the latest sleep/wake decision and rearm health retries after sleep. Add causal provider tests and physical iPhone profile/routing/early-Stop regression coverage.
 * Reserve both Android standalone-delay listener ports during preparation with bounded allocation retries. Keep probe cleanup effective under cancellation and report only bounded, content-free stage/exit diagnostics.
 * Reserve caller metrics listener ports alongside API ports on Android, iOS, macOS and Windows, including Core's field aliases and Go's optional leading plus on decimal ports. Avoid metrics collisions with Windows proxy-only statistics; add shared allocation and real service/traffic regressions.

@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Add an opt-in development socket broker requiring both VPN protection and binding of transferred descriptors to a captured physical Network. Revoke new acknowledgements on generation closure and refuse legacy/system DNS commands; ordinary VPN startup retains its existing path.
 * Reserve standalone delay SOCKS/API listener ports together until Core launch; bound allocation retries, retain cleanup on interruption and add private stage/exit diagnostics without native output.
 * Reserve caller API and metrics listener ports before allocating the private VPN adapter; preserve caller metrics settings and cover their listener alongside authenticated traffic. Full caller API passthrough remains separate work.
 * Reserve imported port lists/ranges and environment references when allocating private listeners; preserve Unix listeners and their authentication. Add real TUN/imported-listener HTTP regression coverage.

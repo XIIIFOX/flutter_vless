@@ -6,12 +6,14 @@ import android.net.LocalSocket
 import android.net.NetworkCapabilities
 import android.net.Network
 import android.net.VpnService
+import android.content.pm.ApplicationInfo
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.system.Os
 import java.io.Closeable
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.FileDescriptor
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -21,10 +23,14 @@ import java.util.concurrent.SynchronousQueue
 import java.util.Locale
 
 /** Receives actual SCM_RIGHTS descriptors, never process-local FD numbers. */
-class XraySocketProtector(
+class XraySocketProtector private constructor(
     private val service: VpnService,
-    private val protectFd: (Int) -> Boolean = service::protect
+    private val protectFd: (Int) -> Boolean,
+    private val numericPreview: NumericPreview?
 ) : Closeable {
+    constructor(service: VpnService, protectFd: (Int) -> Boolean = service::protect) : this(service, protectFd, null)
+
+    private class NumericPreview(val policy: NativePreviewSocketPolicy, val bind: (FileDescriptor) -> Unit)
     val socketName = "flutter-vless-protect-${UUID.randomUUID()}"
     private val server = LocalServerSocket(socketName)
     private val verified = CountDownLatch(1)
@@ -38,7 +44,8 @@ class XraySocketProtector(
         start()
     }
 
-    fun awaitVerified(): Boolean = verified.await(3, TimeUnit.SECONDS) && !closed
+    fun awaitVerified(): Boolean = verified.await(3, TimeUnit.SECONDS) && !closed &&
+        (numericPreview?.policy?.isCurrent() ?: true)
 
     /** Set before launching Xray: null for config mode, emptySet() for pinned proxy DNS. */
     fun allowPhysicalDnsForEndpointNames(names: Set<String>?) {
@@ -67,6 +74,23 @@ class XraySocketProtector(
                 val descriptors = socket.ancillaryFileDescriptors.orEmpty()
                 try {
                     if (closed) return@use
+                    numericPreview?.let { mode ->
+                        if (!NativePreviewSocketPolicy.accepts(command, descriptors.size)) {
+                            socket.outputStream.write(0)
+                            return@use
+                        }
+                        val acknowledged = ParcelFileDescriptor.dup(descriptors.single()).use { owned ->
+                            mode.policy.protectBindAndAcknowledge(command, descriptors.size,
+                                protect = { protectFd(owned.fd) },
+                                bind = { mode.bind(owned.fileDescriptor) },
+                                acknowledge = {
+                                    socket.outputStream.write(1)
+                                    if (command == 'S'.code) verified.countDown()
+                                })
+                        }
+                        if (!acknowledged) socket.outputStream.write(0)
+                        return@use
+                    }
                     when (command) {
                         'H'.code, 'P'.code -> {
                             val accepted = descriptors.size == 1 && ParcelFileDescriptor.dup(descriptors[0]).use {
@@ -107,6 +131,30 @@ class XraySocketProtector(
     private fun physicalNetwork(): Network? = physicalNetwork(service)
 
     companion object {
+        /**
+         * Explicit development-only numeric DNS preview capability. The caller
+         * supplies an already selected physical Network and a fresh generation.
+         * This neither selects the default network nor completes handover.
+         * Revocation denies new ACKs; the host must also close the native owner/
+         * runtime to close Core sockets that were acknowledged before revocation.
+         */
+        internal fun forNumericPreview(service: VpnService, capturedNetwork: Network,
+            generation: NativePreviewNetworkGeneration,
+            protectFd: (Int) -> Boolean = service::protect): XraySocketProtector {
+            require(service.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+                "Scoped native socket protection is development-only"
+            }
+            val manager = service.getSystemService(ConnectivityManager::class.java)
+            val policy = NativePreviewSocketPolicy(generation) {
+                val capabilities = manager.getNetworkCapabilities(capturedNetwork)
+                capabilities != null && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            }
+            require(policy.isCurrent()) { "Captured physical network is unavailable" }
+            return try { XraySocketProtector(service, protectFd, NumericPreview(policy, capturedNetwork::bindSocket)) }
+            catch (error: Exception) { policy.revoke(); throw error }
+        }
+
         /** Bootstrap only: never use a process/global resolver that could re-enter the VPN. */
         fun resolveBootstrapHostname(service: VpnService, hostname: String): List<String> {
             val network = physicalNetwork(service) ?: throw IllegalStateException("No physical network for proxy endpoint bootstrap")
@@ -128,10 +176,23 @@ class XraySocketProtector(
     }
 
     override fun close() {
+        numericPreview?.policy?.revoke()
         closed = true
         runCatching { server.close() }
         synchronized(clients) { clients.forEach { runCatching { it.close() } } }
         requests.shutdownNow()
         worker.interrupt()
+    }
+
+    /** Bounded lifecycle observation for the opt-in launcher/tests, never a new admission. */
+    internal fun awaitClosed(timeoutMillis: Long = 3000): Boolean {
+        require(timeoutMillis in 0..3000)
+        if (!closed) return false
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+        val remaining = (deadline - System.nanoTime()).coerceAtLeast(0)
+        if (!requests.awaitTermination(remaining, TimeUnit.NANOSECONDS)) return false
+        val waitMillis = TimeUnit.NANOSECONDS.toMillis((deadline - System.nanoTime()).coerceAtLeast(0))
+        if (waitMillis > 0) worker.join(waitMillis)
+        return !worker.isAlive && clients.isEmpty()
     }
 }

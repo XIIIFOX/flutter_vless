@@ -62,3 +62,5 @@ shutil.copyfile(overlay / "protect.go", destination / "protect.go")
 shutil.copyfile(overlay / "main_android.go", root / "main/flutter_vless_protect_android.go")
 if (overlay / "protect_test.go").exists():
     shutil.copyfile(overlay / "protect_test.go", destination / "protect_test.go")
+if (overlay / "numeric_only_test.go").exists():
+    shutil.copyfile(overlay / "numeric_only_test.go", destination / "numeric_only_test.go")

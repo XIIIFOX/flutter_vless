@@ -5,9 +5,9 @@ Pinned Core commit: `92ccc939aaf4f8965f369cf0b142e005aeaa11d5`.
 This internal capability is not a public upstream API or full advanced DNS support.
 
 `overlay/` contains a strict instance/handler transport-bootstrap implementation
-and its pure tests. Existing source changes are restricted to
-`transport/internet/dialer.go`, `app/proxyman/outbound/handler.go`, and
-`proxy/freedom/freedom.go`; other overlay files are new. Shared Go preparation
+and its pure tests. Existing source changes are SHA-guarded in the manifest;
+the additive local/default resolver patch also covers `features/dns/localdns`,
+`app/dns` and Core construction. Other overlay files are new. Shared Go preparation
 in `common/nativeconfig` sits above protocol/transport packages and must not be
 imported back into `transport/internet` or `app/dns`.
 
@@ -61,6 +61,60 @@ be verified for IPv4/IPv6 and bootstrap traffic. Process-global alternative
 dialers/controllers remain shared Core state and are not made instance-owned
 by this overlay.
 
+## Scoped local/default DNS preview
+
+An additive `features/dns.NativeLocalResolver` context seam now captures the
+local/default lookup implementation without changing caller DNS protobufs.
+Missing DNS, empty servers and explicit `localhost` can use an explicitly
+installed native delegate. A present nil/not-ready/closed delegate never falls
+back to the OS. Construction performs no query. The implicit scoped client has
+a four-second bound; the legacy zero-timeout/local implementation is unchanged.
+Current query cancellation and missing construction/Core context are combined
+without retaining the first request. Close cancels active local-client contexts;
+late answers are discarded and mutable IP slices copied.
+
+`common/nativednsruntime.TCPResolver` is the first managed default policy, not a
+replacement enabled by production native hosts. It accepts a numeric TCP
+resolver and an exact compiled source index whose complete runtime handler has
+registered with the owner. After Core construction the concrete manager validates
+all expected handler pointers and seals Add/Remove under its admission lock.
+Existing empty tags are supported without renaming or changing ordinary routes.
+Hot handler mutation is explicitly unavailable for that sealed instance;
+read-only API/statistics services do not require that mutation capability.
+
+This first policy accepts only a simple freedom TCP egress: mux/chaining,
+rewrites, custom TCP headers, socket options and other transports are refused.
+That intentionally narrow qualification does not establish a protected default
+through a proxy, DoH/DoT, or every freedom option. Native socket protection still
+belongs to the host; numeric loopback acceptance cannot establish underlay bypass.
+No native builder installs this delegate yet.
+
+Each lookup creates its own cache-disabled Core TCP name server and query-scoped
+dispatcher. Even a cache-disabled upstream server otherwise coalesces same-name
+requests using the first caller's context. Core's `toDnsContext` also detaches
+cancellation. The per-query wrapper restores only that lookup's fixed operation
+after detachment; no cached transport captures a first request. Native exchanges
+allocate fresh bounded pipes and routing metadata without caller user/session
+objects. Owner cancellation, the query deadline and delegate Close interrupt
+owned pipes; Close also waits a bounded interval for handlers and reports a
+drain failure. The enclosing host must still close Core.
+
+The source-only tests exercise actual Core TCP DNS framing over in-memory pipes,
+including independent same-name cancellation, plus source identity and late
+result refusal. The CI-only local-default fixture adds missing/empty/explicit
+localhost roots, independent owners, A/AAAA, mixed per-domain TCP, unchanged
+hosts/aliases/rcode/family filtering, real HTTP bytes and a stalled TCP exchange
+canceled by owner Close alone. Local runs compile that fixture without executing
+Core; actual remote runtime results must be checked separately.
+
+The source document is preserved, while an explicit native resolver policy
+changes how `localhost` is resolved. This is not OS search-domain, mDNS,
+split-DNS or `/etc/hosts` passthrough. Root `UseSystem` route probes, `+local`,
+FakeDNS, ECH and other independent resolver paths remain gated. Opt-in Core
+construction failure closes partial features and unadded handlers; legacy
+construction behavior is unchanged. The native caller closes its owner/delegate
+separately before Core.
+
 ## Required native integration contract (not implemented)
 
 1. Freeze a candidate's compiled config once, then enumerate **that exact
@@ -89,17 +143,19 @@ by this overlay.
    resolver/socket seams are implemented; they must not silently fall back to
    physical DNS. `common/nativeconfig.AnalyzeRootDNS` classifies these compiled
    requirements and `ValidateRootDNSCapabilities` rejects an unqualified set.
-   That pure strict gate is now present, but no native builder calls it and no
-   protected localhost/QUIC capability is qualified. Preserving arbitrary root
+   That pure strict gate is now present, but no native builder calls it. No
+   production host installs the scoped localhost implementation, and no QUIC
+   capability is qualified. Preserving arbitrary root
    DNS is **not safe to enable** from this patch alone.
 5. Construct using owner context + `core.NewWithContext`. `NewHandler` now uses
    checked feature assertions and returns a fixed scope error on missing
    features. `core/xray.go:218-251` installs essential defaults before initial
    inbound/outbound creation, so the initial feature capture ordering is
-   supported by source and does not require `RequireFeatures` just for that
-   order. The actual full factory path still needs a CI smoke test; embedded or
-   alternate construction and hot-handler lifecycles remain separate gates.
-   Pure tests construct Handler values directly and cannot establish those.
+   supported by source and the remote-TCP CI factory fixture. It does not require
+   `RequireFeatures` just for that order. Alternate construction and native host
+   integration remain separate gates; pure Handler tests alone cannot establish
+   them. For a scoped default delegate, seal runtime identities and bind the
+   delegate after the same Core.New succeeds and before Core.Start.
 6. On failure or shutdown call `owner.Close()` **before** `Core.Close()`; never
    reuse an owner/config pointer set for another instance. Profile-delay Core,
    VPN provider and macOS proxy instances each need distinct owner/generation
@@ -149,7 +205,7 @@ The name parser intentionally accepts only IP literals or ASCII DNS labels.
 Underscore/IDNA and exact Core address acceptance parity are pending; it is not
 a general-purpose Xray name validator. Each original literal must match its pin.
 
-Pending paths include localhost/`+local`/FakeDNS, root DoQ, ECH/HTTPS records,
+Pending paths include production protected localhost, `+local`/FakeDNS, root DoQ, ECH/HTTPS records,
 QUIC/H3, gRPC, mKCP, XHTTP/SplitHTTP download/cached clients, Hysteria/MASQUE/FinalMask,
 Realm, WireGuard, Browser Dialer, imported Reality server-side callbacks,
 SRV/TXT address-port strategies, alias/static-host bootstrap semantics, endpoint
@@ -190,8 +246,8 @@ group survives. Windows uses the still-owned leader's process tree and never
 guesses descendant PIDs after that leader exits. An unexpected inherited pipe
 is a failure (status 125), not accepted runtime evidence; the runtime fixture
 deliberately has no external worker processes.
-Exit zero alone cannot pass runtime acceptance: the runner requires the exact
-selected test's `--- PASS` event, so an empty/mismatched test filter fails.
+Exit zero alone cannot pass runtime acceptance: the runner requires both exact
+selected tests' `--- PASS` events, so an empty/mismatched test filter fails.
 
 The CI-only `tool/fixtures/native_dns_context_runtime/runtime_test.go` constructs
 real Core instances with exact compiled-config-pointer bindings. Two simultaneous
@@ -213,9 +269,12 @@ feature ordering only**, without name resolution; its implicit local-DNS plan
 must still fail the remote-TCP capability gate. It does not qualify protected
 usable default DNS.
 The fixtures never relay or resolve any requested hostname outside loopback.
+`TestAcceptanceNativeDNSLocalDefault` covers the additive scoped default policy
+described above; the existing unscoped no-DNS factory case still does not grant
+permission to use legacy OS DNS.
 
-These are bounded remote-DNS acceptance cases. They do not validate DoH/DoT,
-localhost/+local, FakeDNS, ECH/QUIC/gRPC, native socket protection, routing/bypass
+These are bounded acceptance cases. They do not validate DoH/DoT,
+OS localhost/+local semantics, FakeDNS, ECH/QUIC/gRPC, native socket protection, routing/bypass
 interfaces or an arbitrary imported root DNS graph. Those remain gated above.
 Local compile and pure test evidence does not establish a successful runtime;
 only the actual CI result does.
@@ -234,13 +293,16 @@ The existing Android socket protection overlay is
 `transport/internet/system_listener.go`, `features/dns/localdns/client.go`,
 `transport/internet/reality/config.go`, `proxy/vless/inbound/inbound.go` and
 `proxy/trojan/server.go`, plus new controller/protection files. It checks existing
-system-dialer error propagation. This overlay changes different existing files:
-Handler/DialSystem/freedom lookup context. Compose them only in one disposable pinned Core copy:
+system-dialer error propagation. The local/default preview also changes
+`features/dns/localdns/client.go`, preserving its legacy protected dial block.
+Compose them only in one disposable pinned Core copy:
 apply this guarded source copy first, then the Android protection overlay to
 that copy, preserving both sets of SHA guards. Do not patch the shared module
 cache or select a different Core fork for Windows. The protection overlay does
 not supply instance owner metadata, root DNS gates or bootstrap resolution.
-Composition needs the same actual fixture plus Android-specific FD/UID tests
+The localdns legacy protected dial block remains byte-identical; structural
+composition and its pure localdns tests pass. Composition still needs the same
+actual fixture plus Android-specific FD/UID tests
 before shipping; no production composition is enabled here.
 
 Prefer one shared Go preparation/extractor against built Core proxy settings

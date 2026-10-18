@@ -63,6 +63,7 @@ type NativeDNSOwner struct {
 	bindings     map[any]nativeDNSBinding
 	instanceLock sync.Mutex
 	instanceKey  any
+	runtime      nativeDNSRuntime
 }
 
 // NewNativeDNSOwner copies every map/slice. Native preparation and all policy
@@ -182,11 +183,12 @@ func BindNativeDNSHandler(ctx context.Context, instance, key any, tag, proxyType
 	if owner.instanceKey != instance {
 		return nil, ErrNativeDNSIdentity
 	}
-	return &NativeDNSHandler{owner: owner, binding: binding, client: client, manager: manager}, nil
+	return &NativeDNSHandler{owner: owner, key: key, binding: binding, client: client, manager: manager}, nil
 }
 
 type NativeDNSHandler struct {
 	owner   *NativeDNSOwner
+	key     any
 	binding nativeDNSBinding
 	client  dns.Client
 	manager outbound.Manager

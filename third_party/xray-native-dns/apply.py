@@ -3,6 +3,7 @@
 from pathlib import Path
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -154,6 +155,25 @@ func LookupForIP(domain string, strategy DomainStrategy, localAddr net.Address) 
 	if nativeErr != nil { common.Interrupt(link.Reader); common.Interrupt(link.Writer); return }
 	ctx = owned''')
     replace('app/proxyman/outbound/handler.go',
+        '\th.proxy = proxyHandler\n\treturn h, nil',
+        '''\th.proxy = proxyHandler
+	if err := h.nativeDNS.RegisterRuntime(h); err != nil { _ = h.Close(); return nil, err }
+	return h, nil''')
+    replace('app/proxyman/outbound/outbound.go',
+        'type Manager struct {\n\taccess',
+        'type Manager struct {\n\tnativeDNSSealed bool\n\taccess')
+    for signature in [
+        'func (m *Manager) AddHandler(ctx context.Context, handler outbound.Handler) error {',
+        'func (m *Manager) RemoveHandler(ctx context.Context, tag string) error {',
+    ]:
+        path = root / 'app/proxyman/outbound/outbound.go'
+        text = path.read_text()
+        start = text.index(signature)
+        guard = '\tm.access.Lock()\n\tdefer m.access.Unlock()'
+        position = text.index(guard, start) + len(guard)
+        text = text[:position] + '\n\tif m.nativeDNSSealed { return errors.New("native DNS runtime is sealed") }' + text[position:]
+        path.write_text(text)
+    replace('app/proxyman/outbound/handler.go',
         'internet.LookupForIP(ob.Target.Address.Domain(), strategy, nil)',
         'internet.LookupForIPContext(ctx, ob.Target.Address.Domain(), strategy, nil)')
     replace('app/proxyman/outbound/handler.go',
@@ -239,6 +259,12 @@ func LookupForIP(domain string, strategy DomainStrategy, localAddr net.Address) 
 						if err != nil || len(ips) == 0 { b.Release(); continue }
 						ip = net.IPAddress(ips[0])
 					}''')
+
+    local_patch = here / 'local_resolver_patch.py'
+    spec = importlib.util.spec_from_file_location('native_dns_local_resolver_patch', local_patch)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.apply(root, replace)
 
     for source in sorted((here / 'overlay').rglob('*.go')):
         target = root / source.relative_to(here / 'overlay')

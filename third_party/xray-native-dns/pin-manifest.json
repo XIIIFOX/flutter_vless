@@ -4,7 +4,13 @@
     "transport/internet/dialer.go": "ed2825ff30a2bfdfacf8681cd1af81d96179103ccff0a0b0b42f4ea64db451d4",
     "app/proxyman/outbound/handler.go": "77d3085a461b30a6a4d25273ba1487c9715655e1a6cfeafe17d6df0605f2c453",
     "proxy/freedom/freedom.go": "da88b4394315870465f44684b58f1bc4177f12d440a3d4e7a4747a7de1332d88",
-    "go.mod": "31fe6bd6c04eb2738e157b850236b1376cbbac3f33e974256bb7325c8c764250"
+    "go.mod": "31fe6bd6c04eb2738e157b850236b1376cbbac3f33e974256bb7325c8c764250",
+    "features/dns/localdns/client.go": "3d3f620349a047361a177e1fce7a958ae13e2dfbbf440b676d2dbbd38afaca68",
+    "app/dns/nameserver_local.go": "5c7128ace2ee1e1acc5fa7da1d6583ded130749601891052c6928ee2d040bd77",
+    "app/dns/nameserver.go": "ed7a8438714e9e3a2f84e164aa5719e6ab948afe01a49ce71e8767b71ed2ee68",
+    "app/dns/dns.go": "51675585d892f1dceeb0d2520303ac73ef0084e58af4414e52f86bf9b2bd5fef",
+    "core/xray.go": "66edf1a9ed6b9683b4f668612e6c6e876830cffb07521517f03a21e630f7ef15",
+    "app/proxyman/outbound/outbound.go": "dea17216b8c93544f8136047c11a77ceb7c684ecf0837117131c50eb956f0eea"
   },
   "module": "github.com/xtls/xray-core",
   "module_version": "v1.260327.1-0.20261017152356-92ccc939aaf4",

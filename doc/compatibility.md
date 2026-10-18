@@ -236,6 +236,29 @@ protected bootstrap, API-created handlers and native integration still need
 implementation and qualification before preserving arbitrary imported DNS is
 safe to enable. Item 1 remains pending.
 
+The next unpublished increment adds a scoped local/default resolver seam, without
+editing caller `dns` configuration. Its first native policy is numeric TCP through
+a sealed, exact source-index freedom handler, including untagged handlers; it is
+not enabled by any production host. Independent per-query Core DNS clients avoid
+sharing the first request's cancellation, and a query-scoped dispatcher restores
+cancellation after Core's DNS context detachment. Pure tests cover these paths
+using actual DNS framing over memory pipes. CI acceptance additionally requires
+unchanged missing/empty/localhost and mixed roots, actual A/AAAA and HTTP bytes,
+owner-only cancellation of a stalled exchange, and another owner's survival.
+Protected proxy egress, OS DNS semantics, DoH/DoT, FakeDNS and physical native
+socket protection remain separate work; this does not complete item 1.
+
+Session teardown progress: Android now closes callback admission before its final
+cleanup, so late network/worker events cannot enqueue into a stopped executor.
+[Android CI on 9a6b595](https://github.com/XIIIFOX/flutter_vless/actions/runs/39147429528)
+passes all 29 native device tests and three example smoke tests, including the
+system Forget scenario. The previous CI crash lacked a primary crash log; the
+pass does not prove its cause. Failure capture now runs before emulator cleanup.
+Both Apple providers also use session epochs to reject stale recovery/wake and
+startup callbacks after Stop; controlled pure tests cover Stop during drain and
+between native stages. Actual Apple runtime/device acceptance of that follow-up
+is recorded separately.
+
 Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |

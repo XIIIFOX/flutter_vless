@@ -154,6 +154,8 @@ def main():
         source = Path(metadata['Dir']).resolve()
         report['module_sum'] = metadata['Sum']
         report['apply_sha256'] = hashlib.sha256((CAPABILITY / 'apply.py').read_bytes()).hexdigest()
+        report['patch_modules_sha256'] = {
+            'local_resolver_patch.py': hashlib.sha256((CAPABILITY / 'local_resolver_patch.py').read_bytes()).hexdigest()}
         report['overlay_sha256'] = {
             str(path.relative_to(CAPABILITY / 'overlay')).replace(os.sep, '/'):
             hashlib.sha256(path.read_bytes()).hexdigest()
@@ -171,23 +173,30 @@ def main():
         for name, package in [('internet', 'transport/internet'),
                               ('outbound', 'app/proxyman/outbound'),
                               ('freedom', 'proxy/freedom'),
-                              ('nativeconfig', 'common/nativeconfig')]:
+                              ('nativeconfig', 'common/nativeconfig'),
+                              ('dnsfeature', 'features/dns'),
+                              ('localdns', 'features/dns/localdns'),
+                              ('appdns', 'app/dns'),
+                              ('core', 'core'),
+                              ('nativednsruntime', 'common/nativednsruntime')]:
             binary = EVIDENCE / (name + ('.test.exe' if os.name == 'nt' else '.test'))
             checked(name + '-compile', [arguments.go, 'test', '-c', '-o', str(binary), './' + package],
                     cwd=core, environment=environment, seconds=300, results=results)
             # nativeconfig contains only decode/plan/static-host value tests;
             # its package has no Core execution, resolver or socket operations.
-            selection = '^TestNative' if name == 'nativeconfig' else '^TestNativeDNS'
+            selection = '^TestNative'
             checked(name + '-pure-tests', [str(binary), '-test.run', selection, '-test.v', '-test.timeout=20s'],
                     cwd=core, environment=environment, seconds=35, results=results)
         binary = EVIDENCE / ('acceptance.test.exe' if os.name == 'nt' else 'acceptance.test')
         checked('runtime-compile', [arguments.go, 'test', '-c', '-o', str(binary), './native_dns_context_runtime'],
                 cwd=core, environment=environment, seconds=300, results=results)
         if arguments.run_runtime:
-            checked('runtime-loopback', [str(binary), '-test.run', '^TestAcceptanceNativeDNSRuntime$', '-test.v', '-test.timeout=75s'],
+            checked('runtime-loopback', [str(binary), '-test.run', '^TestAcceptanceNativeDNS(Runtime|LocalDefault)$', '-test.v', '-test.timeout=75s'],
                     cwd=core, environment=environment, seconds=90, results=results)
-            require_selected_test_pass((EVIDENCE / 'runtime-loopback.log').read_text(), 'TestAcceptanceNativeDNSRuntime')
+            for name in ['TestAcceptanceNativeDNSRuntime', 'TestAcceptanceNativeDNSLocalDefault']:
+                require_selected_test_pass((EVIDENCE / 'runtime-loopback.log').read_text(), name)
             results[-1]['selected_test_pass'] = True
+            results[-1]['selected_tests'] = ['TestAcceptanceNativeDNSRuntime', 'TestAcceptanceNativeDNSLocalDefault']
         report['module_cache_targeted_sources_unchanged'] = all(
             hashlib.sha256((source / path).read_bytes()).hexdigest() == expected
             for path, expected in MANIFEST['upstream_sha256'].items())
@@ -204,6 +213,9 @@ def main():
         report['source_snapshot_unchanged'] = True
         if hashlib.sha256((CAPABILITY / 'apply.py').read_bytes()).hexdigest() != report['apply_sha256']:
             raise RuntimeError('Overlay application source changed during verification')
+        if any(hashlib.sha256((CAPABILITY / path).read_bytes()).hexdigest() != digest
+               for path, digest in report['patch_modules_sha256'].items()):
+            raise RuntimeError('Overlay patch module changed during verification')
         if any(hashlib.sha256((core / path).read_bytes()).hexdigest() != digest
                for path, digest in report['patched_source_sha256'].items()):
             raise RuntimeError('Patched Core source changed during verification')

@@ -47,11 +47,9 @@ class NativePreviewRuntimeDeviceTest {
         init { attachBaseContext(context) }
     }
 
-    private fun capturedNetwork(): Network = manager.allNetworks.firstOrNull {
-        val caps = manager.getNetworkCapabilities(it)
-        caps != null && !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-    } ?: error("Dedicated emulator has no physical INTERNET network")
+    private fun capturedNetwork(): Network = NativePreviewFixtureNetwork.capture(context).also {
+        NativePreviewFixtureNetwork.verify(context, it)
+    }
 
     private fun digest(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)
         .joinToString("") { "%02x".format(it.toInt() and 255) }

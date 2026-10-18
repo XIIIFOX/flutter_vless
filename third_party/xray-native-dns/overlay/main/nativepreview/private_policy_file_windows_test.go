@@ -62,10 +62,39 @@ func TestNativeLauncherPrivatePolicyWindowsACLRefusesBroadOrUnprotected(t *testi
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "policy.json")
 			createTestPolicyWithDACL(t, path, data, sddl)
+			if name == "unprotected" {
+				// CreateFile may normalize a supplied D: descriptor to protected.
+				// Enable inheritance explicitly, then prove the on-disk precondition
+				// before asking the product validator to reject this fixture.
+				security, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+				if err != nil {
+					t.Fatal("fixture DACL read failed")
+				}
+				acl, _, err := security.DACL()
+				if err != nil || acl == nil {
+					t.Fatal("fixture nonnull DACL unavailable")
+				}
+				if windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.UNPROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil) != nil {
+					t.Fatal("fixture inheritance enable failed")
+				}
+				actual, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+				if err != nil {
+					t.Fatal("fixture DACL readback failed")
+				}
+				requireTestUnprotectedDACL(t, actual)
+			}
 			if _, err := readPrivatePolicy(path, source, testPolicyEpoch); err != errPrivatePolicy {
 				t.Fatal("unsafe Windows DACL admitted")
 			}
 		})
+	}
+}
+
+func requireTestUnprotectedDACL(t *testing.T, security *windows.SECURITY_DESCRIPTOR) {
+	t.Helper()
+	control, _, err := security.Control()
+	if err != nil || control&windows.SE_DACL_PROTECTED != 0 {
+		t.Fatal("fixture DACL remains protected")
 	}
 }
 
@@ -85,6 +114,7 @@ func TestNativeLauncherPrivatePolicyWindowsDescriptorExactOwner(t *testing.T) {
 	}
 	sid := current.User.Sid.String()
 	for name, sddl := range map[string]string{
+		"unprotected":  "O:" + sid + "D:(A;;FA;;;" + sid + ")",
 		"owner-system": "O:SYD:P(A;;FA;;;" + sid + ")(A;;FA;;;SY)",
 		"no-user":      "O:" + sid + "D:P(A;;FA;;;SY)",
 		"empty":        "O:" + sid + "D:P",
@@ -94,6 +124,12 @@ func TestNativeLauncherPrivatePolicyWindowsDescriptorExactOwner(t *testing.T) {
 			security, err := windows.SecurityDescriptorFromString(sddl)
 			if err != nil {
 				t.Fatal("fixture descriptor invalid")
+			}
+			if name == "unprotected" {
+				if security.SetControl(windows.SE_DACL_PROTECTED, 0) != nil {
+					t.Fatal("fixture in-memory inheritance enable failed")
+				}
+				requireTestUnprotectedDACL(t, security)
 			}
 			if privatePolicyWindowsSecurity(security, current.User.Sid) != errPrivatePolicy {
 				t.Fatal("unsafe descriptor admitted")

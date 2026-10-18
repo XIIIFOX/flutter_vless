@@ -38,11 +38,7 @@ class NativePreviewBrokerDeviceTest {
         init { attachBaseContext(context) }
     }
 
-    private fun capturedNetwork(): Network = manager.allNetworks.firstOrNull {
-        val caps = manager.getNetworkCapabilities(it)
-        caps != null && !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-    } ?: error("Dedicated emulator has no physical INTERNET network")
+    private fun capturedNetwork(): Network = NativePreviewFixtureNetwork.capture(context)
 
     private fun exchange(broker: XraySocketProtector, command: Char, descriptors: Array<FileDescriptor>,
         allowClosed: Boolean = false): Int = try {
@@ -95,6 +91,7 @@ class NativePreviewBrokerDeviceTest {
     @Test fun realTransferredSocketsAreProtectedBoundAndTransferNumericHttpBytes() {
         assertNull("Disposable test package must already have VPN consent", VpnService.prepare(context))
         val network = capturedNetwork()
+        NativePreviewFixtureNetwork.verify(context, network)
         val generation = NativePreviewNetworkGeneration()
         withBroker(XraySocketProtector.forNumericPreview(PreparedService(context), network, generation)) { broker ->
             withInetFd { handshake ->
@@ -104,7 +101,8 @@ class NativePreviewBrokerDeviceTest {
             assertTrue(broker.awaitVerified())
             withInetFd(OsConstants.SOCK_STREAM) { fd ->
                 assertEquals("Q must protect and bind the transferred TCP socket", 1, exchange(broker, 'Q', arrayOf(fd)))
-                connectNumeric(fd, InetAddress.getByName("10.0.2.2"), 18083)
+                try { connectNumeric(fd, InetAddress.getByAddress(byteArrayOf(10, 0, 2, 2)), 18083) }
+                catch (error: Exception) { throw AssertionError("Actual S/Q numeric connection failed: ${NativePreviewFixtureNetwork.describe(context, network)}", error) }
                 val source = (Os.getsockname(fd) as InetSocketAddress).address
                 val addresses = requireNotNull(manager.getLinkProperties(network)).linkAddresses.map { it.address }
                 assertTrue("The real socket source must belong to the captured physical Network", source in addresses)

@@ -109,9 +109,16 @@ enabled throughout. Supplied profiles and device screenshots remain outside Git.
   automatic connection; fresh Safari traffic used the ordinary connection.
   Reconnecting and stopping from the app also completed. On Demand cannot promise
   to override an explicit system disconnect.
-* Reconnect disabled / On Demand disabled was exercised with working traffic;
-  reconnect enabled with 100/200 ms delays and two retries was accepted. Actual
-  native-worker failure timing and exhaustion still require device evidence.
+* Reconnect disabled / On Demand disabled was exercised with working traffic.
+  A synthetic unsupported outbound then forced native Core startup to fail:
+  100/200 ms and two retries produced three startup failures before exhaustion.
+  A 1000/2000 ms, three-retry case produced four failures at elapsed 0/1/3/6
+  seconds (second-resolution provider timestamps include scheduling overhead).
+  With reconnect disabled the same profile produced only the initial failure.
+  After exhaustion the UI remained CONNECTING with Disconnect available,
+  fresh Safari failed, and Stop restored ordinary connectivity. This establishes
+  startup retry counts/exhaustion, not successful recovery from a running
+  native worker crash or subsecond timing accuracy.
 * Unlock-before-action displayed Apple's authentication UI. Failed recognition
   followed by Cancel left VPN disconnected and no provider running. Successful
   device-owner authentication remains a manual acceptance step.
@@ -126,6 +133,6 @@ page must show ordinary connectivity. Never reinstall while the test VPN remains
 active. The initial reinstall incident required the owner to reboot the phone;
 subsequent stop/reinstall gates and normal-network checks passed.
 
-This is a partial acceptance record. Successful owner authentication, worker-fault
-retry limits and the broader compatibility corpus are not implied by the
-successful cases above.
+This is a partial acceptance record. Successful owner authentication, recovery
+from a running worker crash and the broader compatibility corpus are not implied
+by the successful cases above.

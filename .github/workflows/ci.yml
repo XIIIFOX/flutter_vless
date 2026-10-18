@@ -191,7 +191,7 @@ jobs:
             adb -s emulator-5554 shell settings put global mobile_data_always_on 1
             (cd example && flutter pub get)
             python3 tool/test_android_flutter_smoke.py --serial emulator-5554
-            ANDROID_SERIAL=emulator-5554 tool/test_android_security_emulator.sh
+            ANDROID_SERIAL=emulator-5554 tool/test_android_security_emulator.sh --no-capture
             python3 tool/test_android_separate_uid.py --serial emulator-5554 --output build/android-separate-uid-results.json
       - name: Preserve Android security test evidence
         if: always()

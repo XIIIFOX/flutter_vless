@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -93,7 +94,7 @@ class PreservationRunnerGuards(unittest.TestCase):
 
             with mock.patch.object(runner, 'EVIDENCE', evidence), mock.patch.object(runner.sys, 'argv', ['runner']), \
                     mock.patch.object(runner.platform, 'system', return_value='Linux'), \
-                    mock.patch.object(runner.common.os, 'name', 'posix'), \
+                    mock.patch.object(runner, 'os', SimpleNamespace(name='posix', environ=os.environ, sep=os.sep)), \
                     mock.patch.object(runner.common, 'MANIFEST', manifest), \
                     mock.patch.object(runner, 'source_snapshot', return_value={'synthetic': 'hash'}), \
                     mock.patch.object(runner.common, 'checked', side_effect=fake_checked):

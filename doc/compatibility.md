@@ -142,9 +142,13 @@ Imported listeners do not acquire this private path. Proxy-only and measurement
 preparation retain their separate behavior.
 
 The default Android CI job now runs the production adapter and its two focused
-caller-DNS TUN tests in parallel with desktop Core checks. Development-only
-Core/forwarder composition remains an explicit harness option, outside this
-minimum DNS delivery's acceptance gate.
+caller-DNS TUN tests in parallel with desktop Core checks. It uses the existing
+`--no-capture` mode: functional Wi-Fi DNS/system-policy tests remain mandatory,
+while the report explicitly marks physical packet capture unverified. Cellular
+capture/handover qualification remains separate because the emulator may not
+provide a cellular Network. Strict capture and its verifier remain available in
+the default standalone harness. Development-only Core/forwarder composition
+also remains an explicit harness option, outside this minimum delivery's gate.
 
 On Android the default `config` policy preserves the caller root DNS, including
 missing/localhost resolution through the existing protected physical-Network
@@ -161,6 +165,15 @@ scripts and FakeDNS fail preparation rather than silently using OS fallback.
 The pinned Core has no `tls://` DoT implementation. These limitations, arbitrary
 DNS record types and dual-stack/FakeDNS support remain open; this MVP does not
 complete item 1. Test compilation and runtime results are recorded separately.
+
+[CI on 7ec4636](https://github.com/XIIIFOX/flutter_vless/actions/runs/39171589801)
+qualifies the production C++ preparer on Linux/macOS and the Apple preparer on
+macOS against ordinary pinned Core: TCP/UDP virtual DNS, numeric TCP/UDP and
+named h2c upstreams, per-domain tags, static hosts, endpoint pinning and HTTP
+bytes pass with no OS-resolver attempt. Source hashes match that commit.
+Windows stopped in a platform-dependent test mock before runtime; Android TUN
+and iOS simulator acceptance are recorded separately. This is targeted DNS
+acceptance, not a complete platform VPN or encrypted DoH/TLS qualification.
 
 Port grammar progress (2026-10-18): the Dart, Kotlin, Swift and C++ paths now
 share a 20-case corpus checked against the pinned Core decoder/build path.

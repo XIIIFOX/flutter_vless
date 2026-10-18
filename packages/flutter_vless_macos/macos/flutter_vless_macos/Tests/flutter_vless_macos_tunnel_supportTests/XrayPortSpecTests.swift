@@ -2,6 +2,32 @@ import XCTest
 import flutter_vless_macos_tunnel_support
 
 final class XrayPortSpecTests: XCTestCase {
+    func testSharedNumericAPIListenerCorpusWithoutResolvingNamesOrChangingSource() throws {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/api-listeners.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf:
+            root.appendingPathComponent("tool/fixtures/compatibility/api-listeners.json"))) as? [[String: Any]])
+        for item in cases {
+            let config = try XCTUnwrap(item["config"] as? [String: Any])
+            let before = try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+            XCTAssertEqual(XrayPortSpec.apiListenerPorts(configuration: config), Set(item["ports"] as? [Int] ?? []), item["name"] as? String ?? "")
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys]), before)
+        }
+    }
+
+    func testPrivateAdapterAvoidsAPIAlongsideImportedPortRangesAndPreservesAPI() throws {
+        let api: [String: Any] = ["tag": "caller-api", "listen": "127.0.0.1:10808", "services": ["StatsService", "HandlerService"]]
+        var config: [String: Any] = ["api": api, "inbounds": [["protocol": "http", "port": "10809-10810"]]]
+        let port = try LocalProxyAccessPolicy.applyVPN(to: &config,
+            credentials: LocalProxyCredentials(username: "native-user", password: "native-password"))
+        XCTAssertEqual(port, 10811)
+        XCTAssertEqual(config["api"] as? NSDictionary, api as NSDictionary)
+        XCTAssertEqual(((config["inbounds"] as? [[String: Any]])?[1]["port"]) as? String, "10809-10810")
+    }
+
     func testPortEnvironmentIsBoundBeforeCrossProcessPersistenceAndReportsMissingValue() throws {
         let source = Data(#"{"inbounds":[{"protocol":"socks","listen":"127.0.0.1","port":"10808,env:flutter.vless.fixture.ports"}],"outbounds":[{"protocol":"socks","tag":"proxy","settings":{"servers":[{"address":"127.0.0.1","port":19000}]}}]}"#.utf8)
         let environment = ["FLUTTER_VLESS_FIXTURE_PORTS": "010810-010811"]

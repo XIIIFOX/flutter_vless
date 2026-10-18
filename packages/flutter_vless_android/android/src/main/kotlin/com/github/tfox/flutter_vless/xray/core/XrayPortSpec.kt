@@ -1,9 +1,30 @@
 package com.github.tfox.flutter_vless.xray.core
 
 import java.util.Locale
+import org.json.JSONObject
 
 /** Imported Core syntax stays intact; only the private listener's occupied set is derived. */
 internal object XrayPortSpec {
+    /** API.listen is another listener: reserve numeric ports without resolving
+     * hosts or rejecting Core/OS service-name and Unix-socket syntax. */
+    fun apiListenerPorts(configuration: JSONObject): Set<Int> {
+        fun field(key: String, name: String) = key.replace('\u017f', 's').replace('\u212a', 'k').lowercase(Locale.ROOT) == name
+        val ports = mutableSetOf<Int>()
+        configuration.keys().forEach { key ->
+            if (!field(key, "api")) return@forEach
+            val api = configuration.optJSONObject(key) ?: return@forEach
+            api.keys().forEach listenField@ { name ->
+                if (!field(name, "listen")) return@listenField
+                val listen = api.opt(name) as? String ?: return@listenField
+                if (listen.startsWith('/') || listen.startsWith('@') || ':' !in listen) return@listenField
+                val digits = listen.substringAfterLast(':')
+                if (digits.isEmpty() || digits.any { it !in '0'..'9' }) return@listenField
+                digits.toIntOrNull()?.takeIf { it in 1..65535 }?.let(ports::add)
+            }
+        }
+        return ports
+    }
+
     fun reservedPorts(value: Any, environment: (String) -> String? = System::getenv): Set<Int> {
         fun invalid(): Nothing = throw IllegalArgumentException("Invalid Xray inbound port specification")
         if (value is Int || value is Long || value is Short || value is Byte) {

@@ -330,8 +330,31 @@ inline std::optional<std::set<unsigned>> ReservedPorts(const Json& value,
   return occupied;
 }
 
+// Reserve numeric API.listen ports too. Hostnames are not resolved here;
+// service names and Unix addresses remain untouched for Core/OS validation.
+inline std::set<unsigned> ApiListenerPorts(const Json& config) {
+  std::set<unsigned> ports;
+  if (!config.is_object()) return ports;
+  for (auto api = config.begin(); api != config.end(); ++api) {
+    if (Fold(api.key()) != "api" || !api->is_object()) continue;
+    for (auto listen = api->begin(); listen != api->end(); ++listen) {
+      if (Fold(listen.key()) != "listen" || !listen->is_string()) continue;
+      const auto address = listen->get<std::string>();
+      if (address.empty() || address[0] == '/' || address[0] == '@') continue;
+      const auto colon = address.rfind(':');
+      if (colon == std::string::npos || colon + 1 == address.size()) continue;
+      const auto digits = address.substr(colon + 1);
+      if (digits.find_first_not_of("0123456789") != std::string::npos) continue;
+      unsigned port = 0;
+      for (char c : digits) { port = port * 10 + static_cast<unsigned>(c - '0'); if (port > 65535) break; }
+      if (port && port <= 65535) ports.insert(port);
+    }
+  }
+  return ports;
+}
+
 inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t preferred) {
-  std::set<unsigned> occupied;
+  auto occupied = ApiListenerPorts(config);
   if (config.contains("inbounds") && config["inbounds"].is_array()) for (const auto& inbound : config["inbounds"]) {
     if (inbound.contains("listen") && inbound["listen"].is_string()) {
       const auto listen = inbound["listen"].get<std::string>();

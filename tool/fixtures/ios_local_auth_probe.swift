@@ -81,6 +81,8 @@ func runLocalAuthRuntimeChecks() async throws {
         "inbounds": [["tag": "in_proxy", "liſten": "127.0.0.1", "port": 18095,
                       "protocol": "socks", "ſettings": ["auth": "noauth", "udp": true,
                           "accountſ": [["uſer": "old", "paſſ": "old"]]]]],
+        "api": ["tag": "fixture-api", "listen": "127.0.0.1:10808", "services": ["StatsService"]],
+        "stats": [String: Any](),
         "outbounds": [["tag": "direct", "protocol": "freedom", "settings": ["redirect": "127.0.0.1:18096"]],
                       ["tag": "fixture-blocked", "protocol": "blackhole"]],
         // This user's dormant rule must never capture a newly injected adapter.
@@ -89,6 +91,7 @@ func runLocalAuthRuntimeChecks() async throws {
     let source = try JSONSerialization.data(withJSONObject: raw)
     var protected = raw
     let managedPort = try LocalProxyAccessPolicy.applyVPN(to: &protected, credentials: credentials)
+    precondition(managedPort != 10808, "Managed adapter must reserve the imported API port")
     precondition((protected["inbounds"] as? [[String: Any]])?.first?["tag"] as? String == "flutter-vless-tun-1")
     precondition(XrayPrivacyConfig.apply(to: &protected))
     let prepared = try JSONSerialization.data(withJSONObject: protected)
@@ -97,6 +100,13 @@ func runLocalAuthRuntimeChecks() async throws {
         var error: NSError?
         precondition(XRayStartPrivate(prepared, logger, &error))
         defer { XRayStop() }
+        // An HTTP/2 SETTINGS frame proves that the imported API really bound
+        // its original socket, rather than accidentally reaching our SOCKS input.
+        let api = openLoopback(10808)
+        _ = LocalSOCKS5Client.sendAll(fd: api, bytes: Array("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".utf8) + [0, 0, 0, 4, 0, 0, 0, 0, 0])
+        let frame = LocalSOCKS5Client.receiveExactly(fd: api, count: 9) ?? []
+        close(api)
+        precondition(frame.count == 9 && frame[3] == 4 && frame.suffix(4).allSatisfy { $0 == 0 })
         for secret in [nil, wrong] as [LocalProxyCredentials?] {
             let fd = openLoopback(managedPort)
             precondition(!LocalSOCKS5Client.authenticate(fd: fd, credentials: secret))
@@ -132,6 +142,7 @@ func runLocalAuthRuntimeChecks() async throws {
         XRayStop()
         print("AUTH_RUNTIME_PASS=\(generation)")
         print("SERVICE_TAG_RUNTIME_PASS=\(generation)")
+        print("API_PORT_RESERVATION_PASS=\(generation)")
     }
     let delay = await ServerDelayRunner().measure(config: String(decoding: source, as: UTF8.self),
         url: "http://probe.invalid/", geoAssetsDirectory: nil)

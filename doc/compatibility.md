@@ -176,6 +176,15 @@ worker recovery, handover and physical DNS capture (`.5UHS7XV2`). Prefix
 selectors in balancers/observatory, API passthrough and the source-inbound
 routing context remain separate work.
 
+Numeric `api.listen` ports now participate in adapter allocation on all native
+platforms, with a shared 14-case fixture for IPv4/IPv6, host addresses, aliases,
+Unix addresses and port zero. Extraction does not resolve hostnames or rewrite
+the source API. Service-name ports remain accepted syntax for Core/OS handling
+and are not yet resolved by this reservation helper. Apple runtime acceptance
+requires the original API to return an HTTP/2 SETTINGS frame while the separate
+authenticated SOCKS adapter transfers HTTP bytes. Android/Windows API
+passthrough is still item 4; reserving a source API port does not implement it.
+
 Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |
@@ -184,7 +193,7 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | 2. IPv6 | Pending | Current tests prove blocking, not dual-stack forwarding, IPv6-only endpoint or NAT64 support. |
 | 3. Protocol/transport matrix | Pending | Supplied VLESS TCP/Reality profiles work on devices. Full pinned-Core transport/socket-protection coverage is still required. |
 | 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS rules and packet-path probe rules are scoped to their adapters. API/services, source-inbound context and explicit VPN default selection remain open. |
-| 5. Ports/addresses | Partial | Shared 20-case port and 12-case service-tag corpora, native tests and real Android/iPhone list/range/env/Unix cases pass. OS/API port reservations, prefix-selector isolation, bind retries and proxy-only parity remain open. |
+| 5. Ports/addresses | Partial | Shared 20-case port, 12-case service-tag and 14-case numeric API-allocation fixtures pass pure native tests. Real Android/iPhone list/range/env/Unix and tag-collision cases pass. OS port checks, API service-name resolution, prefix-selector isolation, bind retries and proxy-only parity remain open. |
 | 6. Assets/import syntax | Partial | A shared 22-case JSON syntax corpus is checked against actual Core decoding. SDK start/delay/import/subscriptions and the example routing editor accept Core-style comments and a leading BOM. Device browser/routing checks pass. Portable cert/key/geodata assets and explicit multi-document merging remain open. |
 | 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |
 | 8. Runtime corpus | Partial | Shared port/syntax fixtures and platform/device HTTP, DNS, routing and recovery checks exist. The complete ECH/DoH/QUIC/protocol corpus and remaining physical options acceptance are not complete. |

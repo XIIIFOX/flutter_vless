@@ -1,0 +1,146 @@
+[
+  {
+    "name": "no-api",
+    "config": {},
+    "ports": []
+  },
+  {
+    "name": "ipv4",
+    "config": {
+      "api": {
+        "listen": "127.0.0.1:10808"
+      }
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "wildcard",
+    "config": {
+      "api": {
+        "listen": ":10808"
+      }
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "ipv6",
+    "config": {
+      "api": {
+        "listen": "[::1]:10808"
+      }
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "ipv6-zone",
+    "config": {
+      "api": {
+        "listen": "[fe80::1%en0]:10808"
+      }
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "hostname-without-lookup",
+    "config": {
+      "api": {
+        "listen": "api-listener.invalid:10808"
+      }
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "leading-zero",
+    "config": {
+      "api": {
+        "listen": "127.0.0.1:010808"
+      }
+    },
+    "ports": [
+      10808
+    ]
+  },
+  {
+    "name": "dynamic-zero",
+    "config": {
+      "api": {
+        "listen": "127.0.0.1:0"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "unix-path",
+    "config": {
+      "api": {
+        "listen": "/tmp/api:10808"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "unix-abstract",
+    "config": {
+      "api": {
+        "listen": "@api:10808"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "go-field-alias",
+    "config": {
+      "API": {
+        "Liſten": "[::1]:10809"
+      }
+    },
+    "ports": [
+      10809
+    ]
+  },
+  {
+    "name": "conservative-alias-reservation",
+    "config": {
+      "api": {
+        "listen": "127.0.0.1:10808",
+        "LISTEN": ":10809"
+      },
+      "API": {
+        "listen": ":10810"
+      }
+    },
+    "ports": [
+      10808,
+      10809,
+      10810
+    ]
+  },
+  {
+    "name": "named-service-deferred",
+    "config": {
+      "api": {
+        "listen": "127.0.0.1:http"
+      }
+    },
+    "ports": []
+  },
+  {
+    "name": "missing-or-non-string-listen",
+    "config": {
+      "api": {
+        "listen": 10808
+      }
+    },
+    "ports": []
+  }
+]

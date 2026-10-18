@@ -51,6 +51,25 @@ public enum LocalProxyAccessError: Error, LocalizedError {
 /// Reserve imported listener ports without rewriting their Core syntax.
 /// Environment references belong to the native process, never the Dart host.
 public enum XrayPortSpec {
+    /// API.listen also binds a TCP socket. Reserve its numeric port before
+    /// choosing a private adapter; Unix and dynamic port-zero listeners do not
+    /// occupy a fixed TCP port. Named services remain Core/OS syntax, not errors.
+    public static func apiListenerPorts(configuration: [String: Any]) -> Set<Int> {
+        var ports = Set<Int>()
+        for (key, value) in configuration where XrayJSONField.matches(key, "api") {
+            guard let api = value as? [String: Any] else { continue }
+            for (field, value) in api where XrayJSONField.matches(field, "listen") {
+                guard let listen = value as? String, !listen.hasPrefix("/"), !listen.hasPrefix("@"),
+                      let colon = listen.lastIndex(of: ":") else { continue }
+                let digits = listen[listen.index(after: colon)...]
+                guard !digits.isEmpty, digits.utf8.allSatisfy({ (48...57).contains($0) }),
+                      let port = Int(digits), (1...65535).contains(port) else { continue }
+                ports.insert(port)
+            }
+        }
+        return ports
+    }
+
     public static func reservedPorts(_ value: Any,
         environment: (String) -> String? = { ProcessInfo.processInfo.environment[$0] }) throws -> Set<Int> {
         if let number = value as? NSNumber {
@@ -147,7 +166,7 @@ public enum LocalProxyAccessPolicy {
 
     public static func validateVPN(configData: Data) throws {
         let object = try normalizedConfig(configData: configData)
-        _ = try privatePort(inbounds: object["inbounds"] as? [[String: Any]] ?? [])
+        _ = try privatePort(configuration: object)
     }
 
     /// Add a private authenticated adapter without changing imported listeners.
@@ -157,7 +176,7 @@ public enum LocalProxyAccessPolicy {
     public static func applyVPN(to config: inout [String: Any], credentials: LocalProxyCredentials) throws -> Int {
         try normalizeLocalFields(&config)
         let imported = config["inbounds"] as? [[String: Any]] ?? []
-        let port = try privatePort(inbounds: imported)
+        let port = try privatePort(configuration: config)
         var tags = XrayServiceTags(configuration: config)
         let tag = tags.next(managedTagPrefix)
         let managed: [String: Any] = [
@@ -171,8 +190,9 @@ public enum LocalProxyAccessPolicy {
         return port
     }
 
-    private static func privatePort(inbounds: [[String: Any]]) throws -> Int {
-        var used = Set<Int>()
+    private static func privatePort(configuration: [String: Any]) throws -> Int {
+        let inbounds = configuration["inbounds"] as? [[String: Any]] ?? []
+        var used = XrayPortSpec.apiListenerPorts(configuration: configuration)
         for inbound in inbounds {
             guard let proto = inbound["protocol"] as? String, !proto.isEmpty else {
                 throw LocalProxyAccessError.malformedConfiguration

@@ -8,6 +8,16 @@ void Check(bool ok, const char* message) {
   if (!ok) throw std::runtime_error(message);
 }
 int main() {
+  std::ifstream api_input("tool/fixtures/compatibility/api-listeners.json");
+  Check(api_input.good(), "shared API listener corpus is required");
+  Json api_cases; api_input >> api_cases;
+  for (const auto& item : api_cases) {
+    const auto before = item["config"].dump();
+    Check(ApiListenerPorts(item["config"]) == item["ports"].get<std::set<unsigned>>(), item["name"].get<std::string>().c_str());
+    Check(item["config"].dump() == before, "API reservation mutated source");
+  }
+  auto api_profile = Parse(R"({"api":{"listen":"127.0.0.1:10808"},"inbounds":[{"protocol":"http","port":"10809-10810"}]})");
+  Check(AvailablePort(api_profile, 10808) == 10811, "private port collided with API/ranges");
   std::ifstream tag_input("tool/fixtures/compatibility/tags.json");
   Check(tag_input.good(), "shared tag corpus is required");
   Json tag_cases; tag_input >> tag_cases;

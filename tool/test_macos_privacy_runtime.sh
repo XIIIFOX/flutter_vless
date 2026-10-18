@@ -47,6 +47,7 @@ text=Path(sys.argv[1]).read_text()
 assert "RUNTIME=26.10.17" in text, "Unexpected embedded Xray version"
 assert 'MACOS_COUNTERS_AND_API_BOUNDARY_PASS' in text
 assert 'SERVICE_TAG_RUNTIME_PASS=0' in text and 'SERVICE_TAG_RUNTIME_PASS=1' in text
+assert 'API_PORT_RESERVATION_PASS=0' in text and 'API_PORT_RESERVATION_PASS=1' in text
 if os.environ.get('REQUIRE_CORE_PREFLIGHT') == '1':
     for generation in [0,1]:
         assert f'PREFLIGHT_RUNNING_SESSION_PASS={generation}' in text

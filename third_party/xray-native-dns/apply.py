@@ -170,6 +170,35 @@ func LookupForIP(domain string, strategy DomainStrategy, localAddr net.Address) 
         'internet.LookupForIP(destination.Address.Domain(), strategy, outGateway)',
         'internet.LookupForIPContext(ctx, destination.Address.Domain(), strategy, outGateway)')
     replace('proxy/freedom/freedom.go',
+        '\tvar conn stat.Connection\n\tvar blockedDest',
+        '''	// AsIs final-rule inspection in upstream Core uses a separate system
+	// resolver before DialSystem. This strict capability does not authorize it.
+	if destination.Address.Family().IsDomain() && (defaultRule != nil || len(h.finalRules) > 0) && !h.resolveStrategy.HasStrategy() {
+		return internet.ErrNativeDNSUnsupported
+	}
+	var conn stat.Connection
+	var blockedDest''')
+    replace('proxy/freedom/freedom.go',
+        '''				} else {
+					addrs, err := net.DefaultResolver.LookupIPAddr(ctx, destination.Address.Domain())
+					if err != nil { // dialer may retry DNS
+						errors.LogInfoInner(ctx, err, "failed to get IP address for domain ", destination.Address.Domain())
+					}
+					for _, addr := range addrs {
+						if ipAddr := net.IPAddress(addr.IP); ipAddr != nil {
+							if rule := h.matchFinalRule(destination.Network, ipAddr, destination.Port, defaultRule); rule != nil && rule.action == RuleAction_Block {
+								blockedDest = &destination
+								blockedDest.Address = ipAddr
+								blockedRule = rule
+								return nil
+							}
+						}
+					}
+				}''',
+        '''				} else {
+					return internet.ErrNativeDNSUnsupported
+				}''')
+    replace('proxy/freedom/freedom.go',
         'NewPacketWriter(conn, h, defaultRule, UDPOverride, destination, outGateway)',
         'NewPacketWriter(conn, h, defaultRule, UDPOverride, destination, outGateway, internet.NativeDNSHandlerFromContext(ctx))')
     replace('proxy/freedom/freedom.go',

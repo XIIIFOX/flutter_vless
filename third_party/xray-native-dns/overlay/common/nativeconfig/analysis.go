@@ -60,6 +60,7 @@ const (
 	RequireServiceLookup   RequirementCode = "srv-txt-lookup"
 	RequireFinalMask       RequirementCode = "finalmask-runtime"
 	RequireSecurityLookup  RequirementCode = "security-auxiliary-lookup"
+	RequireFinalRuleDNS    RequirementCode = "as-is-final-rule-dns"
 	RequireDownload        RequirementCode = "xhttp-download-runtime"
 	RequireServiceEndpoint RequirementCode = "transport-service-endpoint"
 	RequireEndpointName    RequirementCode = "endpoint-name-preparation"
@@ -258,6 +259,16 @@ func AnalyzeOutbound(sourceIndex int, source *core.OutboundHandlerConfig) (plan 
 	memory, parseErr := internet.ToMemoryStreamConfig(stream)
 	if parseErr != nil {
 		return bad(InvalidCompiled)
+	}
+	if settings, ok := proxy.(*freedom.Config); ok && len(settings.FinalRules) > 0 {
+		// AsIs domain final-rule inspection used a separate physical resolver.
+		// The strict runtime refuses it. Inbound-supplied default rules remain
+		// request-dependent and are covered by the same runtime guard.
+		mayInspectDomain := len(plan.Endpoints) == 0 || plan.Endpoints[0].Physical.Address == nil || plan.Endpoints[0].Physical.Address.Family().IsDomain()
+		options := memory.SocketSettings
+		if mayInspectDomain && (options == nil || options.DialerProxy == "" && !options.DomainStrategy.HasStrategy()) {
+			plan.require(RequireFinalRuleDNS, -1)
+		}
 	}
 	for index := range plan.Endpoints {
 		if plan.Family == "wireguard" {

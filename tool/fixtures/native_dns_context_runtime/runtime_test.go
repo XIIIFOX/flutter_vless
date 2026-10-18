@@ -34,6 +34,7 @@ import (
 )
 
 const endpointHost = "same-endpoint.invalid"
+const finalRuleHost = "must-refuse-final.invalid"
 
 type loopServer struct {
 	listener net.Listener
@@ -41,6 +42,7 @@ type loopServer struct {
 	active   map[net.Conn]struct{}
 	observed []string
 	errors   []string
+	accepted int
 	wait     sync.WaitGroup
 }
 
@@ -60,6 +62,7 @@ func newLoopServer(t *testing.T, network, address string, serve func(*loopServer
 				return
 			}
 			server.lock.Lock()
+			server.accepted++
 			server.active[conn] = struct{}{}
 			server.wait.Add(1)
 			server.lock.Unlock()
@@ -98,6 +101,12 @@ func (server *loopServer) record(value string) {
 	server.lock.Lock()
 	defer server.lock.Unlock()
 	server.observed = append(server.observed, value)
+}
+
+func (server *loopServer) activity() int {
+	server.lock.Lock()
+	defer server.lock.Unlock()
+	return server.accepted
 }
 
 func (server *loopServer) observations() ([]string, []string) {
@@ -240,13 +249,16 @@ func makeConfig(t *testing.T, endpointPort int, alpha, beta *loopServer, withDNS
 		"log": map[string]any{"loglevel": "none"},
 		"outbounds": []any{
 			map[string]any{"protocol": "socks", "tag": "caller-proxy", "settings": map[string]any{"servers": []any{map[string]any{"address": endpointHost, "port": endpointPort}}}},
-			map[string]any{"protocol": "freedom", "tag": "caller-direct", "settings": map[string]any{"domainStrategy": "UseIP"}},
+			map[string]any{"protocol": "freedom", "tag": "caller-direct", "settings": map[string]any{"domainStrategy": "UseIP", "finalRules": []any{map[string]any{"action": "allow"}}}},
 			map[string]any{"protocol": "freedom", "tag": "caller-dns-alpha"},
 			map[string]any{"protocol": "freedom", "tag": "caller-dns-beta"},
+			map[string]any{"protocol": "freedom", "tag": "caller-as-is-final", "settings": map[string]any{"finalRules": []any{map[string]any{"action": "allow"}}}},
 		},
 		"routing": map[string]any{"domainStrategy": "AsIs", "rules": []any{
 			map[string]any{"type": "field", "inboundTag": []string{"dns-alpha"}, "outboundTag": "caller-dns-alpha"},
 			map[string]any{"type": "field", "inboundTag": []string{"dns-beta"}, "outboundTag": "caller-dns-beta"},
+			map[string]any{"type": "field", "ip": []string{"127.0.0.1/32"}, "port": strconv.Itoa(endpointPort), "outboundTag": "caller-as-is-final"},
+			map[string]any{"type": "field", "domain": []string{"full:" + finalRuleHost}, "outboundTag": "caller-as-is-final"},
 			map[string]any{"type": "field", "domain": []string{"full:" + endpointHost, "full:alpha.invalid", "full:beta.invalid"}, "outboundTag": "caller-direct"},
 		}},
 	}
@@ -255,7 +267,7 @@ func makeConfig(t *testing.T, endpointPort int, alpha, beta *loopServer, withDNS
 			"hosts": map[string]any{endpointHost: callerHostIP}, "queryStrategy": "UseIP",
 			"disableCache": true, "disableFallbackIfMatch": true,
 			"servers": []any{
-				map[string]any{"address": "tcp://" + alpha.listener.Addr().String(), "domains": []string{"full:alpha.invalid"}, "queryStrategy": "UseIPv4", "tag": "dns-alpha", "skipFallback": true, "timeoutMs": 1500},
+				map[string]any{"address": "tcp://" + alpha.listener.Addr().String(), "domains": []string{"full:alpha.invalid", "full:" + finalRuleHost}, "queryStrategy": "UseIPv4", "tag": "dns-alpha", "skipFallback": true, "timeoutMs": 1500},
 				map[string]any{"address": "tcp://" + beta.listener.Addr().String(), "domains": []string{"full:beta.invalid"}, "queryStrategy": "UseIPv6", "tag": "dns-beta", "skipFallback": true, "timeoutMs": 1500},
 			},
 		}
@@ -457,6 +469,29 @@ func TestAcceptanceNativeDNSRuntime(t *testing.T) {
 			}
 		}
 	}
+	t.Log("PHASE freedom AsIs final-rule domain precheck refuses before every resolver/socket")
+	// Positive control: literal AsIs + allow rule must still use the numeric
+	// socket. Named UseIP + allow-rule controls are the hosts/alpha/beta requests.
+	marker(t, ownerA, "127.0.0.1", port, "CALLER_V4")
+	servers := []*loopServer{v4, v6, alpha, beta}
+	beforeActivity := make([]int, len(servers))
+	for index, server := range servers {
+		beforeActivity[index] = server.activity()
+	}
+	if _, err := fetchMarker(ownerA, finalRuleHost, port); err == nil {
+		t.Fatal("AsIs final-rule domain request was accepted")
+	}
+	for index, server := range servers {
+		if server.activity() != beforeActivity[index] {
+			t.Fatal("AsIs final-rule precheck reached a fixture socket")
+		}
+	}
+	if externalDNSAttempts.Load() != 0 {
+		t.Fatal("AsIs final-rule precheck attempted system DNS")
+	}
+	marker(t, ownerB, "remote-marker.invalid", 80, "OWNER_B")
+	sourceUnchanged(t, ownerA)
+	sourceUnchanged(t, ownerB)
 	t.Log("PHASE rejected candidate preflight leaves both owners alive: check")
 	if _, err := internet.NewNativeDNSOwner([]internet.NativeDNSBinding{{Key: configA.Outbound[0], SourceIndex: 0, ProxyType: configA.Outbound[0].ProxySettings.Type, TransportEndpoints: true}}); err == nil {
 		t.Fatal("Invalid candidate endpoint preflight was accepted")

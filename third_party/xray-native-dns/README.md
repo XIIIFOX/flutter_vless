@@ -129,6 +129,22 @@ implicit OS resolver fallback is replaced by Core `LookupForIPContext(USE_IP)`.
 production design must choose a protected OS-resolver seam or reject unsupported
 AsIs names. It must not advertise this behavior as unchanged caller DNS.
 
+Freedom's **domain final-rule precheck with AsIs** is refused before any lookup,
+retry or socket. The upstream separate `net.DefaultResolver.LookupIPAddr` branch
+is removed by a SHA-guarded exact source replacement; it is not redirected to
+caller DNS. `RequireFinalRuleDNS` marks configured AsIs final rules on a possible
+domain target, excluding ignored rules behind dialerProxy and literal redirects.
+An inbound can also supply a default private-IP final rule (for example VLESS),
+so an outbound-only plan cannot enumerate every affected request. The same
+runtime guard rejects that case too. This is an explicit unsupported combination,
+not qualified protected system-resolver support or a complete final-rule policy
+claim. Pure Process tests cover configured and inbound-default rules without
+Core/sockets; CI also checks a real configured allow-rule request fails with no
+system-resolver or fixture socket activity while the other owner still works.
+The refused name matches an observed caller DNS fixture, so redirecting the
+lookup to caller DNS would fail this check too. Numeric AsIs and named UseIP
+requests with allow rules are successful controls in the same runtime fixture.
+
 The name parser intentionally accepts only IP literals or ASCII DNS labels.
 Underscore/IDNA and exact Core address acceptance parity are pending; it is not
 a general-purpose Xray name validator. Each original literal must match its pin.

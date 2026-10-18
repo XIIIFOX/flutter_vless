@@ -76,6 +76,20 @@ development computer's VPN enabled. Those tests do not establish the
 physical-device/OS guarantees above; record them separately rather than inferring
 success from an icon, CONNECTED, or upload counters.
 
+## Local desktop acceptance boundaries
+
+Keep the development Mac's existing VPN enabled. Local macOS VPN acceptance
+must wait until the owner explicitly confirms readiness, after the main iPhone
+checks and planned implementation work. Until then, macOS network-runtime
+checks run in GitHub Actions; local compilation does not authorize a local VPN
+start or changes to host DNS, routes or proxy settings.
+
+CrossOver may be used for the Windows example's interface, options, imports,
+errors and available desktop controls. Keep all VPN and network-changing actions
+disabled there. CrossOver observations do not establish Windows Wintun/WFP,
+system routing, DNS protection or recovery behavior; verify those separately in
+the real Windows runtime workflow or on a Windows device.
+
 ## iPhone acceptance, 2026-10-18 (1.1.7 / Core 26.10.17)
 
 Physical iPhone 13 Pro Max over USB, iOS 27.0.1, signed Profile build of the

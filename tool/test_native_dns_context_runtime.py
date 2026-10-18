@@ -153,6 +153,7 @@ def main():
             raise RuntimeError('Pinned Core version/checksum mismatch')
         source = Path(metadata['Dir']).resolve()
         report['module_sum'] = metadata['Sum']
+        report['apply_sha256'] = hashlib.sha256((CAPABILITY / 'apply.py').read_bytes()).hexdigest()
         report['overlay_sha256'] = {
             str(path.relative_to(CAPABILITY / 'overlay')).replace(os.sep, '/'):
             hashlib.sha256(path.read_bytes()).hexdigest()
@@ -163,6 +164,8 @@ def main():
             for path in sorted((ROOT / 'tool/fixtures/native_dns_context_runtime').rglob('*.go'))}
         overlay = load_apply_module()
         overlay.copy_and_apply(source, core, go=arguments.go)
+        report['patched_source_sha256'] = {path: hashlib.sha256((core / path).read_bytes()).hexdigest()
+                                          for path in MANIFEST['upstream_sha256'] if path.endswith('.go')}
         fixture = core / 'native_dns_context_runtime'
         shutil.copytree(ROOT / 'tool/fixtures/native_dns_context_runtime', fixture)
         for name, package in [('internet', 'transport/internet'),
@@ -199,6 +202,11 @@ def main():
                                              for path, expected in report[key].items()):
                 raise RuntimeError('Source snapshot changed during verification; repeat in a stable checkout')
         report['source_snapshot_unchanged'] = True
+        if hashlib.sha256((CAPABILITY / 'apply.py').read_bytes()).hexdigest() != report['apply_sha256']:
+            raise RuntimeError('Overlay application source changed during verification')
+        if any(hashlib.sha256((core / path).read_bytes()).hexdigest() != digest
+               for path, digest in report['patched_source_sha256'].items()):
+            raise RuntimeError('Patched Core source changed during verification')
         report['success'] = True
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         report['success'] = False

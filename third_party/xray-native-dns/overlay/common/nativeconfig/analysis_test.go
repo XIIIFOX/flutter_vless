@@ -61,6 +61,40 @@ func hasRequirement(plan OutboundPlan, code RequirementCode) bool {
 	return false
 }
 
+func TestNativeConfigAsIsDomainFinalRulesHaveExplicitUnsupportedRequirement(t *testing.T) {
+	for _, item := range []struct {
+		name, settings, stream string
+		required               bool
+	}{
+		{"as-is-final", `{"finalRules":[{"action":"allow"}]}`, `{}`, true},
+		{"caller-dns-final", `{"domainStrategy":"UseIP","finalRules":[{"action":"allow"}]}`, `{}`, false},
+		{"as-is-no-final", `{}`, `{}`, false},
+		{"as-is-chain-final-ignored", `{"finalRules":[{"action":"allow"}]}`, `{"sockopt":{"dialerProxy":"next"}}`, false},
+		{"literal-redirect", `{"redirect":"127.0.0.1:443","finalRules":[{"action":"allow"}]}`, `{}`, false},
+		{"domain-redirect", `{"redirect":"owned.invalid:443","finalRules":[{"action":"allow"}]}`, `{}`, true},
+		{"port-redirect", `{"redirect":":443","finalRules":[{"action":"allow"}]}`, `{}`, true},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			var source conf.OutboundDetourConfig
+			if err := json.Unmarshal([]byte(`{"protocol":"freedom","settings":`+item.settings+`,"streamSettings":`+item.stream+`}`), &source); err != nil {
+				t.Fatal(err)
+			}
+			compiled, err := source.Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := proto.Clone(compiled)
+			plan, err := AnalyzeOutbound(3, compiled)
+			if err != nil || hasRequirement(plan, RequireFinalRuleDNS) != item.required {
+				t.Fatalf("Wrong typed AsIs final-rule requirement: %v", err)
+			}
+			if !proto.Equal(before, compiled) {
+				t.Fatal("Final-rule analysis mutated source")
+			}
+		})
+	}
+}
+
 func TestNativeConfigAllOutboundIdentifiersCompileToTypedRoles(t *testing.T) {
 	cases := []struct {
 		name, family string

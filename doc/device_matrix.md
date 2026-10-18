@@ -133,9 +133,9 @@ page must show ordinary connectivity. Never reinstall while the test VPN remains
 active. The initial reinstall incident required the owner to reboot the phone;
 subsequent stop/reinstall gates and normal-network checks passed.
 
-This is a partial acceptance record. Recovery from a running worker crash
-and the broader compatibility corpus are not implied
-by the successful cases above.
+This is a partial acceptance record. The broader compatibility corpus is not
+implied by the successful cases above; a later running-worker loss check is
+recorded below.
 
 The build-only Apple preflight preview was also installed on the physical iPhone.
 A synthetic unknown outbound was rejected as `outbounds[0]` at Core build before
@@ -159,8 +159,7 @@ devices; fresh browser pages showed the respective underlay/proxy addresses.
 All test sessions were explicitly stopped, saved Apple recovery read back disabled,
 and fresh ordinary-network pages loaded. The task-owned Android emulator was
 stopped, and the added iPhone Control Center test control was removed. Successful
-owner authentication was subsequently completed below; recovery from a running
-worker crash remains outstanding.
+owner authentication and running-worker loss were subsequently checked below.
 
 Private service identifiers were then tested with a supplied-profile derivative:
 an imported rule blocks `flutter-vless-tun`, and four additional blackhole
@@ -220,7 +219,7 @@ After disabling quick access, a cold app launch read the VPN profile as
 `enabled=false status=1`; options showed quick access and reconnect off, On Demand
 disabled. The task-owned example process and USB forwarder were stopped.
 This proves device-owner acceptance; the record does not distinguish Face ID
-from the permitted passcode fallback or establish worker-crash recovery.
+from the permitted passcode fallback. Worker loss was tested separately below.
 
 The subsequent Android emulator suite passed all 29 tests without skips
 (`build/android-security-emulator.VSBoaWAZ`). It includes an actual SystemUI
@@ -233,3 +232,37 @@ and metrics ports remain occupied, with service tags equal to the proxy tag.
 The full DNS/routing/handover/OS-policy corpus also passes. Android pure tests
 pass 63 cases; shared Apple control tests explicitly cover authenticated Stop
 and cancelled authentication during `.reasserting` without touching a real VPN.
+
+Running Core worker loss was then exercised on the same physical iPhone with
+the first original supplied profile. Auto Reconnect used 1000/2000 ms and three
+attempts; On Demand and quick access were disabled. A development-only build
+flag enabled a once-per-provider message which stops only Core, leaving HEV,
+TUN, routes and ordinary watchdog/retry state untouched. It acknowledged the
+stop; a fresh Safari request failed with a lost-network error during the outage.
+This browser observation is not a packet-capture proof of every possible leak.
+Provider diagnostics recorded Core loss at 14:59:17 UTC, ordinary watchdog
+failures, native worker restart at 14:59:58, and healthy forwarding at 15:00:00.
+The provider PID stayed 2040 throughout. Fresh Safari tfox and 2ip pages then
+both showed 103.75.118.225 (Japan on tfox). This proves successful worker-loss
+recovery inside a surviving provider, not continuous protection after complete
+provider termination or subsecond retry timing.
+
+Explicit Stop completed afterward; the provider exited, cold preferences read
+`enabled=false status=1`, and fresh Safari returned 95.139.123.8 (Russia).
+Reconnect, On Demand and quick access were disabled before restoring the signed
+ordinary build without the fault hook. The restored build's cold readback and
+ordinary internet were checked again. Only task-owned app/USB forwarding
+processes were stopped. Evidence stays under the ignored
+`build/ios-live-2026-10-18/worker-recovery-*` paths. The test hook is compiled out
+unless `FLUTTER_VLESS_ACCEPTANCE_TESTING` is explicitly supplied to both native
+example targets; no production plugin method or release setting enables it.
+
+To repeat that fault check, build the example using
+`FLUTTER_TARGET=test_driver/live_main.dart` and the explicit Swift compilation
+condition above. The driver `request_data` message `acceptance-stop-core` must
+return `acceptance-core-stopped` before counting an induced loss. The host
+requires its uniquely identified, connected profile with On Demand disabled;
+the provider also requires a healthy running session with reconnect enabled.
+Rejections, stale callbacks or timeouts do not prove a worker was stopped.
+The boundary's pure regression runs in `tool/test_apple_options.sh`, covering
+normal-build exclusion and refusing unhealthy, stopping or stale sessions.

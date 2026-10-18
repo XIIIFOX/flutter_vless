@@ -202,6 +202,13 @@ check alongside retained API services. Physical iPhone owner-authenticated
 Control Center start/stop and subsequent ordinary internet also pass; this does
 not complete the remaining compatibility items below.
 
+The physical iPhone also recovered after a development-only, acknowledged stop
+of its running Core worker. Ordinary watchdog recovery retained the same tunnel
+provider; fresh Safari requests afterward reached both IP sites through the
+proxy. Explicit Stop and normal internet were checked before restoring the
+ordinary signed app. See the [device record](device_matrix.md#iphone-acceptance-2026-10-18-117--core-261017)
+for the fault boundary, timestamps and limits of that observation.
+
 Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |

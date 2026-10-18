@@ -111,6 +111,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var hasStartedHEV = false
     private var hevStopSignal: DispatchGroup?
 
+    #if FLUTTER_VLESS_ACCEPTANCE_TESTING
+    // Watchdog-queue owned; deliberately never reset during this provider's life.
+    private var acceptanceCoreLossUsed = false
+    #endif
+
     private struct RuntimeSpec {
         let config: Data
         let port: Int
@@ -359,7 +364,55 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    #if FLUTTER_VLESS_ACCEPTANCE_TESTING
+    // Acceptance-only fault boundary. Read watchdog state on its owner queue;
+    // the HEV lifecycle and forwarding accessors provide their own locking.
+    private func acceptanceCoreLossIsSafe() -> Bool {
+        !watchdogSuspended && !runtimeRecoveryInFlight && !recoveryExhausted
+            && recoveryCheck == nil && watchdogPolicy.consecutiveFailures == 0
+            && initialRuntimeAttempted && runtimeSpec != nil && watchdogInboundPort != nil
+            && watchdogInboundHealthy && nativeOptions.reconnectEnabled
+            && nativeOptions.onDemand == "disabled" && !nativeOptions.enableOnDemand
+            && !isStartupStopped() && !hevLifecycle.isStopRequested && isForwardingReady()
+    }
+
+    private func acceptanceStopCore(completionHandler: ((Data?) -> Void)?) {
+        guard let reply = completionHandler else { return }
+        watchdogQueue.async {
+            guard !self.acceptanceCoreLossUsed && self.acceptanceCoreLossIsSafe() else {
+                reply(Data("acceptance-rejected".utf8))
+                return
+            }
+            self.acceptanceCoreLossUsed = true
+            let generation = self.watchdogGeneration
+            self.runtimeQueue.async {
+                // Recovery only schedules asynchronously onto runtimeQueue, so
+                // this validation cannot form a watchdog/runtime queue cycle.
+                let current = self.watchdogQueue.sync {
+                    self.watchdogGeneration == generation && self.acceptanceCoreLossIsSafe()
+                }
+                guard current && self.hasStartedHEV && !self.isStartupStopped() else {
+                    reply(Data("acceptance-stale".utf8))
+                    return
+                }
+                // Keep HEV, TUN, routes and readiness/retry state untouched. Only
+                // the ordinary watchdog may detect and recover this worker loss.
+                // No lock or synchronous watchdog operation encloses Core stop.
+                self.stopXRay()
+                rememberTunnelLog("Acceptance worker-loss injection: Core stopped")
+                reply(Data("acceptance-core-stopped".utf8))
+            }
+        }
+    }
+    #endif
+
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
+        #if FLUTTER_VLESS_ACCEPTANCE_TESTING
+        if messageData == Data("acceptance-stop-core".utf8) {
+            acceptanceStopCore(completionHandler: completionHandler)
+            return
+        }
+        #endif
         if let message = String(data: messageData, encoding: .utf8) {
             if message == "xray_runtime_state" {
                 completionHandler?(Data((isForwardingReady() ? "ready" : "recovering").utf8))

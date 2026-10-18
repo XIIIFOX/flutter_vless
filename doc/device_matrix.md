@@ -115,6 +115,10 @@ enabled throughout. Supplied profiles and device screenshots remain outside Git.
 * Unlock-before-action displayed Apple's authentication UI. Failed recognition
   followed by Cancel left VPN disconnected and no provider running. Successful
   device-owner authentication remains a manual acceptance step.
+* Forgetting the quick-access profile during an active connection left fresh
+  Safari traffic working. After Stop and a cold app start, the native toggle
+  could no longer start that forgotten profile. Disabling quick access also
+  prevented native startup; the containing app still opened normally.
 
 Before each development reinstall, app Stop is awaited, disabled recovery/profile
 preferences are read back, provider termination is checked, and a fresh Safari
@@ -122,6 +126,6 @@ page must show ordinary connectivity. Never reinstall while the test VPN remains
 active. The initial reinstall incident required the owner to reboot the phone;
 subsequent stop/reinstall gates and normal-network checks passed.
 
-This is a partial acceptance record. Quick-profile forgetting/disable, successful
-owner authentication, worker-fault retry limits and the broader compatibility
-corpus are not implied by the successful cases above.
+This is a partial acceptance record. Successful owner authentication, worker-fault
+retry limits and the broader compatibility corpus are not implied by the
+successful cases above.

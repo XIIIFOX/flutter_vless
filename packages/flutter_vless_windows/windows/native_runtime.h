@@ -19,9 +19,13 @@ bool SystemCommand(const wchar_t* name, const std::vector<std::wstring>& argumen
 bool WritePrivateConfig(const std::string& config, fs::path& path);
 void RemovePrivateConfig(fs::path& path);
 // Pinned Core decode/build/creation check, without starting listeners or routes.
-// The temporary document is privacy-normalized, owner-only and always removed.
+// The temporary document is privacy-normalized and always removed. VPN checks
+// require the administrator-owned runtime directory, including against a
+// filtered token belonging to the same signed-in Windows user.
 // Raw child output is discarded. No active service is stopped by this function.
-bool CheckConfig(const std::string& config, const fs::path& executable);
+enum class ConfigCheckStorage { currentUser, administrators };
+bool CheckConfig(const std::string& config, const fs::path& executable,
+    ConfigCheckStorage storage);
 bool SocksReady(uint16_t port, const std::string& user = {}, const std::string& password = {});
 }  // namespace flutter_vless::native
 #endif

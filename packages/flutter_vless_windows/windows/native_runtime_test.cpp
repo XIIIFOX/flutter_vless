@@ -113,6 +113,8 @@ int main(int argc, char** argv) {
 
   const auto trusted = FindBundledFile(L"xray.exe");
   if (trusted) {
+    constexpr auto owner = ConfigCheckStorage::currentUser;
+    constexpr auto administrator = ConfigCheckStorage::administrators;
     const auto temporary_documents = [] {
       std::set<fs::path> paths;
       for (const auto& entry : fs::directory_iterator(fs::temp_directory_path())) {
@@ -133,11 +135,28 @@ int main(int argc, char** argv) {
     assert(listen(occupied, 1) == 0);
     const auto configuration = std::string("{\"inbounds\":[{\"listen\":\"127.0.0.1\",\"protocol\":\"socks\",\"port\":")
         + std::to_string(ntohs(address.sin_port)) + "}],\"outbounds\":[{\"protocol\":\"freedom\"}]}";
-    assert(CheckConfig(configuration, *trusted)); // Core must not bind the occupied listener.
-    assert(!CheckConfig("{\"outbounds\":[{\"protocol\":\"private-preflight-canary\"}]}", *trusted));
-    assert(!CheckConfig("not-json-private-canary", *trusted));
+    assert(CheckConfig(configuration, *trusted, owner)); // Core must not bind the occupied listener.
+    assert(!CheckConfig("{\"outbounds\":[{\"protocol\":\"private-preflight-canary\"}]}", *trusted, owner));
+    assert(!CheckConfig("not-json-private-canary", *trusted, owner));
+    if (!wine && IsAdministrator()) {
+      const auto protected_directories = [] {
+        wchar_t windows[32768]{}; assert(GetWindowsDirectoryW(windows, 32768));
+        std::set<fs::path> paths;
+        for (const auto& entry : fs::directory_iterator(fs::path(windows) / L"Temp")) {
+          if (entry.path().filename().wstring().rfind(L"flutter-vless-protected-", 0) == 0) paths.insert(entry.path());
+        }
+        return paths;
+      };
+      const auto directories_before = protected_directories();
+      // Same administrator-owned factory whose filtered-token file/image
+      // denial is exercised above; checks must clean up after either result.
+      assert(CheckConfig(configuration, *trusted, administrator));
+      assert(!CheckConfig("{\"outbounds\":[{\"protocol\":\"private-preflight-canary\"}]}", *trusted, administrator));
+      assert(protected_directories() == directories_before);
+      std::cout << "PASS administrator-only Core preflight and private directory cleanup\n";
+    }
     const auto missing = trusted->parent_path() / L"missing-preflight-runtime.exe";
-    assert(!fs::exists(missing) && !CheckConfig(configuration, missing));
+    assert(!fs::exists(missing) && !CheckConfig(configuration, missing, owner));
     assert(temporary_documents() == documents_before);
     closesocket(occupied); WSACleanup();
     std::cout << "PASS pinned Core preflight, occupied listener and closed candidate errors\n";

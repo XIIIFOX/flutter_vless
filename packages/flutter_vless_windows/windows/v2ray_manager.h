@@ -52,7 +52,7 @@ class V2rayManager {
 
   // Helper methods
   void RunV2ray();
-  bool ValidateConfig(const std::string& config);
+  bool ValidateConfig(const std::string& config, bool proxy_only);
   std::string ModifyConfigForWindows(const std::string& config, bool proxy_only);
   
   // Thread synchronization and state

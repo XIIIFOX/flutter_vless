@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Keep Windows VPN preflight documents and their Core image in the administrator-owned runtime directory; require filtered-token access checks and cleanup checks in Windows acceptance.
 * Accept Core-style JSON comments and a leading BOM in SDK configuration/import/subscription paths and the example routing editor, preserving quoted markers and unknown fields. Add a shared syntax corpus checked against pinned Core; keep trailing-document rejection explicit.
 
 * Add build-only Apple Core preflight previews with redacted stage/index errors before VPN routes, and Windows bundled-Core checks before session replacement. Preserve active sessions on rejected candidates; keep published runtime artifacts unchanged during acceptance.

@@ -82,7 +82,7 @@ V2rayManager& V2rayManager::GetInstance() {
 }
 
 bool V2rayManager::Start(const std::string& config, bool proxy_only, const flutter_vless::NativeOptions& options) try {
-  if (!ValidateConfig(config)) {
+  if (!ValidateConfig(config, proxy_only)) {
     flutter_vless::DiagnosticsLog::Instance().Append(
         "runtime", "Xray configuration check rejected candidate; active session preserved");
     return false;
@@ -223,9 +223,11 @@ void V2rayManager::GetTrafficStats(int64_t& upload, int64_t& download) {
   }
 }
 
-bool V2rayManager::ValidateConfig(const std::string& config) {
+bool V2rayManager::ValidateConfig(const std::string& config, bool proxy_only) {
   const auto executable = flutter_vless::native::FindBundledFile(L"xray.exe");
-  return executable && flutter_vless::native::CheckConfig(config, *executable);
+  const auto storage = proxy_only ? flutter_vless::native::ConfigCheckStorage::currentUser
+                                 : flutter_vless::native::ConfigCheckStorage::administrators;
+  return executable && flutter_vless::native::CheckConfig(config, *executable, storage);
 }
 
 // Kept for reference but unused in VPN stub

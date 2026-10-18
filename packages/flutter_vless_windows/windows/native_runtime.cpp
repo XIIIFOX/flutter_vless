@@ -1,4 +1,5 @@
 #include "native_runtime.h"
+#include "protected_runtime.h"
 #include "xray_config.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -221,15 +222,20 @@ void RemovePrivateConfig(fs::path& path) {
   if (path.empty()) return;
   if (DeleteFileW(path.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND) path.clear();
 }
-bool CheckConfig(const std::string& config, const fs::path& executable) try {
+bool CheckConfig(const std::string& config, const fs::path& executable, ConfigCheckStorage storage) try {
   auto document = xray_config::Parse(config);
   if (!xray_config::Normalize(document)) return false;
+  ProtectedRuntime protected_runtime;
   struct PrivateDocument {
     fs::path path;
     ~PrivateDocument() { RemovePrivateConfig(path); }
   } candidate;
-  if (!WritePrivateConfig(document.dump(), candidate.path)) return false;
-  auto process = Launch(executable, {L"run", L"-test", L"-config", candidate.path.wstring()});
+  fs::path image = executable;
+  if (storage == ConfigCheckStorage::administrators) {
+    if (!protected_runtime.Create(executable) || !protected_runtime.WriteConfig(document.dump(), candidate.path)) return false;
+    image = protected_runtime.Executable();
+  } else if (!WritePrivateConfig(document.dump(), candidate.path)) return false;
+  auto process = Launch(image, {L"run", L"-test", L"-config", candidate.path.wstring()});
   if (!process) return false;
   const HANDLE handle = reinterpret_cast<HANDLE>(process->hProcess);
   if (WaitForSingleObject(handle, 10000) != WAIT_OBJECT_0) return false;

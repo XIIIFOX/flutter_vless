@@ -150,7 +150,10 @@ explicitly report preflight unavailable and retain their previous startup path.
 This feature requires the build-only preview until its runtime artifacts are
 approved for release. Windows runs its bundled Core `run -test` against private,
 privacy-normalized temporary documents before session replacement and against
-the generated adapter config. Android already checks its final candidate with
+the generated adapter config. VPN preflight uses the same administrator-owned
+runtime directory as forwarding, denying filtered same-user access to its
+configuration and Core image; proxy-only preflight uses current-user storage.
+Both success and rejection must remove the temporary runtime. Android already checks its final candidate with
 its bundled Core before the service transaction. Safe effective-config diffs,
 complete asset diagnostics, bind-race handling and rollback from later runtime
 failures are still pending; item 7 is not complete.

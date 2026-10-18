@@ -98,7 +98,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     if (!protection_.Active()) protection_.Release();
     return false;
   }
-  if (!native::CheckConfig(*prepared, *xray)) {
+  if (!native::CheckConfig(*prepared, *xray, native::ConfigCheckStorage::administrators)) {
     Event("Xray configuration check rejected generated VPN document; active session preserved");
     return false;
   }

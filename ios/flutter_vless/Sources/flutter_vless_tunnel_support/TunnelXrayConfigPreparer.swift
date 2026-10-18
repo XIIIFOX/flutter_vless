@@ -103,26 +103,17 @@ public enum TunnelXrayConfigPreparer {
             }
 
             var proxyUsesXhttp = false
-            if var outbounds = configJSON["outbounds"] as? [[String: Any]] {
-                for index in outbounds.indices {
-                    let tag = outbounds[index]["tag"] as? String
-                    let protocolType = outbounds[index]["protocol"] as? String
-                    guard tag == "proxy" || protocolType != "freedom" && protocolType != "blackhole" else {
-                        continue
-                    }
-                    var streamSettings = outbounds[index]["streamSettings"] as? [String: Any] ?? [:]
-                    normalizeStreamSettingsAliases(streamSettings: &streamSettings, messages: &messages)
-                    let network = (streamSettings["network"] as? String ?? "?").lowercased()
-                    proxyUsesXhttp = network == "xhttp"
-
-                    outbounds[index]["streamSettings"] = streamSettings
-                    break
-                }
+            if var outbounds = configJSON["outbounds"] as? [[String: Any]],
+               let index = TunnelDNSPolicy.primaryEndpointIndex(in: outbounds) {
+                var streamSettings = outbounds[index]["streamSettings"] as? [String: Any] ?? [:]
+                normalizeStreamSettingsAliases(streamSettings: &streamSettings, messages: &messages)
+                proxyUsesXhttp = ["xhttp", "splithttp"].contains(TunnelDNSPolicy.effectiveTransport(in: streamSettings))
+                outbounds[index]["streamSettings"] = streamSettings
                 configJSON["outbounds"] = outbounds
             }
 
             if proxyUsesXhttp {
-                let blackholeTag = blackholeOutboundTag(configJSON: configJSON)
+                let blackholeTag = blackholeOutboundTag(configJSON: &configJSON)
                 if ensureUdp443BlockRule(configJSON: &configJSON, outboundTag: blackholeTag, inboundTag: managedTag) {
                     messages.append("Added XHTTP UDP/443 block rule to force browser TCP fallback")
                 }
@@ -146,28 +137,12 @@ public enum TunnelXrayConfigPreparer {
         guard let outbounds = configJSON["outbounds"] as? [[String: Any]] else {
             return nil
         }
-        for outbound in outbounds {
-            let tag = outbound["tag"] as? String
-            let protocolType = outbound["protocol"] as? String
-            guard tag == "proxy" || protocolType != "freedom" && protocolType != "blackhole" else {
-                continue
-            }
-            guard let settings = outbound["settings"] as? [String: Any] else {
-                continue
-            }
-            if let vnext = settings["vnext"] as? [[String: Any]],
-               let address = vnext.first?["address"] as? String,
-               !address.isEmpty {
-                return address
-            }
-            if let servers = settings["servers"] as? [[String: Any]],
-               let address = servers.first?["address"] as? String,
-               !address.isEmpty {
-                return address
-            }
-            if let address = settings["address"] as? String, !address.isEmpty {
-                return address
-            }
+        guard let index = TunnelDNSPolicy.primaryEndpointIndex(in: outbounds),
+              let settings = outbounds[index]["settings"] as? [String: Any] else { return nil }
+        if let address = settings["address"] as? String, !address.isEmpty { return address }
+        for key in ["vnext", "servers"] {
+            if let servers = settings[key] as? [[String: Any]],
+               let address = servers.first?["address"] as? String, !address.isEmpty { return address }
         }
         return nil
     }
@@ -188,13 +163,16 @@ public enum TunnelXrayConfigPreparer {
         return nil
     }
 
-    private static func blackholeOutboundTag(configJSON: [String: Any]) -> String {
-        guard let outbounds = configJSON["outbounds"] as? [[String: Any]] else {
-            return "blackhole"
-        }
-        return outbounds.first(where: { outbound in
-            (outbound["protocol"] as? String) == "blackhole"
-        })?["tag"] as? String ?? "blackhole"
+    private static func blackholeOutboundTag(configJSON: inout [String: Any]) -> String {
+        var outbounds = configJSON["outbounds"] as? [[String: Any]] ?? []
+        if let outbound = outbounds.first(where: {
+            TunnelDNSPolicy.protocolRole($0["protocol"]) == "blackhole" && !(($0["tag"] as? String) ?? "").isEmpty
+        }), let tag = outbound["tag"] as? String { return tag }
+        var tags = XrayServiceTags(configuration: configJSON)
+        let tag = tags.next("flutter-vless-xhttp-block")
+        outbounds.append(["tag": tag, "protocol": "blackhole"])
+        configJSON["outbounds"] = outbounds
+        return tag
     }
 
     private static func ensureUdp443BlockRule(configJSON: inout [String: Any], outboundTag: String, inboundTag: String) -> Bool {

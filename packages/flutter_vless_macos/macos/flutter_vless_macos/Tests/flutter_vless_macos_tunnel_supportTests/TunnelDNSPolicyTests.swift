@@ -298,6 +298,115 @@ final class TunnelDNSPolicyTests: XCTestCase {
         }
     }
 
+    func testMasquePrimaryUsesProtectedPinsAndPreservesTransportIdentity() throws {
+        let settings: [String: Any] = ["address": "masque.example", "port": 8443, "remoteDNS": ["1.1.1.1", "9.9.9.9"]]
+        let tls: [String: Any] = ["serverName": "masque-sni.example", "alpn": ["h2"]]
+        let transport: [String: Any] = ["user": "fixture-user", "pass": "fixture-password", "host": "masque-host.example", "path": "/connect-ip/", "headers": ["X-Fixture": "masque-value"]]
+        let original: [String: Any] = ["tag": "proxy", "protocol": "masque", "settings": settings, "streamSettings": ["network": "masque", "security": "tls", "tlsSettings": tls, "masqueSettings": transport]]
+        var config: [String: Any] = ["dns": ["servers": ["tcp://9.9.9.9"]], "outbounds": [original]]
+        var requests: [String] = []
+        XCTAssertEqual(TunnelDNSPolicy.apply(to: &config, managedInboundTag: "tun", resolveIPv4: { requests.append($0); return "203.0.113.9" }), ["203.0.113.9"])
+        XCTAssertEqual(requests, ["masque.example"])
+        let primary = try XCTUnwrap((config["outbounds"] as? [[String: Any]])?.first)
+        XCTAssertEqual(primary["settings"] as? NSDictionary, settings as NSDictionary)
+        let stream = try XCTUnwrap(primary["streamSettings"] as? [String: Any])
+        XCTAssertEqual(stream["tlsSettings"] as? NSDictionary, tls as NSDictionary)
+        XCTAssertEqual(stream["masqueSettings"] as? NSDictionary, transport as NSDictionary)
+        XCTAssertEqual((stream["sockopt"] as? [String: Any])?["domainStrategy"] as? String, "AsIs")
+        XCTAssertNotNil((stream["sockopt"] as? [String: Any])?["dialerProxy"] as? String)
+        let rules = try XCTUnwrap((config["routing"] as? [String: Any])?["rules"] as? [[String: Any]])
+        XCTAssertTrue(rules.contains { ($0["domain"] as? [String]) == ["full:masque.example"] && ($0["port"] as? String) == "8443" })
+    }
+
+    func testInternalHandlersBeforeSelectedProxyDoNotSuppressXHTTPProtection() throws {
+        let internalDNS: [String: Any] = ["tag": "caller-dns", "protocol": "dns", "settings": ["rules": [["action": "return", "rCode": 5]]]]
+        let loop: [String: Any] = ["tag": "caller-loop", "protocol": "loopback", "settings": ["inboundTag": "caller-loop-input"]]
+        let other: [String: Any] = ["tag": "backup", "protocol": "http", "settings": ["address": "backup.example", "port": 8080]]
+        for network in ["xhttp", "splithttp"] {
+            let selected: [String: Any] = ["tag": "proxy", "protocol": "vless", "settings": ["address": "selected.example", "port": 443, "id": "22222222-2222-4222-8222-222222222222", "encryption": "none"], "streamSettings": ["network": "tcp", "method": network, "xhttpSettings": ["path": "/fixture"]]]
+            let raw: [String: Any] = ["inbounds": [["protocol": "socks", "port": 10808]], "dns": ["servers": ["tcp://9.9.9.9"]], "outbounds": [internalDNS, loop, other, selected]]
+            let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: JSONSerialization.data(withJSONObject: raw), credentials: Self.credentials, resolveIPv4: { _ in "203.0.113.9" }))
+            XCTAssertTrue(prepared.proxyUsesXhttp)
+            let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+            let outbounds = try XCTUnwrap(output["outbounds"] as? [[String: Any]])
+            XCTAssertEqual(outbounds[0] as NSDictionary, internalDNS as NSDictionary)
+            XCTAssertEqual(outbounds[1] as NSDictionary, loop as NSDictionary)
+            XCTAssertEqual(Array(outbounds.prefix(4)).compactMap { $0["tag"] as? String }, ["caller-dns", "caller-loop", "backup", "proxy"])
+            let rules = try XCTUnwrap((output["routing"] as? [String: Any])?["rules"] as? [[String: Any]])
+            XCTAssertEqual(rules.filter { ($0["network"] as? String) == "udp" && ($0["port"] as? String) == "443" }.count, 1)
+            let blockRule = try XCTUnwrap(rules.first { ($0["network"] as? String) == "udp" && ($0["port"] as? String) == "443" })
+            let blocked = try XCTUnwrap(outbounds.first { ($0["tag"] as? String) == (blockRule["outboundTag"] as? String) })
+            XCTAssertTrue(["blackhole", "block"].contains(blocked["protocol"] as? String ?? ""))
+            XCTAssertEqual(TunnelXrayConfigPreparer.parseServerAddress(configJSON: output), "selected.example")
+        }
+    }
+
+    func testExistingTransportMetadataAndMultipleOriginalOutboundsStayIntact() throws {
+        let transports: [(String, String, [String: Any])] = [
+            ("ws", "wsSettings", ["path": "/ws", "headers": ["Host": "ws-host.example"]]),
+            ("grpc", "grpcSettings", ["serviceName": "caller-service", "authority": "grpc-host.example", "multiMode": true]),
+            ("httpupgrade", "httpupgradeSettings", ["path": "/upgrade", "host": "upgrade-host.example"])
+        ]
+        var inputs: [[String: Any]] = []
+        for (index, transport) in transports.enumerated() {
+            inputs.append(["tag": index == 0 ? "proxy" : "backup-\(index)", "protocol": "http", "settings": ["address": "shared.example", "port": 8443 + index, "user": "user-\(index)", "pass": "pass-\(index)"], "streamSettings": ["network": transport.0, "security": "tls", "tlsSettings": ["serverName": "sni-\(index).example"], transport.1: transport.2]])
+        }
+        var config: [String: Any] = ["outbounds": inputs]
+        var resolved: [String] = []
+        XCTAssertEqual(TunnelDNSPolicy.apply(to: &config, managedInboundTag: "tun", resolveIPv4: { resolved.append($0); return "203.0.113.9" }), ["203.0.113.9"])
+        XCTAssertEqual(resolved, ["shared.example"])
+        let outputs = try XCTUnwrap(config["outbounds"] as? [[String: Any]])
+        for (index, transport) in transports.enumerated() {
+            XCTAssertEqual(outputs[index]["tag"] as? String, inputs[index]["tag"] as? String)
+            XCTAssertEqual(outputs[index]["settings"] as? NSDictionary, inputs[index]["settings"] as? NSDictionary)
+            let stream = try XCTUnwrap(outputs[index]["streamSettings"] as? [String: Any])
+            XCTAssertEqual(stream[transport.1] as? NSDictionary, transport.2 as NSDictionary)
+            XCTAssertEqual(stream["tlsSettings"] as? NSDictionary, (inputs[index]["streamSettings"] as? [String: Any])?["tlsSettings"] as? NSDictionary)
+        }
+        let rules = try XCTUnwrap((config["routing"] as? [String: Any])?["rules"] as? [[String: Any]])
+        XCTAssertEqual(Set(rules.compactMap { ($0["domain"] as? [String]) == ["full:shared.example"] ? $0["port"] as? String : nil }), ["8443", "8444", "8445"])
+    }
+
+    func testCoreProtocolAliasesAndNullTransportPointersKeepProtection() throws {
+        let sourceDirect: [String: Any] = ["tag": "caller-direct", "protocol": "direct", "settings": ["targetStrategy": "AsIs"], "streamSettings": ["sockopt": ["dialerProxy": NSNull()]]]
+        let sourceBlock: [String: Any] = ["tag": "caller-block", "protocol": "block"]
+        let primary: [String: Any] = ["tag": "proxy", "protocol": "http", "settings": ["address": "proxy.example", "port": 443], "streamSettings": ["method": NSNull(), "network": "xhttp", "xhttpSettings": ["downloadSettings": ["address": "download.example", "port": 8443]], "sockopt": ["dialerProxy": NSNull()]]]
+        let raw: [String: Any] = ["inbounds": [["protocol": "socks", "port": 10808]], "outbounds": [sourceDirect, sourceBlock, primary]]
+        var names: [String] = []
+        let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: JSONSerialization.data(withJSONObject: raw), credentials: Self.credentials, resolveIPv4: { names.append($0); return "203.0.113.9" }))
+        XCTAssertTrue(prepared.proxyUsesXhttp)
+        XCTAssertEqual(Set(names), ["proxy.example", "download.example"])
+        let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+        let outbounds = try XCTUnwrap(output["outbounds"] as? [[String: Any]])
+        XCTAssertEqual(outbounds[0]["protocol"] as? String, "direct")
+        XCTAssertEqual((outbounds[0]["settings"] as? [String: Any])?["domainStrategy"] as? String, "ForceIPv4")
+        XCTAssertNil((outbounds[0]["settings"] as? [String: Any])?["targetStrategy"])
+        XCTAssertEqual(outbounds[1] as NSDictionary, sourceBlock as NSDictionary)
+        let rules = try XCTUnwrap((output["routing"] as? [String: Any])?["rules"] as? [[String: Any]])
+        XCTAssertTrue(rules.contains { ($0["port"] as? String) == "443" && ($0["network"] as? String) == "udp" && ($0["outboundTag"] as? String) == "caller-block" })
+    }
+
+    func testNullXHTTPPointersRespectCoreEffectiveDownloadSettings() throws {
+        let active: [String: Any] = ["downloadSettings": ["address": "download.example", "port": 8443]]
+        let dormant: [String: Any] = ["downloadSettings": ["address": "must-not-resolve.example", "port": 9443]]
+        let streams: [[String: Any]] = [
+            ["network": "xhttp", "xhttpSettings": NSNull(), "splithttpSettings": active],
+            ["network": "xhttp", "xhttpSettings": ["extra": NSNull(), "downloadSettings": dormant["downloadSettings"]!], "splithttpSettings": dormant]
+        ]
+        for (index, stream) in streams.enumerated() {
+            var config: [String: Any] = ["outbounds": [["tag": "proxy", "protocol": "http", "settings": ["address": "proxy.example", "port": 443], "streamSettings": stream]]]
+            var names: [String] = []
+            XCTAssertNotNil(TunnelDNSPolicy.apply(to: &config, managedInboundTag: "tun", resolveIPv4: { name in
+                names.append(name)
+                XCTAssertNotEqual(name, "must-not-resolve.example")
+                return name == "must-not-resolve.example" ? nil : "203.0.113.9"
+            }))
+            XCTAssertEqual(Set(names), index == 0 ? ["proxy.example", "download.example"] : ["proxy.example"])
+            let output = try XCTUnwrap(((config["outbounds"] as? [[String: Any]])?.first)?["streamSettings"] as? [String: Any])
+            if index == 1 { XCTAssertEqual(output["splithttpSettings"] as? NSDictionary, dormant as NSDictionary) }
+        }
+    }
+
     func testNativeDNSFixtureExport() throws {
         let env = ProcessInfo.processInfo.environment
         guard let source = env["TUNNEL_DNS_SOURCE_JSON"], let destination = env["TUNNEL_DNS_OUTPUT_JSON"] else { return }

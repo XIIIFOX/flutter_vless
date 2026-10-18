@@ -132,6 +132,10 @@ The Windows backend does not download Xray automatically.
 
 ## Common Checks
 
+- The [shared protocol fixtures](../tool/fixtures/compatibility/protocols.json)
+  are synthetic preparation examples. Replace their endpoint and credentials
+  with a server you control before live testing; successful Core Build does
+  not establish a working protocol handshake.
 - For the DNS preservation check, import full Xray JSON with `dns.hosts` and
   per-domain `dns.servers`, then keep Android's default `config` DNS policy.
   The explicit `proxy` policy intentionally overrides system DNS. See the

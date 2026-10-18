@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Recognize MASQUE and Core role aliases while preserving internal DNS/loopback handlers. Select the actual proxy transport, match XHTTP null precedence, and allocate a real UDP/443 block target when needed.
 * Preserve explicit remote caller DNS and separate transport bootstrap pins from caller hosts. Use Core DNS for private VPN A queries; document the proxied native localhost default and unsupported DNS paths.
 * Revoke stale startup/recovery callbacks synchronously on Stop; keep sleep/wake admission ordered and release sleeping health-check retry slots before a valid wake.
 * Reserve caller metrics listener ports alongside API ports without rewriting their settings; cover simultaneous API, metrics and authenticated adapter traffic in runtime acceptance.

@@ -12,7 +12,7 @@ internal object AndroidTunnelDnsPolicy {
     const val RELAY_TAG = "flutter-vless-system-dns"
     const val UPSTREAM_TAG = "flutter-vless-dns-upstream"
     const val PROXY_TAG = "flutter-vless-dns-proxy"
-    private val endpointProtocols = setOf("http", "socks", "vless", "vmess", "trojan", "shadowsocks", "hysteria", "wireguard")
+    private val endpointProtocols = setOf("http", "socks", "vless", "vmess", "trojan", "shadowsocks", "hysteria", "wireguard", "masque")
 
     data class Prepared(
         val configJson: String,
@@ -220,10 +220,8 @@ internal object AndroidTunnelDnsPolicy {
         }
     }
 
-    private fun prepareStream(stream: JSONObject, pinEndpoint: (String) -> Unit) {
-        canonicalize(stream, "sockopt", "address", "network", "xhttpSettings", "splithttpSettings")
-        // These two native keys select the same transport object. Reject ambiguous payloads.
-        require(!(stream.has("xhttpSettings") && stream.has("splithttpSettings"))) { "Conflicting XHTTP transport aliases" }
+    private fun prepareStream(stream: JSONObject, pinEndpoint: (String) -> Unit, independentDownload: Boolean = false) {
+        canonicalize(stream, "sockopt", "address", "network", "method", "xhttpSettings", "splithttpSettings")
         val sockopt = objectValue(stream, "sockopt") ?: JSONObject()
         canonicalize(sockopt, "domainStrategy", "addressPortStrategy", "dialerProxy")
         require((optionalString(sockopt, "addressPortStrategy") ?: "none").equals("none", true)) {
@@ -231,19 +229,27 @@ internal object AndroidTunnelDnsPolicy {
         }
         sockopt.put("domainStrategy", "ForceIP")
         stream.put("sockopt", sockopt)
-        optionalString(stream, "address")?.let(pinEndpoint)
-        for (key in listOf("xhttpSettings", "splithttpSettings")) {
-            val transport = objectValue(stream, key) ?: continue
-            canonicalize(transport, "extra", "downloadSettings")
-            val extra = objectValue(transport, "extra")
-            if (extra == null) {
-                objectValue(transport, "downloadSettings")?.let { prepareStream(it, pinEndpoint) }
-            } else {
-                // Xray replaces the outer settings with extra; unused endpoints must not bootstrap.
-                canonicalize(extra, "downloadSettings")
-                objectValue(extra, "downloadSettings")?.let { prepareStream(it, pinEndpoint) }
-            }
-        }
+        // Core method overrides network; JSON null retains the fallback/default.
+        val method = if (stream.isNull("method")) null else optionalString(stream, "method")
+        val network = method ?: if (stream.isNull("network")) "tcp" else optionalString(stream, "network")
+        // Primary TCP/WS/gRPC/XHTTP use the protocol's server address. Only
+        // XDRIVE uses the primary MemoryStreamConfig destination; an independent
+        // XHTTP download always has its own destination, regardless of method.
+        if (independentDownload || network.equals("xdrive", ignoreCase = true))
+            optionalString(stream, "address")?.let(pinEndpoint)
+        if (network?.lowercase(Locale.ROOT) !in setOf("xhttp", "splithttp")) return
+        fun nullableObject(value: JSONObject, key: String) =
+            if (value.isNull(key)) null else objectValue(value, key)
+        // These are separate Core aliases with defined precedence, not ambiguous
+        // duplicate keys. Do not rewrite or bootstrap the inactive object.
+        val transport = nullableObject(stream, "xhttpSettings") ?: nullableObject(stream, "splithttpSettings") ?: return
+        canonicalize(transport, "extra", "downloadSettings")
+        if (transport.has("extra")) {
+            // Even explicit extra:null replaces outer advanced settings in Core.
+            val extra = nullableObject(transport, "extra") ?: return
+            canonicalize(extra, "downloadSettings")
+            nullableObject(extra, "downloadSettings")?.let { prepareStream(it, pinEndpoint, independentDownload = true) }
+        } else nullableObject(transport, "downloadSettings")?.let { prepareStream(it, pinEndpoint, independentDownload = true) }
     }
 
     /** User bypass routes may never remove the reserved resolver from TUN capture. */

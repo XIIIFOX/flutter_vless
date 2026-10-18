@@ -8,9 +8,29 @@ import flutter_vless_macos_privacy
 public enum TunnelDNSPolicy {
     public static let virtualServer = "198.18.0.2"
     private static let endpointProtocols: Set<String> = [
-        "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria", "wireguard"
+        "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria", "masque", "wireguard"
     ]
     private struct Endpoint { let host: String; let port: Int }
+
+    // Core aliases change policy roles, not caller protocol text. Internal
+    // DNS/loopback handlers have no physical server endpoint to bootstrap.
+    static func protocolRole(_ value: Any?) -> String {
+        switch (value as? String ?? "").lowercased() {
+        case "direct": return "freedom"
+        case "block": return "blackhole"
+        case let value: return value
+        }
+    }
+
+    static func primaryEndpointIndex(in outbounds: [[String: Any]]) -> Int? {
+        outbounds.firstIndex { ($0["tag"] as? String) == "proxy" && endpointProtocols.contains(protocolRole($0["protocol"])) }
+            ?? outbounds.firstIndex { endpointProtocols.contains(protocolRole($0["protocol"])) }
+    }
+
+    static func effectiveTransport(in stream: [String: Any]) -> String {
+        // method is a pointer in Core: explicit null leaves network effective.
+        ((stream["method"] as? String) ?? (stream["network"] as? String) ?? "tcp").lowercased()
+    }
 
     static func apply(to config: inout [String: Any], managedInboundTag: String,
                       resolveIPv4: (String) -> String?) -> [String]? {
@@ -18,11 +38,7 @@ public enum TunnelDNSPolicy {
         // rewrite a caller dictionary which might be retried.
         guard var output = TunnelConfigKeys.normalize(config),
               var outbounds = output["outbounds"] as? [[String: Any]],
-              let primary = outbounds.firstIndex(where: {
-                  ($0["tag"] as? String) == "proxy" && endpointProtocols.contains(($0["protocol"] as? String ?? "").lowercased())
-              }) ?? outbounds.firstIndex(where: {
-                  endpointProtocols.contains(($0["protocol"] as? String ?? "").lowercased())
-              }) else { return nil }
+              let primary = primaryEndpointIndex(in: outbounds) else { return nil }
         let tags = outbounds.compactMap { $0["tag"] as? String }.filter { !$0.isEmpty }
         guard Set(tags).count == tags.count else { return nil }
         var allocator = XrayServiceTags(configuration: output)
@@ -60,7 +76,7 @@ public enum TunnelDNSPolicy {
             }
         }
         for index in outbounds.indices {
-            let proto = (outbounds[index]["protocol"] as? String ?? "").lowercased()
+            let proto = protocolRole(outbounds[index]["protocol"])
             var stream = outbounds[index]["streamSettings"] as? [String: Any] ?? [:]
             if proto == "freedom" {
                 var settings = outbounds[index]["settings"] as? [String: Any] ?? [:]
@@ -198,7 +214,7 @@ public enum TunnelDNSPolicy {
         guard (sockopt["addressPortStrategy"] as? String ?? "none").lowercased() == "none" else { return false }
         if let tls = stream["tlsSettings"] as? [String: Any],
            tls.keys.contains(where: { XrayJSONField.matches($0, "echConfigList") && (tls[$0] as? String ?? "").contains("://") }) { return false }
-        let network = ((stream["method"] ?? stream["network"]) as? String ?? "tcp").lowercased()
+        let network = effectiveTransport(in: stream)
         // XDRIVE has a separate fronting destination, not the protocol endpoint.
         guard network != "xdrive" else { return false }
         let chained = !(sockopt["dialerProxy"] as? String ?? "").isEmpty
@@ -234,9 +250,10 @@ public enum TunnelDNSPolicy {
         stream["sockopt"] = sockopt
         // Only the effective XHTTP settings participate. A supplied extra
         // replaces outer downloadSettings; dormant data must not bootstrap.
-        let key = stream["xhttpSettings"] != nil ? "xhttpSettings" : "splithttpSettings"
+        let key = stream["xhttpSettings"] is [String: Any] ? "xhttpSettings" : "splithttpSettings"
         if ["xhttp", "splithttp"].contains(network), var settings = stream[key] as? [String: Any] {
-            if var extra = settings["extra"] as? [String: Any] {
+            if let extraValue = settings["extra"] {
+                var extra = extraValue as? [String: Any] ?? [:]
                 if var download = extra["downloadSettings"] as? [String: Any] {
                     guard sockopt["penetrate"] as? Bool != true,
                           let host = download["address"] as? String, let p = port(download["port"]),
@@ -262,10 +279,10 @@ public enum TunnelDNSPolicy {
     private static func streamChains(_ stream: [String: Any]) -> [String] {
         var result: [String] = []
         if let tag = (stream["sockopt"] as? [String: Any])?["dialerProxy"] as? String, !tag.isEmpty { result.append(tag) }
-        let network = ((stream["method"] ?? stream["network"]) as? String ?? "tcp").lowercased()
+        let network = effectiveTransport(in: stream)
         if ["xhttp", "splithttp"].contains(network),
-           let settings = (stream["xhttpSettings"] ?? stream["splithttpSettings"]) as? [String: Any] {
-            let effective = settings["extra"] as? [String: Any] ?? settings
+           let settings = (stream["xhttpSettings"] as? [String: Any]) ?? (stream["splithttpSettings"] as? [String: Any]) {
+            let effective = settings["extra"] != nil ? (settings["extra"] as? [String: Any] ?? [:]) : settings
             if let download = effective["downloadSettings"] as? [String: Any] { result += streamChains(download) }
         }
         return result

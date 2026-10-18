@@ -58,7 +58,7 @@ enum TunnelConfigKeys {
                     extra["downloadSettings"] = download
                 }
                 settings["extra"] = extra
-            } else if var download = settings["downloadSettings"] as? [String: Any] {
+            } else if settings["extra"] == nil, var download = settings["downloadSettings"] as? [String: Any] {
                 guard normalizeStream(&download) else { return false }
                 settings["downloadSettings"] = download
             }

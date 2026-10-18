@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Admit MASQUE, caller DNS/loopback outbounds and Core direct/block aliases with protected physical dialing. Match nullable stream fields and effective XHTTP extra/download settings; add causal and shared preparation tests.
 * Preserve explicit remote caller DNS and separate transport bootstrap pins from caller hosts. Use Core DNS for private VPN A queries; document the proxied native localhost default and unsupported DNS paths.
 * Enforce the command deadline while stdout remains available. Add actual stalled-child, output-cap and failed-command checks, with a separate process-only build for CrossOver validation.
 * Reserve caller metrics ports for private VPN/statistics allocation and proxy-only statistics, retaining bounded OS availability checks and caller metrics settings.

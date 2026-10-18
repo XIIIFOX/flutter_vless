@@ -4,7 +4,106 @@
 #include <fstream>
 using namespace flutter_vless::xray_config;
 void Require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+void ProtocolCompatibilityCases(const std::string& only = "") {
+  const auto source = Parse(R"({"inbounds":[],"outbounds":[{"tag":"proxy","protocol":"socks","settings":{"servers":[{"address":"endpoint.invalid","port":443}]}},{"tag":"direct","protocol":"freedom"},{"tag":"block","protocol":"blackhole"}],"dns":{"queryStrategy":"UseIPv4","servers":["tcp://1.1.1.1"]},"routing":{"rules":[]}})");
+  auto prepare = [](const Json& value) {
+    return PrepareProtectedVpn(value.dump(), "session-user", "session-password", "Ethernet",
+        [](const std::string& host) { return host == "endpoint.invalid" ? "192.0.2.5" : ""; });
+  };
+  auto tagged = [](const Json& config, const std::string& tag) -> const Json& {
+    for (const auto& outbound : config["outbounds"]) if (outbound.value("tag", "") == tag) return outbound;
+    throw std::runtime_error("protocol case references missing handler");
+  };
+  std::map<std::string, std::function<void()>> cases;
+  cases["loopback"] = [&] {
+    auto profile = source;
+    const Json loop = {{"tag", "caller-loop"}, {"protocol", "loopback"}, {"settings", {{"inboundTag", "caller-loop-context"},
+        {"sniffing", {{"enabled", true}, {"destOverride", Json::array({"http"})}, {"routeOnly", true}}}}}};
+    profile["outbounds"].insert(profile["outbounds"].begin(), loop);
+    profile["routing"]["rules"].push_back({{"type", "field"}, {"inboundTag", Json::array({"caller-loop-context"})}, {"outboundTag", "proxy"}});
+    auto output = prepare(profile); Require(output.has_value(), "valid caller loopback was rejected as an endpoint");
+    auto config = Parse(*output);
+    Require(config["outbounds"][0] == loop && config["outbounds"][1]["settings"] == source["outbounds"][0]["settings"], "dispatch-only caller loopback or endpoint order changed");
+    Require(config["routing"]["rules"].back() == profile["routing"]["rules"].back(), "caller loopback routing lost");
+    profile["outbounds"][0]["streamSettings"] = {{"sockopt", {{"dialerProxy", "unused-loopback-socket-handler"}}}};
+    output = prepare(profile); Require(output.has_value(), "dispatch-only loopback inspected its unused socket chain");
+    Require(Parse(*output)["outbounds"][0] == profile["outbounds"][0], "caller loopback dormant stream was rewritten");
+  };
+  cases["dns"] = [&] {
+    auto profile = source;
+    const Json settings = {{"rewriteNetwork", "tcp"}, {"rewriteAddress", "caller-resolver.invalid"}, {"rewritePort", 5353},
+        {"rules", Json::array({{{"action", "direct"}}})}};
+    profile["dns"]["hosts"] = {{"caller-resolver.invalid", "203.0.113.53"}};
+    profile["outbounds"].push_back({{"tag", "caller-dns-adapter"}, {"protocol", "dns"}, {"settings", settings},
+        {"streamSettings", {{"sockopt", {{"tcpKeepAliveIdle", 31}}}}}});
+    auto output = prepare(profile); Require(output.has_value(), "valid caller DNS outbound was rejected as an endpoint");
+    auto config = Parse(*output); const auto& dns = tagged(config, "caller-dns-adapter");
+    Require(dns["settings"] == settings && config["dns"] == profile["dns"], "caller DNS outbound policy or root hosts changed");
+    Require(dns["streamSettings"]["sockopt"] == Json{{"tcpKeepAliveIdle", 31}, {"domainStrategy", "ForceIPv4"}, {"interface", "Ethernet"}}, "DNS raw dial path lost its physical protection/options");
+  };
+  cases["masque"] = [&] {
+    for (const auto& alpn : {"h2", "h3"}) {
+      auto profile = source;
+      const Json settings = {{"address", "endpoint.invalid"}, {"port", 443}, {"remoteDNS", Json::array({"1.1.1.1"})}};
+      profile["outbounds"][0] = {{"tag", "proxy"}, {"protocol", "masque"}, {"settings", settings},
+          {"streamSettings", {{"network", "masque"}, {"security", "tls"}, {"tlsSettings", {{"serverName", "masque-origin.invalid"}, {"alpn", Json::array({alpn})}}},
+              {"masqueSettings", {{"path", "/masque"}, {"headers", {{"X-Test", "source-header"}}}}}}}};
+      auto output = prepare(profile); Require(output.has_value(), "valid flat MASQUE endpoint was rejected");
+      auto config = Parse(*output); const auto& remote = config["outbounds"][0];
+      Require(remote["settings"] == settings && remote["streamSettings"]["tlsSettings"]["serverName"] == "masque-origin.invalid"
+          && remote["streamSettings"]["tlsSettings"]["alpn"] == Json::array({alpn})
+          && remote["streamSettings"]["masqueSettings"] == profile["outbounds"][0]["streamSettings"]["masqueSettings"], "MASQUE identity, logical endpoint or transport metadata changed");
+      const auto& loop = tagged(config, remote["streamSettings"]["sockopt"]["dialerProxy"].get<std::string>());
+      Require(loop["protocol"] == "loopback" && remote["streamSettings"]["sockopt"]["domainStrategy"] == "AsIs", "MASQUE physical endpoint escaped private bootstrap");
+      const auto input = loop["settings"]["inboundTag"];
+      bool bound = false;
+      for (const auto& rule : config["routing"]["rules"]) if (rule.value("inboundTag", Json::array()) == Json::array({input}) && rule.value("port", "") == "443") {
+        const auto& leaf = tagged(config, rule["outboundTag"].get<std::string>());
+        bound = leaf["settings"]["redirect"] == "192.0.2.5:0" && leaf["streamSettings"]["sockopt"]["interface"] == "Ethernet";
+      }
+      Require(bound, "MASQUE pin did not preserve underlay binding");
+    }
+  };
+  cases["aliases"] = [&] {
+    auto profile = source;
+    profile["outbounds"][1]["protocol"] = "direct";
+    profile["outbounds"][2]["protocol"] = "block";
+    auto output = prepare(profile); Require(output.has_value(), "registered Core direct/block aliases were rejected");
+    auto config = Parse(*output);
+    Require(config["outbounds"][1]["protocol"] == "direct" && config["outbounds"][2] == profile["outbounds"][2], "source alias protocol strings changed");
+    Require(config["outbounds"][1]["streamSettings"]["sockopt"]["interface"] == "Ethernet"
+        && config["outbounds"][1]["settings"]["domainStrategy"] == "ForceIPv4", "direct alias bypassed physical protection");
+  };
+  cases["null-stream-fields"] = [&] {
+    auto profile = source;
+    profile["outbounds"][0]["streamSettings"] = {{"method", nullptr}, {"network", "xhttp"}, {"sockopt", {{"dialerProxy", nullptr}}},
+        {"xhttpSettings", {{"downloadSettings", {{"address", "endpoint.invalid"}, {"port", 8443}, {"network", "tcp"}}}}}};
+    auto output = prepare(profile); Require(output.has_value(), "Core nullable stream fields were rejected");
+    auto config = Parse(*output);
+    Require(config["outbounds"][0]["streamSettings"]["method"].is_null(), "source nullable method was rewritten");
+    bool download = false;
+    for (const auto& rule : config["routing"]["rules"]) if (rule.value("port", "") == "8443" && rule.contains("domain")) download = true;
+    Require(download, "null method failed to fall back to effective XHTTP network");
+    profile["outbounds"][0]["streamSettings"]["method"] = "raw";
+    profile["outbounds"][0]["streamSettings"]["network"] = nullptr;
+    profile["outbounds"][0]["streamSettings"]["xhttpSettings"]["downloadSettings"]["address"] = "unused.invalid";
+    Require(prepare(profile).has_value(), "nonnull method did not override null network/dormant download");
+  };
+  cases["xhttp-null-extra"] = [&] {
+    auto profile = source;
+    profile["outbounds"][0]["streamSettings"] = {{"network", "xhttp"}, {"xhttpSettings", {{"extra", nullptr},
+        {"downloadSettings", {{"address", "unused.invalid"}, {"port", 8443}, {"sockopt", {{"dialerProxy", "unused-handler"}}}}}}}};
+    auto output = prepare(profile); Require(output.has_value(), "extra:null failed to suppress dormant outer download/chain");
+    auto config = Parse(*output);
+    Require(config["outbounds"][0]["streamSettings"]["xhttpSettings"] == profile["outbounds"][0]["streamSettings"]["xhttpSettings"], "dormant extra:null transport data changed");
+    for (const auto& rule : config["routing"]["rules"]) Require(rule.value("port", "") != "8443", "ignored extra:null outer download received physical pins");
+  };
+  if (!only.empty()) {
+    const auto found = cases.find(only); Require(found != cases.end(), "unknown protocol test case"); found->second();
+  } else for (const auto& item : cases) item.second();
+}
 int main(int argc, char** argv) try {
+  if (argc == 3 && std::string(argv[1]) == "--protocol-case") { ProtocolCompatibilityCases(argv[2]); return 0; }
   if (argc != 1) {
     if (argc != 7 || std::string(argv[1]) != "--prepare-dns-fixture") return 2;
     std::ifstream input(argv[2]);
@@ -18,6 +117,7 @@ int main(int argc, char** argv) try {
     output << *result;
     return output.good() ? 0 : 4;
   }
+  ProtocolCompatibilityCases();
   const auto source = Parse(R"({
     "log":{"access":"private-canary.log","error":"secret.log","loglevel":"debug","dnsLog":true},
     "inbounds":[{"protocol":"socks","listen":"127.0.0.1","port":18580,"tag":"socks-in","settings":{"auth":"noauth"},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":false}}],
@@ -154,12 +254,14 @@ int main(int argc, char** argv) try {
   auto cycle = chained;
   cycle["outbounds"][2]["streamSettings"] = {{"sockopt", {{"dialerProxy", "proxy"}}}};
   Require(!prepare(cycle), "cyclic handler transport chain admitted");
-  auto multi_endpoint = source;
-  multi_endpoint["outbounds"][0]["settings"]["vnext"].push_back({{"address", "192.0.2.9"}, {"port", 8443}, {"users", source["outbounds"][0]["settings"]["vnext"][0]["users"]}});
-  auto multi_prepared = prepare(multi_endpoint); Require(multi_prepared.has_value(), "multi-endpoint bootstrap rejected");
+  auto multi_outbound = source;
+  auto backup = source["outbounds"][0]; backup["tag"] = "proxy-backup"; backup["settings"]["vnext"][0]["port"] = 8443;
+  multi_outbound["outbounds"].push_back(backup);
+  auto multi_prepared = prepare(multi_outbound); Require(multi_prepared.has_value(), "multiple independent outbounds rejected");
   auto multi_config = Parse(*multi_prepared);
-  Require(multi_config["outbounds"][0]["settings"] == multi_endpoint["outbounds"][0]["settings"], "multi-endpoint logical hosts/credentials changed");
-  Require(multi_config["routing"]["rules"][3]["ip"] == Json::array({"192.0.2.9/32"}) && multi_config["routing"]["rules"][3]["port"] == "8443", "multi-endpoint numeric pin lacks exact address/port");
+  Require(multi_config["outbounds"][0]["settings"] == source["outbounds"][0]["settings"]
+      && find_outbound(multi_config, "proxy-backup")["settings"] == backup["settings"], "independent outbound identities/settings changed");
+  Require(multi_config["routing"]["rules"][4]["domain"] == Json::array({"full:endpoint.invalid"}) && multi_config["routing"]["rules"][4]["port"] == "8443", "same-host second outbound pin lost its independent port");
   auto dormant_address = source;
   dormant_address["outbounds"][0]["streamSettings"]["address"] = "ignored.invalid";
   dormant_address["outbounds"][0]["streamSettings"]["port"] = 444;

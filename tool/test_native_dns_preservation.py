@@ -20,6 +20,7 @@ WINDOWS = ROOT / 'packages/flutter_vless_windows/windows'
 MOBILE = ROOT / 'third_party/xray-mobile'
 SWIFT = ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos'
 SELECTED_TEST = 'TestNativeDNSPreservation'
+PROTOCOL_TEST = 'TestNativeProtocolPreparation'
 
 spec = importlib.util.spec_from_file_location('dns_preservation_checked', ROOT / 'tool/test_native_dns_context_runtime.py')
 common = importlib.util.module_from_spec(spec)
@@ -30,11 +31,24 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def child_environment(source):
+    # distro/all registers a browser-dialer listener during package init when
+    # configured by environment. Keep file-only Build tests independent from
+    # caller runtime settings without changing the parent's environment.
+    result = {key: value for key, value in source.items()
+              if not key.upper().startswith(('XRAY.', 'XRAY_'))}
+    result.update(GOTOOLCHAIN='local', GOWORK='off')
+    result['xray.browser.dialer'] = ''
+    result['XRAY_BROWSER_DIALER'] = ''
+    return result
+
+
 def source_snapshot():
     paths = [Path(__file__).resolve(), ROOT / 'tool/test_native_dns_preservation_runner.py', ROOT / 'tool/test_native_dns_context_runtime.py',
              ROOT / 'third_party/xray-native-dns/pin-manifest.json', MOBILE / 'go.mod', MOBILE / 'go.sum',
              WINDOWS / 'xray_config.h', WINDOWS / 'desktop_security_test.cpp',
              WINDOWS / 'xray_config_test.cpp', WINDOWS / 'third_party/nlohmann/json.hpp']
+    paths.append(ROOT / 'tool/fixtures/compatibility/protocols.json')
     fixture = MOBILE / 'native_dns_preservation'
     sources = sorted(fixture.rglob('*.go'))
     if not sources:
@@ -110,7 +124,7 @@ def main():
     results = []
     report = {'runtime_requested': arguments.run_runtime, 'core_overlay_applied': False,
               'go_binary': str(Path(shutil.which(arguments.go) or arguments.go).resolve()), 'results': results}
-    environment = dict(os.environ, GOTOOLCHAIN='local', GOWORK='off')
+    environment = child_environment(os.environ)
     core_source = None
     manifest = common.MANIFEST
     try:
@@ -152,12 +166,22 @@ def main():
         binary = EVIDENCE / ('acceptance.test.exe' if os.name == 'nt' else 'acceptance.test')
         checked('acceptance-compile', [arguments.go, 'test', '-c', '-o', str(binary), './native_dns_preservation'], 300, MOBILE)
         report['acceptance_sha256'] = digest(binary)
+        # These exact tests only decode/build and invoke file-only preparers.
+        # They create no Core instance, listener, resolver or runtime engine.
+        checked('protocol-preparation-pure', [str(binary), '-test.run', '^(' + PROTOCOL_TEST + '|TestProtocolCorpusBuilds)$',
+                '-test.v', '-test.timeout=60s'], 75, MOBILE, runtime_environment)
+        output = (EVIDENCE / 'protocol-preparation-pure.log').read_text(encoding='utf-8')
+        for name in [PROTOCOL_TEST, 'TestProtocolCorpusBuilds']:
+            common.require_selected_test_pass(output, name)
+        results[-1]['selected_test_pass'] = True
+        results[-1]['selected_tests'] = [PROTOCOL_TEST, 'TestProtocolCorpusBuilds']
         if arguments.run_runtime:
             checked('actual-core-dns', [str(binary), '-test.run', '^' + SELECTED_TEST + '$', '-test.v', '-test.timeout=120s'],
                     140, MOBILE, runtime_environment)
-            common.require_selected_test_pass((EVIDENCE / 'actual-core-dns.log').read_text(encoding='utf-8'), SELECTED_TEST)
+            output = (EVIDENCE / 'actual-core-dns.log').read_text(encoding='utf-8')
+            common.require_selected_test_pass(output, SELECTED_TEST)
             results[-1]['selected_test_pass'] = True
-            results[-1]['selected_test'] = SELECTED_TEST
+            results[-1]['selected_tests'] = [SELECTED_TEST]
         if source_snapshot() != report['source_sha256']:
             raise RuntimeError('Production preparer/acceptance source changed during verification')
         report['source_snapshot_unchanged'] = True

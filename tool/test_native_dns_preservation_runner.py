@@ -16,6 +16,20 @@ spec.loader.exec_module(runner)
 
 
 class PreservationRunnerGuards(unittest.TestCase):
+    def test_child_environment_disables_core_init_listener_without_parent_mutation(self):
+        source = {'PATH': 'keep-toolchain', 'CI': 'true', 'xray.browser.dialer': 'must-not-listen',
+                  'XRAY_BROWSER_DIALER': 'must-not-listen', 'Xray_Location_Cert': 'caller-location'}
+        before = dict(source)
+        result = runner.child_environment(source)
+        self.assertEqual(source, before)
+        self.assertEqual(result['PATH'], source['PATH'])
+        self.assertEqual(result['CI'], 'true')
+        self.assertEqual(result['xray.browser.dialer'], '')
+        self.assertEqual(result['XRAY_BROWSER_DIALER'], '')
+        self.assertNotIn('Xray_Location_Cert', result)
+        self.assertEqual(result['GOTOOLCHAIN'], 'local')
+        self.assertEqual(result['GOWORK'], 'off')
+
     def test_runtime_refused_before_any_child_or_evidence(self):
         for system, environment in [('Linux', {}), ('Windows', {}), ('Darwin', {'CI': 'true'})]:
             with self.subTest(system=system), tempfile.TemporaryDirectory() as directory:
@@ -74,7 +88,7 @@ class PreservationRunnerGuards(unittest.TestCase):
                 runner.common.require_selected_test_pass(output, runner.SELECTED_TEST)
         runner.common.require_selected_test_pass('--- PASS: TestNativeDNSPreservation (0.01s)\nPASS\n', runner.SELECTED_TEST)
 
-    def test_default_only_compiles_core_and_never_invokes_acceptance(self):
+    def test_default_selects_pure_preparation_without_core_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = Path(directory) / 'evidence'
             core = Path(directory) / 'ordinary-core'
@@ -91,6 +105,9 @@ class PreservationRunnerGuards(unittest.TestCase):
                     Path(command[command.index('-o') + 1]).write_text('synthetic compiled output')
                 if name == 'core-pin':
                     (evidence / 'core-pin.log').write_text(json.dumps({'Version': 'v1.0.0', 'Sum': 'synthetic', 'Dir': str(core)}))
+                if name == 'protocol-preparation-pure':
+                    (evidence / 'protocol-preparation-pure.log').write_text(
+                        '--- PASS: TestNativeProtocolPreparation (0.01s)\n--- PASS: TestProtocolCorpusBuilds (0.01s)\n')
 
             with mock.patch.object(runner, 'EVIDENCE', evidence), mock.patch.object(runner.sys, 'argv', ['runner']), \
                     mock.patch.object(runner.platform, 'system', return_value='Linux'), \
@@ -100,7 +117,9 @@ class PreservationRunnerGuards(unittest.TestCase):
                     mock.patch.object(runner.common, 'checked', side_effect=fake_checked):
                 self.assertEqual(runner.main(), 0)
             self.assertTrue(any('test' in command and '-c' in command for command in commands))
-            self.assertFalse(any(command[0].endswith('acceptance.test') for command in commands))
+            selections = [command[command.index('-test.run') + 1] for command in commands if '-test.run' in command]
+            self.assertEqual(selections, ['^(TestNativeProtocolPreparation|TestProtocolCorpusBuilds)$'])
+            self.assertFalse(any(runner.SELECTED_TEST in selection for selection in selections))
             report = json.loads((evidence / 'result.json').read_text())
             self.assertFalse(report['runtime_requested'])
             self.assertFalse(report['core_overlay_applied'])

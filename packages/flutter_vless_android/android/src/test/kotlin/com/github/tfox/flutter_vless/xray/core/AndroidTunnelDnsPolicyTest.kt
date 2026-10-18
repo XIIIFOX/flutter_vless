@@ -232,19 +232,19 @@ class AndroidTunnelDnsPolicyTest {
 
     @Test fun xhttpDownloadAndExtraEndpointsArePinnedAndRequireNoSrvFallback() {
         for (transportKey in listOf("xHTTPSettings", "SplitHTTPSettings")) {
-            val stream = JSONObject().put("Address", "transport.test")
+            val stream = JSONObject().put("Address", "transport.test").put("network", "xhttp")
                 .put(transportKey, JSONObject()
                     .put("downloadSettings", JSONObject().put("Address", "outer-download.test"))
                     .put("Extra", JSONObject().put("DownloadSettings", JSONObject().put("address", "extra-download.test")
                         .put("sockopt", JSONObject().put("DomainStrategy", "AsIs")))))
             val prepared = prepare(config(outbound().put("StreamSettings", stream)))
-            assertEquals(setOf("proxy.test", "transport.test", "extra-download.test"), prepared.bootstrapHostnames)
+            assertEquals(setOf("proxy.test", "extra-download.test"), prepared.bootstrapHostnames)
             val outputStream = JSONObject(prepared.configJson).getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
             val transport = outputStream.getJSONObject(if (transportKey == "xHTTPSettings") "xhttpSettings" else "splithttpSettings")
             assertEquals("ForceIP", transport.getJSONObject("extra").getJSONObject("downloadSettings").getJSONObject("sockopt").getString("domainStrategy"))
             stream.getJSONObject(transportKey).remove("Extra")
             val outerPrepared = prepare(config(outbound().put("streamSettings", stream)))
-            assertEquals(setOf("proxy.test", "transport.test", "outer-download.test"), outerPrepared.bootstrapHostnames)
+            assertEquals(setOf("proxy.test", "outer-download.test"), outerPrepared.bootstrapHostnames)
             val outerOutput = JSONObject(outerPrepared.configJson).getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
                 .getJSONObject(if (transportKey == "xHTTPSettings") "xhttpSettings" else "splithttpSettings").getJSONObject("downloadSettings")
             assertEquals("ForceIP", outerOutput.getJSONObject("sockopt").getString("domainStrategy"))
@@ -252,14 +252,155 @@ class AndroidTunnelDnsPolicyTest {
         rejected { prepare(config(outbound().put("streamSettings", JSONObject().put("sockopt", JSONObject().put("AddressPortStrategy", "srv"))))) }
     }
 
-    @Test fun conflictingNativeCaseAndXhttpAliasesAreRejected() {
+    @Test fun masqueProxyDnsPinsOnlyItsOuterEndpointAndPreservesInternalRecords() {
+        val settings = JSONObject().put("address", "masque.test").put("port", 443)
+            .put("remoteDNS", JSONArray().put("1.1.1.1").put("2001:4860:4860::8888"))
+        val transport = JSONObject().put("user", "synthetic-user").put("pass", "synthetic-password")
+            .put("host", "logical-masque.test").put("path", "/masque")
+        val masque = JSONObject().put("protocol", "masque").put("tag", "proxy").put("settings", settings)
+            .put("streamSettings", JSONObject().put("network", "masque").put("security", "tls")
+                .put("tlsSettings", JSONObject().put("serverName", "certificate.test")).put("masqueSettings", transport))
+        val loopback = JSONObject().put("protocol", "loopback").put("tag", "caller-loop")
+            .put("settings", JSONObject().put("inboundTag", "caller-loop-input"))
+        val dns = JSONObject().put("protocol", "dns").put("tag", "caller-dns").put("settings", JSONObject())
+        val input = config(masque, loopback, dns)
+        val original = input.toString()
+        val prepared = AndroidTunnelDnsPolicy.prepare(original, "proxy") {
+            assertEquals("masque.test", it); listOf("192.0.2.17")
+        }
+        assertEquals(setOf("masque.test"), prepared.bootstrapHostnames)
+        val outputs = JSONObject(prepared.configJson).getJSONArray("outbounds")
+        assertEquals(settings.toString(), outputs.getJSONObject(0).getJSONObject("settings").toString())
+        assertEquals(transport.toString(), outputs.getJSONObject(0).getJSONObject("streamSettings").getJSONObject("masqueSettings").toString())
+        assertEquals(loopback.toString(), outputs.getJSONObject(1).toString())
+        assertEquals(dns.toString(), outputs.getJSONObject(2).toString())
+        assertEquals(original, input.toString())
+    }
+
+    @Test fun xhttpWinsSplitHttpWhileExtraSelectsOnlyItsOwnDownloadEndpoint() {
+        val inactive = JSONObject().put("headers", JSONObject().put("X-Secret", "retained-inactive"))
+            .put("downloadSettings", JSONObject().put("address", "inactive-split.test"))
+        val outerDownload = JSONObject().put("address", "inactive-outer.test")
+        val selected = JSONObject().put("downloadSettings", outerDownload).put("extra", JSONObject()
+            .put("headers", JSONObject().put("X-Secret", "active-secret"))
+            .put("downloadSettings", JSONObject().put("address", "active-download.test")))
+        val stream = JSONObject().put("network", "splithttp").put("xhttpSettings", selected).put("splithttpSettings", inactive)
+        val input = config(outbound().put("streamSettings", stream)); val original = input.toString()
+        val prepared = prepare(input)
+        assertEquals(setOf("proxy.test", "active-download.test"), prepared.bootstrapHostnames)
+        val result = JSONObject(prepared.configJson).getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
+        assertEquals(inactive.toString(), result.getJSONObject("splithttpSettings").toString())
+        assertEquals(outerDownload.toString(), result.getJSONObject("xhttpSettings").getJSONObject("downloadSettings").toString())
+        assertEquals("active-secret", result.getJSONObject("xhttpSettings").getJSONObject("extra").getJSONObject("headers").getString("X-Secret"))
+        assertEquals(original, input.toString())
+    }
+
+    @Test fun nullXhttpFallsBackToSplitHttpAndNullExtraReplacesOuterDownloads() {
+        val split = JSONObject().put("downloadSettings", JSONObject().put("address", "active-split.test"))
+        val stream = JSONObject().put("network", "splithttp").put("xhttpSettings", JSONObject.NULL).put("splithttpSettings", split)
+        assertEquals(setOf("proxy.test", "active-split.test"), prepare(config(outbound().put("streamSettings", stream))).bootstrapHostnames)
+        for (extra in listOf<Any>(JSONObject.NULL, JSONObject().put("downloadSettings", JSONObject.NULL))) {
+            val xhttp = JSONObject().put("downloadSettings", JSONObject().put("address", "inactive-outer.test")).put("extra", extra)
+            val output = prepare(config(outbound().put("streamSettings", JSONObject().put("network", "xhttp").put("xhttpSettings", xhttp))))
+            assertEquals(setOf("proxy.test"), output.bootstrapHostnames)
+            val retained = JSONObject(output.configJson).getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings").getJSONObject("xhttpSettings")
+            assertEquals(xhttp.toString(), retained.toString())
+        }
+    }
+
+    @Test fun methodOverridesNetworkAndNullMethodRetainsNetworkDefault() {
+        val download = JSONObject().put("address", "download.test")
+        for ((network, method, active) in listOf(Triple("tcp", "xhttp", true),
+                Triple("splithttp", JSONObject.NULL, true), Triple("xhttp", "tcp", false),
+                Triple(JSONObject.NULL, JSONObject.NULL, false))) {
+            val xhttp = JSONObject().put("headers", JSONObject().put("X-Token", "unchanged"))
+                .put("downloadSettings", JSONObject(download.toString()))
+            val stream = JSONObject().put("network", network).put("method", method).put("xhttpSettings", xhttp)
+            val prepared = prepare(config(outbound().put("streamSettings", stream)))
+            assertEquals(if (active) setOf("proxy.test", "download.test") else setOf("proxy.test"), prepared.bootstrapHostnames)
+            if (!active) assertEquals(xhttp.toString(), JSONObject(prepared.configJson).getJSONArray("outbounds").getJSONObject(0)
+                .getJSONObject("streamSettings").getJSONObject("xhttpSettings").toString())
+        }
+    }
+
+    @Test fun dormantPrimaryAddressIsRetainedWhileXdriveAndIndependentDownloadArePinned() {
+        val ws = JSONObject().put("network", "ws").put("address", "dormant.invalid")
+            .put("wsSettings", JSONObject().put("path", "/preserved"))
+        val prepared = AndroidTunnelDnsPolicy.prepare(config(outbound().put("streamSettings", ws)).toString(), "proxy") {
+            assertEquals("A dormant primary stream address must not bootstrap", "proxy.test", it)
+            listOf("192.0.2.17")
+        }
+        assertEquals(setOf("proxy.test"), prepared.bootstrapHostnames)
+        assertEquals("dormant.invalid", JSONObject(prepared.configJson).getJSONArray("outbounds").getJSONObject(0)
+            .getJSONObject("streamSettings").getString("address"))
+        val download = JSONObject().put("address", "download.test").put("network", "xhttp")
+            .put("xhttpSettings", JSONObject().put("path", "/download"))
+        val xhttp = JSONObject().put("network", "xhttp").put("address", "dormant.invalid")
+            .put("xhttpSettings", JSONObject().put("downloadSettings", download))
+        assertEquals(setOf("proxy.test", "download.test"), prepare(config(outbound().put("streamSettings", xhttp))).bootstrapHostnames)
+        val xdrive = JSONObject().put("network", "tcp").put("method", "xdrive").put("address", "xdrive.test")
+        assertEquals(setOf("proxy.test", "xdrive.test"), prepare(config(outbound("vless").put("streamSettings", xdrive))).bootstrapHostnames)
+    }
+
+    @Test fun sharedPinnedCoreProtocolCorpusPreservesCallerOutboundsAndTransportFields() {
+        val cases = JSONArray(requireNotNull(javaClass.getResource("/protocols.json")).readText())
+        assertEquals("Expected the complete shared protocol corpus", 7, cases.length())
+        fun retained(label: String, expected: Any?, actual: Any?) {
+            when (expected) {
+                is JSONObject -> {
+                    assertTrue(label, actual is JSONObject)
+                    expected.keys().forEach { key ->
+                        assertTrue("$label/$key missing", (actual as JSONObject).has(key))
+                        retained("$label/$key", expected.get(key), actual.get(key))
+                    }
+                }
+                is JSONArray -> {
+                    assertTrue(label, actual is JSONArray)
+                    assertEquals(label, expected.length(), (actual as JSONArray).length())
+                    for (index in 0 until expected.length()) retained("$label/$index", expected.get(index), actual.get(index))
+                }
+                else -> assertEquals(label, expected, actual)
+            }
+        }
+        for (index in 0 until cases.length()) {
+            val item = cases.getJSONObject(index); val label = item.getString("name")
+            val input = item.getJSONObject("config"); val before = input.toString()
+            val resolved = mutableListOf<String>()
+            val prepared = AndroidTunnelDnsPolicy.prepare(before, "proxy") { hostname ->
+                assertEquals("$label attempted to bootstrap an inactive or logical name", "endpoint.invalid", hostname)
+                resolved.add(hostname); listOf("192.0.2.17")
+            }
+            assertEquals(label, listOf("endpoint.invalid"), resolved)
+            val expected = input.getJSONArray("outbounds")
+            val actual = JSONObject(prepared.configJson).getJSONArray("outbounds")
+            for (outboundIndex in 0 until expected.length()) {
+                val original = expected.getJSONObject(outboundIndex)
+                val output = actual.getJSONObject(outboundIndex)
+                assertEquals(label, original.opt("protocol"), output.opt("protocol"))
+                assertEquals(label, original.opt("tag"), output.opt("tag"))
+                assertEquals(label, original.optJSONObject("settings")?.toString(), output.optJSONObject("settings")?.toString())
+                // Every imported TLS, Host, credential and transport field must
+                // survive. Only new native protection fields may be appended.
+                retained(label, original, output)
+                val stream = original.optJSONObject("streamSettings") ?: continue
+                if (!stream.isNull("xhttpSettings") && stream.has("splithttpSettings"))
+                    assertEquals(label, stream.get("splithttpSettings").toString(),
+                        output.getJSONObject("streamSettings").get("splithttpSettings").toString())
+                val xhttp = stream.optJSONObject("xhttpSettings")
+                if (xhttp != null && xhttp.has("extra") && xhttp.isNull("extra"))
+                    assertEquals(label, xhttp.toString(), output.getJSONObject("streamSettings").getJSONObject("xhttpSettings").toString())
+            }
+            assertEquals(label, before, input.toString())
+        }
+    }
+
+    @Test fun conflictingNativeCaseAliasesAreRejected() {
         val variants = listOf(
             config(outbound()).put("Outbounds", JSONArray().put(outbound(address = "hidden.test"))),
             config(outbound().put("Settings", JSONObject().put("address", "hidden.test"))),
             config(outbound().put("streamSettings", JSONObject().put("sockopt", JSONObject().put("domainStrategy", "ForceIP").put("DomainStrategy", "AsIs")))),
             config(outbound().put("streamSettings", JSONObject().put("xhttpSettings", JSONObject()).put("xHTTPSettings", JSONObject()))),
-            config(outbound().put("streamSettings", JSONObject().put("xhttpSettings", JSONObject()).put("splithttpSettings", JSONObject()))),
-            config(outbound().put("streamSettings", JSONObject().put("xhttpSettings", JSONObject().put("extra", JSONObject()).put("Extra", JSONObject()))))
+            config(outbound().put("streamSettings", JSONObject().put("network", "xhttp").put("xhttpSettings", JSONObject().put("extra", JSONObject()).put("Extra", JSONObject()))))
         )
         variants.forEach { rejected { prepare(it) } }
         val capitalized = config(outbound()).also { it.put("Outbounds", it.remove("outbounds")) }

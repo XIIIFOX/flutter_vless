@@ -523,16 +523,25 @@ func testNativeDNSPreservation(t *testing.T) {
 	gammaPort := h2cResolver(t, gamma)
 	proxyPort := socksMarker(t, origin)
 	source := map[string]any{
-		"log":       map[string]any{"loglevel": "none"},
-		"inbounds":  []any{},
-		"outbounds": []any{map[string]any{"tag": "proxy", "protocol": "socks", "settings": map[string]any{"servers": []any{map[string]any{"address": "endpoint.invalid", "port": proxyPort}}}}, map[string]any{"tag": "dns-direct", "protocol": "freedom", "settings": map[string]any{"domainStrategy": "AsIs", "finalRules": []any{map[string]any{"action": "allow"}}}}, map[string]any{"tag": "block", "protocol": "blackhole"}},
+		"log":      map[string]any{"loglevel": "none"},
+		"inbounds": []any{},
+		"outbounds": []any{
+			map[string]any{"tag": "proxy", "protocol": "socks", "settings": map[string]any{"servers": []any{map[string]any{"address": "endpoint.invalid", "port": proxyPort}}}},
+			map[string]any{"tag": "dns-direct", "protocol": "direct", "settings": map[string]any{"domainStrategy": "AsIs", "finalRules": []any{map[string]any{"action": "allow"}}}},
+			map[string]any{"tag": "block", "protocol": "block"},
+			map[string]any{"tag": "caller-loop", "protocol": "loopback", "settings": map[string]any{"inboundTag": "caller-loop-input"}},
+			map[string]any{"tag": "caller-dns-relay", "protocol": "dns", "settings": map[string]any{"rewriteAddress": "127.0.0.1", "rewritePort": alphaPort, "rewriteNetwork": "tcp"}},
+		},
 		"dns": map[string]any{"hosts": map[string]any{"endpoint.invalid": "127.0.0.2", "resolver.invalid": []string{"127.0.0.1"}, "static.invalid": "192.0.2.14"}, "tag": "flutter-vless-tun", "queryStrategy": "UseIPv4", "disableCache": true, "disableFallbackIfMatch": true, "servers": []any{
 			map[string]any{"address": fmt.Sprintf("tcp://127.0.0.1:%d", alphaPort), "domains": []string{"full:alpha.invalid"}, "tag": "flutter-vless-bootstrap-input", "skipFallback": true, "queryStrategy": "UseIPv4"},
 			map[string]any{"address": "127.0.0.1", "port": betaPort, "domains": []string{"full:beta.invalid"}, "tag": "beta-client", "skipFallback": true, "queryStrategy": "UseIPv4"},
 			map[string]any{"address": fmt.Sprintf("h2c://resolver.invalid:%d/dns-query", gammaPort), "domains": []string{"full:gamma.invalid"}, "tag": "gamma-client", "skipFallback": true, "queryStrategy": "UseIPv4"},
 		}},
 		"routing": map[string]any{"domainStrategy": "AsIs", "rules": []any{
-			map[string]any{"type": "field", "inboundTag": []string{"flutter-vless-bootstrap-input", "beta-client", "gamma-client"}, "outboundTag": "dns-direct"},
+			map[string]any{"type": "field", "inboundTag": []string{"caller-loop-input"}, "outboundTag": "proxy"},
+			map[string]any{"type": "field", "domain": []string{"full:remote-marker.invalid"}, "outboundTag": "caller-loop"},
+			map[string]any{"type": "field", "inboundTag": []string{"flutter-vless-bootstrap-input"}, "outboundTag": "caller-dns-relay"},
+			map[string]any{"type": "field", "inboundTag": []string{"beta-client", "gamma-client"}, "outboundTag": "dns-direct"},
 			map[string]any{"type": "field", "port": fmt.Sprintf("%d,%d,%d", alphaPort, betaPort, gammaPort), "outboundTag": "block"},
 		}},
 	}

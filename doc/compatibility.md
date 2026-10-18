@@ -171,12 +171,42 @@ qualifies the production C++ preparer on Linux/macOS/Windows and the Apple prepa
 macOS against ordinary pinned Core: TCP/UDP virtual DNS, numeric TCP/UDP and
 named h2c upstreams, per-domain tags, static hosts, endpoint pinning and HTTP
 bytes pass with no OS-resolver attempt. Source hashes match that commit.
-Android's real TUN check on 7ec4636 passes both missing and localhost DNS with
-UDP/TCP queries, OS lookup, HTTP and clean Stop. Its controlled resolver fixture
-needed to refuse unrelated background Android names while retaining its worker;
-that test-only fix and its foreign-query-then-owned-query control require a new
-device run. iOS simulator acceptance is recorded separately. This is targeted
-DNS acceptance, not complete platform VPN or encrypted DoH/TLS qualification.
+[Android on c40f4b6](https://github.com/XIIIFOX/flutter_vless/actions/runs/39174414486)
+passes all 35 native emulator checks without skips, including both new production
+TUN DNS cases: source hosts, root/per-server tags, per-domain selection, TCP/UDP,
+OS resolution, HTTP, missing/localhost defaults and clean Stop. The controlled
+fixture also proves an unrelated refused query does not kill its worker.
+Physical packet capture was explicitly disabled and remains unverified in this
+run. The iOS simulator and remote macOS runtime on 6c19e2d pass both HTTP/SOCKS
+DNS proxy variants, two generations, non-IP refusal and failure without direct
+fallback. This qualifies the minimum DNS increment, not full advanced DNS,
+physical Apple VPN routing or encrypted DoH/TLS.
+
+### Minimum protocol and transport adaptation
+
+Protected native preparation now recognizes MASQUE's address/port shape and
+Core's `direct`/`block` role aliases, retaining the caller's protocol text.
+Source DNS/loopback handlers stay in place and no longer hide the selected
+proxy's transport. Windows applies its physical binding to a source DNS raw
+dialer; loopback remains dispatch-only. XHTTP uses Core's effective method,
+preferred alias and extra/download branch, including explicit null values.
+An unused primary stream address must not trigger bootstrap; an independent
+download address still does.
+
+The shared [seven-config corpus](../tool/fixtures/compatibility/protocols.json)
+covers MASQUE/TLS, VLESS with WS/gRPC/HTTPUpgrade, two XHTTP precedence cases
+and HTTP alongside internal handlers/role aliases. Android checks this same
+corpus in JVM tests. Production C++/Apple export plus pinned Core decode/build
+passes locally without a Core instance or listeners. This proves preparation,
+not MASQUE/WS/gRPC/HTTPUpgrade server handshakes. The next remote traffic fixture
+also requires imported loopback HTTP routing and a source DNS raw relay; its
+runtime result is recorded separately.
+
+Keep socket-policy inheritance for XHTTP downloads with caller chains as a
+separate remaining check: inserting download sockopt can suppress Core's parent
+inheritance. WG/XDRIVE and the exhaustive protocol matrix remain unqualified.
+Pinned Core requires one receiver/user in the relevant `servers`/`vnext` arrays;
+multiple independent outbounds with a balancer are a different supported shape.
 
 Port grammar progress (2026-10-18): the Dart, Kotlin, Swift and C++ paths now
 share a 20-case corpus checked against the pinned Core decoder/build path.
@@ -434,9 +464,9 @@ Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |
 | --- | --- | --- |
-| 1. Advanced DNS | Partial; MVP runtime qualification pending | Production adapters now preserve explicit remote caller DNS and use Core for private A queries. Test-first native regressions pass; ordinary Core and Android TUN acceptance are wired into CI. Localhost adaptation, IPv4-only answers and unsupported paths are documented above. Full advanced/FakeDNS semantics remain open. |
+| 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private A queries. Ordinary Core tests pass on all three desktop systems, Android TUN passes both new DNS cases within 35 native checks, and iOS/macOS native runtime variants pass in CI. Localhost adaptation, IPv4-only answers and unsupported paths are documented above. Full advanced/FakeDNS semantics remain open. |
 | 2. IPv6 | Pending | Current tests prove blocking, not dual-stack forwarding, IPv6-only endpoint or NAT64 support. |
-| 3. Protocol/transport matrix | Pending | Supplied VLESS TCP/Reality profiles work on devices. Full pinned-Core transport/socket-protection coverage is still required. |
+| 3. Protocol/transport matrix | Partial | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP preparation fixes and a seven-case pinned Core build corpus pass native tests. Imported loopback/DNS runtime acceptance is being extended; new protocol handshakes, download socket inheritance and the full matrix remain open. |
 | 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. Apple retains caller API/services; Android/Windows API, caller stats/policy, source-inbound context and explicit VPN default selection remain open. |
 | 5. Ports/addresses | Partial | Shared 20-case port, 12-case service-tag, 21-case numeric API and 36-case service-listener fixtures cover allocation. Real Android/iPhone list/range/env/Unix and tag-collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. OS port checks, service-name resolution, prefix-selector isolation, bind retries and broader proxy-only parity remain open. |
 | 6. Assets/import syntax | Partial | A shared 22-case JSON syntax corpus is checked against actual Core decoding. SDK start/delay/import/subscriptions and the example routing editor accept Core-style comments and a leading BOM. Device browser/routing checks pass. Portable cert/key/geodata assets and explicit multi-document merging remain open. |

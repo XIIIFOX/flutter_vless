@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Broaden protected preparation for MASQUE, caller DNS/loopback handlers and Core role aliases. Match effective XHTTP/null selection across platforms; add a shared seven-profile preparation/build corpus and keep live protocol qualification separate.
 * Preserve caller remote DNS hosts, servers, domain rules and tags in the VPN adapters. Use Core's DNS client for private system A queries; isolate Apple/Windows transport bootstrap from caller hosts. Keep the native localhost default and current IPv4 DNS limitations explicit.
 * Add an unpublished construction-bound managed DNS input with per-packet UDP destination checks and owned connection/pipe shutdown. Keep its restricted graph and connection limits separate from production platform integration.
 * Bound Android statistics command output before reading it, including stalled APIs, cancellation and process cleanup. Check Windows command deadlines during continuous output; add process-only regression coverage.

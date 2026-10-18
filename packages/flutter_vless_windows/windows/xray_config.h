@@ -422,23 +422,33 @@ struct BootstrapGraph {
   std::map<std::string, std::string> addresses;
 };
 
+inline std::string EffectiveStreamNetwork(const Json& stream) {
+  // Core's method/network fields are pointers: JSON null means absent, and a
+  // nonnull method wins without inspecting a dormant network value.
+  for (const auto* key : {"method", "network"})
+    if (stream.contains(key) && !stream[key].is_null()) return Fold(stream[key].get<std::string>());
+  return "tcp";
+}
+
 inline bool EffectiveBootstrapChains(Json stream, std::vector<std::string>& chains) {
   if (stream.is_null()) return true;
   if (!Fields(stream, {"sockopt", "network", "method", "xhttpSettings", "splithttpSettings"})) return false;
   if (stream.contains("sockopt") && !stream["sockopt"].is_null()) {
     auto options = stream["sockopt"];
     if (!Fields(options, {"dialerProxy"})) return false;
-    if (options.contains("dialerProxy")) {
+    if (options.contains("dialerProxy") && !options["dialerProxy"].is_null()) {
       if (!options["dialerProxy"].is_string()) return false;
       if (!options["dialerProxy"].get<std::string>().empty()) chains.push_back(options["dialerProxy"].get<std::string>());
     }
   }
-  const auto network = Fold(stream.value("method", stream.value("network", "tcp")));
+  const auto network = EffectiveStreamNetwork(stream);
   const auto* key = stream.contains("xhttpSettings") && !stream["xhttpSettings"].is_null() ? "xhttpSettings" : "splithttpSettings";
   if ((network == "xhttp" || network == "splithttp") && stream.contains(key) && !stream[key].is_null()) {
     auto settings = stream[key];
     if (!Fields(settings, {"extra", "downloadSettings"})) return false;
-    auto effective = settings.contains("extra") && !settings["extra"].is_null() ? settings["extra"] : settings;
+    // A present RawMessage extra:null decodes to a fresh zero extra in Core;
+    // it still suppresses the outer download settings.
+    auto effective = settings.contains("extra") ? (settings["extra"].is_null() ? Json::object() : settings["extra"]) : settings;
     if (!Fields(effective, {"downloadSettings"})) return false;
     if (effective.contains("downloadSettings") && !effective["downloadSettings"].is_null())
       return EffectiveBootstrapChains(effective["downloadSettings"], chains);
@@ -457,6 +467,9 @@ inline bool ValidBootstrapChains(const Json& outbounds) {
   std::vector<std::vector<size_t>> edges(outbounds.size());
   std::vector<size_t> incoming(outbounds.size(), 0), ready;
   for (size_t i = 0; i < outbounds.size(); ++i) {
+    // A loopback handler never calls its socket dialer; dormant stream socket
+    // references must not turn into physical chain dependencies.
+    if (outbounds[i].value("protocol", "") == "loopback") continue;
     std::vector<std::string> chains;
     if (!EffectiveBootstrapChains(outbounds[i].value("streamSettings", Json()), chains)) return false;
     for (const auto& chain : chains) {
@@ -488,15 +501,15 @@ inline bool BootstrapStream(Json& stream, const std::vector<BootstrapEndpoint>& 
   // unrelated application traffic to the same server address.
   options["interface"] = interface_name;
   std::vector<BootstrapEndpoint> physical = endpoints;
-  const auto network = stream.value("method", stream.value("network", "tcp"));
+  const auto network = EffectiveStreamNetwork(stream);
   if (Fold(network) == "xdrive") return false; // Independent fronting/storage paths need their own qualification.
   if (independent_destination) {
     const auto port = Port(stream);
     if (!stream.contains("address") || !stream["address"].is_string() || !port) return false;
     physical = {{stream["address"].get<std::string>(), *port}};
   }
-  if (options.contains("dialerProxy") && !options["dialerProxy"].is_string()) return false;
-  const bool chained = options.contains("dialerProxy") && !options["dialerProxy"].get<std::string>().empty();
+  if (options.contains("dialerProxy") && !options["dialerProxy"].is_null() && !options["dialerProxy"].is_string()) return false;
+  const bool chained = options.contains("dialerProxy") && !options["dialerProxy"].is_null() && !options["dialerProxy"].get<std::string>().empty();
   if (chained) {
     // A chained endpoint is a logical target of that handler. Its physical
     // transport is prepared separately; never bootstrap the logical target.
@@ -550,7 +563,8 @@ inline bool BootstrapStream(Json& stream, const std::vector<BootstrapEndpoint>& 
     auto& settings = stream[key];
     if (!Fields(settings, {"extra", "downloadSettings"})) return false;
     auto* container = &settings;
-    if (settings.contains("extra") && !settings["extra"].is_null()) container = &settings["extra"];
+    Json null_extra = Json::object();
+    if (settings.contains("extra")) container = settings["extra"].is_null() ? &null_extra : &settings["extra"];
     if (!Fields(*container, {"downloadSettings"})) return false;
     if (container->contains("downloadSettings") && !(*container)["downloadSettings"].is_null()) {
       // Penetrate overwrites download sockopt with the upload socket object.
@@ -680,10 +694,23 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   std::string proxy;
   BootstrapGraph bootstrap;
   for (auto& outbound : config["outbounds"]) {
-    const auto protocol = outbound["protocol"].get<std::string>();
-    if (protocol == "blackhole") continue;
+    auto protocol = outbound["protocol"].get<std::string>();
+    // Registered Core aliases share a policy role; keep the source protocol
+    // string so routing/handler metadata is not rewritten by adaptation.
+    if (protocol == "direct") protocol = "freedom";
+    if (protocol == "block") protocol = "blackhole";
+    // Loopback redispatches through the caller's rules and does not dial a
+    // physical socket. Its source settings/order/identity stay untouched.
+    if (protocol == "blackhole" || protocol == "loopback") continue;
     if (!Fields(outbound, {"sendThrough"}) || !Object(outbound, "streamSettings")) return std::nullopt;
     const auto send_through = outbound.value("sendThrough", Json());
+    if (protocol == "dns") {
+      // The DNS outbound's optional raw forwarding uses the normal dialer.
+      // Its target is dynamic: keep caller rewrite/rules unchanged and resolve
+      // names through Core while binding actual sockets to the underlay.
+      if (!BootstrapStream(outbound["streamSettings"], {}, interface_name, resolve, service_tags, ipv6_tag, bootstrap, send_through)) return std::nullopt;
+      continue;
+    }
     if (protocol == "freedom") {
       if (!Object(outbound, "settings") || !Fields(outbound["settings"], {"domainStrategy", "targetStrategy"})) return std::nullopt;
       outbound["settings"]["domainStrategy"] = "ForceIPv4";
@@ -691,7 +718,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
       if (!BootstrapStream(outbound["streamSettings"], {}, interface_name, resolve, service_tags, ipv6_tag, bootstrap, send_through)) return std::nullopt;
       continue;
     }
-    if (!std::set<std::string>{"vless","vmess","trojan","shadowsocks","socks","http","hysteria","wireguard"}.count(protocol)) return std::nullopt;
+    if (!std::set<std::string>{"vless","vmess","trojan","shadowsocks","socks","http","hysteria","masque","wireguard"}.count(protocol)) return std::nullopt;
     if (!outbound.contains("tag") || outbound["tag"] == "") {
       outbound["tag"] = service_tags.Next("flutter-vless-proxy");
     }

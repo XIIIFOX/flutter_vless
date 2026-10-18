@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <map>
+#include <vector>
 #include "third_party/nlohmann/json.hpp"
 
 namespace flutter_vless::xray_config {
@@ -413,43 +415,255 @@ inline bool Literal4(const std::string& value) {
   }
   return true;
 }
-inline bool BootstrapStream(Json& stream, Json& hosts, const std::string& interface_name,
-                            const std::function<std::string(const std::string&)>& resolve) {
-  if (!Fields(stream, {"address", "sockopt", "xhttpSettings", "splithttpSettings"}) || !Object(stream, "sockopt")) return false;
+struct BootstrapEndpoint { std::string host; uint16_t port; };
+struct BootstrapGraph {
+  Json outbounds = Json::array();
+  Json rules = Json::array();
+  std::map<std::string, std::string> addresses;
+};
+
+inline bool EffectiveBootstrapChains(Json stream, std::vector<std::string>& chains) {
+  if (stream.is_null()) return true;
+  if (!Fields(stream, {"sockopt", "network", "method", "xhttpSettings", "splithttpSettings"})) return false;
+  if (stream.contains("sockopt") && !stream["sockopt"].is_null()) {
+    auto options = stream["sockopt"];
+    if (!Fields(options, {"dialerProxy"})) return false;
+    if (options.contains("dialerProxy")) {
+      if (!options["dialerProxy"].is_string()) return false;
+      if (!options["dialerProxy"].get<std::string>().empty()) chains.push_back(options["dialerProxy"].get<std::string>());
+    }
+  }
+  const auto network = Fold(stream.value("method", stream.value("network", "tcp")));
+  const auto* key = stream.contains("xhttpSettings") && !stream["xhttpSettings"].is_null() ? "xhttpSettings" : "splithttpSettings";
+  if ((network == "xhttp" || network == "splithttp") && stream.contains(key) && !stream[key].is_null()) {
+    auto settings = stream[key];
+    if (!Fields(settings, {"extra", "downloadSettings"})) return false;
+    auto effective = settings.contains("extra") && !settings["extra"].is_null() ? settings["extra"] : settings;
+    if (!Fields(effective, {"downloadSettings"})) return false;
+    if (effective.contains("downloadSettings") && !effective["downloadSettings"].is_null())
+      return EffectiveBootstrapChains(effective["downloadSettings"], chains);
+  }
+  return true;
+}
+
+inline bool ValidBootstrapChains(const Json& outbounds) {
+  std::map<std::string, size_t> names;
+  for (size_t i = 0; i < outbounds.size(); ++i) {
+    if (!outbounds[i].contains("tag")) continue;
+    if (!outbounds[i]["tag"].is_string()) return false;
+    const auto tag = outbounds[i]["tag"].get<std::string>();
+    if (!tag.empty() && !names.emplace(tag, i).second) return false;
+  }
+  std::vector<std::vector<size_t>> edges(outbounds.size());
+  std::vector<size_t> incoming(outbounds.size(), 0), ready;
+  for (size_t i = 0; i < outbounds.size(); ++i) {
+    std::vector<std::string> chains;
+    if (!EffectiveBootstrapChains(outbounds[i].value("streamSettings", Json()), chains)) return false;
+    for (const auto& chain : chains) {
+      const auto target = names.find(chain);
+      if (target == names.end()) return false;
+      edges[i].push_back(target->second);
+      ++incoming[target->second];
+    }
+  }
+  for (size_t i = 0; i < incoming.size(); ++i) if (!incoming[i]) ready.push_back(i);
+  for (size_t cursor = 0; cursor < ready.size(); ++cursor)
+    for (auto target : edges[ready[cursor]]) if (!--incoming[target]) ready.push_back(target);
+  return ready.size() == outbounds.size();
+}
+
+// Preserve the transport's logical destination (including implicit SNI/Host).
+// Only this private loopback context can reach its exact host+port pins. An
+// unmatched destination is blocked before imported routing rules are examined.
+inline bool BootstrapStream(Json& stream, const std::vector<BootstrapEndpoint>& endpoints,
+    const std::string& interface_name, const std::function<std::string(const std::string&)>& resolve,
+    ServiceTags& tags, const std::string& reject_tag, BootstrapGraph& graph, const Json& send_through = nullptr,
+    bool independent_destination = false) {
+  if (!Fields(stream, {"address", "port", "sockopt", "xhttpSettings", "splithttpSettings", "network", "method"}) || !Object(stream, "sockopt")) return false;
   auto& options = stream["sockopt"];
-  if (!Fields(options, {"interface", "domainStrategy", "addressPortStrategy"})) return false;
+  if (!Fields(options, {"interface", "domainStrategy", "addressPortStrategy", "dialerProxy", "penetrate"})) return false;
   if (options.contains("addressPortStrategy") && options["addressPortStrategy"] != "none") return false;
   options["domainStrategy"] = "ForceIPv4";
   // Bind every dialer to the selected underlay; no endpoint /32 route can expose
   // unrelated application traffic to the same server address.
   options["interface"] = interface_name;
-  if (stream.contains("address")) {
-    if (!stream["address"].is_string()) return false;
-    const auto host = stream["address"].get<std::string>();
-    if (!host.empty() && !Literal4(host)) {
-      auto ip = resolve(host); if (!Literal4(ip)) return false;
-      hosts[Fold(host.back() == '.' ? host.substr(0, host.size()-1) : host)] = ip;
+  std::vector<BootstrapEndpoint> physical = endpoints;
+  const auto network = stream.value("method", stream.value("network", "tcp"));
+  if (Fold(network) == "xdrive") return false; // Independent fronting/storage paths need their own qualification.
+  if (independent_destination) {
+    const auto port = Port(stream);
+    if (!stream.contains("address") || !stream["address"].is_string() || !port) return false;
+    physical = {{stream["address"].get<std::string>(), *port}};
+  }
+  if (options.contains("dialerProxy") && !options["dialerProxy"].is_string()) return false;
+  const bool chained = options.contains("dialerProxy") && !options["dialerProxy"].get<std::string>().empty();
+  if (chained) {
+    // A chained endpoint is a logical target of that handler. Its physical
+    // transport is prepared separately; never bootstrap the logical target.
+    options["domainStrategy"] = "AsIs";
+  } else {
+    bool needs_pins = false;
+    for (const auto& endpoint : physical) {
+      if (endpoint.host.empty() || endpoint.host.find(':') != std::string::npos || !endpoint.port) return false;
+      needs_pins = needs_pins || !Literal4(endpoint.host);
+    }
+    if (needs_pins) {
+      const auto loopback = tags.Next("flutter-vless-bootstrap-loopback");
+      const auto input = tags.Next("flutter-vless-bootstrap-input");
+      graph.outbounds.push_back({{"tag", loopback}, {"protocol", "loopback"}, {"settings", {{"inboundTag", input}}}});
+      std::set<std::pair<std::string, uint16_t>> seen;
+      for (const auto& endpoint : physical) {
+        if (!seen.insert({endpoint.host, endpoint.port}).second) continue;
+        auto ip = endpoint.host;
+        if (!Literal4(ip)) {
+          auto found = graph.addresses.find(endpoint.host);
+          if (found == graph.addresses.end()) {
+            ip = resolve(endpoint.host);
+            if (!Literal4(ip)) return false;
+            graph.addresses[endpoint.host] = ip;
+          } else ip = found->second;
+        }
+        const auto egress = tags.Next("flutter-vless-bootstrap-egress");
+        auto physical_options = options;
+        physical_options.erase("dialerProxy");
+        Json physical_outbound = {{"tag", egress}, {"protocol", "freedom"},
+            {"settings", {{"redirect", ip + ":0"}, {"domainStrategy", "AsIs"}}},
+            {"streamSettings", {{"sockopt", physical_options}}}};
+        if (!send_through.is_null()) physical_outbound["sendThrough"] = send_through;
+        graph.outbounds.push_back(physical_outbound);
+        Json rule = {{"type", "field"}, {"inboundTag", Json::array({input})}, {"port", std::to_string(endpoint.port)}, {"outboundTag", egress}};
+        if (Literal4(endpoint.host)) rule["ip"] = Json::array({endpoint.host + "/32"});
+        else rule["domain"] = Json::array({"full:" + endpoint.host});
+        graph.rules.push_back(rule);
+      }
+      graph.rules.push_back({{"type", "field"}, {"inboundTag", Json::array({input})}, {"outboundTag", reject_tag}});
+      // DialSystem resolves a non-AsIs socket destination before applying a
+      // dialerProxy. The loopback itself suppresses router/target DNS lookup.
+      options["domainStrategy"] = "AsIs";
+      options["dialerProxy"] = loopback;
     }
   }
-  for (const auto* key : {"xhttpSettings", "splithttpSettings"}) {
-    if (!stream.contains(key) || stream[key].is_null()) continue;
+  // Core prefers xhttpSettings over its legacy alias and extra replaces the
+  // typed settings. Only the effective download stream may create dialers.
+  const auto* key = stream.contains("xhttpSettings") && !stream["xhttpSettings"].is_null() ? "xhttpSettings" : "splithttpSettings";
+  if ((Fold(network) == "xhttp" || Fold(network) == "splithttp") && stream.contains(key) && !stream[key].is_null()) {
     auto& settings = stream[key];
     if (!Fields(settings, {"extra", "downloadSettings"})) return false;
     auto* container = &settings;
     if (settings.contains("extra") && !settings["extra"].is_null()) container = &settings["extra"];
     if (!Fields(*container, {"downloadSettings"})) return false;
-    if (container->contains("downloadSettings") && !(*container)["downloadSettings"].is_null()
-        && !BootstrapStream((*container)["downloadSettings"], hosts, interface_name, resolve)) return false;
+    if (container->contains("downloadSettings") && !(*container)["downloadSettings"].is_null()) {
+      // Penetrate overwrites download sockopt with the upload socket object.
+      // It needs a separately qualified combined pin scope, not two graphs.
+      if (options.value("penetrate", false)) return false;
+      auto& download = (*container)["downloadSettings"];
+      if (!download.is_object() || !download.contains("address")
+          || !BootstrapStream(download, {}, interface_name, resolve, tags, reject_tag, graph, send_through, true)) return false;
+    }
+  }
+  return true;
+}
+
+inline bool ProtectedDnsAddress(const std::string& address, const Json& hosts) {
+  auto host = address;
+  const auto scheme = host.find("://");
+  if (scheme != std::string::npos) {
+    const auto protocol = Fold(host.substr(0, scheme));
+    if (protocol != "tcp" && protocol != "https" && protocol != "h2c") return false;
+    host = host.substr(scheme + 3);
+    host = host.substr(0, host.find_first_of("/?#"));
+    const auto colon = host.find(':');
+    if (colon != std::string::npos) {
+      const auto port = host.substr(colon + 1);
+      if (port.empty() || port.size() > 5 || port.find_first_not_of("0123456789") != std::string::npos
+          || std::stoul(port) == 0 || std::stoul(port) > 65535) return false;
+      host = host.substr(0, colon);
+    }
+  }
+  if (host.empty() || host.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.") != std::string::npos) return false;
+  if (Literal4(host)) return true;
+  // Named remote resolvers need a caller-owned static bootstrap. No native
+  // endpoint mapping is added to this map; URLs/TLS names remain unchanged.
+  host = Fold(host);
+  if (!host.empty() && host.back() == '.') host.pop_back(); // Root LookupIP trims the FQDN suffix.
+  if (!hosts.is_object()) return false;
+  bool found = false;
+  for (auto it = hosts.begin(); it != hosts.end(); ++it) {
+    if (Fold(it.key()) != host) continue;
+    found = true;
+    if (it->is_string()) { if (!Literal4(it->get<std::string>())) return false; }
+    else {
+      if (!it->is_array() || it->empty()) return false;
+      for (const auto& entry : *it) if (!entry.is_string() || !Literal4(entry.get<std::string>())) return false;
+    }
+  }
+  return found;
+}
+
+inline bool ProtectedDns(Json& config, ServiceTags& tags, const std::string& proxy, Json& rules) {
+  if (!Object(config, "dns")) return false;
+  auto& original = config["dns"];
+  auto dns = original;
+  if (!Fields(dns, {"servers", "queryStrategy", "script", "hosts"})) return false;
+  if (dns.contains("script") && dns["script"] != "" && !dns["script"].is_null()) return false;
+  auto strategy = [](const Json& object) {
+    if (!object.contains("queryStrategy") || object["queryStrategy"].is_null()) return true;
+    if (!object["queryStrategy"].is_string()) return false;
+    auto value = Fold(object["queryStrategy"].get<std::string>());
+    value.erase(std::remove_if(value.begin(), value.end(), [](char c) { return c == '_' || c == '-'; }), value.end());
+    return value != "usesys" && value != "usesystem";
+  };
+  if (!strategy(dns)) return false;
+  std::string servers_key = "servers";
+  for (auto it = original.begin(); it != original.end(); ++it) if (Fold(it.key()) == "servers") servers_key = it.key();
+  if (!dns.contains("servers") || dns["servers"].is_null() || (dns["servers"].is_array() && dns["servers"].empty())) original[servers_key] = Json::array({"localhost"});
+  if (!original[servers_key].is_array()) return false;
+  for (auto& server : original[servers_key]) {
+    auto canonical = server;
+    if (server.is_object() && !Fields(canonical, {"address", "queryStrategy", "tag", "port"})) return false;
+    if (server.is_object() && !strategy(canonical)) return false;
+    auto address = server.is_string() ? server : canonical.value("address", Json());
+    if (!address.is_string()) return false;
+    const auto value = Fold(address.get<std::string>());
+    if (value == "localhost") {
+      if (server.is_string()) server = {{"address", "tcp://1.1.1.1"}};
+      else {
+        for (auto it = server.begin(); it != server.end(); ++it) if (Fold(it.key()) == "address") { it.value() = "tcp://1.1.1.1"; break; }
+      }
+      std::string tag;
+      if (canonical.is_object() && canonical.contains("tag")) {
+        if (!canonical["tag"].is_string()) return false;
+        tag = canonical["tag"].get<std::string>();
+      }
+      if (tag.empty()) {
+        tag = tags.Next(kDnsUpstream);
+        std::string tag_key = "tag";
+        for (auto it = server.begin(); it != server.end(); ++it) if (Fold(it.key()) == "tag") tag_key = it.key();
+        server[tag_key] = tag;
+      }
+      // Only the native replacement endpoint is forced through the selected
+      // proxy. Imported remote-server tags and routing remain authoritative.
+      rules.push_back({{"type", "field"}, {"inboundTag", Json::array({tag})}, {"ip", Json::array({"1.1.1.1/32"})},
+          {"port", "53"}, {"network", "tcp"}, {"outboundTag", proxy}});
+    } else {
+      // Local/QUIC clients bypass ordinary dispatcher/socket binding. DoT is
+      // not implemented by this pinned Core. Keep explicit remote clients as
+      // supplied, rather than silently replacing an unsupported protocol.
+      if (value == "fakedns" || value.find("+local") != std::string::npos || value.rfind("quic:", 0) == 0
+          || value.rfind("tls:", 0) == 0 || value.rfind("localhost", 0) == 0) return false;
+      if (!ProtectedDnsAddress(address.get<std::string>(), dns.value("hosts", Json()))) return false;
+    }
   }
   return true;
 }
 
 inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
     const std::string& username, const std::string& password, const std::string& interface_name,
-    const std::function<std::string(const std::string&)>& resolve) {
+    const std::function<std::string(const std::string&)>& resolve) try {
   auto config = Parse(text);
   if (username.empty() || password.empty() || username.size() > 255 || password.size() > 255 || interface_name.empty()
       || !Normalize(config) || config.contains("fakeDns") || config.contains("fakedns")) return std::nullopt;
+  if (!ValidBootstrapChains(config["outbounds"])) return std::nullopt;
   ServiceTags service_tags(config);
   auto& inbounds = config["inbounds"];
   // Keep every imported listener intact. tun2socks gets a separate loopback
@@ -462,18 +676,19 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
       {"sniffing", {{"enabled", true}, {"routeOnly", true}, {"destOverride", Json::array({"http", "tls", "quic"})}}}};
   inbounds.insert(inbounds.begin(), inbound);
   const auto relay_tag = service_tags.Next(kDnsRelay);
-  const auto upstream_tag = service_tags.Next(kDnsUpstream);
   const auto ipv6_tag = service_tags.Next(kIpv6Block);
   std::string proxy;
-  Json hosts = Json::object();
+  BootstrapGraph bootstrap;
   for (auto& outbound : config["outbounds"]) {
     const auto protocol = outbound["protocol"].get<std::string>();
     if (protocol == "blackhole") continue;
-    if (!Object(outbound, "streamSettings") || !BootstrapStream(outbound["streamSettings"], hosts, interface_name, resolve)) return std::nullopt;
+    if (!Fields(outbound, {"sendThrough"}) || !Object(outbound, "streamSettings")) return std::nullopt;
+    const auto send_through = outbound.value("sendThrough", Json());
     if (protocol == "freedom") {
       if (!Object(outbound, "settings") || !Fields(outbound["settings"], {"domainStrategy", "targetStrategy"})) return std::nullopt;
       outbound["settings"]["domainStrategy"] = "ForceIPv4";
       outbound["settings"].erase("targetStrategy");
+      if (!BootstrapStream(outbound["streamSettings"], {}, interface_name, resolve, service_tags, ipv6_tag, bootstrap, send_through)) return std::nullopt;
       continue;
     }
     if (!std::set<std::string>{"vless","vmess","trojan","shadowsocks","socks","http","hysteria","wireguard"}.count(protocol)) return std::nullopt;
@@ -491,42 +706,42 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
       for (auto& entry : settings[key]) endpoints.push_back(&entry);
     }
     if (endpoints.empty()) return std::nullopt;
+    std::vector<BootstrapEndpoint> physical;
     for (auto* entry : endpoints) {
       if (!Fields(*entry, {"address", "endpoint"})) return std::nullopt;
       const char* key = protocol == "wireguard" ? "endpoint" : "address";
       if (!entry->contains(key) || !(*entry)[key].is_string()) return std::nullopt;
       std::string host = (*entry)[key].get<std::string>();
+      auto remote_port = Port(*entry);
       if (protocol == "wireguard") {
-        auto colon = host.rfind(':'); if (colon == std::string::npos) return std::nullopt;
-        host = host.substr(0, colon);
+        // WireGuard's own resolver/socket path does not use this dialer graph.
+        // It requires a separate protected implementation before admission.
+        return std::nullopt;
       }
-      if (!Literal4(host)) {
-        // IPv6 endpoints cannot be reached under the explicit IPv4-only policy.
-        if (host.empty() || host.find(':') != std::string::npos) return std::nullopt;
-        auto ip = resolve(host); if (!Literal4(ip)) return std::nullopt;
-        hosts[Fold(host.back() == '.' ? host.substr(0, host.size()-1) : host)] = ip;
-      }
+      if (!remote_port) return std::nullopt;
+      physical.push_back({host, *remote_port});
     }
+    if (!BootstrapStream(outbound["streamSettings"], physical, interface_name, resolve, service_tags, ipv6_tag, bootstrap, send_through)) return std::nullopt;
   }
   if (proxy.empty()) return std::nullopt;
+  Json dns_rules = Json::array();
+  if (!ProtectedDns(config, service_tags, proxy, dns_rules)) return std::nullopt;
   config["outbounds"].push_back({{"tag", relay_tag}, {"protocol", "dns"},
-      {"settings", {{"rewriteNetwork", "tcp"}, {"rewriteAddress", "1.1.1.1"}, {"rewritePort", 53},
-          // Raw relay ignores dns.queryStrategy. Return AAAA NODATA so clients
-          // do not choose IPv6 destinations blocked by the VPN policy.
-          {"rules", Json::array({{{"action", "return"}, {"qType", "28"}, {"rCode", 0}},
-                                {{"action", "direct"}}})}}}, {"streamSettings", {{"sockopt", {{"dialerProxy", proxy}}}}}});
+      {"settings", {{"rules", Json::array({{{"action", "return"}, {"qType", "28"}, {"rCode", 0}},
+                                         {{"action", "hijack"}, {"qType", "1"}},
+                                         {{"action", "return"}, {"rCode", 5}}})}}}});
   config["outbounds"].push_back({{"tag", ipv6_tag}, {"protocol", "blackhole"}});
-  config["dns"] = {{"hosts", hosts}, {"servers", Json::array({"tcp://1.1.1.1"})}, {"tag", upstream_tag},
-      {"queryStrategy", "UseIPv4"}, {"disableFallback", true}};
+  for (const auto& outbound : bootstrap.outbounds) config["outbounds"].push_back(outbound);
   if (!Object(config, "routing") || !Fields(config["routing"], {"rules", "domainStrategy"})) return std::nullopt;
   auto& routing = config["routing"];
   if (!routing.contains("rules")) routing["rules"] = Json::array();
   if (!routing["rules"].is_array()) return std::nullopt;
   Json rules = Json::array({
       {{"type", "field"}, {"inboundTag", Json::array({managed_tag})}, {"ip", Json::array({"::/0"})}, {"outboundTag", ipv6_tag}},
-      {{"type", "field"}, {"inboundTag", Json::array({upstream_tag})}, {"outboundTag", proxy}},
       {{"type", "field"}, {"inboundTag", Json::array({managed_tag})}, {"ip", Json::array({std::string(kVirtualDns) + "/32"})}, {"port", "53"}, {"network", "tcp,udp"}, {"outboundTag", relay_tag}}
   });
+  for (const auto& rule : dns_rules) rules.push_back(rule);
+  for (const auto& rule : bootstrap.rules) rules.push_back(rule);
   for (const auto& rule : routing["rules"]) rules.push_back(rule);
   routing["rules"] = rules;
   // Replace imported API listeners; only statistics are exposed on loopback.
@@ -535,7 +750,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   if (!api_port || !AddApi(config, *api_port)) return std::nullopt;
   config["api"]["tag"] = service_tags.Next("flutter-vless-stats");
   return config.dump();
-}
+} catch (...) { return std::nullopt; }
 
 // Explicit subnet bypass stays inside the authenticated proxy and below the
 // mandatory DNS/IPv6 rules, never as physical adapter route exceptions.

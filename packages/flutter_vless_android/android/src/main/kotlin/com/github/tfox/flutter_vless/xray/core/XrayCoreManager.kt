@@ -115,7 +115,7 @@ object XrayCoreManager {
         // The DNS preparer chooses the adapter identity before adding its rule.
         // Accept it only with the exact native-prepared document, including on
         // recovery; guessing a tag from caller JSON could scope another input.
-        val dnsAdapterTag = if (config.ANDROID_DNS_POLICY == "proxy") {
+        val dnsAdapterTag = if (protectedDns != null || config.ANDROID_DNS_POLICY == "proxy") {
             require(!config.PROXY_ONLY && protectedDns?.configJson == config.V2RAY_FULL_JSON_CONFIG) {
                 "Protected DNS preparation is required"
             }
@@ -187,7 +187,10 @@ object XrayCoreManager {
     fun validateConfiguration(config: XrayConfig) {
         require(config.ANDROID_DNS_POLICY in setOf("config", "proxy")) { "Unsupported Android DNS policy" }
         require(!(config.PROXY_ONLY && config.ANDROID_DNS_POLICY == "proxy")) { "Proxy DNS requires VPN mode" }
-        AndroidTunnelDnsPolicy.validate(config.V2RAY_FULL_JSON_CONFIG, config.ANDROID_DNS_POLICY,
+        require(config.ANDROID_DNS_PROXY_OUTBOUND_TAG == null || config.ANDROID_DNS_POLICY == "proxy") {
+            "DNS proxy outbound tag requires proxy DNS policy"
+        }
+        if (!config.PROXY_ONLY) AndroidTunnelDnsPolicy.validate(config.V2RAY_FULL_JSON_CONFIG, config.ANDROID_DNS_POLICY,
             config.ANDROID_DNS_PROXY_OUTBOUND_TAG, config.BYPASS_SUBNETS)
         // DNS structural validation above does not resolve endpoints. The final
         // service preparation supplies the native DNS identity before Core test.

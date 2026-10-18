@@ -131,7 +131,7 @@ public enum TunnelXrayConfigPreparer {
             guard let bootstrapAddresses = TunnelDNSPolicy.apply(to: &configJSON, managedInboundTag: managedTag, resolveIPv4: resolveIPv4) else {
                 return nil
             }
-            messages.append("Configured system DNS over TCP through the selected proxy")
+            messages.append("Configured system IPv4 DNS through the caller Core DNS policy")
             guard TunnelIPv6Policy.apply(to: &configJSON, managedInboundTag: managedTag) else { return nil }
             messages.append("Captured IPv6 is blocked; IPv4 remains available")
             let data = try JSONSerialization.data(withJSONObject: configJSON, options: [])

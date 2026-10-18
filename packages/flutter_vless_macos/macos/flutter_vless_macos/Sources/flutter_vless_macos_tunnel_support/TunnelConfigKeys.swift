@@ -15,17 +15,17 @@ enum TunnelConfigKeys {
         for key in ["inbounds", "outbounds"] {
             guard var entries = config[key] as? [[String: Any]] else { continue }
             for index in entries.indices {
-                guard fields(&entries[index], ["tag", "protocol", "settings", "streamSettings", "sniffing"]) else { return nil }
+                guard fields(&entries[index], ["tag", "protocol", "settings", "streamSettings", "sniffing", "sendThrough"]) else { return nil }
                 if var sniffing = entries[index]["sniffing"] as? [String: Any] {
                     guard fields(&sniffing, ["enabled", "destOverride", "routeOnly"]) else { return nil }
                     entries[index]["sniffing"] = sniffing
                 }
                 if var settings = entries[index]["settings"] as? [String: Any] {
-                    guard fields(&settings, ["address", "vnext", "servers", "peers"]) else { return nil }
+                    guard fields(&settings, ["address", "port", "vnext", "servers", "peers", "domainStrategy", "targetStrategy"]) else { return nil }
                     for listKey in ["vnext", "servers", "peers"] {
                         guard var servers = settings[listKey] as? [[String: Any]] else { continue }
                         for server in servers.indices {
-                            guard fields(&servers[server], ["address", "endpoint"]) else { return nil }
+                            guard fields(&servers[server], ["address", "port", "endpoint"]) else { return nil }
                         }
                         settings[listKey] = servers
                     }
@@ -42,10 +42,10 @@ enum TunnelConfigKeys {
     }
 
     private static func normalizeStream(_ stream: inout [String: Any]) -> Bool {
-        guard fields(&stream, ["address", "network", "security", "sockopt", "xhttpSettings",
+        guard fields(&stream, ["address", "port", "method", "network", "security", "sockopt", "xhttpSettings",
                               "splithttpSettings", "httpupgradeSettings", "tlsSettings"]) else { return false }
         if var sockopt = stream["sockopt"] as? [String: Any] {
-            guard fields(&sockopt, ["domainStrategy", "addressPortStrategy"]) else { return false }
+            guard fields(&sockopt, ["domainStrategy", "addressPortStrategy", "dialerProxy", "penetrate"]) else { return false }
             stream["sockopt"] = sockopt
         }
         for key in ["xhttpSettings", "splithttpSettings"] {

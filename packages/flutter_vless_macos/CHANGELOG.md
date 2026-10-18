@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Preserve explicit remote caller DNS and separate transport bootstrap pins from caller hosts. Use Core DNS for private VPN A queries; document the proxied native localhost default and unsupported DNS paths.
 * Revoke stale startup/recovery callbacks synchronously on Stop; keep sleep/wake admission ordered and release sleeping health-check retry slots before a valid wake.
 * Reserve caller metrics listener ports alongside API ports without rewriting their settings; cover simultaneous API, metrics and authenticated adapter traffic in runtime acceptance.
 * Wire Core decode/build preflight into app/provider startup for the unpublished preview runtime; preserve active sessions and expose redacted stage/index failures before route installation.

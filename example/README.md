@@ -132,6 +132,12 @@ The Windows backend does not download Xray automatically.
 
 ## Common Checks
 
+- For the DNS preservation check, import full Xray JSON with `dns.hosts` and
+  per-domain `dns.servers`, then keep Android's default `config` DNS policy.
+  The explicit `proxy` policy intentionally overrides system DNS. See the
+  [DNS MVP behavior and current limits](../doc/compatibility.md#incremental-delivery-order-2026-10-19)
+  before testing localhost defaults, IPv6 or FakeDNS. Use a fresh browser
+  connection after changing a DNS or routing rule.
 - Use proxy-only mode first when you want the smallest runtime path.
 - Use VPN/tunnel mode only after platform setup is complete.
 - Import a known-good share link or raw Xray config from the clipboard.

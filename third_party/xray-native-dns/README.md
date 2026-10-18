@@ -295,12 +295,14 @@ Each case waits for a stable physical Wi-Fi default and IPv4 fixture route;
 handover teardown confirms Stop before reconnecting and settling that baseline.
 These are bounded fixture preconditions, not retries of protected operations.
 
-CI waits for scoped Core runtime qualification on Windows, macOS and Ubuntu,
-including the Linux descriptor-ownership fixtures, before starting the Android
-job. The [b030db9 run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39164717739)
-passes those three Core jobs and Linux fixtures. The five mobile TUN scenarios
-run in the same job only after the ordinary Android suite succeeds. The harness
-enforces that gate before building or installing the two-binary VPN test APK.
+The default CI now qualifies the ordinary production DNS adapter separately,
+with Android running in parallel with desktop Core checks. This development
+composition remains opt-in. Before exercising it, qualify scoped Core on all
+three desktop systems and Linux descriptor ownership; the
+[b030db9 run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39164717739)
+passes those checks. With both preview harness options supplied, the five
+mobile TUN scenarios run only after the ordinary Android suite succeeds. The
+harness enforces that gate before building or installing the two-binary VPN APK.
 That run exhausted the 45-minute job limit inside the example smoke wrapper,
 before any native security suite ran; the Flutter child's underlying outcome is
 unknown because its output was buffered until exit. The smoke wrapper now has

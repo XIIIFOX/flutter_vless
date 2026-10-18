@@ -74,5 +74,6 @@ for proxy in ['http', 'socks']:
   assert f'DNS_IPV4_ONLY_PASS={proxy};GENERATION={generation}' in text
   assert f'DNS_IMPORTED_CONTEXT_PASS={proxy};GENERATION={generation}' in text
  assert f'DNS_REFUSAL_NO_FALLBACK_PASS={proxy}' in text
+ assert f'DNS_ROOT_CLIENT_REFUSED_NON_IP_PASS={proxy}' in text
 print('PASS: actual runtime stdout/callback, 12 preparation/runtime cases, proxy snapshot, standalone delay runner')
 PY

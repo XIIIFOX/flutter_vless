@@ -105,8 +105,10 @@ Optional parameters:
   mode so both the app and Packet Tunnel extension can read it. Omit this
   parameter to keep Xray's default/bundled asset lookup.
 - `notificationDisconnectButtonName`: Android notification action label.
-- `androidDnsPolicy`: `AndroidDnsPolicy.config` (default) preserves raw DNS
-  semantics; `AndroidDnsPolicy.proxy` protects the virtual system resolver.
+- `androidDnsPolicy`: `AndroidDnsPolicy.config` (default) sends private virtual
+  resolver A queries through the caller's Core DNS settings;
+  `AndroidDnsPolicy.proxy` intentionally overrides system DNS through a selected
+  proxy. Both use AAAA NODATA while the VPN forwards IPv4 only.
 - `androidDnsProxyOutboundTag`: optional selected proxy tag, only with proxy DNS.
   Unsupported native backends reject explicitly requested new guarantees before
   starting or reconfiguring a session.

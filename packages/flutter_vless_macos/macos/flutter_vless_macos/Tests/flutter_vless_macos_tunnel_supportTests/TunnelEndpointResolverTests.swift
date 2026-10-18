@@ -91,7 +91,7 @@ final class TunnelEndpointResolverTests: XCTestCase {
     }
 
     func testAsyncPreparationResolvesTransportNamesOnlyAndPreservesSNI() async throws {
-        let input = Data(#"{"inbounds":[{"protocol":"socks","port":10808}],"outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"vpn.example.com","port":443,"users":[{"id":"fixture-user"}]}]},"streamSettings":{"security":"reality","realitySettings":{"serverName":"sni.example.com"},"network":"xhttp","xhttpSettings":{"downloadSettings":{"address":"download.example.com"}}}}],"routing":{"rules":[{"domain":["domain:ru"],"outboundTag":"proxy"}]}}"#.utf8)
+        let input = Data(#"{"inbounds":[{"protocol":"socks","port":10808}],"outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"vpn.example.com","port":443,"users":[{"id":"fixture-user"}]}]},"streamSettings":{"security":"reality","realitySettings":{"serverName":"sni.example.com"},"network":"xhttp","xhttpSettings":{"downloadSettings":{"address":"download.example.com","port":8443}}}}],"routing":{"rules":[{"domain":["domain:ru"],"outboundTag":"proxy"}]}}"#.utf8)
         let credentials = try LocalProxyCredentials(username: "fixture", password: "fixture-password")
         var names: [String] = []
         let prepared = try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: input, credentials: credentials,

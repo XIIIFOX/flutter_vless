@@ -72,16 +72,98 @@ class AndroidTunnelDnsPolicyTest {
         }
     }
 
-    @Test fun configModePreservesExactOriginalDnsAndSkipsBootstrap() {
-        val original = "  " + config(outbound()).toString(2) + "\n"
-        for (policy in listOf("config")) {
-            val prepared = AndroidTunnelDnsPolicy.prepare(original, policy) { error("config mode must not resolve endpoints") }
-            assertEquals(original, prepared.configJson)
-            assertEquals(listOf("8.8.8.8", "1.1.1.1"), prepared.systemDnsServers)
-            assertTrue(prepared.bootstrapHostnames.isEmpty())
-        }
+    @Test fun configModePreservesCallerRootDnsAndEndpointsWithPrivateCoreClientRelay() {
+        val callerDns = JSONObject("""{
+          "hosts":{"domain:example.test":["192.0.2.8"],"alias.test":"canonical.test"},
+          "servers":["localhost","https://resolver.test/dns-query","https+local://local-resolver.test/dns-query",
+            "tls://dot-source.test",{"address":"tcp://192.0.2.53","domains":["full:caller.test"],
+            "skipFallback":true,"tag":"caller-server","queryStrategy":"UseIPv4","timeoutMs":500}],
+          "queryStrategy":"UseIPv6","tag":"caller-dns","disableFallback":true,"clientIp":"192.0.2.9"
+        }""")
+        val input = config(outbound()).put("dns", callerDns)
+        val original = input.toString()
+        val prepared = AndroidTunnelDnsPolicy.prepare(original, "config") { error("config mode must not bootstrap endpoints") }
+        val output = JSONObject(prepared.configJson)
+        assertEquals(original, input.toString())
+        assertEquals(callerDns.toString(), output.getJSONObject("dns").toString())
+        assertEquals(input.getJSONArray("inbounds").toString(), output.getJSONArray("inbounds").toString())
+        assertEquals(input.getJSONArray("outbounds").getJSONObject(0).toString(), output.getJSONArray("outbounds").getJSONObject(0).toString())
+        assertEquals(listOf(AndroidTunnelDnsPolicy.VIRTUAL_SERVER), prepared.systemDnsServers)
+        assertTrue(prepared.bootstrapHostnames.isEmpty()); assertTrue(prepared.bootstrapAddresses.isEmpty())
+        val relay = output.getJSONArray("outbounds").getJSONObject(2)
+        assertEquals("dns", relay.getString("protocol"))
+        assertFalse(relay.has("streamSettings"))
+        val settings = relay.getJSONObject("settings")
+        assertFalse(settings.has("rewriteAddress")); assertFalse(settings.has("rewriteNetwork")); assertFalse(settings.has("rewritePort"))
+        val dnsRules = settings.getJSONArray("rules")
+        assertEquals(3, dnsRules.length())
+        assertEquals("return", dnsRules.getJSONObject(0).getString("action"))
+        assertEquals("28", dnsRules.getJSONObject(0).getString("qType")); assertEquals(0, dnsRules.getJSONObject(0).getInt("rCode"))
+        assertEquals("hijack", dnsRules.getJSONObject(1).getString("action")); assertEquals("1", dnsRules.getJSONObject(1).getString("qType"))
+        assertEquals("return", dnsRules.getJSONObject(2).getString("action")); assertEquals(5, dnsRules.getJSONObject(2).getInt("rCode"))
+        val routing = output.getJSONObject("routing"); val rules = routing.getJSONArray("rules")
+        assertEquals("IPIfNonMatch", routing.getString("domainStrategy"))
+        val bridge = rules.getJSONObject(0)
+        assertEquals(prepared.managedInboundTag, bridge.getJSONArray("inboundTag").getString(0))
+        assertEquals("198.18.0.2/32", bridge.getJSONArray("ip").getString(0))
+        assertEquals("53", bridge.getString("port")); assertEquals("tcp,udp", bridge.getString("network"))
+        assertEquals(relay.getString("tag"), bridge.getString("outboundTag"))
+        val userRules = input.getJSONObject("routing").getJSONArray("rules")
+        assertEquals(userRules.length() + 1, rules.length())
+        for (i in 0 until userRules.length()) assertEquals(userRules.getJSONObject(i).toString(), rules.getJSONObject(i + 1).toString())
         rejected { AndroidTunnelDnsPolicy.prepare(original, "invalid") }
         rejected { AndroidTunnelDnsPolicy.prepare(original, "config", "proxy") }
+    }
+
+    @Test fun configModeMissingEmptyAndLocalhostDnsKeepProtectedCoreDefaultSemantics() {
+        for (dns in listOf<JSONObject?>(null, JSONObject(), JSONObject().put("servers", JSONArray()),
+                JSONObject().put("servers", JSONArray().put("localhost")))) {
+            val input = config(JSONObject().put("protocol", "freedom").put("tag", "caller-direct"))
+            if (dns == null) input.remove("dns") else input.put("dns", dns)
+            val prepared = AndroidTunnelDnsPolicy.prepare(input.toString(), "config") { error("no preparer OS fallback") }
+            val output = JSONObject(prepared.configJson)
+            assertEquals(dns != null, output.has("dns"))
+            if (dns != null) assertEquals(dns.toString(), output.getJSONObject("dns").toString())
+            assertEquals(listOf(AndroidTunnelDnsPolicy.VIRTUAL_SERVER), prepared.systemDnsServers)
+            val settings = output.getJSONArray("outbounds").getJSONObject(2).getJSONObject("settings")
+            assertEquals(3, settings.getJSONArray("rules").length()) // A uses Core; no direct-to-VIP fallback.
+            assertEquals("return", settings.getJSONArray("rules").getJSONObject(0).getString("action"))
+        }
+    }
+
+    @Test fun configModeReservesPrivateIdentitiesWithoutRenamingCallerDnsOrInputTags() {
+        val input = config(outbound(tag = AndroidTunnelDnsPolicy.RELAY_TAG))
+        input.getJSONObject("dns").put("tag", "flutter-vless-system-dns-1")
+        input.getJSONArray("inbounds").getJSONObject(0).put("tag", "flutter-vless-tun")
+        input.getJSONObject("routing").getJSONArray("rules").put(JSONObject().put("inboundTag", JSONArray().put("caller-dns"))
+            .put("outboundTag", "flutter-vless-tun-1"))
+        val prepared = AndroidTunnelDnsPolicy.prepare(input.toString(), "config")
+        val output = JSONObject(prepared.configJson)
+        assertEquals("flutter-vless-tun-2", prepared.managedInboundTag)
+        assertEquals("flutter-vless-system-dns-2", output.getJSONArray("outbounds").getJSONObject(2).getString("tag"))
+        assertEquals(input.getJSONObject("dns").toString(), output.getJSONObject("dns").toString())
+        assertEquals(input.getJSONArray("inbounds").toString(), output.getJSONArray("inbounds").toString())
+    }
+
+    @Test fun configModeRejectsFakeDnsBeforeInstallingAnIncompatibleIpv4Bridge() {
+        for (key in listOf("fakeDns", "FAKEDNS", "fakeDnſ")) {
+            for (value in listOf<Any>(JSONObject(), JSONArray())) {
+                val source = config(outbound()).put(key, value).toString()
+                rejected { AndroidTunnelDnsPolicy.prepare(source) }
+            }
+        }
+        for (address in listOf("fakedns", "FakeDNS", "fakednſ")) {
+            for (server in listOf<Any>(address, JSONObject().put("Addreſſ", address))) {
+                val input = config(outbound()).put("DNS", JSONObject().put("SerVerſ", JSONArray().put(server)))
+                input.remove("dns")
+                rejected { AndroidTunnelDnsPolicy.prepare(input.toString()) }
+            }
+        }
+        // A null engine is not a configured Core app. Hosts may legitimately
+        // contain this word; do not use arbitrary recursive string matching.
+        val allowed = config(outbound()).put("fakeDns", JSONObject.NULL)
+        allowed.getJSONObject("dns").put("hosts", JSONObject().put("fakedns", "192.0.2.1"))
+        AndroidTunnelDnsPolicy.prepare(allowed.toString())
     }
 
     @Test fun untaggedSingleProxyGetsReservedTagAndAmbiguousProxiesRequireSelection() {

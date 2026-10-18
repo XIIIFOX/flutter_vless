@@ -71,5 +71,6 @@ for proxy in ['http','socks']:
         assert f'DNS_IPV4_ONLY_PASS={proxy};GENERATION={generation}' in text
         assert f'DNS_IMPORTED_CONTEXT_PASS={proxy};GENERATION={generation}' in text
     assert f'DNS_REFUSAL_NO_FALLBACK_PASS={proxy}' in text
+    assert f'DNS_ROOT_CLIENT_REFUSED_NON_IP_PASS={proxy}' in text
 print('PASS macOS Xray runtime: privacy, 12 modes, local authentication, rotation, domain routing, DNS relay/refusal and delay')
 PY

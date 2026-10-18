@@ -85,7 +85,7 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
         XCTAssertNil(streamSettings["xHTTPSettings"])
         XCTAssertNotNil(streamSettings["xhttpSettings"])
         XCTAssertNil((streamSettings["tlsSettings"] as? [String: Any])?["allowInsecure"])
-        XCTAssertEqual((streamSettings["sockopt"] as? [String: Any])?["domainStrategy"] as? String, "ForceIP")
+        XCTAssertEqual((streamSettings["sockopt"] as? [String: Any])?["domainStrategy"] as? String, "AsIs")
         XCTAssertEqual(rules.first(where: { String(describing: $0["port"] ?? "") == "443" })?["network"] as? String, "udp")
         XCTAssertEqual(String(describing: rules.first(where: { String(describing: $0["port"] ?? "") == "443" })?["port"] ?? ""), "443")
         XCTAssertEqual(rules.first(where: { String(describing: $0["port"] ?? "") == "443" })?["outboundTag"] as? String, "block")
@@ -128,7 +128,7 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
         XCTAssertFalse(result.proxyUsesXhttp)
         XCTAssertEqual(vnext[0]["address"] as? String, "reality.example.com")
         XCTAssertEqual(result.bootstrapAddresses, ["203.0.113.10"])
-        XCTAssertTrue(result.logMessages.contains("Configured system DNS over TCP through the selected proxy"))
+        XCTAssertTrue(result.logMessages.contains("Configured system IPv4 DNS through the caller Core DNS policy"))
     }
 
     func testParsesInboundPortAndProxyServerAcrossProtocols() throws {
@@ -192,7 +192,7 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
         let routing = try XCTUnwrap(output["routing"] as? [String: Any])
         let rules = try XCTUnwrap(routing["rules"] as? [[String: Any]])
 
-        XCTAssertEqual(rules.count, 4)
+        XCTAssertEqual(rules.filter { ($0["network"] as? String) == "udp" && ($0["port"] as? String) == "443" && ($0["outboundTag"] as? String) == "blackhole" }.count, 1)
         XCTAssertFalse(result.logMessages.contains("Added XHTTP UDP/443 block rule to force browser TCP fallback"))
     }
 

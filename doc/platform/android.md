@@ -140,8 +140,14 @@ from the VPN. User-requested `blockedApps` and Xray `direct` rules remain suppor
 
 ## Explicit DNS policy
 
-Default `AndroidDnsPolicy.config` preserves the supplied config's semantics and
-does not promise protected DNS. Choose proxy DNS explicitly:
+Default `AndroidDnsPolicy.config` retains the supplied root DNS settings. The
+VPN advertises `198.18.0.2`; its private adapter sends A queries to Core's DNS
+client, including caller hosts, per-domain servers and tags. Missing/localhost
+DNS uses the existing physical-Network resolver protection. The current IPv4
+adapter returns AAAA NODATA and refuses other record types; FakeDNS is rejected
+before replacing a session. Proxy-only operation does not install this bridge.
+
+Choose an intentional proxy DNS override explicitly:
 
 ```dart
 await flutterVless.startVless(
@@ -153,7 +159,7 @@ await flutterVless.startVless(
 );
 ```
 
-The protected mode advertises `198.18.0.2` as system DNS and forwards its queries
+The explicit proxy mode advertises `198.18.0.2` as system DNS and forwards its queries
 over TCP through the selected proxy. A suitable `proxy` tag or a unique supported
 outbound is selected; ambiguity and reserved-tag/virtual-address conflicts fail
 before changing a working session. Service DNS rules precede user `UDP -> direct`

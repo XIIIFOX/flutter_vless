@@ -11,6 +11,43 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class XrayCoreManagerTest {
+    @Test fun callerRootDnsRelayBindsOnlyTheNativePreparedPrivateAdapter() {
+        val source = """{
+          "dns":{"hosts":{"caller.test":"192.0.2.8"},"servers":["localhost"],"tag":"caller-dns","queryStrategy":"UseIPv4"},
+          "inbounds":[{"tag":"flutter-vless-tun","protocol":"socks","listen":"127.0.0.1","port":10808,
+            "settings":{"auth":"noauth","udp":true}}],
+          "outbounds":[{"tag":"direct","protocol":"freedom"}],
+          "routing":{"rules":[{"inboundTag":["caller-dns"],"outboundTag":"direct"}]}
+        }"""
+        val prepared = AndroidTunnelDnsPolicy.prepare(source)
+        val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = prepared.configJson, LOCAL_SOCKS5_PORT = 10808)
+        val output = XrayCoreManager.buildRuntimeConfigJson(profile, File("build/test-files/root-dns"), credentials, prepared)
+        assertEquals(JSONObject(source).getJSONObject("dns").toString(), output.getJSONObject("dns").toString())
+        val inbounds = output.getJSONArray("inbounds")
+        assertEquals("flutter-vless-tun", inbounds.getJSONObject(0).getString("tag"))
+        val adapter = (0 until inbounds.length()).map { inbounds.getJSONObject(it) }
+            .single { it.optInt("port") == profile.LOCAL_SOCKS5_PORT }
+        assertEquals(prepared.managedInboundTag, adapter.getString("tag"))
+        assertFalse(adapter.getString("tag") == "flutter-vless-tun")
+        val rules = output.getJSONObject("routing").getJSONArray("rules")
+        val bridge = (0 until rules.length()).map { rules.getJSONObject(it) }
+            .single { it.optJSONArray("ip")?.optString(0) == AndroidTunnelDnsPolicy.VIRTUAL_SERVER + "/32" }
+        assertEquals(adapter.getString("tag"), bridge.getJSONArray("inboundTag").getString(0))
+        val wrongSource = profile.copy(V2RAY_FULL_JSON_CONFIG = source)
+        try {
+            XrayCoreManager.buildRuntimeConfigJson(wrongSource, File("build/test-files/root-dns"), credentials, prepared)
+            org.junit.Assert.fail("Prepared DNS identity must be bound to its exact document")
+        } catch (_: IllegalArgumentException) { }
+    }
+
+    @Test fun fakeDnsVpnGuardDoesNotRestrictProxyOnlyOrStandaloneDelay() {
+        val source = """{"fakeDns":{},"dns":{"servers":["fakedns"]},"inbounds":[],"outbounds":[{"protocol":"freedom"}]}"""
+        XrayCoreManager.validateConfiguration(XrayConfig(V2RAY_FULL_JSON_CONFIG = source, PROXY_ONLY = true))
+        val measured = XrayCoreManager.buildDelayConfigJson(source, 20000, File("build/test-files/fakedns-delay"), credentials).first
+        assertTrue(measured.has("fakeDns"))
+        assertEquals("fakedns", measured.getJSONObject("dns").getJSONArray("servers").getString(0))
+    }
+
     @Test fun unixPortListDoesNotConsumeTcpPortsOrReceivePrivateAuthentication() {
         val input = JSONObject("""{"protocol":"socks","listen":"/tmp/flutter-vless-port-corpus.sock","port":"0-65535","settings":{"auth":"password","accounts":[{"user":"caller","pass":"caller-password"}]}}""")
         val profile = JSONObject().put("inbounds", JSONArray().put(input)).put("outbounds", JSONArray().put(JSONObject().put("protocol", "freedom")))

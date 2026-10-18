@@ -188,6 +188,7 @@ func runDNSRuntimeChecks() throws {
         let upstream = DNSControlledProxy(port: 18103, proto: proto)
         defer { upstream.stop() }
         let raw: [String: Any] = [
+            "dns": ["disableCache": true, "disableFallback": true, "queryStrategy": "UseIPv4"],
             "inbounds": [["tag": "in_proxy", "protocol": "socks", "listen": "127.0.0.1", "port": 18098,
                 "settings": ["auth": "password", "accounts": [["user": credentials.username, "pass": credentials.password]]]]],
             "outbounds": [
@@ -232,6 +233,9 @@ func runDNSRuntimeChecks() throws {
                 }
                 precondition(ipv6 == dnsNoDataResponse(id: ipv6ID), "IPv4-only DNS must answer AAAA with NOERROR/NODATA")
                 precondition(upstream.state().0 == queriesBeforeAAAA, "AAAA must not reach the upstream resolver")
+                let refused = try queryVirtualDNS(proxyPort: managedPort, credentials: credentials, udp: udp, id: id + 0x200, type: 16)
+                precondition(refused != nil && refused![3] & 15 == 5, "Non-IP records must receive REFUSED")
+                precondition(upstream.state().0 == queriesBeforeAAAA, "Non-IP records must not reach a raw DNS socket")
             }
             XRayStop()
             print("DNS_RUNTIME_PASS=\(proto);GENERATION=\(generation)")
@@ -243,6 +247,7 @@ func runDNSRuntimeChecks() throws {
         for udp in [false, true] {
             let answer = try queryVirtualDNS(proxyPort: managedPort, credentials: credentials, udp: udp, id: udp ? 0x4501 : 0x4500)
             precondition(answer != nil && answer![3] & 15 == 2, "DNS SERVFAIL must not switch to another resolver")
+            precondition(trap.count() == 0, "Core root DNS must not bypass the configured proxy on SERVFAIL")
         }
         upstream.mode(.refuseConnection)
         for udp in [false, true] {
@@ -252,6 +257,7 @@ func runDNSRuntimeChecks() throws {
         XRayStop()
         let (count, failure) = upstream.state()
         precondition(count == 6 && failure == nil && trap.count() == 0)
+        print("DNS_ROOT_CLIENT_REFUSED_NON_IP_PASS=\(proto)")
         print("DNS_REFUSAL_NO_FALLBACK_PASS=\(proto)")
     }
 }

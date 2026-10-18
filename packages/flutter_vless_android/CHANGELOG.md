@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Connect the default config DNS policy to Core's caller DNS through the private VPN adapter. Preserve root hosts/server/tag policy and protected physical-Network localhost resolution; retain explicit proxy overrides and separate proxy-only behavior.
 * Bound statistics collection while reading, rather than waiting for EOF before applying its timeout. Cap captured bytes, reject unsuccessful commands and terminate/reap owned children on timeout or cancellation.
 * Shut down development-broker sockets before closing them so blocked accepts/reads drain. Strengthen rejection checks and add an opt-in, provenance-verified instrumentation APK for actual composed Core DNS/HTTP and bounded parent-EOF cleanup; ordinary runtime packaging is unchanged.
 * Add an opt-in development socket broker requiring both VPN protection and binding of transferred descriptors to a captured physical Network. Revoke new acknowledgements on generation closure and refuse legacy/system DNS commands; ordinary VPN startup retains its existing path.

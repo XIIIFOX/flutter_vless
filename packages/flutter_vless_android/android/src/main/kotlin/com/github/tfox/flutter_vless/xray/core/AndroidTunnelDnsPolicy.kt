@@ -41,7 +41,7 @@ internal object AndroidTunnelDnsPolicy {
                                 excludedRoutes: List<String>, resolveEndpoint: ((String) -> List<String>)?): Prepared {
         require(policy == "config" || policy == "proxy") { "Unsupported Android DNS policy" }
         require(proxyOutboundTag == null || policy == "proxy") { "DNS proxy outbound tag requires proxy DNS policy" }
-        if (policy == "config") return Prepared(configJson, listOf("8.8.8.8", "1.1.1.1"))
+        if (policy == "config") return prepareCallerRoot(configJson, excludedRoutes)
         require(allowsRouteExclusions(excludedRoutes)) { "Excluded route conflicts with virtual system DNS" }
 
         val config = JSONObject(configJson)
@@ -151,6 +151,73 @@ internal object AndroidTunnelDnsPolicy {
         config.put("dns", JSONObject().put("hosts", hosts).put("servers", JSONArray().put("tcp://1.1.1.1"))
             .put("tag", upstreamTag).put("queryStrategy", "UseIP").put("disableFallback", true))
         return Prepared(config.toString(), listOf(VIRTUAL_SERVER), names, addresses, managedInboundTag)
+    }
+
+    /**
+     * Keep the imported root DNS client intact. The private TUN input sends only
+     * its virtual resolver traffic here; imported inputs and DNS routing tags
+     * retain their original meaning. Missing/empty/localhost DNS uses the
+     * official protected Core resolver's D broker on an Android physical Network.
+     * This does not pin transport endpoints into caller hosts or select a proxy.
+     */
+    private fun prepareCallerRoot(configJson: String, excludedRoutes: List<String>): Prepared {
+        require(allowsRouteExclusions(excludedRoutes)) { "Excluded route conflicts with virtual system DNS" }
+        val config = JSONObject(configJson)
+        requireNoFakeDns(config)
+        canonicalize(config, "outbounds", "inbounds", "routing")
+        val outbounds = objects(config, "outbounds", required = true)
+        val serviceTags = XrayServiceTags(config)
+        val managedInboundTag = serviceTags.next("flutter-vless-tun")
+        val relayTag = serviceTags.next(RELAY_TAG)
+        val routing = objectValue(config, "routing") ?: JSONObject()
+        canonicalize(routing, "rules")
+        val userRules = objects(routing, "rules")
+        for (rule in userRules) {
+            val inspected = JSONObject(rule.toString())
+            canonicalize(inspected, "ip")
+            val ips = inspected.optJSONArray("ip") ?: continue
+            for (i in 0 until ips.length()) require(ips.optString(i) !in setOf(VIRTUAL_SERVER, "$VIRTUAL_SERVER/32")) {
+                "Routing rule explicitly targets the reserved virtual DNS endpoint"
+            }
+        }
+        val rules = JSONArray().put(JSONObject().put("type", "field")
+            .put("inboundTag", JSONArray().put(managedInboundTag))
+            .put("ip", JSONArray().put("$VIRTUAL_SERVER/32")).put("port", "53")
+            .put("network", "tcp,udp").put("outboundTag", relayTag))
+        userRules.forEach(rules::put)
+        routing.put("rules", rules)
+        config.put("routing", routing)
+        // A is answered by Core's unchanged root client. The current Android
+        // interface blocks IPv6, so AAAA is explicit NODATA. Other record types
+        // are REFUSED, never forwarded directly to the virtual address.
+        val dnsRules = JSONArray()
+            .put(JSONObject().put("action", "return").put("qType", "28").put("rCode", 0))
+            .put(JSONObject().put("action", "hijack").put("qType", "1"))
+            .put(JSONObject().put("action", "return").put("rCode", 5))
+        config.put("outbounds", JSONArray(outbounds).put(JSONObject().put("tag", relayTag)
+            .put("protocol", "dns").put("settings", JSONObject().put("rules", dnsRules))))
+        return Prepared(config.toString(), listOf(VIRTUAL_SERVER), managedInboundTag = managedInboundTag)
+    }
+
+    /** Match only Core's engine/server fields, not arbitrary caller host names. */
+    private fun requireNoFakeDns(config: JSONObject) {
+        fun fold(value: String) = value.replace('\u017f', 's').replace('\u212a', 'k').lowercase(Locale.ROOT)
+        fun field(value: JSONObject, name: String): Any? {
+            val keys = value.keys().asSequence().filter { fold(it) == name }.toList()
+            require(keys.size <= 1) { "Conflicting case-insensitive configuration keys" }
+            return keys.singleOrNull()?.let(value::opt)
+        }
+        val engine = field(config, "fakedns")
+        require(engine == null || engine == JSONObject.NULL) { "FakeDNS is unavailable in the IPv4 VPN DNS bridge" }
+        val dns = field(config, "dns") as? JSONObject ?: return
+        val servers = field(dns, "servers") as? JSONArray ?: return
+        for (index in 0 until servers.length()) {
+            val server = servers.opt(index)
+            val address = if (server is JSONObject) field(server, "address") else server
+            require(address !is String || fold(address) != "fakedns") {
+                "FakeDNS is unavailable in the IPv4 VPN DNS bridge"
+            }
+        }
     }
 
     private fun prepareStream(stream: JSONObject, pinEndpoint: (String) -> Unit) {

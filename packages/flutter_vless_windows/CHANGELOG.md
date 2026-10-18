@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Preserve explicit remote caller DNS and separate transport bootstrap pins from caller hosts. Use Core DNS for private VPN A queries; document the proxied native localhost default and unsupported DNS paths.
 * Enforce the command deadline while stdout remains available. Add actual stalled-child, output-cap and failed-command checks, with a separate process-only build for CrossOver validation.
 * Reserve caller metrics ports for private VPN/statistics allocation and proxy-only statistics, retaining bounded OS availability checks and caller metrics settings.
 * Check original/generated documents with bundled Core before session replacement, remove private check files, and retain working state/quick profiles after rejection. Add live invalid-replacement workflow coverage.

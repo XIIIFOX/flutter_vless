@@ -119,6 +119,49 @@ with every feature or protocol accepted by the Xray command-line runtime.
 
 These are implementation and acceptance tasks, not supported-feature claims.
 
+### Incremental delivery order (2026-10-19)
+
+Deliver one useful cross-platform increment at a time: failing regression,
+production adaptation, then targeted runtime acceptance. The full protocol and
+transport matrix is deferred; a missing server configuration does not block the
+first DNS increment. The eight requirements below remain the long-term list.
+
+1. DNS: preserve explicit caller `hosts`, remote `servers`, domain selection,
+   tags and query strategy. Send the managed VPN resolver's A queries to Core's
+   own DNS client. Keep transport bootstrap outside the caller's hosts map.
+2. Protocols and transports: remove avoidable adapter restrictions using focused
+   synthetic cases and the configurations available for live checks.
+3. Full configuration passthrough, then ports/addresses and files/imports.
+4. Remaining IPv6, diagnostics, recovery and device acceptance from the eight
+   requirements, expanding the corpus when a concrete gap is found.
+
+The DNS MVP uses an address-only virtual resolver at `198.18.0.2:53`, scoped to
+the private VPN adapter. A uses Core's preserved root DNS; AAAA returns successful
+NODATA while forwarding is IPv4-only; other record types return REFUSED.
+Imported listeners do not acquire this private path. Proxy-only and measurement
+preparation retain their separate behavior.
+
+The default Android CI job now runs the production adapter and its two focused
+caller-DNS TUN tests in parallel with desktop Core checks. Development-only
+Core/forwarder composition remains an explicit harness option, outside this
+minimum DNS delivery's acceptance gate.
+
+On Android the default `config` policy preserves the caller root DNS, including
+missing/localhost resolution through the existing protected physical-Network
+resolver. The explicit `proxy` policy intentionally selects proxied system DNS.
+On Apple and Windows missing/empty/localhost DNS uses a documented native
+default, `tcp://1.1.1.1` through the selected proxy. This is an adaptation, not
+identical OS-localhost behavior. Other fields on a localhost server entry remain.
+
+Apple/Windows initially admit numeric UDP/TCP and remote HTTPS/h2c resolvers;
+named resolvers need an exact caller-owned IPv4 static hosts mapping. Bootstrap
+pins live in private closed routing branches, preserving logical endpoints and
+TLS/HTTP names. Unqualified local/QUIC resolver paths, system-family strategies,
+scripts and FakeDNS fail preparation rather than silently using OS fallback.
+The pinned Core has no `tls://` DoT implementation. These limitations, arbitrary
+DNS record types and dual-stack/FakeDNS support remain open; this MVP does not
+complete item 1. Test compilation and runtime results are recorded separately.
+
 Port grammar progress (2026-10-18): the Dart, Kotlin, Swift and C++ paths now
 share a 20-case corpus checked against the pinned Core decoder/build path.
 It covers lists/ranges, numeric zero, native `env:` lookup and its normalized
@@ -371,20 +414,11 @@ record the underlying Core outcome; its cause is still unproven. The handoff
 between releasing a reservation and Core binding remains a separate bind-race
 requirement, and the main VPN listener allocator is unchanged.
 
-Delivery order updated on 2026-10-19 at the owner's request: finish a minimal,
-broad DNS increment on all four platforms first, then protocol/transport
-adaptation, full-document handling, ports/addresses and assets/imports. Each
-increment starts with a failing regression, then implementation and focused
-runtime acceptance. Exhaustive protocol combinations and later edge-case
-qualification are deferred; they do not block delivering the qualified minimum.
-Explicit unsupported cases stay visible and are not counted as working. The
-eight longer-term compatibility requirements remain tracked below.
-
 Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |
 | --- | --- | --- |
-| 1. Advanced DNS | Pending | Current protection tests cover resolver isolation/refusal. Protected DNS policies still replace imported DNS; full hosts/server/FakeDNS semantics are not accepted yet. |
+| 1. Advanced DNS | Partial; MVP runtime qualification pending | Production adapters now preserve explicit remote caller DNS and use Core for private A queries. Test-first native regressions pass; ordinary Core and Android TUN acceptance are wired into CI. Localhost adaptation, IPv4-only answers and unsupported paths are documented above. Full advanced/FakeDNS semantics remain open. |
 | 2. IPv6 | Pending | Current tests prove blocking, not dual-stack forwarding, IPv6-only endpoint or NAT64 support. |
 | 3. Protocol/transport matrix | Pending | Supplied VLESS TCP/Reality profiles work on devices. Full pinned-Core transport/socket-protection coverage is still required. |
 | 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. Apple retains caller API/services; Android/Windows API, caller stats/policy, source-inbound context and explicit VPN default selection remain open. |
@@ -402,9 +436,10 @@ contracts; this does not implement Core multi-file override/merge semantics.
 
 1. **Preserve advanced DNS semantics.** Separate the OS-facing protected resolver
    from imported `dns` hosts, servers, per-domain rules, query strategies, DoH/DoT
-   and DNS tags. Apple/Windows currently replace DNS for VPN protection; FakeDNS
-   and IPv6 remain constrained. Cover DNS loops and endpoint bootstrap without
-   adding physical resolver fallbacks.
+   and DNS tags. The minimum adaptation above preserves explicit remote roots;
+   localhost behavior, FakeDNS and IPv6 remain constrained. Qualify advanced
+   DNS loops, endpoint bootstrap and additional resolver modes. DoT needs a
+   supporting Core implementation before it can be admitted.
 2. **Complete IPv6 forwarding.** Carry TCP/UDP and DNS across both address
    families, including IPv6-only endpoints, NAT64 and network handover. Current
    Apple/Windows forwarding blocks IPv6 instead of providing full dual stack.

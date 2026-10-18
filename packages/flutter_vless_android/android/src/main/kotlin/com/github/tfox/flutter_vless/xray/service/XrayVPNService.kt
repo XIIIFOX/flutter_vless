@@ -41,7 +41,7 @@ class XrayVPNService : VpnService() {
     private var config: XrayConfig? = null
     private var sourceConfig: XrayConfig? = null
     private var prepared: JSONObject? = null
-    private var dnsServers = listOf("8.8.8.8", "1.1.1.1")
+    private var dnsServers = listOf(AndroidTunnelDnsPolicy.VIRTUAL_SERVER)
     private var credentials: LocalProxyCredentials? = null
     private var tunConfigFile: File? = null
     private var socketFile: File? = null
@@ -213,12 +213,14 @@ class XrayVPNService : VpnService() {
         var candidateDnsServers = dnsServers
         val json = try {
             XrayCoreManager.validateConfiguration(candidate)
-            val dns = AndroidTunnelDnsPolicy.prepare(candidate.V2RAY_FULL_JSON_CONFIG, candidate.ANDROID_DNS_POLICY,
+            val dns = if (candidate.PROXY_ONLY) null else AndroidTunnelDnsPolicy.prepare(candidate.V2RAY_FULL_JSON_CONFIG, candidate.ANDROID_DNS_POLICY,
                 candidate.ANDROID_DNS_PROXY_OUTBOUND_TAG, candidate.BYPASS_SUBNETS) {
                 XraySocketProtector.resolveBootstrapHostname(this, it)
             }
-            candidate.V2RAY_FULL_JSON_CONFIG = dns.configJson
-            candidateDnsServers = dns.systemDnsServers
+            if (dns != null) {
+                candidate.V2RAY_FULL_JSON_CONFIG = dns.configJson
+                candidateDnsServers = dns.systemDnsServers
+            }
             val runtime = XrayCoreManager.buildRuntimeConfigJson(candidate, noBackupFilesDir, secret, dns)
             require(XrayCoreManager.validateNative(this, runtime)) { "Native configuration rejected" }
             if (!candidate.PROXY_ONLY) SessionReadinessProbe.selectHost(runtime)

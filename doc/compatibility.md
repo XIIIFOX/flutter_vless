@@ -127,8 +127,9 @@ transport matrix is deferred; a missing server configuration does not block the
 first DNS increment. The eight requirements below remain the long-term list.
 
 1. DNS: preserve explicit caller `hosts`, remote `servers`, domain selection,
-   tags and query strategy. Send the managed VPN resolver's A queries to Core's
-   own DNS client. Keep transport bootstrap outside the caller's hosts map.
+   tags and query strategy. Send the managed VPN resolver's A/AAAA queries to
+   Core's own DNS client, retaining caller `UseIPv4` AAAA NODATA behavior. Keep
+   transport bootstrap outside the caller's hosts map.
 2. Protocols and transports: remove avoidable adapter restrictions using focused
    synthetic cases and the configurations available for live checks.
 3. Full configuration passthrough, then ports/addresses and files/imports.
@@ -145,7 +146,7 @@ Track the small delivery gates separately from the eight full requirements:
 | Port/address syntax and explicit data/certificate roots | Qualified baseline | Shared Core/native controls and the targeted runtime cases below; OS allocation/reload and managed import lifetime remain open. |
 | Source inbound and explicit VPN default | Qualified controlled baseline | Shared Core, Android TUN, Windows 2022/2025 and both enabled Apple SDK runtimes pass controlled source/default selection. Physical/system-VPN acceptance remains separately tracked. |
 | Occupied private TCP listeners | Qualified controlled baseline | Bounded selection, held-port traffic and Android/Windows probe exclusions pass the targeted runtime gates below. Atomic ownership transfer and reload remain separate. |
-| Session-owned traffic counters | Qualified controlled baseline | Windows passes 442 rows. At 02136f1, Android passes all required counter/DNS/routing cases and three Flutter tests (one cellular-prerequisite skip); both enabled Apple SDKs pass counters, all twelve ordinary modes, routing and cleanup. Apple VPN keeps HEV accounting; physical-device acceptance remains separate. |
+| Session-owned traffic counters | Qualified controlled baseline | At f5acbbc, Windows passes 460 rows and Android passes 41 native tests plus three Flutter tests with no skips, including enabled/disabled counter generations. At 02136f1, both enabled Apple SDKs pass counters, all twelve ordinary modes, routing and cleanup. Apple VPN keeps HEV accounting; physical-device acceptance remains separate. |
 
 Each qualified row refers to the specific checks recorded below. It does not
 mark an entire long-term requirement complete.
@@ -162,6 +163,10 @@ must reach Core as an empty engine rather than becoming an absent engine with
 implicit pools. Share-link generation keeps its separate cleanup behavior.
 Existing legacy stream-setting aliases and removal of `allowInsecure` still
 apply; preservation concerns JSON structure rather than its original whitespace.
+The public API regression checks all four concrete platform adapters through
+their mocked message channels. Together with the root and example import/routing
+tests, this verifies the shared JSON handoff without claiming a new native
+runtime result.
 
 The FakeDNS increment moves owned DNS to `10.0.85.53`, the Windows probe
 to `10.0.85.54`, and Apple interface IPv4 to `10.0.85.2/24`, outside Core's
@@ -190,9 +195,10 @@ acquire a hosted ARM64 runner and executed no SDK tests. Combined Apple HEV/Fake
 iOS packets also remain separate.
 
 
-The default Android CI job runs the production adapter and its two focused
-caller-DNS TUN tests in parallel with desktop Core checks; a third IPv6 payload
-case passes in the current increment. It uses the existing
+The default Android CI job runs the production adapter and five focused
+caller-DNS TUN methods in parallel with desktop Core checks: caller DNS,
+missing/localhost defaults, direct/selector routing, IPv6 payloads and FakeDNS.
+It uses the existing
 `--no-capture` mode: functional Wi-Fi DNS/system-policy tests remain mandatory,
 while the report explicitly marks physical packet capture unverified. Cellular
 capture/handover qualification remains separate because the emulator may not
@@ -917,8 +923,8 @@ Root DNS address progress: the selected typed fields also include string DNS
 servers, object server `address`, root/per-server `clientIp`, and scalar or array
 values in `hosts`. Apple and Windows freeze these fields before protected
 preparation; Apple freezes them before profile persistence. Android binds them
-in caller config mode before checking unavailable FakeDNS. Its explicit proxy
-DNS mode still replaces the caller root by request. Server options, host-map
+in caller config mode before validating FakeDNS engine/pool compatibility. Its
+explicit proxy DNS mode still replaces the caller root by request. Server options, host-map
 keys, array order, tags and embedded `env:` substrings in URLs remain intact.
 Core's first domain-valued hosts array entry retains alias precedence over all
 IP entries. Guards inspect Core's parsed address while effective JSON keeps the
@@ -1297,7 +1303,7 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private address queries. Caller AAAA, bare/full resolver hosts and encrypted DoH trust/name controls pass ordinary Core on all three desktop systems. Missing/null/empty localhost server tags pass shared preparation and native Apple DNS generations. Direct-only traffic passes shared Core, Android TUN, native Apple and Windows TUN gates. Controlled FakeDNS TCP/UDP passes native-prepared ordinary Core on Linux/macOS/Windows and Android/Windows TUN at f5acbbc. Apple SDK FakeDNS, combined HEV/FakeDNS and additional DNS paths remain open. |
 | 2. IPv6 | Partial; physical iOS packet gate pending | IPv6 TCP/UDP with preserved AAAA policy passes ordinary Core on all three desktop systems, actual Android TUN and Windows 2022/2025 TUN/recovery/physical-interface controls. Actual shipped macOS HEV packet controls pass remotely; iOS simulator HEV is a verified link-only stub and physical iOS remains pending. Full macOS system-VPN acceptance, IPv6-only endpoints, NAT64, cross-family handover and broader physical bypass qualification remain open. |
 | 3. Protocol/transport matrix | Partial; controlled XHTTP increment qualified | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP and null legacy-endpoint preparation fixes pass a nine-case pinned Core build corpus with native preparation, including shared XHTTP upload/download socket policy. At cdc5b94, ordinary Core on all three desktop systems carries actual XHTTP HTTP/1.1 packet-up payloads with and without a caller SOCKS chain; both Apple and Windows preparers pass on macOS. Further protocol handshakes, XHTTP TLS/HTTP3/QUIC, physical iOS packets and the full matrix remain open. |
-| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes pass shared component, ordinary Core and native platform traffic gates at a475374. Per-session source/default selection passes Android TUN at 2f74f13, both enabled Apple SDK runtimes at e5f9fc6 and Windows 2022/2025 at fb2eb75. Session-owned counters pass Windows runtime at 2775207 and the complete Android/Apple controlled gates at 02136f1. Wildcard isolation and physical/system-VPN acceptance remain open. |
+| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes pass shared component, ordinary Core and native platform traffic gates at a475374. Per-session source/default selection passes Android TUN at 2f74f13, both enabled Apple SDK runtimes at e5f9fc6 and Windows 2022/2025 at fb2eb75. Session-owned counters pass Android/Windows again at f5acbbc and both complete enabled Apple controlled gates at 02136f1. Public full-JSON startup/delay/import now also preserves explicit nulls and empty containers through all four platform message adapters. Wildcard isolation and physical/system-VPN acceptance remain open. |
 | 5. Ports/addresses | Partial | Shared port/service/tag fixtures and Android/iPhone list/range/env/Unix and collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. Bounded OS-aware generated TCP admission passes Android TUN at 2f74f13, both enabled Apple SDK held-port runtimes at e5f9fc6 and Windows 2022/2025 at fb2eb75. Android/Windows probe exclusion passes targeted runtime acceptance. Recovery relocation, service-name resolution, wildcard isolation, bind races and broader proxy-only parity remain open. |
 | 6. Assets/import syntax | Partial; data-root increment qualified | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit roots propagate across native backends; custom GeoSite traffic passes Android TUN, both Apple preview runtimes and Windows 2022/2025. Explicit TLS certificate/key directory binding passes shared native/Core regressions; controlled CA-file TLS traffic passes ordinary Core on all three desktop systems at ca96891 (four variants per preparer, 16 markers). Physical Apple access/reload, managed asset import/lifetime, specialized certificate features and explicit multi-document merging remain open. |
 | 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |

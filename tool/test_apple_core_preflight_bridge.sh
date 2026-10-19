@@ -7,6 +7,9 @@ SOURCE="$ROOT/ios/flutter_vless/Sources/flutter_vless_core_compat"
 cat > "$OUT/probe.m" <<'OBJC'
 #import "FlutterVlessCoreCompat.h"
 #include <assert.h>
+#ifdef FLVLESS_TEST_CORE_ROUTING_DIAGNOSTICS
+#include <stdio.h>
+#endif
 @protocol XRayLogger;
 // Match the real gomobile ABI; this ordinary strong call pulls its archive
 // member into the binary so optional strong definitions can be discovered.
@@ -16,6 +19,9 @@ extern int64_t XRayCheckRoutingPrivate(NSData *, NSData *);
 extern BOOL XRayStartRoutingPrivate(NSData *, NSData *, id<XRayLogger> _Nullable, NSError * _Nullable * _Nullable);
 extern int MockRoutingCheckCalls(void);
 extern int MockRoutingStartCalls(void);
+#ifdef FLVLESS_TEST_CORE_ROUTING_DIAGNOSTICS
+extern void FLVlessTestCoreRoutingDiagnostics(int *, int *, int64_t *);
+#endif
 int main(void) { @autoreleasepool {
     NSData *data = [@"abc" dataUsingEncoding:NSUTF8StringEncoding];
     assert(XRayStartPrivate(data, nil, NULL));
@@ -28,6 +34,13 @@ int main(void) { @autoreleasepool {
 #endif
     NSData *spec = [@"private-routing-spec-canary" dataUsingEncoding:NSUTF8StringEncoding];
     NSError *error = [NSError errorWithDomain:@"private-canary" code:42 userInfo:nil];
+#ifdef FLVLESS_TEST_CORE_ROUTING_DIAGNOSTICS
+    int checkMissing, startMissing;
+    int64_t rawCapability;
+    FLVlessTestCoreRoutingDiagnostics(&checkMissing, &startMissing, &rawCapability);
+    fprintf(stderr, "BRIDGE_ROUTING_DIAGNOSTIC check_missing=%d start_missing=%d raw_cap=%lld result=%lld\n",
+            checkMissing, startMissing, (long long)rawCapability, (long long)FLVlessCoreRoutingCapability());
+#endif
 #ifdef ROUTING_AVAILABLE
     assert(FLVlessCoreRoutingCapability() == 1);
     assert(FLVlessCheckCoreRoutingPrivate(data, spec) == 0);
@@ -90,6 +103,23 @@ BOOL XRayStartRoutingPrivate(NSData *configuration, NSData *spec, id<XRayLogger>
 OBJC
 LINKED=0
 EXECUTED=0
+run_bridge_diagnostics() {
+    printf 'BRIDGE_DIAGNOSTIC_CASE arch=%s variant=%s\n' "$ARCH" "$variant"
+    if ! xcrun clang -arch "$ARCH" -O2 -fobjc-arc -Wall -Wextra -Werror -DFLVLESS_TEST_CORE_ROUTING_DIAGNOSTICS "${FLAGS[@]}" -framework Foundation -I "$SOURCE/include" \
+        "$SOURCE/FlutterVlessCoreCompat.m" "$OUT/probe.m" "$OUT/$ARCH-$variant.a" -Wl,-dead_strip -o "$OUT/$ARCH-$variant-diagnostic"; then
+        return 1
+    fi
+    /usr/bin/arch "-$ARCH" "$OUT/$ARCH-$variant-diagnostic"
+}
+run_bridge_probe() {
+    local baseline_status=0
+    "$@" || baseline_status=$?
+    if [[ "$baseline_status" != 0 ]]; then
+        printf 'BRIDGE_BASELINE_FAILURE status=%s\n' "$baseline_status"
+        run_bridge_diagnostics || true
+    fi
+    return "$baseline_status"
+}
 for ARCH in arm64 x86_64; do
     CAN_RUN=0
     if /usr/bin/arch "-$ARCH" /usr/bin/true 2>/dev/null; then CAN_RUN=1; fi
@@ -109,8 +139,9 @@ for variant in legacy current routing cap0 unknown missing-cap missing-check mis
     xcrun clang -arch "$ARCH" -O2 -fobjc-arc -Wall -Wextra -Werror "${FLAGS[@]}" -framework Foundation -I "$SOURCE/include" \
         "$SOURCE/FlutterVlessCoreCompat.m" "$OUT/probe.m" "$OUT/$ARCH-$variant.a" -Wl,-dead_strip -o "$OUT/$ARCH-$variant"
     LINKED=$((LINKED + 1))
+    printf 'BRIDGE_CASE arch=%s variant=%s execute=%s\n' "$ARCH" "$variant" "$CAN_RUN"
     if [[ "$CAN_RUN" == 1 ]]; then
-        /usr/bin/arch "-$ARCH" "$OUT/$ARCH-$variant"
+        run_bridge_probe /usr/bin/arch "-$ARCH" "$OUT/$ARCH-$variant"
         EXECUTED=$((EXECUTED + 1))
     fi
 done

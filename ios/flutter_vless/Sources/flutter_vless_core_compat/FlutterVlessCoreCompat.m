@@ -75,6 +75,23 @@ int64_t FLVlessCoreRoutingCapability(void) {
     return XRayRoutingCapability() == 1 ? 1 : 0;
 }
 
+#if defined(FLVLESS_TEST_CORE_ROUTING_DIAGNOSTICS)
+// Inert link-fixture diagnostics only. Keep sentinel references in this same
+// translation unit so observing them does not add external strong references
+// from the probe and change weak-atom extraction/coalescing behavior.
+__attribute__((visibility("hidden")))
+void FLVlessTestCoreRoutingDiagnostics(int *checkMissing, int *startMissing, int64_t *rawCapability) {
+    int64_t (*volatile check)(NSData *, NSData *) = XRayCheckRoutingPrivate;
+    int64_t (*volatile missingCheck)(NSData *, NSData *) = FLVlessMissingRoutingCheck;
+    BOOL (*volatile start)(NSData *, NSData *, id<XRayLogger>, NSError **) = XRayStartRoutingPrivate;
+    BOOL (*volatile missingStart)(NSData *, NSData *, id<XRayLogger>, NSError **) = FLVlessMissingRoutingStart;
+    int64_t (*volatile capability)(void) = XRayRoutingCapability;
+    *checkMissing = check == missingCheck;
+    *startMissing = start == missingStart;
+    *rawCapability = capability();
+}
+#endif
+
 int64_t FLVlessCheckCoreRoutingPrivate(NSData *configuration, NSData *specification) {
     if (FLVlessCoreRoutingCapability() != 1) { return 32; }
     return XRayCheckRoutingPrivate(configuration, specification);

@@ -145,6 +145,7 @@ Track the small delivery gates separately from the eight full requirements:
 | Protocol/transport preparation and controlled XHTTP | Qualified | Shared pinned-Core corpus and controlled payloads; the exhaustive external-server matrix is deferred. |
 | Typed transport headers and XHTTP download policy | Qualified controlled increment | The ten-profile transport dictionary corpus checks 18 raw maps and effective pinned-Core headers through both native preparers, public import/start/delay on all four message adapters and Android's actual prepare/build path. This covers data preservation, not a full transport handshake matrix. |
 | Routing attribute dictionary data | Preparation qualified | Shared literal regex corpus, all four public import/start/delay adapters, Android producer and actual pinned-Core attribute matching pass. Both native preparers retain the exact compiled rule; this is separate from system-VPN traffic. |
+| Public Core schema fields and effective transport admission | Preparation qualified | The shared five-case corpus retains Go-folded fields and method precedence through all four public adapters, Android preparation and both native exporters. Core rejects the active-empty and non-string controls; ambiguous aliases remain refused. |
 | Imported API/services/stats/policy | Qualified | Shared preparation and API/traffic gates, including Windows service acceptance. |
 | Port/address syntax and explicit data/certificate roots | Qualified baseline | Shared Core/native controls and the targeted runtime cases below; OS allocation/reload and managed import lifetime remain open. |
 | Environment aliases in ports and addresses | Preparation qualified; Windows OS acceptance pending | Shared eight-case Core/native corpus, four public adapters, actual Android builder and both Apple port binders pass. Generated Unicode casing matches pinned Go; the Windows UTF-16 process reader still requires execution in Actions. |
@@ -171,6 +172,23 @@ The public API regression checks all four concrete platform adapters through
 their mocked message channels. Together with the root and example import/routing
 tests, this verifies the shared JSON handoff without claiming a new native
 runtime result.
+
+The [five-profile schema-field corpus](../tool/fixtures/compatibility/schema-fields.json)
+checks full JSON discovery and structural validation with Go-folded names such
+as `OUTBOUNDS`, `PROTOCOL`, long-s and Kelvin-sign schema spellings. Lookup is
+read-only and limited to inspected fields; keys and dictionary values keep their
+original spelling. Conflicting aliases refuse before the native handoff. JSON,
+subscription arrays, public start/delay and the first-outbound accessor use the
+same schema interpretation. Sing-box discovery keeps its own field rules.
+
+Transport string semantics belong to native Core preflight. `method: "tcp"`
+can make `network: ""` inactive and valid; an active empty network still fails
+Core Build, and a numeric network fails decoding. Structural Dart validation
+retains the type check and passes the string through without choosing its
+transport. Three positive profiles preserve Core-compiled semantics through
+both native exporters; the two negative controls retain their Core refusals.
+All four public adapters, actual Android preparation and example imports have
+focused regressions. This is preparation evidence, not new protocol traffic.
 
 The [five-profile DNS data corpus](../tool/fixtures/compatibility/dns-data-maps.json)
 checks that host names matching legacy settings (`allowInsecure`, `network` and
@@ -423,6 +441,12 @@ compile/link checks. The file-only Core/native aggregate passes thirteen phases,
 including the eight-case upstream oracle and generator controls. Actual Windows
 Unicode-environment execution and regression traffic are pending Actions;
 physical-device and service-name/race/recovery acceptance remain separate.
+At [f6273c9](https://github.com/XIIIFOX/flutter_vless/actions/runs/39302708006),
+macOS and Ubuntu pass the expanded preparation and existing traffic gates.
+Windows stops before the new port/runtime gates because its C++ fixture still
+writes UTF-8 bytes through the ANSI CRT. That fixture now uses UTF-16 set/restore
+and requires a raw UTF-8 roundtrip; the original endpoint assertions remain.
+Windows acceptance is pending the corrected-head run.
 Apple's current String-keyed environment snapshots still compare canonically
 equivalent Unicode spellings as the same key. A separate pure counterexample
 shows a composed key hiding an absent decomposed exact key and its valid alias.

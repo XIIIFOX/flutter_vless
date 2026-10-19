@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Accept Core-folded JSON schema fields through full-profile import, startup and delay without rewriting caller data. Defer string transport semantics to Core preflight so an explicit method can override a dormant empty network.
+
 * Preserve Core environment aliases for imported port lists and addresses using the pinned simple Unicode case mapping. Keep exact empty values and Core whitespace semantics; add shared public/native regressions.
 
 * Preserve routing-rule `attrs` keys and case-sensitive expressions through full-JSON import, startup and delay on all platform adapters. Keep dictionary data separate from Android protected-feature admission.

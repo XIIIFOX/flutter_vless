@@ -1,5 +1,33 @@
 import 'dart:convert';
 
+/// Go's struct-field matching against ASCII Xray schema names. Dictionary
+/// keys are caller data and must never be normalized using this helper.
+String foldXraySchemaField(String key) => String.fromCharCodes(key.runes.map(
+      (rune) => switch (rune) {
+        >= 0x41 && <= 0x5a => rune + 0x20,
+        0x017f => 0x73,
+        0x212a => 0x6b,
+        _ => rune,
+      },
+    ));
+
+/// Read one inspected schema field without changing the imported document.
+/// Native adapters also reject ambiguous aliases before adding private state.
+Object? readXraySchemaField(Map<String, dynamic> object, String field) {
+  final wanted = foldXraySchemaField(field);
+  Object? value;
+  var present = false;
+  for (final entry in object.entries) {
+    if (foldXraySchemaField(entry.key) != wanted) continue;
+    if (present) {
+      throw ArgumentError('Xray config has conflicting aliases for "$field"');
+    }
+    present = true;
+    value = entry.value;
+  }
+  return value;
+}
+
 /// Decode one Xray document (or subscription array) with Core-style comments.
 ///
 /// Xray's local-file reader removes //, /* */ and # comments outside strings.

@@ -63,6 +63,7 @@ def source_snapshot():
     paths.append(ROOT / 'tool/fixtures/compatibility/selector-traffic.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/listen-addresses.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/port-env.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/schema-fields.json')
     paths.append(ROOT / 'tool/generate_core_env_case.go')
     paths.append(ROOT / 'tool/generate_core_env_case_test.go')
     paths.append(ROOT / 'tool/fixtures/compatibility/endpoint-addresses.json')
@@ -208,7 +209,8 @@ def main():
         pure_tests = [PROTOCOL_TEST, 'TestProtocolCorpusBuilds', MATERIAL_TEST, 'TestNativeSelectorPrefixAllocation',
                       'TestNativeCertificatePaths', 'TestNativeRoutingContextTailCatchall',
                       'TestNativeRoutingContextLoopbackDNS', 'TestNativeRoutingContextCandidate',
-                      'TestRoutingAttrsBuilds', 'TestNativeRoutingAttrsPreservation', 'TestPortEnvironmentAliases']
+                      'TestRoutingAttrsBuilds', 'TestNativeRoutingAttrsPreservation', 'TestPortEnvironmentAliases',
+                      'TestSchemaFieldsPreparation']
         checked('protocol-preparation-pure', [str(binary), '-test.run', '^(' + '|'.join(pure_tests) + ')$',
                 '-test.v', '-test.timeout=60s'], 75, MOBILE, runtime_environment)
         output = (EVIDENCE / 'protocol-preparation-pure.log').read_text(encoding='utf-8')

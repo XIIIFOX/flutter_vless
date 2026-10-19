@@ -109,10 +109,17 @@ class VlessSubscriptionParser {
   }
 
   static bool _isXrayConfig(Map<String, dynamic> config) {
-    final outbounds = config['outbounds'];
-    return outbounds is List<dynamic> &&
-        outbounds.any((outbound) =>
-            outbound is Map<String, dynamic> && outbound['protocol'] is String);
+    // Only classify here. Validation rejects conflicting aliases after the
+    // document is identified as Xray, retaining other import formats' rules.
+    return config.entries
+        .where((entry) => foldXraySchemaField(entry.key) == 'outbounds')
+        .any((entry) =>
+            entry.value is List<dynamic> &&
+            (entry.value as List<dynamic>).any((outbound) =>
+                outbound is Map<String, dynamic> &&
+                outbound.entries.any((field) =>
+                    foldXraySchemaField(field.key) == 'protocol' &&
+                    field.value is String)));
   }
 
   static bool _isSingBoxConfig(Map<String, dynamic> config) {

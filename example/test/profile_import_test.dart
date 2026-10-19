@@ -107,6 +107,25 @@ void main() {
     }
   });
 
+  test('Core schema aliases and effective methods survive example import', () {
+    final cases =
+        jsonDecode(
+              File(
+                '../tool/fixtures/compatibility/schema-fields.json',
+              ).readAsStringSync(),
+            )
+            as List<dynamic>;
+    for (final entry in cases.cast<Map<String, dynamic>>()) {
+      if (entry['coreInvalid'] == true) continue;
+      final config = entry['config'] as Map<String, dynamic>;
+      final source = jsonEncode(config);
+      for (final input in [source, '[$source]']) {
+        expect(jsonDecode(importProfile(input).config), config);
+      }
+      expect(jsonEncode(config), source);
+    }
+  });
+
   test('Raw JSON retains existing remark aliases', () {
     for (final key in ['remarks', 'remark', 'ps']) {
       final input = jsonEncode({

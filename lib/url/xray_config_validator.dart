@@ -15,8 +15,8 @@ class XrayConfigValidator {
   void validate(Map<String, dynamic> config) {
     _validateObjectSection(config, 'log', required: false);
     _validateObjectSection(config, 'routing', required: false);
-    _validateInbounds(config['inbounds']);
-    _validateOutbounds(config['outbounds']);
+    _validateInbounds(readXraySchemaField(config, 'inbounds'));
+    _validateOutbounds(readXraySchemaField(config, 'outbounds'));
   }
 
   Object? _decodeJson(String config) {
@@ -32,7 +32,7 @@ class XrayConfigValidator {
     String key, {
     required bool required,
   }) {
-    final value = config[key];
+    final value = readXraySchemaField(config, key);
     if (value == null) {
       if (required) {
         throw ArgumentError('Xray config must contain "$key"');
@@ -57,7 +57,7 @@ class XrayConfigValidator {
         throw ArgumentError('Xray inbound at index $i must be a JSON object');
       }
       _validateRequiredString(inbound, 'protocol', 'inbound', i);
-      final port = inbound['port'];
+      final port = readXraySchemaField(inbound, 'port');
       if (port != null && !_isValidPort(port)) {
         throw ArgumentError('Xray inbound at index $i has invalid port');
       }
@@ -77,15 +77,17 @@ class XrayConfigValidator {
         throw ArgumentError('Xray outbound at index $i must be a JSON object');
       }
       _validateRequiredString(outbound, 'protocol', 'outbound', i);
-      final streamSettings = outbound['streamSettings'];
+      final streamSettings = readXraySchemaField(outbound, 'streamSettings');
       if (streamSettings != null) {
         if (streamSettings is! Map<String, dynamic>) {
           throw ArgumentError(
             'Xray outbound at index $i has invalid streamSettings',
           );
         }
-        final network = streamSettings['network'];
-        if (network != null && (network is! String || network.isEmpty)) {
+        final network = readXraySchemaField(streamSettings, 'network');
+        // Core chooses the effective method before validating its string
+        // transport. An empty network can be dormant under an explicit method.
+        if (network != null && network is! String) {
           throw ArgumentError(
             'Xray outbound at index $i has invalid streamSettings.network',
           );
@@ -100,7 +102,7 @@ class XrayConfigValidator {
     String sectionName,
     int index,
   ) {
-    final value = section[key];
+    final value = readXraySchemaField(section, key);
     if (value is! String || value.isEmpty) {
       throw ArgumentError(
         'Xray $sectionName at index $index must contain "$key"',

@@ -10,16 +10,20 @@ class EndpointEnvironment {
     for (auto it = values.begin(); it != values.end(); ++it) {
       previous_.push_back({it.key(), PortEnvironment(it.key())});
 #ifdef _WIN32
-      Require(_putenv_s(it.key().c_str(), it->get<std::string>().c_str()) == 0, "cannot set fixture endpoint environment");
+      const auto name = Wide(it.key()), value = Wide(it->get<std::string>());
+      Require(SetEnvironmentVariableW(name.c_str(), value.c_str()) != 0, "cannot set fixture endpoint environment");
 #else
       Require(setenv(it.key().c_str(), it->get<std::string>().c_str(), 1) == 0, "cannot set fixture endpoint environment");
 #endif
+      Require(PortEnvironment(it.key()) == it->get<std::string>(), "fixture endpoint environment did not roundtrip raw UTF-8");
     }
   }
   ~EndpointEnvironment() {
     for (const auto& entry : previous_) {
 #ifdef _WIN32
-      _putenv_s(entry.first.c_str(), entry.second ? entry.second->c_str() : "");
+      const auto name = Wide(entry.first);
+      const auto value = entry.second ? Wide(*entry.second) : std::wstring();
+      SetEnvironmentVariableW(name.c_str(), entry.second ? value.c_str() : nullptr);
 #else
       if (entry.second) setenv(entry.first.c_str(), entry.second->c_str(), 1);
       else unsetenv(entry.first.c_str());
@@ -27,6 +31,18 @@ class EndpointEnvironment {
     }
   }
  private:
+#ifdef _WIN32
+  static std::wstring Wide(const std::string& text) {
+    Require(text.find('\0') == std::string::npos && text.size() <= static_cast<size_t>(INT_MAX), "invalid fixture environment UTF-8");
+    if (text.empty()) return {};
+    const auto length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    Require(length != 0, "invalid fixture environment UTF-8");
+    std::wstring result(static_cast<size_t>(length), L'\0');
+    Require(MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), result.data(), length) == length,
+        "cannot convert fixture environment UTF-8");
+    return result;
+  }
+#endif
   std::vector<std::pair<std::string, std::optional<std::string>>> previous_;
 };
 Json& EndpointPath(Json& value, const std::string& path) {

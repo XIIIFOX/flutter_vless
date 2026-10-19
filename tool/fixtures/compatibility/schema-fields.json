@@ -1,0 +1,241 @@
+[
+  {
+    "name": "folded_root_fields",
+    "config": {
+      "DNS": {
+        "servers": [
+          "tcp://9.9.9.9"
+        ],
+        "queryStrategy": "UseIPv4"
+      },
+      "INBOUNDS": [
+        {
+          "protocol": "http",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "tag": "caller-http",
+          "settings": {}
+        }
+      ],
+      "OUTBOUNDS": [
+        {
+          "protocol": "socks",
+          "tag": "proxy",
+          "settings": {
+            "servers": [
+              {
+                "address": "198.51.100.7",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "network": "tcp"
+          }
+        },
+        {
+          "protocol": "freedom",
+          "tag": "direct",
+          "settings": {}
+        },
+        {
+          "protocol": "blackhole",
+          "tag": "block",
+          "settings": {}
+        }
+      ]
+    }
+  },
+  {
+    "name": "folded_handler_fields",
+    "config": {
+      "dns": {
+        "servers": [
+          "tcp://9.9.9.9"
+        ],
+        "queryStrategy": "UseIPv4"
+      },
+      "inbounds": [
+        {
+          "PROTOCOL": "http",
+          "LISTEN": "127.0.0.1",
+          "PORT": 10807,
+          "TAG": "caller-http",
+          "SETTINGS": {}
+        }
+      ],
+      "outbounds": [
+        {
+          "PROTOCOL": "socks",
+          "TAG": "proxy",
+          "SETTINGS": {
+            "servers": [
+              {
+                "address": "198.51.100.7",
+                "port": 19090
+              }
+            ]
+          },
+          "ſtreamSettings": {
+            "NETWORK": "tcp"
+          }
+        },
+        {
+          "PROTOCOL": "freedom",
+          "TAG": "direct",
+          "SETTINGS": {}
+        },
+        {
+          "PROTOCOL": "blackhole",
+          "TAG": "block",
+          "SETTINGS": {}
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty_network_overridden_by_method",
+    "config": {
+      "dns": {
+        "servers": [
+          "tcp://9.9.9.9"
+        ],
+        "queryStrategy": "UseIPv4"
+      },
+      "inbounds": [
+        {
+          "protocol": "http",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "tag": "caller-http",
+          "settings": {}
+        }
+      ],
+      "outbounds": [
+        {
+          "protocol": "socks",
+          "tag": "proxy",
+          "settings": {
+            "servers": [
+              {
+                "address": "198.51.100.7",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "network": "",
+            "method": "tcp"
+          }
+        },
+        {
+          "protocol": "freedom",
+          "tag": "direct",
+          "settings": {}
+        },
+        {
+          "protocol": "blackhole",
+          "tag": "block",
+          "settings": {}
+        }
+      ]
+    }
+  },
+  {
+    "name": "active_empty_network",
+    "config": {
+      "dns": {
+        "servers": [
+          "tcp://9.9.9.9"
+        ],
+        "queryStrategy": "UseIPv4"
+      },
+      "inbounds": [
+        {
+          "protocol": "http",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "tag": "caller-http",
+          "settings": {}
+        }
+      ],
+      "outbounds": [
+        {
+          "protocol": "socks",
+          "tag": "proxy",
+          "settings": {
+            "servers": [
+              {
+                "address": "198.51.100.7",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "network": ""
+          }
+        },
+        {
+          "protocol": "freedom",
+          "tag": "direct",
+          "settings": {}
+        },
+        {
+          "protocol": "blackhole",
+          "tag": "block",
+          "settings": {}
+        }
+      ]
+    },
+    "coreInvalid": true
+  },
+  {
+    "name": "nonstring_network",
+    "config": {
+      "dns": {
+        "servers": [
+          "tcp://9.9.9.9"
+        ],
+        "queryStrategy": "UseIPv4"
+      },
+      "inbounds": [
+        {
+          "protocol": "http",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "tag": "caller-http",
+          "settings": {}
+        }
+      ],
+      "outbounds": [
+        {
+          "protocol": "socks",
+          "tag": "proxy",
+          "settings": {
+            "servers": [
+              {
+                "address": "198.51.100.7",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "network": 17
+          }
+        },
+        {
+          "protocol": "freedom",
+          "tag": "direct",
+          "settings": {}
+        },
+        {
+          "protocol": "blackhole",
+          "tag": "block",
+          "settings": {}
+        }
+      ]
+    },
+    "coreInvalid": true,
+    "invalidSyntax": true
+  }
+]

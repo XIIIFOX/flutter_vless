@@ -65,7 +65,7 @@ class XrayJsonConfig extends FlutterVlessURL {
 
   @override
   Map<String, dynamic> get outbound1 {
-    final outbounds = rawConfig['outbounds'];
+    final outbounds = readXraySchemaField(rawConfig, 'outbounds');
     if (outbounds is List<dynamic> &&
         outbounds.isNotEmpty &&
         outbounds.first is Map<String, dynamic>) {

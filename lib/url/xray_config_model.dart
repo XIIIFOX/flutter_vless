@@ -1,5 +1,7 @@
 import 'dart:collection';
 
+import 'package:flutter_vless/url/xray_json.dart';
+
 typedef JsonMap = Map<String, dynamic>;
 
 abstract interface class XrayJsonModel {
@@ -414,8 +416,7 @@ dynamic sanitizeXrayJson(dynamic params, {bool preserveStructure = false}) {
   );
 }
 
-String _xrayField(String key) =>
-    key.replaceAll('\u017f', 's').replaceAll('\u212a', 'k').toLowerCase();
+String _xrayField(String key) => foldXraySchemaField(key);
 
 bool _matchesXrayField(String key, String field) => _xrayField(key) == field;
 

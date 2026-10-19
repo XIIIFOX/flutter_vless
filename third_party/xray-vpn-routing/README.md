@@ -20,8 +20,33 @@ well as normal shutdown. The optional `NewWithContext` failure hook revokes the
 owner before closing the partial Core, retaining the original construction
 error. Unseeded construction keeps upstream behavior. The dispatcher also seals
 at its own Start boundary.
-Native runtime preparation, exact final-document selection, startup cleanup and
-binary capability negotiation still need launcher integration.
+The shared mobile factory now retains those exact compiled objects from a
+digest-bound final JSON/spec pair, seals before Start and publishes only after
+success. It rejects replacement of an active Core before candidate processing.
+Stop clears the published pair and revokes the owner before Core cleanup.
+Platform launchers still need to adopt this factory and negotiate the actual
+binary capability.
+
+Ordinary mobile builds export `RoutingCapability() == 0` and refuse the new
+check/start calls. The `flutter_vless_vpn_routing` build tag requires this
+overlay and exposes capability 1. `CheckRoutingPrivate` is a decode/build-only
+check; `StartRoutingPrivate` uses the same strict spec and constructs one Core.
+The spec binds the final JSON digest, private inbound index/tag/auth user,
+optional source inbound index, optional default outbound tag and generated guard
+indices. It is launcher-owned metadata, never a field imported from caller JSON.
+Selected guards are cloned from the compiled router. Nonempty root `env` is
+refused before Build to protect the in-process preflight environment.
+
+For an unpublished Apple compile preview use:
+
+```sh
+tool/build_apple_core_preview.sh ios build/apple-routing-preview --vpn-routing
+```
+
+The same final flag works with `macos`. It copies both modules, validates the
+pinned Core checksum and checks generated bridge headers without replacing a
+shipped artifact. The receipt records compile expectations separately from
+runtime acceptance.
 
 For admitted flows, generated DNS/probe/bootstrap guards see physical inbound
 metadata first, ahead of a forced detour. The real caller router then sees a
@@ -42,5 +67,8 @@ The patcher refuses a changed pin, existing destinations and module-cache
 destinations. It copies Core before applying the optional hooks, leaving the
 shared source untouched. Pure tests use inert identities, fake DNS and logical
 routers. The separate actual-Core fixture is CI-only; no local VPN/TUN, Core
-instance or socket runtime is required for default validation. Neither this
-preview nor a passing Core fixture qualifies native device/system VPN support.
+instance or socket runtime is required for default validation. The factory
+runner compiles both artifacts and selects pure tests explicitly; its separate
+actual Start/Stop/restart fixture requires an explicit runtime flag in GitHub
+Actions. Neither this preview nor a passing Core fixture qualifies native
+device/system VPN support.

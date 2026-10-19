@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Add an unpublished, capability-gated mobile routing factory bound to the final config digest and exact compiled inbound. Preserve active sessions on rejected starts, seal before Start, revoke before Close, and compile optional Apple previews from disposable modules. Native launcher adoption and device acceptance remain separate.
 * Reject nonempty root `env` before in-process Apple Core preflight can change a working session's process environment. Return a fixed `environment-policy` error and protect cached older checkers; keep profile data and separate-process Android/Windows checking unchanged. Scoped Apple `env` support remains open.
 * Add `certificateAssetsDirectory` for relative TLS certificate/key files on every native platform. Bind Core-built TLS and XHTTP download paths before preflight, retain absolute/inline/reload settings and recovery paths, and reject unsupported older backends. Add shared file/Core controls and controlled TLS traffic coverage.
 * Accept Core-equivalent missing, null, empty and case-insensitive `none` socket address/port strategies across native adapters. Preserve raw caller values and existing protected routing; keep active endpoint overrides and malformed values closed. Add shared WebSocket/XHTTP upload/download/direct preparation controls.

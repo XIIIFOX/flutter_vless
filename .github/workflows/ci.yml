@@ -31,6 +31,8 @@ jobs:
         run: python tool/test_native_dns_preservation.py --run-runtime
       - name: Test optional VPN routing seam with isolated pinned Core
         run: python tool/test_native_vpn_routing.py --run-runtime
+      - name: Test ordinary and optional mobile routing factory
+        run: python tool/test_native_routing_factory.py --run-runtime
       - name: Test private Android forwarder ownership without TUN
         if: matrix.os == 'ubuntu-latest'
         run: python tool/test_native_tun_preview.py
@@ -46,6 +48,8 @@ jobs:
             build/native_dns_preservation/result.json
             build/native_vpn_routing/*.log
             build/native_vpn_routing/result.json
+            build/native_routing_factory/*.log
+            build/native_routing_factory/result.json
             build/native_tun_preview/*.jsonl
             build/native_tun_preview/*.log
             build/native_tun_preview/result.json
@@ -243,6 +247,7 @@ jobs:
         run: flutter pub get
       - name: Test PacketTunnel Swift helper
         run: |
+          python3 tool/test_build_apple_core_preview.py
           bash tool/test_apple_address_binding.sh
           tool/test_ios_tunnel_support.sh
       - uses: actions/setup-go@v6

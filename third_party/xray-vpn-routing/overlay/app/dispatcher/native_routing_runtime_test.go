@@ -108,7 +108,7 @@ func TestNativeVPNRoutingRuntime(t *testing.T) {
 		if err == nil {
 			defer late.Close()
 			nativeRuntimeClosed(t, late, until)
-		} else if !errors.Is(err, syscall.ECONNREFUSED) && !nativeRuntimeReset(err, runtime.GOOS) {
+		} else if !errors.Is(err, syscall.ECONNREFUSED) && !nativeRuntimeClosedError(err, runtime.GOOS) {
 			t.Fatal("late private control was not explicitly refused", err)
 		}
 		if !time.Now().Before(until) {
@@ -491,6 +491,47 @@ func nativeRuntimeReset(err error, goos string) bool {
 		goos == "windows" && errors.Is(err, syscall.Errno(10054))
 }
 
+// A Windows local abort is also an explicit closure, but is not a reset.
+// Keep this predicate limited to typed closure errors, never timeout or text.
+func nativeRuntimeClosedError(err error, goos string) bool {
+	var failure net.Error
+	if errors.As(err, &failure) && failure.Timeout() {
+		return false
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, syscall.EPIPE) ||
+		nativeRuntimeReset(err, goos) ||
+		goos == "windows" && errors.Is(err, syscall.Errno(10053))
+}
+
+func TestNativeVPNRoutingClosedError(t *testing.T) {
+	wrapped := func(err error) error {
+		return &net.OpError{Op: "read", Net: "tcp4", Err: &os.SyscallError{Syscall: "wsarecv", Err: err}}
+	}
+	for _, tc := range []struct {
+		name   string
+		err    error
+		goos   string
+		closed bool
+	}{
+		{"windows-wrapped-abort", wrapped(syscall.Errno(10053)), "windows", true},
+		{"windows-abort-not-other-os", wrapped(syscall.Errno(10053)), "linux", false},
+		{"windows-timeout-not-closure", wrapped(syscall.Errno(10060)), "windows", false},
+		{"deadline-not-closure", wrapped(os.ErrDeadlineExceeded), "windows", false},
+		{"unknown-error", wrapped(syscall.EACCES), "windows", false},
+		{"nil-is-not-closure", nil, "windows", false},
+		{"message-is-not-proof", errors.New("wsarecv: An established connection was aborted by the software in your host machine."), "windows", false},
+		{"wrapped-eof", wrapped(io.EOF), "windows", true},
+		{"wrapped-broken-pipe", wrapped(syscall.EPIPE), runtime.GOOS, true},
+		{"windows-wrapped-reset", wrapped(syscall.Errno(10054)), "windows", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nativeRuntimeClosedError(tc.err, tc.goos); got != tc.closed {
+				t.Fatalf("typed closure classification=%t, expected=%t", got, tc.closed)
+			}
+		})
+	}
+}
+
 func TestNativeVPNRoutingClosureErrors(t *testing.T) {
 	wrapped := func(err error) error {
 		return &net.OpError{Op: "read", Net: "tcp4", Err: &os.SyscallError{Syscall: "wsarecv", Err: err}}
@@ -529,7 +570,7 @@ func nativeRuntimeClosed(t *testing.T, c net.Conn, until time.Time) {
 	if failure, ok := err.(net.Error); ok && failure.Timeout() {
 		t.Fatal("timeout is not connection closure")
 	}
-	if !errors.Is(err, io.EOF) && !nativeRuntimeReset(err, runtime.GOOS) && !errors.Is(err, syscall.EPIPE) {
+	if !nativeRuntimeClosedError(err, runtime.GOOS) {
 		t.Fatal("unexpected connection failure", err)
 	}
 }
@@ -537,7 +578,7 @@ func (f *nativeRuntimeFixture) blocked(t *testing.T, port int, host string) {
 	t.Helper()
 	c, _ := f.connect(t, port, 1, host, 443)
 	defer c.Close()
-	if err := nativeRuntimeWriteFrame(c, []byte(f.nonce+"/blocked")); err != nil && !errors.Is(err, syscall.EPIPE) && !nativeRuntimeReset(err, runtime.GOOS) {
+	if err := nativeRuntimeWriteFrame(c, []byte(f.nonce+"/blocked")); err != nil && !nativeRuntimeClosedError(err, runtime.GOOS) {
 		t.Fatal(err)
 	}
 	nativeRuntimeClosed(t, c, time.Now().Add(2*time.Second))

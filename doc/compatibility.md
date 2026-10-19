@@ -335,17 +335,32 @@ foreign-instance rejection, revocation and actual inert mux-session cleanup.
 The isolated TCP/UDP/DNS byte fixture passes all four scenarios on Linux and
 macOS at [78ade5c](https://github.com/XIIIFOX/flutter_vless/actions/runs/39214337019),
 with exact committed sources, drained workers and zero OS-resolver attempts.
-Windows reached all scenarios but its closure assertion did not recognize the
-platform's typed `WSAECONNRESET` value; that assertion is corrected without
-accepting timeout/unknown errors, with new pure controls. Fresh Windows runtime
-acceptance remains pending. Native launcher/capability integration and
+Windows closure assertions now recognize typed `WSAECONNRESET` and
+`WSAECONNABORTED` only on Windows, with pure controls retaining timeout and
+unknown-error rejection. Fresh Windows runtime acceptance remains pending.
+Native launcher/capability integration and
 device acceptance remain open; no public routing option is enabled by this seam.
 
 The optional constructor also revokes its owner and closes partially created
 Core features when `NewWithContext` fails, preserving the original error.
 Unseeded constructors retain upstream behavior. Inert cleanup tests pass;
-the actual early-construction failure fixture is CI-only and still needs its
-new runtime acceptance before a native launcher is enabled.
+the actual early-construction failure fixture passes on all three Core runners
+at [9bfe38b](https://github.com/XIIIFOX/flutter_vless/actions/runs/39216266631).
+The Linux/macOS runners also pass the routing traffic and cleanup scenarios;
+the Windows routing closure assertion above still needs fresh acceptance.
+
+The shared mobile factory now validates a strict launcher-owned spec against
+the digest of the final JSON and retains the exact compiled private inbound.
+It clones selected private guards, derives the source alias from the selected
+compiled inbound, and validates the optional explicit default outbound.
+The optional factory seals before Start and publishes only after success;
+Stop revokes the owner before Core.Close. Both ordinary and optional artifacts
+pass pure lifecycle/spec/preflight checks. Default artifacts report capability
+zero; the optional tagged artifact reports one. A disposable iOS preview also
+compiles device/simulator bridge headers. The actual factory traffic,
+active-candidate rejection, bounded Stop and fresh restart fixture is CI-only
+and awaits its first acceptance. Native Android/Apple/Windows consumers still
+need to adopt the new check/start ABI; no public option is enabled yet.
 
 The fifth case adds an explicit null tag on the default direct outbound. Core
 decodes this as untagged; Windows previously rejected it before preflight.

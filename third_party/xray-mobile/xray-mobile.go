@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"sync"
 
 	_ "github.com/xtls/xray-core/main/distro/all"
 
@@ -22,6 +23,25 @@ type Logger interface {
 }
 
 var coreInstance *core.Instance
+var coreRoutingOwner routingRevoker
+var runtimeOperation sync.Mutex
+var coreState sync.RWMutex
+
+func hasPublishedRuntime() bool {
+	coreState.RLock()
+	defer coreState.RUnlock()
+	return coreInstance != nil
+}
+
+func publishPrivateRuntime(instance *core.Instance, owner routingRevoker) error {
+	coreState.Lock()
+	defer coreState.Unlock()
+	if coreInstance != nil {
+		return fmt.Errorf("Xray runtime already active")
+	}
+	coreInstance, coreRoutingOwner = instance, owner
+	return nil
+}
 
 // SetAssetLocation configures the directory used by Xray-core to load runtime
 // assets such as geoip.dat and geosite.dat.
@@ -77,6 +97,11 @@ func SetMemoryLimit() {
 }
 
 func Start(config []byte, logger Logger) error {
+	runtimeOperation.Lock()
+	defer runtimeOperation.Unlock()
+	if hasPublishedRuntime() {
+		return startupFailure(logger, "active session")
+	}
 	// Cover decode/build warnings before core.New installs its configured logger.
 	xlog.RegisterHandler(privateLogHandler{})
 	prepared, level, enabled, err := privateConfig(config)
@@ -102,7 +127,10 @@ func Start(config []byte, logger Logger) error {
 		instance.Close()
 		return startupFailure(logger, "start core")
 	}
-	coreInstance = instance
+	if err := publishPrivateRuntime(instance, nil); err != nil {
+		_ = instance.Close()
+		return startupFailure(logger, "publish core")
+	}
 	return nil
 }
 
@@ -111,9 +139,17 @@ func Start(config []byte, logger Logger) error {
 func StartPrivate(config []byte, logger Logger) error { return Start(config, logger) }
 
 func Stop() {
-	if coreInstance != nil {
-		coreInstance.Close()
-		coreInstance = nil
+	runtimeOperation.Lock()
+	defer runtimeOperation.Unlock()
+	coreState.Lock()
+	instance, owner := coreInstance, coreRoutingOwner
+	coreInstance, coreRoutingOwner = nil, nil
+	coreState.Unlock()
+	if owner != nil {
+		_ = owner.Close()
+	}
+	if instance != nil {
+		_ = instance.Close()
 	}
 }
 
@@ -133,6 +169,8 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 // Uses VisitCounters which is available in xray-core features/stats.Manager.
 // Caller parses "uplink" and "downlink" from counter names.
 func QueryStats(tag string) string {
+	coreState.RLock()
+	defer coreState.RUnlock()
 	if coreInstance == nil {
 		return ""
 	}

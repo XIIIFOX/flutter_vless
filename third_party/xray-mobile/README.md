@@ -23,6 +23,11 @@ changes needed by `flutter_vless`:
 - `SetAssetLocation` exported so Apple runtimes can select an App Group asset
   directory from inside Go before Xray reads `geoip.dat` and `geosite.dat`.
 - `Stop` handles a nil or already-stopped core instance.
+- Ordinary and optional routing builds share a strict final-config/spec
+  validator and serialized session admission/teardown. The unpublished optional
+  factory requires `flutter_vless_vpn_routing` and the separately pinned
+  [Core overlay](../xray-vpn-routing/README.md). Default artifacts report
+  capability zero and refuse optional start/check requests.
 
 Build scripts copy this directory into a temporary build directory before
 running `go get` and `go mod tidy`, so release builds do not mutate the tracked

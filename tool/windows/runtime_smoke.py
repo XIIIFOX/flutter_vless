@@ -24,7 +24,7 @@ import tempfile
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-PORTS = {"inbound": 18580, "direct": 18581, "proxy": 18582, "extra": 18583}
+PORTS = {"inbound": 18580, "direct": 18581, "proxy": 18582, "extra": 18583, "routing_proxy": 18584}
 DNS_QUERIES = []
 PROBE = None
 REAL_DNS = False
@@ -849,12 +849,19 @@ def native_routing_config(address, dns_port):
                       "settings": {"auth": "noauth", "udp": True}}],
         "outbounds": [{"tag": "first-blocked", "protocol": "blackhole"},
                       {"tag": "source-route", "protocol": "freedom", "settings": {"redirect": f"{address}:{PORTS['direct']}"}},
-                      {"tag": "selected-default", "protocol": "socks", "settings": {"servers": [{"address": address, "port": PORTS["proxy"]}]}},
+                      {"tag": "selected-default", "protocol": "socks", "settings": {"servers": [{"address": address, "port": PORTS["routing_proxy"]}]}},
                       {"tag": "dns-direct", "protocol": "freedom"}],
         "dns": {"tag": "caller-dns", "disableCache": True, "servers": [f"tcp://{address}:{dns_port}"]},
         "routing": {"domainStrategy": "AsIs", "rules": [
             {"type": "field", "inboundTag": ["caller-dns"], "ip": [address + "/32"], "port": str(dns_port), "network": "tcp", "outboundTag": "dns-direct"},
             {"type": "field", "inboundTag": ["caller-source"], "domain": ["full:alias.invalid"], "outboundTag": "source-route"}]}}
+
+
+def native_routing_proxy(address):
+    server = Server((address, 0), Socks)
+    server.daemon_threads = False  # server_close joins each bounded HTTP callback.
+    PORTS["routing_proxy"] = server.server_address[1]
+    return server
 
 
 def native_routing_gate(probe, directory, address, dns, origin, results):
@@ -1006,6 +1013,10 @@ def main():
             direct_dns.daemon_threads = False  # server_close joins the bounded, owned DNS callbacks.
             direct_dns.questions, direct_dns.questions_lock = [], threading.Lock()
             servers.append(direct_dns)
+            if args.native_routing:
+                # The selected default accepts ordinary traffic. It must not
+                # share the prior IPv6 scenario's strict one-shot nonce state.
+                servers.append(native_routing_proxy(direct_address))
         for server in servers:
             threading.Thread(target=server.serve_forever, daemon=True).start()
         with socket.socket() as candidate:

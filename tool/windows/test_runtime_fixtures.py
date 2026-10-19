@@ -21,6 +21,38 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    def test_native_routing_proxy_does_not_feed_previous_ipv6_nonce_observer(self):
+        state = runtime.IPv6PayloadState()
+        # This is a valid ordinary HTTP payload to an IPv6 target, not the
+        # prior scenario's one-shot IPv6 marker protocol.
+        stream = bytearray(b"\x05\x01\x00\x05\x01\x00\x04" +
+            runtime.socket.inet_pton(runtime.socket.AF_INET6, "2001:db8::123") +
+            (80).to_bytes(2, "big") + b"GET /ordinary-http HTTP/1.1\r\nHost: fallback.invalid\r\n\r\n")
+        client = Mock()
+        def recv(count):
+            value = bytes(stream[:count]); del stream[:count]; return value
+        client.recv.side_effect = recv
+        previous = SimpleNamespace(ipv6_payload=state, server_address=("192.0.2.10", runtime.PORTS["proxy"]))
+        separate_port = runtime.PORTS.get("routing_proxy", runtime.PORTS["proxy"] + 1)
+        separate = SimpleNamespace(server_address=("192.0.2.10", separate_port))
+        selected = runtime.native_routing_config("192.0.2.10", 15353)["outbounds"][2]["settings"]["servers"][0]["port"]
+        server = {previous.server_address[1]: previous, separate_port: separate}[selected]
+        runtime.Socks(client, ("192.0.2.10", 50000), server)
+        state.close(); state.require_clean()
+        self.assertTrue(client.sendall.call_args.args[0].endswith(b"PROXY-FIXTURE"))
+        self.assertEqual(separate_port, selected)
+
+    def test_native_routing_dedicated_origin_is_joined_and_uses_its_bound_port(self):
+        owner = SimpleNamespace(server_address=("192.0.2.10", 19422), daemon_threads=True)
+        with patch.object(runtime, "Server", return_value=owner) as constructor, patch.dict(runtime.PORTS):
+            self.assertIs(owner, runtime.native_routing_proxy("192.0.2.10"))
+            constructor.assert_called_once_with(("192.0.2.10", 0), runtime.Socks)
+            self.assertFalse(owner.daemon_threads)
+            self.assertFalse(hasattr(owner, "ipv6_payload"))
+            actual = runtime.native_routing_config("192.0.2.10", 15353)
+            self.assertEqual(19422, actual["outbounds"][2]["settings"]["servers"][0]["port"])
+            self.assertNotEqual(runtime.PORTS["proxy"], runtime.PORTS["routing_proxy"])
+
     def test_native_routing_profile_requires_source_alias_and_non_first_default(self):
         profile = runtime.native_routing_config("192.0.2.10", 15353)
         self.assertEqual("blackhole", profile["outbounds"][0]["protocol"])

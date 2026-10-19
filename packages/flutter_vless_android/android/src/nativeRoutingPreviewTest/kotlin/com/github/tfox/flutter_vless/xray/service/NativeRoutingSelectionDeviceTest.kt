@@ -25,6 +25,7 @@ import org.junit.runner.RunWith
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.File
+import java.io.InputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -167,23 +168,24 @@ class NativeRoutingSelectionDeviceTest {
         assertTrue("Caller Core hosts did not answer the OS resolver",addresses.any { it.hostAddress=="10.0.2.2" })
         assertEquals(listOf("198.18.0.2"),manager.getLinkProperties(manager.activeNetwork)?.dnsServers?.map { it.hostAddress })
     }
-    private fun http(host:String,marker:String) {
-        Socket().use { socket ->
-            socket.connect(InetSocketAddress(host,18083),3000);socket.soTimeout=3000
-            socket.getOutputStream().write("GET /routing-$run HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n".toByteArray())
-            val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
-            val response=ByteArrayOutputStream();val buffer=ByteArray(512)
-            while(true) {
-                val left=TimeUnit.NANOSECONDS.toMillis(deadline-System.nanoTime())
-                check(left>0) { "Controlled HTTP deadline expired" };socket.soTimeout=minOf(left,3000).toInt().coerceAtLeast(1)
-                val count=socket.getInputStream().read(buffer)
-                if(count<0) break
-                check(count<=4096-response.size()) { "Controlled HTTP response exceeded its bound" }
-                response.write(buffer,0,count)
+    private fun http(host:String,origin:Origin,other:Origin) {
+        val progress=RoutingHttpProgress()
+        try {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(host,18083),3000);socket.soTimeout=3000
+                progress.stage="SEND"
+                socket.getOutputStream().write("GET /routing-$run HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n".toByteArray())
+                val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
+                val body=readRoutingHttp(socket.getInputStream(),progress) {
+                    val left=TimeUnit.NANOSECONDS.toMillis(deadline-System.nanoTime())
+                    check(left>0) { "Controlled HTTP deadline expired" }
+                    socket.soTimeout=minOf(left,3000).toInt().coerceAtLeast(1)
+                }
+                assertArrayEquals("Wrong selected HTTP marker",origin.marker.toByteArray(Charsets.US_ASCII),body)
             }
-            val text=response.toString("US-ASCII")
-            assertTrue("Wrong selected HTTP status",text.startsWith("HTTP/1.1 200 OK\r\n"))
-            assertTrue("Wrong selected HTTP marker",text.endsWith("\r\n\r\n$marker"))
+        } catch(error:Throwable) {
+            error.addSuppressed(IllegalStateException("Controlled HTTP stage=${progress.stage} headerBytes=${progress.headerBytes} bodyBytes=${progress.bodyBytes} declaredLength=${progress.declaredLength} selected=${origin.safeState()} other=${other.safeState()}"))
+            throw error
         }
     }
     private fun udp(marker:String) {
@@ -199,16 +201,19 @@ class NativeRoutingSelectionDeviceTest {
     @Test fun taggedAndUntaggedOriginalSourceContextKeepsPrivateDnsAndProbeGuards() {
         verifyPreview()
         for(alias in listOf("caller-source", "")) {
-            Origin("alias-$run",run).use { selected -> Origin("unused-$run",run).use { unused ->
+            Origin("alias-$run",run).use { aliasOrigin -> Origin("default-$run",run).use { defaultOrigin ->
+                // Core never matches an empty inbound tag, including a caller selector containing "".
+                val selected=if(alias.isEmpty()) defaultOrigin else aliasOrigin
+                val unused=if(alias.isEmpty()) aliasOrigin else defaultOrigin
                 val host="alias-${if(alias.isEmpty())"empty" else "tagged"}-$run.dns-audit.invalid"
-                val source=source(alias.takeIf { it.isNotEmpty() },host,selected,unused)
+                val source=source(alias.takeIf { it.isNotEmpty() },host,aliasOrigin,defaultOrigin)
                 if(alias.isEmpty()) aliasRuleForUntagged(source)
                 val original=source.toString()
                 try {
                     assertEquals(0,request(source,mapOf("sourceInboundIndex" to 0,"defaultOutboundTag" to "default-marker")))
                     ready();assertSourceRetained(source,runtimePair(),true)
                     assertEquals(0,selected.tcp.get());assertEquals(0,unused.tcp.get())
-                    dns(host);http(host,selected.marker);udp(selected.marker)
+                    dns(host);http(host,selected,unused);udp(selected.marker)
                     assertEquals(original,source.toString())
                 } finally { stop() }
                 selected.close();unused.close();selected.checkCounts(1,1);unused.checkCounts(0,0)
@@ -223,12 +228,12 @@ class NativeRoutingSelectionDeviceTest {
             try {
                 assertEquals(0,request(source,mapOf("defaultOutboundTag" to "default-marker")))
                 val first=ready();val checked=runtimePair();assertSourceRetained(source,checked,false)
-                dns(host);http(host,selected.marker)
+                dns(host);http(host,selected,unused)
                 val invalid=JSONObject(source.toString())
                 invalid.getJSONArray("outbounds").getJSONObject(0).put("protocol","not-a-registered-core-protocol")
                 assertEquals(1,request(invalid,mapOf("defaultOutboundTag" to "default-marker")))
                 assertEquals("Refused candidate replaced the accepted child",listOf(first),ownedChildren())
-                assertArrayEquals(checked.first,runtimePair().first);assertTrue(captured());http(host,selected.marker)
+                assertArrayEquals(checked.first,runtimePair().first);assertTrue(captured());http(host,selected,unused)
                 val beforeRecovery=connectedCount()
                 assertEquals(listOf(first),ownedChildren())
                 android.os.Process.killProcess(first) // Exact verified owned native child, never a global pkill.
@@ -236,7 +241,7 @@ class NativeRoutingSelectionDeviceTest {
                 assertFalse("Old native child was not reaped",File("/proc/$first").exists())
                 val recovered=runtimePair();assertSourceRetained(source,recovered,false)
                 assertNotEquals("Recovery reused the previous probe/config pair",checked.second.getString("source_sha256"),recovered.second.getString("source_sha256"))
-                http(host,selected.marker);udp(selected.marker);assertEquals(original,source.toString())
+                http(host,selected,unused);udp(selected.marker);assertEquals(original,source.toString())
             } finally { stop() }
             selected.close();unused.close();selected.checkCounts(3,1);unused.checkCounts(0,0)
             println("NATIVE_ROUTING_DEFAULT_RECOVERY_PASS")
@@ -289,6 +294,7 @@ class NativeRoutingSelectionDeviceTest {
             failure.get()?.let { throw AssertionError("Owned routing marker failed",it) }
             assertEquals(expectedTcp,tcp.get());assertEquals(expectedUdp,udp.get())
         }
+        fun safeState()="tcp:${tcp.get()},udp:${udp.get()},failure:${failure.get()?.javaClass?.simpleName?.take(64)?:"none"}"
         override fun close() {
             if(!closed.compareAndSet(false,true)) return
             var primary:Throwable?=null;var interrupted=Thread.interrupted()
@@ -306,4 +312,52 @@ class NativeRoutingSelectionDeviceTest {
             primary?.let { throw it }
         }
     }
+}
+
+/** Controlled fixture framing only: a complete Content-Length body does not depend on a later FIN. */
+private class RoutingHttpProgress {
+    var stage="CONNECT"
+    var headerBytes=0
+    var bodyBytes=0
+    var declaredLength=-1
+}
+
+private fun readRoutingHttp(input:InputStream,progress:RoutingHttpProgress,beforeRead:()->Unit):ByteArray {
+    progress.stage="HEADERS"
+    val header=ByteArrayOutputStream()
+    while(!header.toString("US-ASCII").endsWith("\r\n\r\n")) {
+        check(header.size()<4096) { "Controlled HTTP headers exceeded their bound" }
+        beforeRead()
+        val value=input.read()
+        check(value>=0) { "Controlled HTTP headers were truncated" }
+        header.write(value);progress.headerBytes=header.size()
+    }
+    val lines=header.toString("US-ASCII").split("\r\n")
+    check(lines.first()=="HTTP/1.1 200 OK") { "Wrong selected HTTP status" }
+    var length:Int?=null
+    for(line in lines.drop(1).filter { it.isNotEmpty() }) {
+        val separator=line.indexOf(':')
+        check(separator>0) { "Controlled HTTP header was malformed" }
+        val name=line.substring(0,separator)
+        check(!name.equals("Transfer-Encoding",ignoreCase=true)) { "Controlled HTTP transfer encoding was unexpected" }
+        if(name.equals("Content-Length",ignoreCase=true)) {
+            check(length==null) { "Controlled HTTP length was duplicated" }
+            val value=line.substring(separator+1).trim(' ','\t')
+            check(value.isNotEmpty() && value.all { it in '0'..'9' }) { "Controlled HTTP length was malformed" }
+            length=value.toIntOrNull()
+            check(length!=null && length<=4096-header.size()) { "Controlled HTTP response exceeded its bound" }
+        }
+    }
+    val size=checkNotNull(length) { "Controlled HTTP length was missing" }
+    progress.declaredLength=size;progress.stage="BODY"
+    val body=ByteArray(size)
+    while(progress.bodyBytes<size) {
+        beforeRead()
+        val count=input.read(body,progress.bodyBytes,size-progress.bodyBytes)
+        check(count>0) { "Controlled HTTP body was truncated" }
+        progress.bodyBytes+=count
+    }
+    beforeRead() // Completion must still fit the same absolute deadline.
+    progress.stage="COMPLETE"
+    return body
 }

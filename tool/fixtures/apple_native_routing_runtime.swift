@@ -12,6 +12,8 @@ func runNativeRoutingRuntimeChecks() throws {
     let credentials = try LocalProxyCredentials(username: "routing-session-user", password: "routing-session-password")
     let expected = Array("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
     for variant in 0..<2 {
+        func stage(_ name: String) { print("NATIVE_ROUTING_STAGE=\(name);VARIANT=\(variant)") }
+        stage("prepare")
         let sourceTag = variant == 0 ? "caller-source" : ""
         var sourceInput: [String: Any] = ["listen": "127.0.0.1", "port": 18095, "protocol": "socks", "settings": ["auth": "noauth", "udp": true]]
         if variant == 0 { sourceInput["tag"] = sourceTag }
@@ -53,20 +55,31 @@ func runNativeRoutingRuntimeChecks() throws {
                 precondition(answer![3] & 15 == 0 && answer![6] == 0 && answer![7] == 1 && answer!.suffix(4).elementsEqual([192, 0, 2, 14]))
             }
         }
-        try start(); try pair(); try dnsProof(0)
+        stage("start"); try start()
+        stage("first-http"); try pair()
+        stage("first-dns"); try dnsProof(0)
         var stale = envelope.configurationData; stale.append(0x20)
         precondition(FLVlessCheckCoreRoutingPrivate(stale, envelope.metadataData) == 17)
         var rejectedError: NSError?
         precondition(!FLVlessStartCoreRoutingPrivate(stale, envelope.metadataData, ProbeLogger(), &rejectedError))
-        try pair() // Rejected final bytes must preserve the currently live owner.
-        XRayStop()
-        try start(); try pair(); try dnsProof(1); XRayStop()
-        precondition(aliased.state().0 == (variant + 1) * 3 && fallback.state().0 == (variant + 1) * 3)
+        // Rejected final bytes must preserve the currently live owner.
+        stage("after-rejection-http"); try pair()
+        stage("stop"); XRayStop()
+        stage("restart"); try start()
+        stage("restart-http"); try pair()
+        stage("restart-dns"); try dnsProof(1)
+        stage("final-stop"); XRayStop()
+        print("NATIVE_ROUTING_COUNTS;VARIANT=\(variant);ALIAS=\(aliased.state().0);DEFAULT=\(fallback.state().0);FALLBACK=\(trap.connections())")
+        // Core never matches inboundTag:[""] against an untagged input.
+        // That source therefore sends both HTTP targets to the selected default.
+        precondition(aliased.state().0 == 3 && fallback.state().0 == (variant == 0 ? 3 : 9))
         precondition(trap.connections() == 0)
         print("NATIVE_ROUTING_RUNTIME_PASS=\(variant)")
     }
+    print("NATIVE_ROUTING_STAGE=drain")
     aliased.stop(); fallback.stop(); trap.stop()
-    precondition(aliased.state().0 == 6 && fallback.state().0 == 6 && aliased.connections() == 6 && fallback.connections() == 6)
+    print("NATIVE_ROUTING_DRAIN_COUNTS;ALIAS=\(aliased.state().0);ALIAS_CONNECTIONS=\(aliased.connections());DEFAULT=\(fallback.state().0);DEFAULT_CONNECTIONS=\(fallback.connections());FALLBACK=\(trap.connections())")
+    precondition(aliased.state().0 == 3 && fallback.state().0 == 9 && aliased.connections() == 3 && fallback.connections() == 9)
     precondition(!aliased.state().1 && !fallback.state().1 && trap.connections() == 0)
     print("NATIVE_ROUTING_RUNTIME_DRAIN_PASS")
 }

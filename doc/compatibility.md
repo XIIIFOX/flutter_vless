@@ -325,6 +325,17 @@ an equivalent transfer of the original inbound context. The tests exercise the
 actual Router and a test-only context/default model, including live API rule
 changes. They do not enable a public routing option or claim packet acceptance.
 
+The separate [optional source overlay](../third_party/xray-vpn-routing/README.md)
+now binds the exact private handler to its Core instance and preserves that
+binding across authentication, sniffing and asynchronous mux lifetimes. Native
+private guards precede forced detours; the unchanged live caller router receives
+only an inbound-tag view, with an explicit default after its complete miss.
+Pure regressions cover the actual DNS/IP router pass, API additions/removals,
+foreign-instance rejection, revocation and actual inert mux-session cleanup.
+An isolated TCP/UDP/DNS byte fixture is prepared for all three desktop CI systems;
+its runtime acceptance is pending. Native launcher/capability integration and
+device acceptance remain open; no public routing option is enabled by this seam.
+
 The fifth case adds an explicit null tag on the default direct outbound. Core
 decodes this as untagged; Windows previously rejected it before preflight.
 Windows now skips null tags during named-chain validation and treats a null
@@ -416,8 +427,13 @@ The [six-case shared certificate corpus](../tool/fixtures/compatibility/certific
 checks complete JSON preservation and pinned Core protobuf equivalence, with
 missing-root/file controls and source immutability. The controlled DoH runtime
 also uses a TLS-wrapped caller proxy whose explicit CA file is bound through the
-native helper; DoH trust/name rejection remains independent. New runtime
-acceptance is pending CI and does not establish physical iOS certificate reload.
+native helper; DoH trust/name rejection remains independent. In the
+[ca96891 CI run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39211822084),
+ordinary pinned Core passes all four trust/name variants for each preparer:
+C++ on Ubuntu, Windows and macOS, plus Swift on macOS. All 16
+`TLS_CERTIFICATE_ASSET_BYTES_PASS` markers are verified against the exact
+committed sources. This qualifies controlled CA-file loading and TLS traffic;
+physical Apple certificate access and background reload remain unqualified.
 
 The shared [synthetic custom GeoSite fixture](../tool/fixtures/compatibility/asset-files.json)
 contains one full domain and no standard GeoDAT files. File-only native
@@ -941,7 +957,7 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | 3. Protocol/transport matrix | Partial; controlled XHTTP increment qualified | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP and null legacy-endpoint preparation fixes pass a nine-case pinned Core build corpus with native preparation, including shared XHTTP upload/download socket policy. At cdc5b94, ordinary Core on all three desktop systems carries actual XHTTP HTTP/1.1 packet-up payloads with and without a caller SOCKS chain; both Apple and Windows preparers pass on macOS. Further protocol handshakes, XHTTP TLS/HTTP3/QUIC, physical iOS packets and the full matrix remain open. |
 | 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes pass shared component, ordinary Core and native platform traffic gates at a475374. Source-inbound context, explicit VPN default selection, wildcard isolation and exact adapter counters remain open. |
 | 5. Ports/addresses | Partial | Shared 20-case port, 12-case exact service-tag, nine-case selector-prefix, 21-case numeric API and 36-case service-listener fixtures cover allocation. Real Android/iPhone list/range/env/Unix and tag-collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. OS port checks, service-name resolution, wildcard isolation, bind retries and broader proxy-only parity remain open. |
-| 6. Assets/import syntax | Partial; data-root increment qualified | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit roots propagate across native backends; custom GeoSite traffic passes Android TUN, both Apple preview runtimes and Windows 2022/2025. Explicit TLS certificate/key directory binding is implemented with shared native/Core regressions; its new TLS traffic acceptance is pending CI. Managed asset import/lifetime, specialized certificate features and explicit multi-document merging remain open. |
+| 6. Assets/import syntax | Partial; data-root increment qualified | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit roots propagate across native backends; custom GeoSite traffic passes Android TUN, both Apple preview runtimes and Windows 2022/2025. Explicit TLS certificate/key directory binding passes shared native/Core regressions; controlled CA-file TLS traffic passes ordinary Core on all three desktop systems at ca96891 (four variants per preparer, 16 markers). Physical Apple access/reload, managed asset import/lifetime, specialized certificate features and explicit multi-document merging remain open. |
 | 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |
 | 8. Runtime corpus | Partial | Shared port/syntax fixtures and platform/device HTTP, DNS, routing and recovery checks exist. The complete ECH/DoH/QUIC/protocol corpus and remaining physical options acceptance are not complete. |
 

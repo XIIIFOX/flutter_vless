@@ -1,0 +1,18 @@
+{
+  "capability": "native-vpn-routing-source-preview-v1",
+  "core_commit": "92ccc939aaf4f8965f369cf0b142e005aeaa11d5",
+  "module": "github.com/xtls/xray-core",
+  "module_version": "v1.260327.1-0.20261017152356-92ccc939aaf4",
+  "module_sum": "h1:FlGykoNEWRZN5ExwxSEU5lnuEWU5CD3SJFyKKWLChl8=",
+  "upstream_sha256": {
+    "go.mod": "31fe6bd6c04eb2738e157b850236b1376cbbac3f33e974256bb7325c8c764250",
+    "app/dispatcher/default.go": "29100330a020d75b5f4b77b8eec20779960a8768e765c99c1003e2b1475746fb",
+    "app/proxyman/inbound/inbound.go": "1bc6e0581f17379fb41e0f85aa6e29ac2f21ec87926dffcb3fb488cb64a19681",
+    "app/proxyman/inbound/always.go": "f64783e9a8d256348953fb62afe211482f2df60e48f8bf643b77a2cfa9b6c0fe",
+    "app/proxyman/inbound/worker.go": "670e88f15842e56b9b6cfd681618d2c737c34c4f9debf850935fb52fb6e196e6",
+    "common/session/session.go": "f40f2b767d652117804dc1426eadf0af85af3a16ec8772e458cf9312e4fa740c",
+    "proxy/socks/server.go": "6247a63dc3d4d14f7e0d0cd52582692e9507bb85970ae3bdb67dd89537e1c363",
+    "common/mux/client.go": "469e1c4672509901492ccbb0ab161dbd0712d7d9e1c1356be3bf6b662830d054",
+    "common/mux/session.go": "e47da02c861acbfb02712177e28e852d682d7d8c157dec94ef38a3dc6c604392"
+  }
+}

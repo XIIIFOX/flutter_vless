@@ -322,8 +322,9 @@ func runAssetRuntimeChecks() throws {
         let fd = try LocalSOCKS5Client.openConnection(proxyPort: 18095, credentials: nil, host: fixture.domain, port: 80)
         defer { close(fd) }
         precondition(LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("GET /custom-assets HTTP/1.1\r\nHost: \(fixture.domain)\r\nConnection: close\r\n\r\n".utf8)))
-        let response = LocalSOCKS5Client.receiveExactly(fd: fd, count: 12) ?? []
-        precondition(String(decoding: response, as: UTF8.self) == "HTTP/1.1 204 ")
+        let expected = Array("HTTP/1.1 204 ".utf8)
+        let response = LocalSOCKS5Client.receiveExactly(fd: fd, count: expected.count) ?? []
+        precondition(response == expected)
     }
     precondition(origin.state().0 == 1 && !origin.state().1)
     runner.stop()

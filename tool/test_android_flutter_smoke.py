@@ -37,6 +37,7 @@ class Markers:
     patterns = {'dds': DDS_FAILURE.encode(), 'entry': TEST_ENTRY.encode(),
                 'core_version': b'ANDROID_XRAY_CORE_VERSION=',
                 'gradle': b'Running Gradle task', 'install': b'Installing build/',
+                'install_completed': b'', 'vm_service': b'',
                 'summary3': b'3 tests passed.', 'standard_summary3': b'+3: All tests passed!'}
 
     def __init__(self):
@@ -52,6 +53,10 @@ class Markers:
         value = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', value).strip()
         if not value or value == b'::endgroup::':
             return
+        if re.fullmatch(rb'Installing build/[^\r\n]{1,2048}\.apk\.\.\. +[0-9,]+(?:\.[0-9]+)?(?:ms|s)', value):
+            self.found['install_completed'] = True
+        if b'Dart VM Service on ' in value or b'Dart VM service is listening on ' in value:
+            self.found['vm_service'] = True
         self.found['summary3'] = value == '🎉 3 tests passed.'.encode()
         self.found['standard_summary3'] = re.fullmatch(
             rb'(?:[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})? +)?\+3: All tests passed!', value) is not None
@@ -59,7 +64,7 @@ class Markers:
     def feed(self, chunk):
         text = self.tail + chunk
         for name, marker in self.patterns.items():
-            if name not in ('summary3', 'standard_summary3'):
+            if name not in ('summary3', 'standard_summary3', 'install_completed', 'vm_service'):
                 self.found[name] |= marker in text
         self.tail = text[-max(map(len, self.patterns.values())):]
         # Terminal success is a complete exact line, not a quoted substring or
@@ -80,6 +85,7 @@ class Markers:
 
     def stage(self):
         for marker, stage in [('core_version', 'core_reported'), ('entry', 'test_entered'),
+                              ('install_completed', 'installed_awaiting_test_entry'),
                               ('install', 'installing'), ('gradle', 'building')]:
             if self.found[marker]:
                 return stage
@@ -173,6 +179,9 @@ def stream_attempt(command, path, *, cwd, cancellation, on_failure, progress=lam
 
     def snapshot():
         return {**result, 'markers': dict(markers.found),
+                'owned_process': None if process is None else {
+                    'pid': process.pid, 'pgid': process.pid,
+                    'returncode': result['child_returncode']},
                 'elapsed_seconds': round(time.monotonic() - started, 3)}
 
     def failure():
@@ -274,20 +283,33 @@ def collect_failure_context(serial, output, attempt, *, timeout=10, cancellation
     """Bounded generic collector: the test-APK-specific collect() has the wrong UID/package."""
     commands = {'crash': ['logcat', '-d', '-b', 'crash', '-t', '200', '-v', 'threadtime'],
                 'logcat': ['logcat', '-d', '-b', 'main', '-b', 'system', '-t', '400', '-v', 'threadtime'],
-                'exit-info': ['shell', 'dumpsys', 'activity', 'exit-info', EXAMPLE_PACKAGE]}
+                'exit-info': ['shell', 'dumpsys', 'activity', 'exit-info', EXAMPLE_PACKAGE],
+                'app-pid': ['shell', 'pidof', EXAMPLE_PACKAGE]}
     initial_signal = cancellation.signum if cancellation is not None else None
     def one(item):
         name, arguments = item
         try:
+            path = output / f'flutter-smoke-{attempt}-{name}.log'
             result = capture(['adb', '-s', serial, *arguments],
-                             output / f'flutter-smoke-{attempt}-{name}.log',
-                             timeout=timeout, max_bytes=MAX_CONTEXT_BYTES,
+                             path, timeout=timeout,
+                             max_bytes=4096 if name == 'app-pid' else MAX_CONTEXT_BYTES,
                              cancelled=lambda: initial_signal is None and cancellation is not None and cancellation.signum is not None)
+            if name == 'app-pid':
+                # Only bounded numeric identities may leave the private raw file.
+                raw = path.read_bytes()
+                fields = raw.split()
+                if (result.get('returncode') == 0 and 0 < len(fields) <= 16
+                        and all(re.fullmatch(rb'[1-9][0-9]{0,9}', field) for field in fields)):
+                    result['app_process'] = {'state': 'running', 'pids': [int(field) for field in fields]}
+                elif result.get('returncode') == 1 and not fields:
+                    result['app_process'] = {'state': 'absent', 'pids': []}
+                else:
+                    result['app_process'] = {'state': 'unknown', 'pids': []}
         except (OSError, subprocess.SubprocessError) as error:
             result = {'error': type(error).__name__}
         return name, result
-    # Three independent read-only captures share the signal grace period.
-    with ThreadPoolExecutor(max_workers=3, thread_name_prefix='smoke-context') as workers:
+    # Independent read-only captures share the same bounded observation window.
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix='smoke-context') as workers:
         metadata = dict(workers.map(one, commands.items()))
     write_private(output / f'flutter-smoke-{attempt}-context.json', json.dumps(metadata, indent=2) + '\n')
     return metadata
@@ -351,8 +373,10 @@ def run_smoke(serial, output, *, runner=stream_attempt, pause=time.sleep,
             return False
     def progress(value):
         # No raw child/context output, paths, addresses, config or credentials.
-        print('ANDROID_SMOKE_STATUS=' + json.dumps({key: value.get(key) for key in
-              ('attempt', 'stage', 'reason', 'bytes_written', 'elapsed_seconds')}), flush=True)
+        safe = {key: value.get(key) for key in
+                ('attempt', 'stage', 'reason', 'bytes_written', 'elapsed_seconds', 'owned_process')}
+        safe['vm_service_observed'] = value.get('markers', {}).get('vm_service', False)
+        print('ANDROID_SMOKE_STATUS=' + json.dumps(safe), flush=True)
     try:
         ownership(serial, output, cancellation=state)
     except (Exception, KeyboardInterrupt) as error:
@@ -368,6 +392,27 @@ def run_smoke(serial, output, *, runner=stream_attempt, pause=time.sleep,
     command = ['flutter', 'test', 'integration_test/android_xray_runtime_smoke_test.dart', '-d', serial]
     for attempt in range(1, 3):
         failure_report = {}
+        startup_observation = {}
+        def attempt_progress(value):
+            progress(dict(value, attempt=attempt))
+            if (startup_observation or value['stage'] != 'installed_awaiting_test_entry'
+                    or value.get('markers', {}).get('entry') or state.signum is not None):
+                return
+            remaining = value['timeout_seconds'] - value['elapsed_seconds']
+            if remaining <= 0:
+                return
+            # This synchronous capture consumes the attempt's existing absolute
+            # deadline; stream_attempt never restarts its clock after the hook.
+            startup_observation.update(stage=value['stage'], owned_process=value.get('owned_process'),
+                                       vm_service_observed=value.get('markers', {}).get('vm_service', False))
+            summary['startup_observation'] = startup_observation
+            save()
+            try:
+                startup_observation['context'] = collect(serial, output, f'{attempt}-installed',
+                    timeout=min(2, remaining), cancellation=state)
+            except (Exception, KeyboardInterrupt) as error:
+                startup_observation['error'] = type(error).__name__
+            save()
         def on_failure(value):
             summary.update(stage=value['stage'], exit_code=value['exit_code'])
             summary['active_failure'] = dict(value, attempt=attempt)
@@ -376,13 +421,15 @@ def run_smoke(serial, output, *, runner=stream_attempt, pause=time.sleep,
             # an outer runner's SIGKILL. All partial files stream independently.
             failure_report['context'] = collect(serial, output, attempt,
                                                  timeout=2 if state.signum else 10, cancellation=state)
-            if any(item.get('returncode') != 0 or item.get('timed_out') or item.get('cancelled') or item.get('truncated') or item.get('error')
-                   for item in failure_report['context'].values()):
+            if any((item.get('returncode') != 0 and not (name == 'app-pid'
+                        and item.get('returncode') == 1 and item.get('app_process', {}).get('state') == 'absent'))
+                   or item.get('timed_out') or item.get('cancelled') or item.get('truncated') or item.get('error')
+                   for name, item in failure_report['context'].items()):
                 raise RuntimeError('context-incomplete')
         try:
             result = runner(command, output / f'flutter-smoke-{attempt}.log', cwd=ROOT / 'example',
                             cancellation=state, on_failure=on_failure,
-                            progress=lambda value: progress(dict(value, attempt=attempt)))
+                            progress=attempt_progress)
         except (Exception, KeyboardInterrupt) as error:
             # A runner/metadata failure must still reach the owned-app finally.
             result = {'reason': 'wrapper_error', 'exit_code': 125, 'stage': 'wrapper',
@@ -391,6 +438,7 @@ def run_smoke(serial, output, *, runner=stream_attempt, pause=time.sleep,
                       'truncated': False, 'diagnostic_error': type(error).__name__}
         result['attempt'] = attempt
         result['context'] = failure_report.get('context')
+        result['startup_observation'] = startup_observation or None
         if result['process_started']:
             try:
                 result['example_cleanup'] = cleanup_app(serial, output, attempt, cancellation=state)
@@ -414,6 +462,7 @@ def run_smoke(serial, output, *, runner=stream_attempt, pause=time.sleep,
         summary['attempts'].append(result)
         summary.update(stage=result['stage'], exit_code=result['exit_code'])
         summary.pop('active_failure', None)
+        summary.pop('startup_observation', None)
         save()
         if summary.get('metadata_error') and result['exit_code'] == 0:
             result.update(reason='metadata_error', stage='summary_write', exit_code=125)

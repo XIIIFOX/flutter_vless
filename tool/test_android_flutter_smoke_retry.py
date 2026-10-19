@@ -345,10 +345,10 @@ class SmokeContextTest(unittest.TestCase):
                 started = time.monotonic()
                 result = smoke.collect_failure_context('emulator-5554', folder, 1, timeout=1)
             self.assertLess(time.monotonic() - started, 3)
-            self.assertEqual({'crash', 'logcat', 'exit-info'}, set(result))
+            self.assertEqual({'crash', 'logcat', 'exit-info', 'app-pid'}, set(result))
             for name, report in result.items():
                 self.assertTrue(report['timed_out']); self.assertTrue(report['truncated'])
-                self.assertEqual(smoke.MAX_CONTEXT_BYTES, report['bytes_written'])
+                self.assertEqual(4096 if name == 'app-pid' else smoke.MAX_CONTEXT_BYTES, report['bytes_written'])
                 self.assertNotIn('force-stop', report['command']); self.assertNotIn('-c', report['command'])
                 self.assertEqual(0o600, stat.S_IMODE((folder / report['file']).stat().st_mode))
             self.assertIn(smoke.EXAMPLE_PACKAGE, result['exit-info']['command'])
@@ -364,6 +364,97 @@ class SmokeContextTest(unittest.TestCase):
                 if expected: self.assertTrue(smoke.preflight_ownership('emulator-5554', Path(directory)))
                 else:
                     with self.assertRaises(RuntimeError): smoke.preflight_ownership('emulator-5554', Path(directory))
+
+
+class SmokeStartupDiagnosticTest(unittest.TestCase):
+    completed_install = b'Installing build/app/outputs/flutter-apk/app-debug.apk...        1,349ms\n'
+
+    def test_completed_install_has_chunk_safe_preentry_stage(self):
+        for size in (1, 17, 65536):
+            with self.subTest(chunk_size=size):
+                tracker = smoke.Markers()
+                for offset in range(0, len(self.completed_install), size):
+                    tracker.feed(self.completed_install[offset:offset + size])
+                tracker.finish()
+                self.assertEqual('installed_awaiting_test_entry', tracker.stage())
+                self.assertFalse(smoke.qualified(tracker.found))
+
+    def test_install_start_or_quoted_completion_does_not_claim_installed(self):
+        for value in (b'Installing build/app.apk...', b'quoted "' + self.completed_install.rstrip() + b'"\n'):
+            tracker = smoke.Markers(); tracker.feed(value); tracker.finish()
+            self.assertEqual('installing', tracker.stage())
+            self.assertFalse(tracker.found['install_completed'])
+        tracker.feed(b'A Dart VM Service on emulator is available at: http://PRIVATE_VM_URL\n')
+        self.assertTrue(tracker.found['vm_service'])
+        tracker.feed((smoke.TEST_ENTRY + '\n').encode())
+        self.assertEqual('test_entered', tracker.stage())
+
+    def test_early_context_once_precedes_timeout_cleanup_without_retry(self):
+        order = []; calls = []; budgets = []
+        def collect(serial, folder, attempt, **kwargs):
+            order.append('installed' if str(attempt).endswith('-installed') else 'failure')
+            budgets.append(kwargs['timeout'])
+            return {'fixture': {'returncode': 0, 'timed_out': False}}
+        def runner(command, path, **kwargs):
+            calls.append(command)
+            value = {'reason': None, 'exit_code': None, 'stage': 'installed_awaiting_test_entry',
+                'bytes_written': 1601, 'elapsed_seconds': 290, 'timeout_seconds': 600,
+                'markers': dict.fromkeys(smoke.Markers.patterns, False),
+                'owned_process': {'pid': 4321, 'pgid': 4321, 'returncode': None}}
+            kwargs['progress'](value); kwargs['progress'](value)
+            value = dict(value, reason='timeout', exit_code=124, process_started=True,
+                child_returncode=None, truncated=False, diagnostic_error=None,
+                cleanup={'leader_reaped': True, 'pipe_closed': True, 'error': None})
+            kwargs['on_failure'](value)
+            order.append('stream_cleanup')
+            return value
+        def cleanup(*args, **kwargs): order.append('app_cleanup'); return {'returncode': 0}
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()):
+            result = smoke.run_smoke('emulator-5554', Path(directory), runner=runner,
+                ownership=lambda *a, **k: True, collect=collect, cleanup_app=cleanup,
+                pause=lambda _: self.fail('timeout must never retry'))
+        self.assertEqual(124, result); self.assertEqual(1, len(calls))
+        self.assertEqual(['installed', 'failure', 'stream_cleanup', 'app_cleanup'], order)
+        self.assertLessEqual(budgets[0], 2)
+
+    def test_early_context_uses_remaining_budget_and_keeps_timeout_if_capture_fails(self):
+        budgets = []
+        def collect(*args, **kwargs):
+            budgets.append(kwargs['timeout'])
+            raise OSError('PRIVATE_CONTEXT_SENTINEL')
+        def runner(command, path, **kwargs):
+            value = {'stage': 'installed_awaiting_test_entry', 'elapsed_seconds': 599.75,
+                     'timeout_seconds': 600, 'markers': dict.fromkeys(smoke.Markers.patterns, False)}
+            kwargs['progress'](value); kwargs['progress'](value)
+            return dict(value, reason='timeout', exit_code=124, process_started=True,
+                        child_returncode=None, truncated=False, diagnostic_error=None,
+                        cleanup={'leader_reaped': True, 'pipe_closed': True, 'error': None})
+        console = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(console):
+            code = smoke.run_smoke('emulator-5554', Path(directory), runner=runner, collect=collect,
+                ownership=lambda *a, **k: True, cleanup_app=lambda *a, **k: {'returncode': 0},
+                pause=lambda _: self.fail('timeout must never retry'))
+            report = json.loads((Path(directory) / 'summary.json').read_text())
+        self.assertEqual(124, code); self.assertEqual([.25], budgets)
+        self.assertEqual('OSError', report['attempts'][0]['startup_observation']['error'])
+        self.assertNotIn('PRIVATE_CONTEXT_SENTINEL', console.getvalue())
+
+    def test_context_pid_metadata_is_numeric_or_absent_and_private(self):
+        for raw, code, expected in ((b'123 456\n', 0, {'state': 'running', 'pids': [123, 456]}),
+                (b'', 1, {'state': 'absent', 'pids': []}),
+                (b'PRIVATE_PID_SENTINEL', 0, {'state': 'unknown', 'pids': []})):
+            commands = []
+            def fake(command, path, **kwargs):
+                commands.append((command, kwargs))
+                smoke.write_private(path, raw if 'pidof' in command else b'')
+                return {'returncode': code if 'pidof' in command else 0}
+            with tempfile.TemporaryDirectory() as directory, patch.object(smoke, 'capture', fake):
+                result = smoke.collect_failure_context('emulator-5554', Path(directory), '1-installed', timeout=2)
+                self.assertEqual(expected, result['app-pid']['app_process'])
+                self.assertNotIn('PRIVATE_PID_SENTINEL', json.dumps(result))
+                self.assertTrue(all(item[1]['timeout'] == 2 for item in commands))
+                self.assertTrue(all('force-stop' not in item[0] for item in commands))
+                self.assertEqual(4096, next(opts['max_bytes'] for command, opts in commands if 'pidof' in command))
 
 
 class SmokeSignalTest(unittest.TestCase):
@@ -423,7 +514,7 @@ raise SystemExit(result)
             process = subprocess.Popen([sys.executable, str(driver), str(Path(smoke.__file__).parent), str(folder / 'out')],
                 env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
             try:
-                wait_for(lambda: len(list(pids.iterdir())) == 3)
+                wait_for(lambda: len(list(pids.iterdir())) == 4)
                 started = time.monotonic(); process.send_signal(signal.SIGTERM)
                 output = process.communicate(timeout=4)[0]
                 self.assertLess(time.monotonic() - started, 3)

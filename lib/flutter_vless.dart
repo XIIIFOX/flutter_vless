@@ -141,9 +141,12 @@ class FlutterVless {
   /// Set [proxyOnly] to `true` when the app should start local Xray proxy
   /// behavior without installing a system VPN or Packet Tunnel route.
   ///
-  /// On iOS and macOS, [geoAssetsDirectory] can select an absolute App Group directory
-  /// containing non-empty `geoip.dat` and `geosite.dat` files for this session.
-  /// Omit it to use Xray's bundled/default asset lookup.
+  /// [geoAssetsDirectory] selects an existing absolute data directory for this
+  /// session. Core validates the files referenced by the config, including
+  /// custom `ext:` rules; standard geodata files are optional when unused.
+  /// Apple VPN extensions need a readable App Group directory. Keep the files
+  /// available until Stop completes. Omit it for bundled/default lookup.
+  /// Certificate/key lookup has a separate Core root.
   ///
   /// [notificationDisconnectButtonName] controls the Android foreground
   /// notification disconnect action label.
@@ -207,8 +210,8 @@ class FlutterVless {
   /// Returns delay in milliseconds, or the platform-specific failure value when
   /// the native backend cannot complete the probe.
   ///
-  /// On iOS, [geoAssetsDirectory] has the same behavior and validation as the
-  /// parameter on [startVless].
+  /// Apple and Android use [geoAssetsDirectory] as on [startVless]. Windows
+  /// standalone profile delay remains unsupported and returns `-1`.
   Future<int> getServerDelay(
       {required String config,
       String url = 'https://google.com/generate_204',

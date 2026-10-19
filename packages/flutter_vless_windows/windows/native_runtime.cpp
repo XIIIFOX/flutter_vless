@@ -71,8 +71,8 @@ std::optional<fs::path> FindBundledFile(const wchar_t* name) {
 }
 
 std::unique_ptr<ProcessHandle> Launch(const fs::path& exe,
-    const std::vector<std::wstring>& arguments, bool capture) {
-  if (exe.empty() || !exe.is_absolute()) return nullptr;
+    const std::vector<std::wstring>& arguments, bool capture, const asset_location::Root& assets) {
+  if (exe.empty() || !exe.is_absolute() || !asset_location::Valid(assets)) return nullptr;
   // Refuse replacement of the image until CreateProcess has opened it.
   HANDLE image = CreateFileW(exe.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
@@ -116,26 +116,17 @@ std::unique_ptr<ProcessHandle> Launch(const fs::path& exe,
   bool job_ready = job && SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
   // Imported process environment must not enable runtime key logging, browser
   // dialers, alternate assets, debug traces or an additional HTTP proxy.
-  std::vector<wchar_t> environment;
+  std::vector<std::wstring> inherited_values;
   LPWCH inherited_environment = GetEnvironmentStringsW();
   if (inherited_environment) {
     for (const wchar_t* entry = inherited_environment; *entry; entry += wcslen(entry) + 1) {
-      std::wstring item(entry), key = item.substr(0, item.find(L'='));
-      std::transform(key.begin(), key.end(), key.begin(), towupper);
-      if (key.rfind(L"XRAY", 0) == 0 || key == L"SSLKEYLOGFILE" || key == L"GODEBUG"
-          || key == L"GOTRACEBACK" || key == L"HTTP_PROXY" || key == L"HTTPS_PROXY"
-          || key == L"ALL_PROXY" || key == L"NO_PROXY" || key == L"PATH") continue;
-      environment.insert(environment.end(), item.begin(), item.end()); environment.push_back(0);
+      inherited_values.emplace_back(entry);
     }
     FreeEnvironmentStringsW(inherited_environment);
   }
   wchar_t system_directory[MAX_PATH + 1]{};
-  if (GetSystemDirectoryW(system_directory, MAX_PATH)) {
-    const std::wstring path = L"PATH=" + std::wstring(system_directory);
-    environment.insert(environment.end(), path.begin(), path.end()); environment.push_back(0);
-  }
-  environment.push_back(0);
-  if (environment.size() == 1) environment.push_back(0);
+  const auto trusted_system = GetSystemDirectoryW(system_directory, MAX_PATH) ? std::wstring(system_directory) : L"";
+  auto environment = asset_location::ChildEnvironment(inherited_values, trusted_system, assets);
   bool ok = attributes && job_ready && CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, TRUE,
       CREATE_NO_WINDOW | CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
       environment.data(), directory.c_str(),
@@ -157,9 +148,9 @@ std::unique_ptr<ProcessHandle> Launch(const fs::path& exe,
   return result;
 }
 bool Command(const fs::path& exe, const std::vector<std::wstring>& arguments,
-             std::string& output, unsigned timeout) {
+    std::string& output, unsigned timeout, const asset_location::Root& assets) {
   output.clear();
-  auto process = Launch(exe, arguments, true);
+  auto process = Launch(exe, arguments, true, assets);
   if (!process) return false;
   auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout);
   HANDLE read = reinterpret_cast<HANDLE>(process->hStdOutRead);
@@ -223,7 +214,9 @@ void RemovePrivateConfig(fs::path& path) {
   if (path.empty()) return;
   if (DeleteFileW(path.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND) path.clear();
 }
-bool CheckConfig(const std::string& config, const fs::path& executable, ConfigCheckStorage storage) try {
+bool CheckConfig(const std::string& config, const fs::path& executable, ConfigCheckStorage storage,
+    const asset_location::Root& assets) try {
+  if (!asset_location::Valid(assets)) return false;
   auto document = xray_config::Parse(config);
   if (!xray_config::Normalize(document)) return false;
   ProtectedRuntime protected_runtime;
@@ -233,10 +226,10 @@ bool CheckConfig(const std::string& config, const fs::path& executable, ConfigCh
   } candidate;
   fs::path image = executable;
   if (storage == ConfigCheckStorage::administrators) {
-    if (!protected_runtime.Create(executable) || !protected_runtime.WriteConfig(document.dump(), candidate.path)) return false;
+    if (!protected_runtime.Create(executable, !assets.has_value()) || !protected_runtime.WriteConfig(document.dump(), candidate.path)) return false;
     image = protected_runtime.Executable();
   } else if (!WritePrivateConfig(document.dump(), candidate.path)) return false;
-  auto process = Launch(image, {L"run", L"-test", L"-config", candidate.path.wstring()});
+  auto process = Launch(image, {L"run", L"-test", L"-config", candidate.path.wstring()}, false, assets);
   if (!process) return false;
   const HANDLE handle = reinterpret_cast<HANDLE>(process->hProcess);
   if (WaitForSingleObject(handle, 10000) != WAIT_OBJECT_0) return false;

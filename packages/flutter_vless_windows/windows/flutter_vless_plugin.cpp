@@ -134,7 +134,8 @@ class FlutterVlessPlugin : public flutter::Plugin {
   NativeTaskQueue operations_;
   flutter_vless::NativeOptions native_options_;
   std::unique_ptr<flutter_vless::SystemTray> tray_;
-  std::optional<std::string> quick_profile_; // Access only on operations_. Never persisted in plaintext.
+  struct QuickProfile { std::string config; flutter_vless::asset_location::Root assets; };
+  std::optional<QuickProfile> quick_profile_; // Access only on operations_. Never persisted in plaintext.
   std::atomic<unsigned> options_generation_{0};
   std::atomic<int> last_tray_state_{-1};
   bool tray_pending_ = false;
@@ -152,7 +153,7 @@ class FlutterVlessPlugin : public flutter::Plugin {
         StopStatusTimer(); V2rayManager::GetInstance().Stop(); is_running_ = false;
         SendStatusToUI(flutter::EncodableList{flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("DISCONNECTED")});
       } else if (available && quick_profile_) {
-        const bool ready = V2rayManager::GetInstance().Start(*quick_profile_, false, options);
+        const bool ready = V2rayManager::GetInstance().Start(quick_profile_->config, false, options, quick_profile_->assets);
         is_running_ = ready || V2rayManager::GetInstance().IsProtecting();
         if (is_running_) { start_time_ = std::chrono::steady_clock::now(); StartStatusTimer(); }
         available = is_running_.load();
@@ -399,6 +400,14 @@ void FlutterVlessPlugin::HandleMethodCall(
         std::string remark = std::get<std::string>(remark_it->second);
         std::string config = std::get<std::string>(config_it->second);
         bool proxy_only = false;
+        flutter_vless::asset_location::Root assets;
+        const auto assets_it = arguments->find(flutter::EncodableValue("geo_assets_directory"));
+        if (assets_it != arguments->end() && !assets_it->second.IsNull()) {
+          const auto* value = std::get_if<std::string>(&assets_it->second);
+          const auto wide = value ? flutter_vless::native::Wide(*value) : std::wstring();
+          if (!value || wide.empty()) { result->Error("INVALID_ARGUMENTS", "geoAssetsDirectory must be an existing absolute directory"); return; }
+          assets = fs::path(wide);
+        }
         
         if (proxy_only_it != arguments->end()) {
           const auto* proxy_only_value = std::get_if<bool>(&proxy_only_it->second);
@@ -428,14 +437,14 @@ void FlutterVlessPlugin::HandleMethodCall(
         
         const auto options = native_options_;
         const auto generation = options_generation_.load();
-        operations_.Submit([this, config, proxy_only, shared_result, options, generation]() {
+        operations_.Submit([this, config, proxy_only, assets, shared_result, options, generation]() {
           std::lock_guard<std::mutex> lock(lifecycle_mutex_);
           LogMessage("Starting Xray...");
-          const bool ready = V2rayManager::GetInstance().Start(config, proxy_only, options);
+          const bool ready = V2rayManager::GetInstance().Start(config, proxy_only, options, assets);
           const bool protecting = V2rayManager::GetInstance().IsProtecting();
           is_running_ = V2rayManager::GetInstance().IsRunning() || protecting;
           if (ready && proxy_only) quick_profile_.reset();
-          if (ready && !proxy_only && options.quick_enabled && generation == options_generation_.load()) quick_profile_ = config;
+          if (ready && !proxy_only && options.quick_enabled && generation == options_generation_.load()) quick_profile_ = QuickProfile{config, assets};
           if (ready) {
             start_time_ = std::chrono::steady_clock::now();
             StartStatusTimer();

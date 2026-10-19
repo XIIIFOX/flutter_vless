@@ -202,6 +202,7 @@ object XrayCoreManager {
 
     /** Pure preliminary validation in the application process; service repeats before mutation. */
     fun validateConfiguration(config: XrayConfig) {
+        Utilities.validateAssetsDirectory(config.GEO_ASSETS_DIRECTORY)
         require(config.ANDROID_DNS_POLICY in setOf("config", "proxy")) { "Unsupported Android DNS policy" }
         require(!(config.PROXY_ONLY && config.ANDROID_DNS_POLICY == "proxy")) { "Proxy DNS requires VPN mode" }
         require(config.ANDROID_DNS_PROXY_OUTBOUND_TAG == null || config.ANDROID_DNS_POLICY == "proxy") {
@@ -239,14 +240,13 @@ object XrayCoreManager {
     }
 
     /** Validate the actual native parser before replacing a working session. No raw output escapes. */
-    internal fun validateNative(context: Context, json: JSONObject): Boolean {
+    internal fun validateNative(context: Context, json: JSONObject, geoAssetsDirectory: String? = null): Boolean {
         val file = File(context.noBackupFilesDir, "validate-${UUID.randomUUID()}.json")
         return try {
             file.writeText(json.toString())
-            Utilities.copyAssets(context)
             val builder = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
                 "run", "-test", "-config", file.absolutePath).redirectErrorStream(true)
-            builder.environment()["XRAY_LOCATION_ASSET"] = Utilities.getUserAssetsPath(context)
+            Utilities.configureXrayAssets(context, builder.environment(), geoAssetsDirectory)
             val process = builder.start()
             val reader = drain(process)
             val done = process.waitFor(10, TimeUnit.SECONDS)
@@ -263,10 +263,9 @@ object XrayCoreManager {
             val file = File(context.noBackupFilesDir, "xray-${UUID.randomUUID()}.json")
             runtimeFile = file
             file.writeText(json.toString())
-            Utilities.copyAssets(context)
             val builder = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
                 "run", "-config", file.absolutePath).directory(context.noBackupFilesDir).redirectErrorStream(true)
-            builder.environment()["XRAY_LOCATION_ASSET"] = Utilities.getUserAssetsPath(context)
+            Utilities.configureXrayAssets(context, builder.environment(), config.GEO_ASSETS_DIRECTORY)
             if (protector != null) builder.environment()["FLUTTER_VLESS_PROTECT_SOCKET"] = protector.socketName
             val process = builder.start()
             xrayProcess = process
@@ -340,7 +339,7 @@ object XrayCoreManager {
         } catch (_: Exception) { longArrayOf(0, 0, 0, 0) }
     }
 
-    fun getServerDelay(context: Context, configJson: String, url: String): Long {
+    fun getServerDelay(context: Context, configJson: String, url: String, geoAssetsDirectory: String? = null): Long {
         var process: Process? = null
         val file = File(context.noBackupFilesDir, "delay-${UUID.randomUUID()}.json")
         fun event(event: XrayDiagnosticsStore.Event, value: Long? = null) =
@@ -354,10 +353,9 @@ object XrayCoreManager {
                 val (json, selectedPort) = buildDelayConfigJson(configJson, ports.socksPort, context.noBackupFilesDir, credentials)
                 socksPort = selectedPort
                 file.writeText(json.toString())
-                Utilities.copyAssets(context)
                 ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
                     "run", "-config", file.absolutePath).directory(context.noBackupFilesDir).redirectErrorStream(true).also {
-                    it.environment()["XRAY_LOCATION_ASSET"] = Utilities.getUserAssetsPath(context)
+                    Utilities.configureXrayAssets(context, it.environment(), geoAssetsDirectory)
                     event(XrayDiagnosticsStore.Event.DELAY_CONFIG_READY)
                 }
             }

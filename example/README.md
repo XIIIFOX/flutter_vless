@@ -26,6 +26,23 @@ directory name.
   rebinding ports owned by the active VPN. Normal VPN profiles keep those fields.
   Standalone profile delay on Windows is still unimplemented and returns `-1`.
 
+## External data files
+
+Pass an existing absolute directory with `geoAssetsDirectory` when calling
+`startVless`. A routing rule such as `ext:caller-geosite.dat:CALLER` reads that
+file from the selected directory on Android, iOS, macOS and Windows. Only files
+actually referenced by the profile are required; custom-only and asset-free
+directories do not need `geoip.dat` or `geosite.dat`. Omit the argument for the
+platform's existing bundled/default lookup.
+
+On Apple VPN sessions place the directory in the configured App Group so the
+extension can read it. Keep the directory and referenced files available until
+Stop has completed, including recovery and quick access. An explicit root does
+not receive copies of bundled data. TLS certificate/key lookup uses Core's
+separate certificate location; this argument does not relocate certificates.
+Android and Apple profile-delay calls accept the same directory. Windows
+standalone profile delay remains unsupported.
+
 ## Android
 
 Run on a device:

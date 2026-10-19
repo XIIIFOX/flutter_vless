@@ -83,11 +83,13 @@ await flutterVless.startVless(
 );
 ```
 
-The directory must be an absolute path and must contain readable, non-empty,
-regular files named exactly `geoip.dat` and `geosite.dat`. For Packet Tunnel
-mode it must be inside the App Group shared by `Runner` and `XrayTunnel`.
-Invalid custom assets fail startup instead of silently falling back to stale
-bundle files.
+The directory must be an existing absolute path. The updated 1.1.7 Core bridge
+validates files referenced by the configuration, including custom `ext:` data;
+unused standard files are optional. This bridge currently requires the
+unpublished Core preview build; previously published frameworks still require
+both standard files. For Packet Tunnel mode use the App Group shared by `Runner`
+and `XrayTunnel`. Invalid referenced assets fail startup instead of silently
+falling back to bundle files. Certificate/key lookup has a separate Core root.
 
 Update the files while Xray is stopped. Download to temporary names, validate
 the complete pair, and atomically replace the live files before the next

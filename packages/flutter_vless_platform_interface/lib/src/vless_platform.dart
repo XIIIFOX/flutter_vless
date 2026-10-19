@@ -64,8 +64,8 @@ abstract class VlessPlatform extends PlatformInterface {
 
   /// Starts a proxy-only or VPN/tunnel session with a JSON Xray config.
   ///
-  /// The iOS implementation may use [geoAssetsDirectory] to select external
-  /// `geoip.dat` and `geosite.dat` files for the new runtime session.
+  /// [geoAssetsDirectory] selects an existing absolute directory for data files
+  /// referenced by this session. Apple VPN extensions require shared access.
   Future<void> startVless({
     required String remark,
     required String config,
@@ -87,8 +87,8 @@ abstract class VlessPlatform extends PlatformInterface {
 
   /// Measures delay for a provided Xray config.
   ///
-  /// The iOS implementation may use [geoAssetsDirectory] to select external
-  /// geodata files for the temporary runtime session.
+  /// Apple and Android use [geoAssetsDirectory] for the temporary runtime.
+  /// Windows standalone profile delay is unsupported.
   Future<int> getServerDelay({
     required String config,
     required String url,

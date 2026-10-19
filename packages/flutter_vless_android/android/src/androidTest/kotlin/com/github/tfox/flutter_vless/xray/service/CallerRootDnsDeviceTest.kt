@@ -8,6 +8,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
+import android.util.Base64
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.github.tfox.flutter_vless.xray.core.AndroidTunnelDnsPolicy
@@ -31,6 +32,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -49,7 +51,7 @@ class CallerRootDnsDeviceTest {
     private fun activeVpn() = manager.getNetworkCapabilities(manager.activeNetwork)
         ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
 
-    private fun start(source: JSONObject) {
+    private fun start(source: JSONObject, geoAssetsDirectory: String? = null) {
         assertNull("Test APK requires VPN consent", VpnService.prepare(context))
         val connecting = AtomicBoolean(false)
         val connected = CountDownLatch(1)
@@ -68,6 +70,7 @@ class CallerRootDnsDeviceTest {
             context.startForegroundService(Intent(context, XrayVPNService::class.java)
                 .putExtra("COMMAND", AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE)
                 .putExtra("V2RAY_CONFIG", XrayConfig(V2RAY_FULL_JSON_CONFIG = source.toString(),
+                    GEO_ASSETS_DIRECTORY = geoAssetsDirectory,
                     ANDROID_DNS_POLICY = "config", REMARK = "Caller DNS regression",
                     PLUGIN_OPTIONS_JSON = """{"reconnect":{"enabled":false}}""")))
             assertTrue("Fresh production session never became ready", connected.await(30, TimeUnit.SECONDS))
@@ -164,7 +167,9 @@ class CallerRootDnsDeviceTest {
         // Core/TUN. This separate listener is never counted as VPN evidence.
         DnsFixture().use { fixture ->
             val owned = name("fixture-control")
-            for ((qname, expectedCode) in listOf("unrelated.fixture.invalid" to 5, owned to 0)) {
+            val registered = "asset-control-$run.invalid"
+            fixture.allowOwnedName(registered)
+            for ((qname, expectedCode) in listOf("unrelated.fixture.invalid" to 5, owned to 0, registered to 0)) {
                 Socket().use { socket ->
                     socket.soTimeout = 2000
                     socket.connect(InetSocketAddress("127.0.0.1", fixture.port), 2000)
@@ -178,10 +183,12 @@ class CallerRootDnsDeviceTest {
                     else assertEquals("Declined fixture query had an answer", 0, reply[7].toInt() and 255)
                 }
             }
-            assertEquals(listOf(owned to 1), fixture.observations())
+            assertEquals(listOf(owned to 1, registered to 1), fixture.observations())
         }
         DnsFixture().use { general -> DnsFixture().use { perDomain ->
             val caller = name("caller"); val hosts = name("hosts")
+            val assetRoot = File(context.cacheDir, "caller-assets-$run")
+            assertTrue("Owned asset fixture directory is unavailable", assetRoot.mkdir())
             val root = JSONObject().put("tag", "caller-root-dns").put("queryStrategy", "UseIPv4")
                 .put("disableCache", true).put("hosts", JSONObject().put(hosts, "10.0.2.2"))
                 .put("servers", JSONArray().put("tcp://127.0.0.1:${general.port}")
@@ -189,6 +196,17 @@ class CallerRootDnsDeviceTest {
                         .put("domains", JSONArray().put("full:$caller")).put("skipFallback", true)
                         .put("tag", "caller-per-domain").put("queryStrategy", "UseIPv4")))
             try {
+                val asset = InstrumentationRegistry.getInstrumentation().context.assets.open("asset-files.json")
+                    .bufferedReader().use { JSONObject(it.readText()) }
+                val bytes = Base64.decode(asset.getString("base64"), Base64.DEFAULT)
+                val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+                    .joinToString("") { "%02x".format(it.toInt() and 255) }
+                assertEquals("Shared asset fixture changed", asset.getString("sha256"), digest)
+                val assetFile = File(assetRoot, asset.getString("file"))
+                assetFile.writeBytes(bytes)
+                val assetDomain = asset.getString("domain")
+                general.allowOwnedName(assetDomain); perDomain.allowOwnedName(assetDomain)
+                root.getJSONObject("hosts").put(assetDomain, "10.0.2.2")
                 val source = baseSource(blockDefault = true).put("dns", root)
                 val apiAddress = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1")).use {
                     "127.0.0.1:${it.localPort}"
@@ -199,14 +217,28 @@ class CallerRootDnsDeviceTest {
                     .put("policy", JSONObject().put("system", JSONObject()
                         .put("statsInboundUplink", false).put("statsInboundDownlink", false)
                         .put("statsOutboundUplink", false).put("statsOutboundDownlink", false)))
-                source.getJSONObject("routing").getJSONArray("rules").put(JSONObject().put("type", "field")
-                    .put("domain", JSONArray().put("full:$hosts")).put("outboundTag", "caller-direct"))
-                start(source)
+                val routing = source.getJSONObject("routing")
+                val originalRules = routing.getJSONArray("rules")
+                val rules = JSONArray()
+                    .put(JSONObject().put("type", "field").put("domain", JSONArray()
+                        .put("ext:${asset.getString("file")}:${asset.getString("code")}"))
+                        .put("outboundTag", "caller-direct"))
+                    .put(JSONObject().put("type", "field").put("domain", JSONArray().put("full:$hosts"))
+                        .put("outboundTag", "caller-direct"))
+                    // A generic numeric fixture route must not hide a missing
+                    // domain match. HTTP needs one of the two rules above.
+                    .put(JSONObject().put("type", "field").put("network", "tcp").put("port", "18083")
+                        .put("outboundTag", "blocked-default"))
+                for (index in 0 until originalRules.length()) rules.put(originalRules.get(index))
+                routing.put("rules", rules)
+                start(source, assetRoot.absolutePath)
                 val udp = name("udp"); val tcp = name("tcp"); val system = name("system")
                 assertA(query(udp, false)); assertA(query(tcp, true)); assertA(query(caller, false))
                 assertTrue(InetAddress.getAllByName(system).any { it.hostAddress == "10.0.2.2" })
                 assertTrue(InetAddress.getAllByName(hosts).any { it.hostAddress == "10.0.2.2" })
                 http(hosts)
+                http(assetDomain)
+                assertEquals("Explicit root received bundled assets", listOf(assetFile.name), assetRoot.listFiles()!!.map { it.name })
                 val ipv6 = query(name("ipv6"), false, 28)
                 assertEquals(0, ipv6[3].toInt() and 15); assertEquals(0, ipv6[7].toInt() and 255)
                 val nonAddress = query(name("txt"), true, 16)
@@ -216,6 +248,7 @@ class CallerRootDnsDeviceTest {
                 assertTrue("Missing per-server-tag DNS bytes", caller to 1 in domainSeen)
                 assertFalse("Per-domain query escaped to fallback", generalSeen.any { it.first == caller })
                 assertFalse("Static hosts escaped to a DNS server", (generalSeen + domainSeen).any { it.first == hosts })
+                assertFalse("Asset domain static host escaped to a DNS server", (generalSeen + domainSeen).any { it.first == assetDomain })
                 assertTrue("IPv4 policy issued another record type", (generalSeen + domainSeen).all { it.second == 1 })
                 val command = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
                     "api", "statsquery", "--server=$apiAddress").redirectErrorStream(true).start()
@@ -223,7 +256,10 @@ class CallerRootDnsDeviceTest {
                 assertNotNull("Caller StatsService did not respond", output)
                 val counters = JSONObject(output!!).optJSONArray("stat")
                 assertTrue("Caller disabled counters were enabled", counters == null || counters.length() == 0)
-            } finally { stop() }
+            } finally {
+                stop()
+                assertTrue("Owned asset fixture directory survived Stop", assetRoot.deleteRecursively())
+            }
         } }
     }
 
@@ -249,6 +285,7 @@ class CallerRootDnsDeviceTest {
         private var closed = false
         private var active: Socket? = null
         private val seen = mutableListOf<Pair<String, Int>>()
+        private val ownedNames = mutableSetOf<String>()
         private val failure = AtomicReference<Throwable?>()
         private val worker = Thread({
             try {
@@ -287,8 +324,11 @@ class CallerRootDnsDeviceTest {
             require(offset + 4 <= size)
             val type = ((question[offset].toInt() and 255) shl 8) or (question[offset + 1].toInt() and 255)
             val qname = labels.joinToString(".")
-            val controlled = qname.endsWith("-$run.dns-audit.invalid", ignoreCase = true)
-            if (controlled) synchronized(lock) { seen.add(qname.lowercase(java.util.Locale.ROOT) to type) }
+            val controlled = synchronized(lock) {
+                val canonical = qname.lowercase(java.util.Locale.ROOT)
+                (qname.endsWith("-$run.dns-audit.invalid", ignoreCase = true) || canonical in ownedNames)
+                    .also { if (it) seen.add(canonical to type) }
+            }
             val reply = ByteArrayOutputStream()
             DataOutputStream(reply).use { output ->
                 // REFUSED is an owned reply, never a resolver fallback or a
@@ -305,6 +345,11 @@ class CallerRootDnsDeviceTest {
         }
 
         fun observations(): List<Pair<String, Int>> = synchronized(lock) { seen.toList() }
+
+        fun allowOwnedName(name: String) = synchronized(lock) {
+            require(!closed && name.endsWith(".invalid", ignoreCase = true)) { "Expected an owned synthetic fixture name" }
+            ownedNames.add(name.lowercase(java.util.Locale.ROOT))
+        }
 
         override fun close() {
             val socket = synchronized(lock) { closed = true; active }

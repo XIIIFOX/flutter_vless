@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Honor explicit data-asset directories on Android and Windows across preflight, launch and saved recovery profiles. Permit custom-only or empty asset roots on Apple, validate referenced files with Core, and keep certificate lookup independent. Add shared custom GeoSite and platform traffic regressions.
 * Bind imported listener address environment references before native port allocation. Preserve Unix socket semantics, empty-value precedence and the editor's source; reject recursive references and add shared address/Core-build and Unix runtime regressions.
 * Retain caller API/services and existing stats/policy sections, including explicit null and disabled counters. Query only plugin-owned statistics endpoints on Android/Windows; add shared full-profile preparation and real API/traffic regressions.
 * Broaden protected preparation for MASQUE, caller DNS/loopback handlers and Core role aliases. Match effective XHTTP/null selection across platforms; add a shared seven-profile preparation/build corpus and keep live protocol qualification separate.

@@ -27,7 +27,10 @@ at 128 KiB using an isolated toolchain copy.
 Configure the extension, shared App Group and signing with the package's
 `setup_macos_vpn` tool. The app and extension must use matching plugin support
 sources and the same framework. Set `geoAssetsDirectory` to an extension-readable
-directory containing `geoip.dat` and `geosite.dat` when using custom geodata.
+directory containing the data files actually referenced by the configuration.
+Custom-only or asset-free directories require the updated unpublished Core
+preview; previously published frameworks require both standard GeoDAT files.
+Certificate/key lookup uses Core's separate certificate root.
 
 ## Standalone manual checks
 

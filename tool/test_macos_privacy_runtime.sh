@@ -9,7 +9,7 @@ SOURCE="$ROOT/packages/flutter_vless_macos/macos/flutter_vless_macos/Sources"
 mkdir -p "$OUT/modules"
 python3 - "$ROOT" "$OUT" <<'PY'
 from pathlib import Path
-import sys
+import base64, sys
 root,out=map(Path,sys.argv[1:])
 source=(root/'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos/FlutterVlessPlugin.swift').read_text()
 head=source[:source.index('public class FlutterVlessPlugin:')].replace('import FlutterMacOS\n','')
@@ -25,6 +25,7 @@ harness='\n'.join((root/'tool/fixtures'/name).read_text() for name in ['ios_loca
 harness=(root/'tool/fixtures/macos_runtime_regressions.swift').read_text()+'\n'+harness
 harness=harness.replace('    let markers = [', '    do { try await runMacCounterChecks() } catch { print("MACOS_COUNTERS_FAILED"); exit(1) }\n    let markers = [')
 harness=harness[:harness.index('class ModeDelegate:')]+ '\nTask { await runModes() }; dispatchMain()\n'
+harness=harness.replace('__ASSET_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/asset-files.json').read_bytes()).decode('ascii'))
 (out/'main.swift').write_text(head+asset+'\nimport flutter_vless_macos_tunnel_support\n'+harness)
 PY
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
@@ -50,6 +51,7 @@ import os, sys
 text=Path(sys.argv[1]).read_text()
 assert "RUNTIME=26.10.17" in text, "Unexpected embedded Xray version"
 assert 'MACOS_COUNTERS_AND_API_PASSTHROUGH_PASS' in text
+assert 'ASSET_CUSTOM_ROOT_RUNTIME_PASS' in text
 assert 'SERVICE_TAG_RUNTIME_PASS=0' in text and 'SERVICE_TAG_RUNTIME_PASS=1' in text
 assert 'API_PORT_RESERVATION_PASS=0' in text and 'API_PORT_RESERVATION_PASS=1' in text
 assert 'METRICS_PORT_RESERVATION_PASS=0' in text and 'METRICS_PORT_RESERVATION_PASS=1' in text

@@ -39,6 +39,7 @@ func runModes() async {
     do { try await runLocalAuthRuntimeChecks() } catch { print("AUTH_RUNTIME_FAILED"); exit(1) }
     do { try runDomainRoutingChecks() } catch { print("DOMAIN_ROUTING_FAILED"); exit(1) }
     do { try runDNSRuntimeChecks() } catch { print("DNS_RUNTIME_FAILED"); exit(1) }
+    do { try runAssetRuntimeChecks() } catch { print("ASSET_RUNTIME_FAILED"); exit(1) }
     let markers = ["privacy-canary.invalid", "d2719f44-f51f-4c35-aeae-246230d21f38", "synthetic-password-canary"]
     let logger = ProbeLogger()
     for level in ["debug", "warning", "error", "none"] {

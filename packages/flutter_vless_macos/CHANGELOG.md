@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Permit explicit custom-only or asset-free data directories without unrelated standard GeoDAT files. Keep certificate lookup separate and validate referenced files through Core; add shared custom GeoSite runtime coverage for both Apple platforms.
 * Freeze listener address environment references before cross-process profile persistence and Unix/TCP allocation. Preserve explicit empty values and source JSON; reject recursive listener references.
 * Preserve existing stats/policy sections, including explicit null, disabled counters and levels-only policy. Add defaults only when a root section is absent; keep caller API/services intact.
 * Recognize MASQUE and Core role aliases while preserving internal DNS/loopback handlers. Select the actual proxy transport, match XHTTP null precedence, and allocate a real UDP/443 block target when needed.

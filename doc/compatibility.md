@@ -233,7 +233,11 @@ The shared [four-case full-config corpus](../tool/fixtures/compatibility/full-co
 checks these source sections after native preparation and against pinned Core
 decode/build. Runtime acceptance additionally requires a caller StatsService
 to remain available while HTTP/DNS traffic flows and disabled counters to stay
-disabled; this increment's remote runtime result is still pending.
+disabled. [Ordinary Core acceptance on 8ed2b7e](https://github.com/XIIIFOX/flutter_vless/actions/runs/39178340305)
+passes this check on Linux/macOS/Windows, including both native preparers on
+macOS. [Windows service acceptance on 1c2c490](https://github.com/XIIIFOX/flutter_vless/actions/runs/39177932558)
+also passes proxy/portable and VPN tests on Windows 2022/2025 with working
+traffic after rejected replacement and disabled caller counters unchanged.
 This increment does not implement source-inbound context selection, explicit
 VPN default selection or isolation from caller prefix-based balancers.
 
@@ -253,15 +257,43 @@ environment listener references are rejected: Core interprets the first result
 as an address, while freezing and reparsing it could otherwise expand it again.
 ASCII normalized aliases are qualified; Apple/Windows explicitly reject a
 non-ASCII alias when the exact key is absent. Wider Unicode alias parity remains
-separate work. Runtime acceptance additionally requires a real environment-based
-Unix HTTP listener alongside the existing HTTP/DNS/API checks; the new remote
-result is pending. Other address fields and environment references are outside
-this increment.
+separate work. Ordinary Core acceptance on 8ed2b7e also carries actual HTTP bytes
+through an environment-based Unix listener on all three desktop test systems,
+alongside the existing HTTP/DNS/API checks. Other address fields and environment
+references are outside this increment.
 
 Core decode/build acceptance alone does not establish a listening protocol:
 the pinned SOCKS handler advertises TCP, while its HTTP handler advertises TCP
 and Unix. The pure address corpus checks Core's port semantics; the runtime
 Unix fixture deliberately uses HTTP.
+
+### Minimum external data adaptation
+
+The existing `geoAssetsDirectory` argument now reaches Android and Windows
+preflight, startup and recovery/quick-profile paths as well as Apple. An explicit
+root must be an existing absolute directory. Both Core data-root aliases select
+that directory in owned child processes; inherited settings cannot override the
+argument. Bundled data is copied only for Android's legacy default path, never
+into an explicit caller directory. Android/Apple standalone delay uses the same
+selection; Windows standalone delay remains unsupported.
+
+Apple no longer requires unrelated `geoip.dat` and `geosite.dat` files when
+selecting a directory. Core validates the data actually referenced by the
+configuration, including custom `ext:` GeoSite files. An empty directory is
+valid for an asset-free profile. Apple VPN providers still require an
+extension-readable App Group path; callers must retain data until Stop completes.
+Certificate/key lookup uses Core's independent certificate root. Relative
+certificate portability and a managed asset-import/copy lifecycle remain open.
+Custom-only Apple roots require the rebuilt unpublished Core preview; published
+framework URLs and checksums remain unchanged during this acceptance phase.
+
+The shared [synthetic custom GeoSite fixture](../tool/fixtures/compatibility/asset-files.json)
+contains one full domain and no standard GeoDAT files. File-only native
+preparation and pinned Core build require a missing-root failure followed by
+success with the selected custom-only root. Android TUN, Apple proxy and Windows
+runtime fixtures require actual HTTP traffic whose route depends on that custom
+file. These new remote traffic results are pending; compilation alone is not
+runtime qualification.
 
 Port grammar progress (2026-10-18): the Dart, Kotlin, Swift and C++ paths now
 share a 20-case corpus checked against the pinned Core decoder/build path.
@@ -522,9 +554,9 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private A queries. Ordinary Core tests pass on all three desktop systems, Android TUN passes both new DNS cases within 35 native checks, and iOS/macOS native runtime variants pass in CI. Localhost adaptation, IPv4-only answers and unsupported paths are documented above. Full advanced/FakeDNS semantics remain open. |
 | 2. IPv6 | Pending | Current tests prove blocking, not dual-stack forwarding, IPv6-only endpoint or NAT64 support. |
 | 3. Protocol/transport matrix | Partial | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP preparation fixes and a seven-case pinned Core build corpus pass native tests. Imported loopback/DNS traffic passes ordinary Core acceptance on all three desktop systems at dacfd59; new protocol handshakes, XHTTP penetrate and the full matrix remain open. |
-| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation is implemented across platforms with shared preparation tests; its new runtime check is pending. Source-inbound context, explicit VPN default selection, prefix-selector isolation and exact adapter counters remain open. |
+| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Source-inbound context, explicit VPN default selection, prefix-selector isolation and exact adapter counters remain open. |
 | 5. Ports/addresses | Partial | Shared 20-case port, 12-case service-tag, 21-case numeric API and 36-case service-listener fixtures cover allocation. Real Android/iPhone list/range/env/Unix and tag-collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. OS port checks, service-name resolution, prefix-selector isolation, bind retries and broader proxy-only parity remain open. |
-| 6. Assets/import syntax | Partial | A shared 22-case JSON syntax corpus is checked against actual Core decoding. SDK start/delay/import/subscriptions and the example routing editor accept Core-style comments and a leading BOM. Device browser/routing checks pass. Portable cert/key/geodata assets and explicit multi-document merging remain open. |
+| 6. Assets/import syntax | Partial | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit data roots now propagate across all native backends; custom-only roots use Core file validation and a shared GeoSite fixture. New platform traffic checks are pending. Relative certificate portability, managed asset import/lifetime and explicit multi-document merging remain open. |
 | 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |
 | 8. Runtime corpus | Partial | Shared port/syntax fixtures and platform/device HTTP, DNS, routing and recovery checks exist. The complete ECH/DoH/QUIC/protocol corpus and remaining physical options acceptance are not complete. |
 

@@ -81,8 +81,9 @@ V2rayManager& V2rayManager::GetInstance() {
   return instance;
 }
 
-bool V2rayManager::Start(const std::string& config, bool proxy_only, const flutter_vless::NativeOptions& options) try {
-  if (!ValidateConfig(config, proxy_only)) {
+bool V2rayManager::Start(const std::string& config, bool proxy_only, const flutter_vless::NativeOptions& options,
+    flutter_vless::asset_location::Root assets) try {
+  if (!flutter_vless::asset_location::Valid(assets) || !ValidateConfig(config, proxy_only, assets)) {
     flutter_vless::DiagnosticsLog::Instance().Append(
         "runtime", "Xray configuration check rejected candidate; active session preserved");
     return false;
@@ -105,7 +106,7 @@ bool V2rayManager::Start(const std::string& config, bool proxy_only, const flutt
     // Proxy Mode: Delegate to ProxyService
     if (proxy_service_) {
       is_running_.store(true);
-      return proxy_service_->Start(config);
+      return proxy_service_->Start(config, assets);
     }
     return false;
   } else {
@@ -113,7 +114,7 @@ bool V2rayManager::Start(const std::string& config, bool proxy_only, const flutt
     std::cerr << "Starting VPN mode with Tun2Socks..." << std::endl;
     if (vpn_service_) {
       is_running_.store(true);
-      return vpn_service_->Start(config, options);
+      return vpn_service_->Start(config, options, assets);
     }
     return false;
   }
@@ -223,11 +224,11 @@ void V2rayManager::GetTrafficStats(int64_t& upload, int64_t& download) {
   }
 }
 
-bool V2rayManager::ValidateConfig(const std::string& config, bool proxy_only) {
+bool V2rayManager::ValidateConfig(const std::string& config, bool proxy_only, const flutter_vless::asset_location::Root& assets) {
   const auto executable = flutter_vless::native::FindBundledFile(L"xray.exe");
   const auto storage = proxy_only ? flutter_vless::native::ConfigCheckStorage::currentUser
                                  : flutter_vless::native::ConfigCheckStorage::administrators;
-  return executable && flutter_vless::native::CheckConfig(config, *executable, storage);
+  return executable && flutter_vless::native::CheckConfig(config, *executable, storage, assets);
 }
 
 // Kept for reference but unused in VPN stub

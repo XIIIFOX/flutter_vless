@@ -53,7 +53,8 @@ class VpnService {
    * 4. Starts Tun2Socks pointing to that SOCKS port.
    * 5. Configures the OS network interface and routes.
    */
-  bool Start(const std::string& config, const flutter_vless::NativeOptions& options = {});
+  bool Start(const std::string& config, const flutter_vless::NativeOptions& options = {},
+      flutter_vless::asset_location::Root assets = std::nullopt);
 
   /**
    * @brief Stops the VPN service and cleans up resources.
@@ -102,6 +103,7 @@ class VpnService {
   fs::path temp_config_path_;
   fs::path tun_config_path_;
   std::string current_config_;
+  flutter_vless::asset_location::Root asset_directory_;
   flutter_vless::NativeOptions options_;
   std::map<std::string, std::string> bootstrap_cache_;
   std::string username_, password_;

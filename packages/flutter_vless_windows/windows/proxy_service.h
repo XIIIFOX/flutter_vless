@@ -14,6 +14,7 @@
 #include <vector>
 #include <cstdint>
 #include <condition_variable>
+#include "asset_location.h"
 
 namespace fs = std::filesystem;
 
@@ -46,7 +47,7 @@ class ProxyService {
    * @param config The Xray configuration JSON.
    * @return true if started successfully, false otherwise.
    */
-  bool Start(const std::string& config);
+  bool Start(const std::string& config, flutter_vless::asset_location::Root assets = std::nullopt);
 
   /**
    * @brief Stops the proxy service.
@@ -118,6 +119,7 @@ class ProxyService {
   std::thread v2ray_thread_;
   std::thread stats_thread_;
   std::string current_config_;
+  flutter_vless::asset_location::Root asset_directory_;
   
   // Traffic statistics
   std::mutex stats_mutex_;

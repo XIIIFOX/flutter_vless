@@ -121,6 +121,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                 config.ANDROID_DNS_PROXY_OUTBOUND_TAG = call.argument("android_dns_proxy_outbound_tag")
                 config.PROXY_ONLY = call.argument<Boolean>("proxy_only") == true
                 config.V2RAY_FULL_JSON_CONFIG = call.argument("config") ?: ""
+                config.GEO_ASSETS_DIRECTORY = call.argument("geo_assets_directory")
                 config.BLOCKED_APPS = call.argument<ArrayList<String>>("blocked_apps") ?: ArrayList()
                 config.BYPASS_SUBNETS = call.argument<ArrayList<String>>("bypass_subnets") ?: ArrayList()
                 config.NOTIFICATION_DISCONNECT_BUTTON_NAME = call.argument("notificationDisconnectButtonName") ?: "Disconnect"
@@ -237,6 +238,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                 android.util.Log.d("FlutterVlessPlugin", "getServerDelay called")
                 val configJson = call.argument<String>("config")
                 val url = call.argument<String>("url") ?: "https://www.google.com"
+                val geoAssetsDirectory = call.argument<String>("geo_assets_directory")
                 
                 if (configJson == null) {
                     result.error("INVALID_CONFIG", "Config is null", null)
@@ -250,7 +252,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                 }
                 
                 executor.execute {
-                    val delay = XrayCoreManager.getServerDelay(currentActivity, configJson, url)
+                    val delay = XrayCoreManager.getServerDelay(currentActivity, configJson, url, geoAssetsDirectory)
                     currentActivity.runOnUiThread {
                         result.success(delay)
                     }

@@ -1,6 +1,7 @@
 #ifndef FLUTTER_VLESS_NATIVE_RUNTIME_H_
 #define FLUTTER_VLESS_NATIVE_RUNTIME_H_
 #include "proxy_service.h"
+#include "asset_location.h"
 #include <functional>
 
 namespace flutter_vless::native {
@@ -12,9 +13,10 @@ bool IsAdministrator();
 // No shell, search path, global environment changes or inherited host handles.
 // Long-lived workers discard raw output; only fixed lifecycle events are logged.
 std::unique_ptr<ProcessHandle> Launch(const fs::path& executable,
-    const std::vector<std::wstring>& arguments, bool capture = false);
+    const std::vector<std::wstring>& arguments, bool capture = false,
+    const asset_location::Root& assets = std::nullopt);
 bool Command(const fs::path& executable, const std::vector<std::wstring>& arguments,
-    std::string& output, unsigned timeout_ms = 3000);
+    std::string& output, unsigned timeout_ms = 3000, const asset_location::Root& assets = std::nullopt);
 bool SystemCommand(const wchar_t* name, const std::vector<std::wstring>& arguments);
 bool WritePrivateConfig(const std::string& config, fs::path& path);
 void RemovePrivateConfig(fs::path& path);
@@ -25,7 +27,7 @@ void RemovePrivateConfig(fs::path& path);
 // Raw child output is discarded. No active service is stopped by this function.
 enum class ConfigCheckStorage { currentUser, administrators };
 bool CheckConfig(const std::string& config, const fs::path& executable,
-    ConfigCheckStorage storage);
+    ConfigCheckStorage storage, const asset_location::Root& assets = std::nullopt);
 bool SocksReady(uint16_t port, const std::string& user = {}, const std::string& password = {});
 }  // namespace flutter_vless::native
 #endif

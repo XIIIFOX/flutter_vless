@@ -1,3 +1,5 @@
+import CryptoKit
+
 // Localhost origin + the actual bundled Xray. No VPN routes or host DNS changes.
 final class LocalProbeOrigin: @unchecked Sendable {
     private let fd: Int32
@@ -279,4 +281,55 @@ func runDomainRoutingChecks() throws {
         XRayStop()
         print("DOMAIN_ROUTING_PASS=\(generation)")
     }
+}
+
+
+// The qualifier embeds the shared, non-secret corpus rather than duplicating
+// its protobuf payload in either platform's runtime fixture.
+private struct LocalAssetFixture: Decodable {
+    let file: String
+    let code: String
+    let domain: String
+    let base64: String
+    let sha256: String
+}
+
+func runAssetRuntimeChecks() throws {
+    let encoded = "__ASSET_FIXTURE_JSON_BASE64__"
+    let fixture = try JSONDecoder().decode(LocalAssetFixture.self, from: Data(base64Encoded: encoded)!)
+    let payload = Data(base64Encoded: fixture.base64)!
+    precondition(fixture.file == "caller-geosite.dat" && fixture.code == "CALLER" && fixture.domain == "files-fixture.invalid")
+    precondition(SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined() == fixture.sha256)
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("xray-custom-assets-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try payload.write(to: root.appendingPathComponent(fixture.file))
+    let files = try FileManager.default.contentsOfDirectory(atPath: root.path)
+    precondition(files == [fixture.file])
+    let origin = LocalProbeOrigin(port: 18096)
+    defer { origin.stop() }
+    let raw: [String: Any] = [
+        "inbounds": [["protocol": "socks", "listen": "127.0.0.1", "port": 18095]],
+        "dns": ["hosts": [fixture.domain: "127.0.0.1"]],
+        "outbounds": [["protocol": "blackhole", "tag": "default-block"],
+            ["protocol": "freedom", "tag": "asset-direct", "settings": ["redirect": "127.0.0.1:18096"]]],
+        "routing": ["rules": [["type": "field", "domain": ["ext:\(fixture.file):\(fixture.code)"], "outboundTag": "asset-direct"]]]
+    ]
+    let runner = ProxyOnlyRunner()
+    defer { runner.stop() }
+    try runner.start(configData: JSONSerialization.data(withJSONObject: raw), geoAssetsDirectory: root.path)
+    do {
+        let fd = try LocalSOCKS5Client.openConnection(proxyPort: 18095, credentials: nil, host: fixture.domain, port: 80)
+        defer { close(fd) }
+        precondition(LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("GET /custom-assets HTTP/1.1\r\nHost: \(fixture.domain)\r\nConnection: close\r\n\r\n".utf8)))
+        let response = LocalSOCKS5Client.receiveExactly(fd: fd, count: 12) ?? []
+        precondition(String(decoding: response, as: UTF8.self) == "HTTP/1.1 204 ")
+    }
+    precondition(origin.state().0 == 1 && !origin.state().1)
+    runner.stop()
+    // Root lifetime follows the stopped runtime; following nil-root sessions
+    // exercise the existing default lookup and cannot retain this directory.
+    try FileManager.default.removeItem(at: root)
+    precondition(!FileManager.default.fileExists(atPath: root.path))
+    print("ASSET_CUSTOM_ROOT_RUNTIME_PASS")
 }

@@ -5,6 +5,8 @@ ordinary TCP to a documentation IP; HTTP sniffing selects a domain rule and
 Xray delivers to a local underlay HTTP server or a loopback SOCKS server. No server secrets.
 """
 import argparse
+import base64
+import hashlib
 import http.client
 import json
 import os
@@ -18,6 +20,7 @@ import sys
 from functools import lru_cache
 import threading
 import time
+import tempfile
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -175,7 +178,7 @@ def external_http(address, vpn=False):
         return "HTTP 200"
 
 
-def config(reverse, external_address=None, direct_address="127.0.0.1", caller_api_port=None):
+def config(reverse, external_address=None, direct_address="127.0.0.1", caller_api_port=None, asset_fixture=None):
     profile = {
         "log": {"loglevel": "warning", "access": "none"},
         "dns": {"hosts": {h: direct_address for h in ("2ip.ru", "2ip.io", "myip.com")},
@@ -214,7 +217,28 @@ def config(reverse, external_address=None, direct_address="127.0.0.1", caller_ap
         profile["stats"] = {}
         profile["policy"] = {"system": {key: False for key in (
             "statsInboundUplink", "statsInboundDownlink", "statsOutboundUplink", "statsOutboundDownlink")}}
+    if asset_fixture is not None:
+        profile["dns"]["hosts"][asset_fixture["domain"]] = direct_address
+        profile["routing"]["rules"][:0] = [
+            {"type": "field", "domain": [f"ext:{asset_fixture['file']}:{asset_fixture['code']}"], "outboundTag": "direct"},
+            {"type": "field", "domain": ["full:" + asset_fixture["domain"]], "outboundTag": "fixture-blocked"}]
     return profile
+
+
+def create_asset_root(directory):
+    source = Path(__file__).resolve().parents[2] / "tool/fixtures/compatibility/asset-files.json"
+    fixture = json.loads(source.read_text(encoding="utf-8"))
+    assert fixture["file"] == "caller-geosite.dat" and fixture["code"] == "CALLER" \
+        and fixture["domain"] == "files-fixture.invalid", "Unexpected asset fixture manifest"
+    data = base64.b64decode(fixture["base64"], validate=True)
+    assert hashlib.sha256(data).hexdigest() == fixture["sha256"], "Asset fixture digest mismatch"
+    owner = tempfile.TemporaryDirectory(prefix="caller-assets-", dir=directory)
+    try:
+        (Path(owner.name) / fixture["file"]).write_bytes(data)
+    except BaseException:
+        owner.cleanup()
+        raise
+    return owner, fixture
 
 
 def check_caller_api(directory, port, wine_bottle=None):
@@ -451,6 +475,7 @@ def main():
     PROBE = probe
     servers = []
     adapters = []
+    asset_roots = []
     results = []
     external_address = None
     direct_address = "127.0.0.1"
@@ -494,11 +519,16 @@ def main():
             label = ("vpn" if args.vpn else "proxy") + ("-reverse" if reverse else "") + ("-" + ending if ending != "stop" else "")
             profile = directory / (label + ".json")
             caller_api_port = None
+            assets = None
+            asset_fixture = None
             if reverse and ending == "stop":
                 with socket.socket() as candidate:
                     candidate.bind(("127.0.0.1", 0))
                     caller_api_port = candidate.getsockname()[1]
-            prepared = config(reverse, external_address, direct_address, caller_api_port)
+                owner, asset_fixture = create_asset_root(directory)
+                asset_roots.append(owner)
+                assets = Path(owner.name)
+            prepared = config(reverse, external_address, direct_address, caller_api_port, asset_fixture)
             # Exercise both the managed VPN SOCKS candidate and the private
             # stats API candidate, before either Core listener exists in the OS.
             metrics_port = (10086 if reverse else 10807) if args.vpn else 10085
@@ -527,6 +557,8 @@ def main():
                 command = (["/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine",
                             "--bottle", args.wine_bottle] if args.wine_bottle else [])
                 command += [str(probe), ("run-vpn-no-reconnect" if ending == "no-reconnect" else "run-vpn") if args.vpn else "run-proxy", windows_path(profile), "240", windows_path(stop_file), windows_path(state_file)]
+                if assets is not None:
+                    command.append(windows_path(assets))
                 process = subprocess.Popen(command, cwd=directory, stdout=log, stderr=log)
                 if args.vpn:
                     guard = subprocess.Popen([str(probe), "guard", str(process.pid), "240", str(guard_stop)],
@@ -565,11 +597,16 @@ def main():
                     invalid["outbounds"][0]["protocol"] = "private-preflight-canary"
                     rejection.write_text(json.dumps(invalid))
                     deadline = time.monotonic() + 25
-                    while "REJECTED_REPLACEMENT_PRESERVED=1" not in (directory / (label + ".log")).read_text(errors="replace"):
+                    while True:
+                        current_log = (directory / (label + ".log")).read_text(errors="replace")
+                        if "REJECTED_REPLACEMENT_PRESERVED=1" in current_log and (assets is None or "REJECTED_ASSET_ROOT_PRESERVED=1" in current_log):
+                            break
                         if process.poll() is not None or time.monotonic() >= deadline:
                             raise RuntimeError("Invalid replacement did not preserve the live session")
                         time.sleep(0.1)
                     results.append(dict(mode=label, check="Core-invalid replacement preserves live workers", passed=True))
+                    if assets is not None:
+                        results.append(dict(mode=label, check="invalid asset root preserves live workers", passed=True))
                     for host in ("2ip.ru", "2ip.io", "myip.com"):
                         expected = "DIRECT-FIXTURE" if ((host == "myip.com") == reverse) else "PROXY-FIXTURE"
                         try:
@@ -579,6 +616,11 @@ def main():
                         row = dict(mode=label, host=host, expected=expected, actual=actual, passed=actual == expected)
                         results.append(row)
                         print(json.dumps(row), flush=True)
+                    if asset_fixture is not None:
+                        actual = request(asset_fixture["domain"], args.vpn)
+                        results.append(dict(mode=label, check="explicit custom asset root routes ext GeoSite before blocking fallback",
+                                            actual=actual, passed=actual == "DIRECT-FIXTURE"))
+                        assert actual == "DIRECT-FIXTURE", "Custom GeoSite asset did not select its routing rule"
                     if caller_api_port is not None:
                         assert all(row["passed"] for row in results if row.get("mode") == label and "host" in row), "Caller API case has no successful routing proof"
                         check_caller_api(directory, caller_api_port, args.wine_bottle)
@@ -725,6 +767,11 @@ def main():
         for server in servers:
             server.shutdown()
             server.server_close()
+        for owner in asset_roots:
+            try:
+                owner.cleanup()
+            except OSError:
+                results.append(dict(check="owned asset directory cleanup", passed=False))
         (directory / ("vpn-results.json" if args.vpn else "proxy-results.json")).write_text(json.dumps(results, indent=2))
     if not results or not all(row["passed"] for row in results):
         raise SystemExit(1)

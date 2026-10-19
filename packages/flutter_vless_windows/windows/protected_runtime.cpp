@@ -51,7 +51,7 @@ ProtectedRuntime::~ProtectedRuntime() {
   if (directory_handle_ != INVALID_HANDLE_VALUE) CloseHandle(directory_handle_);
   if (!directory_.empty()) { std::error_code error; fs::remove_all(directory_, error); }
 }
-bool ProtectedRuntime::Create(const fs::path& bundled_xray) {
+bool ProtectedRuntime::Create(const fs::path& bundled_xray, bool copy_geo_assets) {
   if (!directory_.empty() || !IsAdministrator()) return false;
   wchar_t windows[32768]{};
   if (!GetWindowsDirectoryW(windows, 32768)) return false;
@@ -67,7 +67,7 @@ bool ProtectedRuntime::Create(const fs::path& bundled_xray) {
       FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
   if (directory_handle_ == INVALID_HANDLE_VALUE) return false;
   if (!CopyImage(bundled_xray, Executable())) return false;
-  for (const auto* asset : {L"geoip.dat", L"geosite.dat"}) {
+  if (copy_geo_assets) for (const auto* asset : {L"geoip.dat", L"geosite.dat"}) {
     auto source = bundled_xray.parent_path() / asset;
     std::error_code error;
     if (fs::exists(source, error) && !CopyImage(source, directory_ / asset)) return false;

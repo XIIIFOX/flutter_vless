@@ -9,6 +9,29 @@ import java.io.OutputStream
 
 object Utilities {
 
+    internal fun configureXrayAssets(environment: MutableMap<String, String>, defaultDirectory: File,
+        requestedDirectory: String?, copyBundled: () -> Unit): File {
+        val selected = validateAssetsDirectory(requestedDirectory) ?: defaultDirectory
+        if (requestedDirectory == null) {
+            if (!selected.exists()) selected.mkdirs()
+            copyBundled()
+        }
+        // Core checks the exact dotted name before its uppercase alias.
+        // Keep both bound to this child, without touching certificate roots.
+        environment["xray.location.asset"] = selected.absolutePath
+        environment["XRAY_LOCATION_ASSET"] = selected.absolutePath
+        return selected
+    }
+
+    internal fun validateAssetsDirectory(requestedDirectory: String?): File? = requestedDirectory?.let {
+        File(it).also { directory ->
+            require(directory.isAbsolute && directory.isDirectory) { "Geo asset directory must be an existing absolute directory" }
+        }
+    }
+
+    internal fun configureXrayAssets(context: Context, environment: MutableMap<String, String>, requestedDirectory: String?) =
+        configureXrayAssets(environment, context.filesDir, requestedDirectory) { copyAssets(context) }
+
     fun getUserAssetsPath(context: Context): String {
         val dir = context.filesDir
         if (!dir.exists()) {

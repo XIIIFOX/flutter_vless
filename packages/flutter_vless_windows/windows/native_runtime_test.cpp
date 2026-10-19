@@ -12,6 +12,20 @@
 
 int main(int argc, char** argv) {
   using namespace flutter_vless::native;
+  if (argc == 2 && std::string(argv[1]) == "child-assets") {
+    wchar_t dotted[32768]{}, alternate[32768]{};
+    const bool selected = GetEnvironmentVariableW(L"xray.location.asset", dotted, 32768)
+        && GetEnvironmentVariableW(L"XRAY_LOCATION_ASSET", alternate, 32768)
+        && std::wstring(dotted) == alternate && fs::is_directory(dotted)
+        && fs::is_regular_file(fs::path(dotted) / L"caller-only.dat")
+        && !fs::exists(fs::path(dotted) / L"geoip.dat") && !fs::exists(fs::path(dotted) / L"geosite.dat");
+    const bool private_environment = !GetEnvironmentVariableW(L"xray.location.cert", nullptr, 0)
+        && !GetEnvironmentVariableW(L"XRAY_LOCATION_CERT", nullptr, 0)
+        && !GetEnvironmentVariableW(L"SSLKEYLOGFILE", nullptr, 0)
+        && !GetEnvironmentVariableW(L"XRAY_BROWSER_DIALER", nullptr, 0);
+    std::cout << (selected && private_environment ? "CHILD_ASSETS_OK" : "CHILD_ASSETS_FAILED");
+    return selected && private_environment ? 0 : 1;
+  }
   if (argc > 1 && std::string(argv[1]) == "capture-hang") {
     std::cout << "READY:" << GetCurrentProcessId() << std::flush;
     Sleep(60000);
@@ -49,9 +63,25 @@ int main(int argc, char** argv) {
   assert(Command(self, {L"child", L"space quote\" slash\\", L"", L"trailing\\"}, output, 10000));
   assert(output == "CHILD_OK");
   assert(GetEnvironmentVariableW(L"SSLKEYLOGFILE", nullptr, 0)); // parent unchanged
+  const auto asset_directory = fs::temp_directory_path() / (L"flutter-vless-assets-" + Wide(RandomHex(16))) / L"Caller Assets Ω";
+  assert(fs::create_directories(asset_directory));
+  std::ofstream(asset_directory / L"caller-only.dat") << "synthetic asset";
+  SetEnvironmentVariableW(L"XRAY_LOCATION_ASSET", L"untrusted-alias");
+  SetEnvironmentVariableW(L"xray.location.cert", L"untrusted-cert");
+  assert(Command(self, {L"child-assets"}, output, 10000, asset_directory));
+  assert(output == "CHILD_ASSETS_OK");
+  wchar_t parent_asset[64]{};
+  assert(GetEnvironmentVariableW(L"xray.location.asset", parent_asset, 64)
+      && std::wstring(parent_asset) == L"untrusted-assets");
+  assert(!Command(self, {L"child-assets"}, output, 10000, asset_directory / L"missing"));
+  assert(output.empty());
+  SetEnvironmentVariableW(L"XRAY_LOCATION_ASSET", nullptr);
+  SetEnvironmentVariableW(L"xray.location.cert", nullptr);
+  fs::remove_all(asset_directory.parent_path());
   SetEnvironmentVariableW(L"SSLKEYLOGFILE", nullptr);
   SetEnvironmentVariableW(L"xray.location.asset", nullptr);
   SetEnvironmentVariableW(L"XRAY_BROWSER_DIALER", nullptr);
+  std::cout << "PASS explicit child asset root overrides both aliases, requires no standard geo names, isolates CERT and leaves parent unchanged\n";
 
   const auto capture_start = std::chrono::steady_clock::now();
   assert(!Command(self, {L"capture-hang"}, output, 1000));

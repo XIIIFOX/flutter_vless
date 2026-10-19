@@ -1,0 +1,8 @@
+{
+  "description": "Synthetic pinned-Core GeoSiteList containing one full domain; no server credentials.",
+  "file": "caller-geosite.dat",
+  "code": "CALLER",
+  "domain": "files-fixture.invalid",
+  "base64": "CiMKBkNBTExFUhIZCAMSFWZpbGVzLWZpeHR1cmUuaW52YWxpZA==",
+  "sha256": "721c3fd807303b34497428ec3a3b3fb7f2658fd3949d1e7784f0421cf4df99c9"
+}

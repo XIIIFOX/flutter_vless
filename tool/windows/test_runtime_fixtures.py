@@ -1,5 +1,8 @@
 """Fixture isolation checks run without Windows APIs or network access."""
 import unittest
+import base64
+import hashlib
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -16,6 +19,44 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    def test_explicit_asset_root_contains_only_verified_custom_fixture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            owner, fixture = runtime.create_asset_root(Path(directory))
+            root = Path(owner.name)
+            try:
+                self.assertTrue(root.is_absolute())
+                self.assertEqual([fixture["file"]], [path.name for path in root.iterdir()])
+                data = (root / fixture["file"]).read_bytes()
+                self.assertEqual(base64.b64decode(fixture["base64"], validate=True), data)
+                self.assertEqual(fixture["sha256"], hashlib.sha256(data).hexdigest())
+                self.assertIn(b"files-fixture.invalid", data)
+                self.assertFalse((root / "geoip.dat").exists())
+                self.assertFalse((root / "geosite.dat").exists())
+            finally:
+                owner.cleanup()
+            self.assertFalse(root.exists())
+
+    def test_ext_asset_route_precedes_explicit_block_without_changing_api(self):
+        fixture = {"file": "caller-geosite.dat", "code": "CALLER", "domain": "files-fixture.invalid"}
+        for external in (None, "203.0.113.1"):
+            profile = runtime.config(True, external, "192.0.2.10", 19086, fixture)
+            self.assertEqual({"type": "field", "domain": ["ext:caller-geosite.dat:CALLER"], "outboundTag": "direct"}, profile["routing"]["rules"][0])
+            self.assertEqual({"type": "field", "domain": ["full:files-fixture.invalid"], "outboundTag": "fixture-blocked"}, profile["routing"]["rules"][1])
+            self.assertEqual("192.0.2.10", profile["dns"]["hosts"]["files-fixture.invalid"])
+            self.assertEqual(runtime.config(True, external, "192.0.2.10", 19086)["api"], profile["api"])
+            self.assertTrue(all(value is False for value in profile["policy"]["system"].values()))
+            if external:
+                self.assertEqual("external-direct", profile["routing"]["rules"][-1]["outboundTag"])
+
+    def test_invalid_asset_manifest_is_refused_before_creating_a_root(self):
+        source = {"file": "caller-geosite.dat", "code": "CALLER", "domain": "files-fixture.invalid", "base64": "YQ==", "sha256": "0" * 64}
+        for change in ({}, {"file": "../foreign.dat"}, {"base64": "invalid%%"}):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(runtime.Path, "read_text", return_value=json.dumps(dict(source, **change))):
+                with self.assertRaises((AssertionError, ValueError)):
+                    runtime.create_asset_root(Path(directory))
+                self.assertEqual([], list(Path(directory).iterdir()))
+
     def test_caller_api_case_is_optional_and_retains_disabled_counters(self):
         ordinary = runtime.config(False)
         for key in ("api", "stats", "policy"):

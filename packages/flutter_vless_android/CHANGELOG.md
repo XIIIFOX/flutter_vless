@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Apply `geoAssetsDirectory` during preflight, startup, recovery and standalone delay. Retain it in saved profiles, override both data-root aliases without copying bundled files into explicit roots, and add a custom GeoSite TUN traffic regression.
 * Resolve imported `listen` environment references once before port and authentication selection. Keep Unix listeners out of TCP allocation, preserve source JSON and test the shared address corpus.
 * Preserve caller API/services, stats and policy without enabling disabled counters or polling an imported API. Keep private statistics only for profiles without an API; accept null download socket options consistently with Core.
 * Recognize MASQUE in explicit proxy DNS; follow Core's active XHTTP/alias/null branches and distinguish ignored primary stream addresses from independent download endpoints. Add shared protocol preparation fixtures.

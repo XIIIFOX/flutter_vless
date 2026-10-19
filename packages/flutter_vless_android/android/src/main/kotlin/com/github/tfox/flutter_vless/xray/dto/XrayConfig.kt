@@ -38,6 +38,9 @@ data class XrayConfig(
     
     /** The raw Xray configuration JSON string. */
     var V2RAY_FULL_JSON_CONFIG: String = "",
+
+    /** Optional existing geodata directory, retained by recovery/quick-access snapshots. */
+    var GEO_ASSETS_DIRECTORY: String? = null,
     
     /** Whether to enable traffic statistics collection. */
     var ENABLE_TRAFFIC_STATICS: Boolean = false,

@@ -22,7 +22,8 @@ class V2rayManager {
  public:
   static V2rayManager& GetInstance();
 
-  bool Start(const std::string& config, bool proxy_only, const flutter_vless::NativeOptions& options = {});
+  bool Start(const std::string& config, bool proxy_only, const flutter_vless::NativeOptions& options = {},
+      flutter_vless::asset_location::Root assets = std::nullopt);
   void Stop();
   void Shutdown();
   bool IsRunning() const;
@@ -52,7 +53,7 @@ class V2rayManager {
 
   // Helper methods
   void RunV2ray();
-  bool ValidateConfig(const std::string& config, bool proxy_only);
+  bool ValidateConfig(const std::string& config, bool proxy_only, const flutter_vless::asset_location::Root& assets);
   std::string ModifyConfigForWindows(const std::string& config, bool proxy_only);
   
   // Thread synchronization and state

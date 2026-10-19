@@ -116,17 +116,19 @@ ProxyService::~ProxyService() {
   CleanupTempFiles();
 }
 
-bool ProxyService::Start(const std::string& config) {
+bool ProxyService::Start(const std::string& config, flutter_vless::asset_location::Root assets) {
+  if (!flutter_vless::asset_location::Valid(assets)) return false;
   std::string prepared = config;
   if (!flutter_vless::xray_config::PrepareProxy(prepared,
       [this](uint16_t port) { return IsPortFree(port); }, [this] { return FindFreePort(); })) return false;
   auto executable = FindXrayExecutable();
   if (!executable || !flutter_vless::native::CheckConfig(prepared, *executable,
-      flutter_vless::native::ConfigCheckStorage::currentUser)) return false;
+      flutter_vless::native::ConfigCheckStorage::currentUser, assets)) return false;
   const auto owned_api_port = flutter_vless::xray_config::OwnedApiPort(config, prepared);
   Stop();
   xray_executable_path_ = *executable;
   current_config_ = prepared;
+  asset_directory_ = std::move(assets);
   api_address_ = owned_api_port ? "127.0.0.1:" + std::to_string(*owned_api_port) : "";
   ready_.store(false); is_running_.store(true);
   { std::lock_guard<std::mutex> lock(start_mutex_); start_finished_ = false; }
@@ -149,6 +151,7 @@ void ProxyService::Stop() {
   StopXrayProcess();
   CleanupTempFiles();
   api_address_.clear();
+  asset_directory_.reset();
 
   std::lock_guard<std::mutex> lock(stats_mutex_);
   total_upload_ = 0;
@@ -215,7 +218,7 @@ void ProxyService::RunV2ray() try {
 
 bool ProxyService::StartXrayProcess(const std::string& config_path) {
   xray_process_ = flutter_vless::native::Launch(xray_executable_path_,
-      {L"run", L"-config", fs::path(config_path).wstring()});
+      {L"run", L"-config", fs::path(config_path).wstring()}, false, asset_directory_);
   return xray_process_ != nullptr;
 }
 

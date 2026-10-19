@@ -9,7 +9,7 @@ namespace flutter_vless::native {
 class ProtectedRuntime {
  public:
   ~ProtectedRuntime();
-  bool Create(const fs::path& bundled_xray);
+  bool Create(const fs::path& bundled_xray, bool copy_geo_assets = true);
   bool WriteConfig(const std::string& data, fs::path& path);
   fs::path Executable() const { return directory_ / L"xray.exe"; }
   fs::path Directory() const { return directory_; }

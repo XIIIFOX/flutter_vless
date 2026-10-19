@@ -1,7 +1,9 @@
 #include "xray_config.h"
+#include "asset_location.h"
 #include <iostream>
 #include <stdexcept>
 #include <fstream>
+#include <chrono>
 
 using namespace flutter_vless::xray_config;
 void Check(bool ok, const char* message) {
@@ -167,15 +169,53 @@ void ListenAddressCases() {
   Check(AvailablePort(exact_profile, 10807, exact_unicode) == 10807 && Normalize(exact_profile, exact_unicode)
       && exact_profile["inbounds"][0]["listen"] == "@exact-unicode-key", "exact Unicode env binding did not preserve its value");
 }
+void AssetLocationCases() {
+  namespace assets = flutter_vless::asset_location;
+  namespace fs = std::filesystem;
+  const auto directory = fs::temp_directory_path() / ("flutter-vless-assets-pure-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  Check(fs::create_directory(directory), "cannot create owned asset fixture directory");
+  struct Cleanup { fs::path path; ~Cleanup() { std::error_code error; fs::remove_all(path, error); } } cleanup{directory};
+  const auto root = directory / fs::u8path(u8"Caller Assets Ω");
+  Check(fs::create_directory(root), "cannot create explicit Unicode asset directory");
+  std::ofstream(root / "caller-only.dat") << "synthetic asset";
+  Check(assets::Valid(std::nullopt) && assets::Valid(root), "optional/existing asset directory rejected");
+  Check(!fs::exists(root / "geoip.dat") && !fs::exists(root / "geosite.dat"), "asset fixture accidentally needs standard filenames");
+  for (const auto& invalid : {fs::path(), fs::path("relative-assets"), root / "missing", root / "caller-only.dat"})
+    Check(!assets::Valid(invalid), "empty/relative/missing/non-directory asset root admitted");
+  auto embedded_zero = root.u8string(); embedded_zero.push_back('\0'); embedded_zero += "ignored";
+  Check(!assets::Valid(fs::u8path(embedded_zero)), "embedded NUL asset root admitted");
+  const std::vector<std::wstring> inherited = {L"KEEP=caller-value", L"=C:=C:\\working", L"xray.location.asset=untrusted-dotted",
+      L"XRAY_LOCATION_ASSET=untrusted-alias", L"XRAY_LOCATION_CERT=untrusted-cert", L"SSLKEYLOGFILE=untrusted-log",
+      L"XRAY_BROWSER_DIALER=untrusted-dialer", L"GODEBUG=untrusted-debug", L"GOTRACEBACK=untrusted-trace",
+      L"http_proxy=untrusted-proxy", L"HTTPS_PROXY=untrusted-proxy", L"ALL_PROXY=untrusted-proxy", L"NO_PROXY=untrusted-proxy", L"Path=untrusted-path"};
+  const auto before = inherited;
+  auto entries = [](const std::vector<wchar_t>& block) {
+    Check(block.size() >= 2 && block[block.size()-1] == 0 && block[block.size()-2] == 0, "child environment is not double NUL terminated");
+    std::vector<std::wstring> result;
+    for (size_t offset = 0; offset < block.size() && block[offset];) {
+      const std::wstring value(block.data() + offset); result.push_back(value); offset += value.size() + 1;
+    }
+    return result;
+  };
+  const auto legacy = entries(assets::ChildEnvironment(inherited, L"C:\\Windows\\System32", std::nullopt));
+  Check(legacy == std::vector<std::wstring>{L"KEEP=caller-value", L"=C:=C:\\working", L"PATH=C:\\Windows\\System32"}, "legacy child privacy filtering changed");
+  const auto selected = entries(assets::ChildEnvironment(inherited, L"C:\\Windows\\System32", root));
+  Check(std::count(selected.begin(), selected.end(), L"xray.location.asset=" + root.wstring()) == 1
+      && std::count(selected.begin(), selected.end(), L"XRAY_LOCATION_ASSET=" + root.wstring()) == 1, "explicit asset root was ignored or did not override both Core aliases");
+  Check(selected.size() == legacy.size() + 2 && inherited == before, "explicit assets leaked CERT/debug/proxy values or mutated the parent environment");
+  Check(entries(assets::ChildEnvironment({}, L"", std::nullopt)).empty(), "empty environment block is not valid");
+}
 int main(int argc, char** argv) {
   if (argc == 2 && std::string(argv[1]) == "--caller-services") { CallerServicePreservationCases(); return 0; }
   if (argc == 2 && std::string(argv[1]) == "--owned-api") { OwnedApiPortCases(); return 0; }
   if (argc == 2 && std::string(argv[1]) == "--unix-inputs") { UnixInputProxyPreparationCases(); return 0; }
   if (argc == 2 && std::string(argv[1]) == "--listen-addresses") { ListenAddressCases(); return 0; }
+  if (argc == 2 && std::string(argv[1]) == "--asset-location") { AssetLocationCases(); return 0; }
   CallerServicePreservationCases();
   OwnedApiPortCases();
   UnixInputProxyPreparationCases();
   ListenAddressCases();
+  AssetLocationCases();
   std::ifstream api_input("tool/fixtures/compatibility/api-listeners.json");
   Check(api_input.good(), "shared API listener corpus is required");
   Json api_cases; api_input >> api_cases;

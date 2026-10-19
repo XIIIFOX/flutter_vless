@@ -80,6 +80,7 @@ android {
 
     sourceSets {
         test.resources.srcDir '../../../tool/fixtures/compatibility'
+        androidTest.assets.srcDir '../../../tool/fixtures/compatibility'
         main {
             java.srcDirs += 'src/main/kotlin'
         }

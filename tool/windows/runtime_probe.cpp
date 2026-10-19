@@ -202,8 +202,10 @@ int main(int argc,char** argv) {
   if(!vpn && action!="run-proxy")return 2;
   if(vpn && !isolated)return 20;
   auto& manager=V2rayManager::GetInstance();
+  flutter_vless::asset_location::Root assets;
+  if (arguments.size() > 6) assets = std::filesystem::path(arguments[6]);
   flutter_vless::NativeOptions options; options.reconnect_enabled = !no_reconnect;
-  bool started=manager.Start(config,!vpn,options);std::cout<<"START_RETURN="<<started<<std::endl;
+  bool started=manager.Start(config,!vpn,options,assets);std::cout<<"START_RETURN="<<started<<std::endl;
   if(!started){manager.Stop();std::cout<<manager.GetProviderDebugSnapshot()<<std::endl;return 3;}
   int seconds=argc>3?std::stoi(argv[3]):20;
   const std::filesystem::path stop_file = arguments.size() > 4 ? arguments[4] : L"";
@@ -215,10 +217,15 @@ int main(int argc,char** argv) {
       std::ifstream candidate(reject_file);
       const std::string invalid((std::istreambuf_iterator<char>(candidate)), {});
       candidate.close();
-      const bool rejected = !manager.Start(invalid, !vpn, options) && manager.IsRunning();
+      const bool rejected = !manager.Start(invalid, !vpn, options, assets) && manager.IsRunning();
       std::filesystem::remove(reject_file);
       std::cout << "REJECTED_REPLACEMENT_PRESERVED=" << rejected << std::endl;
       if (!rejected) { manager.Stop(); return 26; }
+      if (assets) {
+        const bool invalid_root_rejected = !manager.Start(config, !vpn, options, *assets / L"missing-asset-root") && manager.IsRunning();
+        std::cout << "REJECTED_ASSET_ROOT_PRESERVED=" << invalid_root_rejected << std::endl;
+        if (!invalid_root_rejected) { manager.Stop(); return 27; }
+      }
     }
     if (!state_file.empty()) {
       std::ofstream state(state_file);

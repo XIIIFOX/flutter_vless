@@ -65,8 +65,10 @@ bool TunnelReady(NET_LUID& luid) {
 }
 VpnService::VpnService() = default;
 VpnService::~VpnService() { Shutdown(); }
-bool VpnService::Start(const std::string& config, const flutter_vless::NativeOptions& options) {
+bool VpnService::Start(const std::string& config, const flutter_vless::NativeOptions& options,
+    flutter_vless::asset_location::Root assets) {
   using namespace flutter_vless;
+  if (!asset_location::Valid(assets)) return false;
   // Validate before retiring an existing session. No setup failure is reported
   // as connected, and reconnect never releases the independent WFP barrier.
   auto xray = native::FindBundledFile(L"xray.exe");
@@ -98,13 +100,13 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     if (!protection_.Active()) protection_.Release();
     return false;
   }
-  if (!native::CheckConfig(*prepared, *xray, native::ConfigCheckStorage::administrators)) {
+  if (!native::CheckConfig(*prepared, *xray, native::ConfigCheckStorage::administrators, assets)) {
     Event("Xray configuration check rejected generated VPN document; active session preserved");
     return false;
   }
   const auto owned_api_port = xray_config::OwnedApiPort(config, *prepared).value_or(0);
   auto runtime = std::make_unique<native::ProtectedRuntime>();
-  if (!runtime->Create(*xray)) {
+  if (!runtime->Create(*xray, !assets.has_value())) {
     Event("Cannot create private administrator-owned VPN runtime");
     if (!protection_.Active()) protection_.Release();
     return false;
@@ -115,6 +117,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   xray_executable_path_ = private_runtime_->Executable(); tun2socks_executable_path_ = *tun;
   options_ = options;
   current_config_ = *prepared; username_ = user; password_ = password;
+  asset_directory_ = std::move(assets);
   socks_port_ = *xray_config::Port(xray_config::Parse(current_config_)["inbounds"][0]);
   api_port_ = owned_api_port;
   // WFP must exist before native workers, resolver configuration or capture.
@@ -140,6 +143,7 @@ void VpnService::StopSession(bool release) {
   private_runtime_.reset();
   if (release && !protection_.Release()) Event("Traffic protection cleanup failed; restart as administrator and stop again");
   username_.clear(); password_.clear(); current_config_.clear(); api_port_ = 0;
+  asset_directory_.reset();
   if (release) bootstrap_cache_.clear();
   std::lock_guard<std::mutex> lock(stats_mutex_); total_upload_ = 0; total_download_ = 0;
 }
@@ -192,7 +196,7 @@ bool VpnService::StartWorkers() {
   packet_probe_ = std::make_unique<PacketPathProbe>();
   if (!packet_probe_->Start() || !packet_probe_->Configure(config, socks_port_)) return fail("Cannot prepare the local packet-path probe");
   if (!private_runtime_ || !private_runtime_->WriteConfig(config.dump(), temp_config_path_)) return fail("Cannot write the private Xray configuration");
-  xray_process_ = native::Launch(xray_executable_path_, {L"run", L"-config", temp_config_path_.wstring()});
+  xray_process_ = native::Launch(xray_executable_path_, {L"run", L"-config", temp_config_path_.wstring()}, false, asset_directory_);
   if (!xray_process_) return fail("Cannot launch the protected Xray process");
   bool listening = false;
   for (int i = 0; i < 60 && requested_.load() && xray_process_->IsRunning(); ++i) {

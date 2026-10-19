@@ -222,7 +222,7 @@ class XrayVPNService : VpnService() {
                 candidateDnsServers = dns.systemDnsServers
             }
             val runtime = XrayCoreManager.buildRuntimeConfigJson(candidate, noBackupFilesDir, secret, dns)
-            require(XrayCoreManager.validateNative(this, runtime)) { "Native configuration rejected" }
+            require(XrayCoreManager.validateNative(this, runtime, candidate.GEO_ASSETS_DIRECTORY)) { "Native configuration rejected" }
             if (!candidate.PROXY_ONLY) SessionReadinessProbe.selectHost(runtime)
             runtime
         } catch (_: Exception) {

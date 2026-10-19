@@ -23,8 +23,6 @@ type Logger interface {
 
 var coreInstance *core.Instance
 
-var requiredGeoAssetFiles = []string{"geoip.dat", "geosite.dat"}
-
 // SetAssetLocation configures the directory used by Xray-core to load runtime
 // assets such as geoip.dat and geosite.dat.
 //
@@ -56,26 +54,10 @@ func SetAssetLocation(directory string) error {
 		return fmt.Errorf("Xray asset path is not a directory: %q", directory)
 	}
 
-	for _, name := range requiredGeoAssetFiles {
-		path := filepath.Join(directory, name)
-		fileInfo, err := os.Stat(path)
-		if err != nil {
-			return fmt.Errorf("open required Xray asset %q: %w", name, err)
-		}
-		if !fileInfo.Mode().IsRegular() {
-			return fmt.Errorf("required Xray asset is not a regular file: %q", name)
-		}
-		if fileInfo.Size() == 0 {
-			return fmt.Errorf("required Xray asset is empty: %q", name)
-		}
-		file, err := os.Open(path)
-		if err != nil {
-			return fmt.Errorf("required Xray asset is not readable %q: %w", name, err)
-		}
-		if err := file.Close(); err != nil {
-			return fmt.Errorf("close required Xray asset %q: %w", name, err)
-		}
-	}
+	// A caller may use only custom ext: data, or no data assets at all.
+	// Validate each referenced asset through Core's configuration build rather
+	// than requiring unrelated standard filenames during directory selection.
+	// Certificate/key lookup uses its separate CertLocation and stays untouched.
 
 	// Xray accepts both the dotted internal name and XRAY_LOCATION_ASSET.
 	// Setting both prevents an inherited value from taking precedence.

@@ -28,6 +28,111 @@ PORTS = {"inbound": 18580, "direct": 18581, "proxy": 18582, "extra": 18583}
 DNS_QUERIES = []
 PROBE = None
 REAL_DNS = False
+IPV6_PAYLOAD_TARGET = "2001:db8:85::7"
+IPV6_TUN_SOURCE = "fd00:198:18::2"
+IPV6_PAYLOAD_PORT = 45678
+
+
+class IPv6PayloadState:
+    """One-shot synthetic markers; no forwarding or physical IPv6 sockets."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.drained = threading.Condition(self.lock)
+        self.expected = {}
+        self.observed = {}
+        self.controls = {}
+        self.errors = []
+        self.closed = False
+
+    def arm(self, transport):
+        assert transport in ("tcp", "udp")
+        with self.lock:
+            assert not self.closed and transport not in self.expected, "IPv6 marker already outstanding"
+            payload = ("ipv6-payload-" + transport + "-" + uuid.uuid4().hex).encode("ascii")
+            self.expected[transport] = payload
+            return payload
+
+    def accept(self, transport, kind, address, port, payload, source=None):
+        with self.lock:
+            active = source is None or any(peer == source for peer in self.controls.values())
+            expected = self.expected.get(transport)
+            if self.closed or not active or kind != 4 or address != socket.inet_pton(socket.AF_INET6, IPV6_PAYLOAD_TARGET) \
+                    or port != IPV6_PAYLOAD_PORT or expected is None or payload != expected:
+                self.errors.append("unexpected IPv6 proxy target or marker")
+                return None
+            del self.expected[transport]
+            self.observed[transport] = payload
+            return b"accepted-" + payload
+
+    def control_open(self, sock, source):
+        with self.lock:
+            if self.closed:
+                return False
+            self.controls[sock] = source
+            return True
+
+    def control_close(self, sock):
+        with self.drained:
+            self.controls.pop(sock, None)
+            self.drained.notify_all()
+
+    def require_observed(self, transport, payload):
+        with self.lock:
+            assert not self.errors and self.observed.get(transport) == payload, "IPv6 proxy did not observe the exact one-shot target/marker"
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+            controls = list(self.controls)
+        for control in controls:
+            try:
+                control.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            control.close()
+        deadline = time.monotonic() + 3
+        with self.drained:
+            while self.controls:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0, "IPv6 SOCKS control did not drain after close"
+                self.drained.wait(remaining)
+
+    def require_clean(self):
+        with self.lock:
+            assert not self.errors and not self.expected and not self.controls, "IPv6 proxy has rejected, outstanding or undrained work"
+
+
+class IPv6PayloadDatagram(socketserver.BaseRequestHandler):
+    def handle(self):
+        packet, relay = self.request
+        state = self.server.ipv6_payload
+        # RFC1928 UDP: RSV=0, FRAG=0, ATYP=IPv6, exact target and payload.
+        if len(packet) < 22 or packet[:4] != b"\0\0\0\x04":
+            state.accept("udp", 0, b"", 0, b"", self.client_address[0])
+            return
+        reply = state.accept("udp", packet[3], packet[4:20], int.from_bytes(packet[20:22], "big"),
+                             packet[22:], self.client_address[0])
+        if reply is not None:
+            relay.sendto(packet[:22] + reply, self.client_address)
+
+
+class DatagramServer(socketserver.ThreadingUDPServer):
+    daemon_threads = True
+
+
+def ipv6_payload_request(state, udp):
+    transport = "udp" if udp else "tcp"
+    payload = state.arm(transport)
+    expected = b"accepted-" + payload
+    with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM) as sock:
+        sock.settimeout(4)
+        sock.connect((IPV6_PAYLOAD_TARGET, IPV6_PAYLOAD_PORT))
+        assert sock.getsockname()[0] == IPV6_TUN_SOURCE, "IPv6 payload did not select the owned tunnel address"
+        sock.sendall(payload)
+        reply = sock.recv(256) if udp else exact(sock, len(expected))
+        assert reply == expected, "IPv6 payload marker reply changed"
+    state.require_observed(transport, payload)
+    return "IPv6 " + transport.upper() + " bytes via exact IPv4 SOCKS target and nonce"
 
 
 def dns_question(query):
@@ -107,11 +212,42 @@ class Socks(socketserver.BaseRequestHandler):
             sock.sendall(b"\x05\x00")
             _, command, _, kind = exact(sock, 4)
             count = exact(sock, 1)[0] if kind == 3 else {1: 4, 4: 16}[kind]
-            exact(sock, count)
+            address = exact(sock, count)
             port = int.from_bytes(exact(sock, 2), "big")
+            payload_state = getattr(self.server, "ipv6_payload", None)
+            if command == 3 and payload_state is not None:
+                # The relay is the same numeric IPv4 address and port as this
+                # TCP server. A closed transport pin need not admit an unknown
+                # ephemeral UDP port or resolve a relay hostname.
+                if kind != 1 or address != bytes(4) or port != 0 \
+                        or not payload_state.control_open(sock, self.client_address[0]):
+                    return
+                try:
+                    relay_host, relay_port = self.server.server_address
+                    sock.sendall(b"\x05\x00\x00\x01" + socket.inet_aton(relay_host) + relay_port.to_bytes(2, "big"))
+                    sock.settimeout(1)
+                    while True:
+                        try:
+                            if not sock.recv(1):
+                                break
+                            payload_state.accept("udp", 0, b"", 0, b"", self.client_address[0])
+                            break
+                        except socket.timeout:
+                            with payload_state.lock:
+                                if payload_state.closed:
+                                    break
+                finally:
+                    payload_state.control_close(sock)
+                return
             if command != 1:
                 return
             sock.sendall(b"\x05\x00\x00\x01\x7f\x00\x00\x01\x00\x00")
+            if kind == 4 and payload_state is not None:
+                payload = exact(sock, len(b"ipv6-payload-tcp-") + 32)
+                reply = payload_state.accept("tcp", kind, address, port, payload)
+                if reply is not None:
+                    sock.sendall(reply)
+                return
             if port == 53:
                 query = exact(sock, int.from_bytes(exact(sock, 2), "big"))
                 response = dns_response(query)
@@ -178,7 +314,7 @@ def external_http(address, vpn=False):
         return "HTTP 200"
 
 
-def config(reverse, external_address=None, direct_address="127.0.0.1", caller_api_port=None, asset_fixture=None):
+def config(reverse, external_address=None, direct_address="127.0.0.1", caller_api_port=None, asset_fixture=None, ipv6_payload=False):
     profile = {
         "log": {"loglevel": "warning", "access": "none"},
         "dns": {"hosts": {h: direct_address for h in ("2ip.ru", "2ip.io", "myip.com")},
@@ -210,6 +346,10 @@ def config(reverse, external_address=None, direct_address="127.0.0.1", caller_ap
     profile["outbounds"].append({"protocol": "blackhole", "tag": "fixture-blocked"})
     profile["routing"]["rules"].insert(0, {"type": "field", "inboundTag": ["flutter-vless-tun"],
                                             "outboundTag": "fixture-blocked"})
+    if ipv6_payload:
+        profile["dns"]["hosts"]["ipv6-payload.invalid"] = IPV6_PAYLOAD_TARGET
+        profile["routing"]["rules"].insert(1, {"type": "field", "ip": [IPV6_PAYLOAD_TARGET + "/128"],
+                                                "network": "tcp,udp", "outboundTag": "proxy"})
     if caller_api_port is not None:
         assert type(caller_api_port) is int and 1 <= caller_api_port <= 65535, "Invalid fixture API port"
         profile["api"] = {"tag": "caller-api", "listen": f"127.0.0.1:{caller_api_port}",
@@ -300,6 +440,22 @@ def protected_dns(tcp):
     assert response[:2] == query[:2] and response[-4:] == b"\xc6\x33\x64\x07"
     assert len(DNS_QUERIES) > before and question.hex() in DNS_QUERIES
     return "DNS reply through selected proxy"
+
+
+def ipv6_payload_dns(tcp):
+    question = b"\x0cipv6-payload\x07invalid\x00\x00\x1c\x00\x01"
+    query = b"\x85\x28\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00" + question
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as sock:
+        sock.settimeout(4)
+        sock.connect(("198.18.0.2", 53))
+        assert sock.getsockname()[0] == "10.0.85.2", "AAAA query did not select the protected DNS adapter"
+        sock.sendall((len(query).to_bytes(2, "big") if tcp else b"") + query)
+        reply = exact(sock, int.from_bytes(exact(sock, 2), "big")) if tcp else sock.recv(4096)
+    assert reply[:2] == query[:2] and reply[2] & 0x80 and reply[3] & 15 == 0 \
+        and int.from_bytes(reply[6:8], "big") == 1, "Caller AAAA lookup returned no successful answer"
+    assert reply[12:12 + len(question)] == question \
+        and reply.endswith(socket.inet_pton(socket.AF_INET6, IPV6_PAYLOAD_TARGET)), "Caller static IPv6 DNS answer changed"
+    return "AAAA caller static host through protected " + ("TCP" if tcp else "UDP") + " DNS"
 
 
 def relayed_dns():
@@ -476,6 +632,7 @@ def main():
     servers = []
     adapters = []
     asset_roots = []
+    ipv6_payload = None
     results = []
     external_address = None
     direct_address = "127.0.0.1"
@@ -506,6 +663,15 @@ def main():
         PORTS["direct"] = servers[0].server_address[1]
         PORTS["proxy"] = servers[1].server_address[1]
         if args.vpn:
+            ipv6_payload = IPv6PayloadState()
+            servers[1].ipv6_payload = ipv6_payload
+            # UDP and TCP intentionally share the same fixed numeric IPv4
+            # relay endpoint, keeping Xray's exact transport pin closed.
+            relay = DatagramServer((direct_address, PORTS["proxy"]), IPv6PayloadDatagram)
+            relay.socket.settimeout(1)
+            relay.ipv6_payload = ipv6_payload
+            assert relay.server_address == servers[1].server_address, "IPv6 proxy UDP relay changed endpoint"
+            servers.append(relay)
             servers.append(ThreadingHTTPServer(("127.0.0.1", PORTS["direct"]), Direct))
         for server in servers:
             threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -528,7 +694,8 @@ def main():
                 owner, asset_fixture = create_asset_root(directory)
                 asset_roots.append(owner)
                 assets = Path(owner.name)
-            prepared = config(reverse, external_address, direct_address, caller_api_port, asset_fixture)
+            uses_ipv6_payload = args.vpn and not reverse and ending == "stop"
+            prepared = config(reverse, external_address, direct_address, caller_api_port, asset_fixture, uses_ipv6_payload)
             # Exercise both the managed VPN SOCKS candidate and the private
             # stats API candidate, before either Core listener exists in the OS.
             metrics_port = (10086 if reverse else 10807) if args.vpn else 10085
@@ -575,7 +742,7 @@ def main():
                             "Get-NetRoute -InterfaceAlias flutter_vless_tun | Select-Object DestinationPrefix,NextHop,RouteMetric | ConvertTo-Json"], text=True, timeout=25)
                         (directory / (label + "-routes-during.log")).write_text(routes)
                         installed = json.loads(routes)
-                        assert {r["DestinationPrefix"] for r in installed} >= {"0.0.0.0/1", "128.0.0.0/1"}
+                        assert {r["DestinationPrefix"] for r in installed} >= {"0.0.0.0/1", "128.0.0.0/1", "::/1", "8000::/1"}
                         time.sleep(1)
                         assert int(native(probe, "policy-count")) >= 10
                         results.append(dict(mode=label, check="native WFP filters installed", passed=True))
@@ -663,6 +830,13 @@ def main():
                         for tcp in (False, True):
                             actual = protected_dns(tcp)
                             results.append(dict(mode=label, check="protected TCP DNS" if tcp else "protected UDP DNS", actual=actual, passed=True))
+                        if uses_ipv6_payload:
+                            for udp in (False, True):
+                                actual = ipv6_payload_request(ipv6_payload, udp)
+                                results.append(dict(mode=label, check="IPv6 UDP payload via IPv4 proxy" if udp else "IPv6 TCP payload via IPv4 proxy", actual=actual, passed=True))
+                            for tcp in (False, True):
+                                results.append(dict(mode=label, check="caller AAAA TCP DNS" if tcp else "caller AAAA UDP DNS",
+                                                    actual=ipv6_payload_dns(tcp), passed=True))
                         results.append(dict(mode=label, check="real runner DNS through VPN", actual=relayed_dns(), passed=True))
                         try:
                             actual = request("localhost", True, loopback=True)
@@ -693,6 +867,9 @@ def main():
                             await_state(state_file, True, timeout=60)
                             assert request("myip.com", True) == "PROXY-FIXTURE"
                             assert system_dns()
+                            for udp in (False, True):
+                                results.append(dict(mode=label, check="IPv6 payload survives underlay rename",
+                                                    actual=ipv6_payload_request(ipv6_payload, udp), passed=True))
                             results.append(dict(mode=label, check="Unicode underlay rename recovers routing and system DNS", passed=True))
                             for worker in ("xray.exe", "tun2socks.exe"):
                                 kill_worker(process.pid, worker)
@@ -702,6 +879,9 @@ def main():
                                 await_state(state_file, True, timeout=60)
                                 assert request("myip.com", True) == "PROXY-FIXTURE"
                                 results.append(dict(mode=label, check=worker + " forwarding recovers", passed=True))
+                                for udp in (False, True):
+                                    results.append(dict(mode=label, check=worker + " IPv6 payload recovers",
+                                                        actual=ipv6_payload_request(ipv6_payload, udp), passed=True))
                     if args.vpn and ending == "no-reconnect":
                         kill_worker(process.pid, "xray.exe")
                         await_state(state_file, False)
@@ -729,7 +909,7 @@ def main():
                         assert native(probe, "policy-count") == "0"
                         remaining = subprocess.check_output([
                             "powershell", "-NoProfile", "-Command",
-                            "@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1') }).Count"], text=True, timeout=25)
+                            "@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1','::/1','8000::/1') }).Count"], text=True, timeout=25)
                         results.append(dict(mode=label, check="capture routes removed by service", passed=remaining.strip() == "0"))
                         assert external_http(external_address) == baseline
                         results.append(dict(mode=label, check="explicit stop restores ordinary HTTPS", passed=True))
@@ -764,9 +944,19 @@ def main():
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
+        if ipv6_payload is not None:
+            try:
+                ipv6_payload.close()
+            except (AssertionError, OSError):
+                results.append(dict(check="IPv6 SOCKS control cleanup", passed=False))
         for server in servers:
             server.shutdown()
             server.server_close()
+        if ipv6_payload is not None:
+            try:
+                ipv6_payload.require_clean()
+            except AssertionError:
+                results.append(dict(check="IPv6 proxy target and nonce ownership", passed=False))
         for owner in asset_roots:
             try:
                 owner.cleanup()

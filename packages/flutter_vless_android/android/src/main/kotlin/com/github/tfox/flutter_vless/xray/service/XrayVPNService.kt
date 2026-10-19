@@ -320,8 +320,11 @@ class XrayVPNService : VpnService() {
     }
 
     private fun setupVpn(current: XrayConfig) {
-        val builder = Builder().setSession(current.REMARK).setMtu(1500).addAddress("26.26.26.1", 30).addRoute("0.0.0.0", 0)
-        // No IPv6 address/route enables Android's default IPv6 blocking, never allowFamily bypass.
+        val builder = Builder().setSession(current.REMARK).setMtu(1500)
+            .addAddress("26.26.26.1", 30).addRoute("0.0.0.0", 0)
+            .addAddress("fd26:26:26::1", 126).addRoute("::", 0)
+        // Capture both families. allowFamily would permit application bypass;
+        // only Core's existing protected sockets follow caller egress policy.
         if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false)
         current.BLOCKED_APPS.forEach {
             try { builder.addDisallowedApplication(it) }

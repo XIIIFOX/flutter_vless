@@ -62,8 +62,12 @@ func (f *fixture) snapshot() ([]string, []error) {
 }
 
 func listener(t *testing.T, serve func(net.Conn)) net.Listener {
+	return networkListener(t, "tcp4", "127.0.0.1:0", serve)
+}
+
+func networkListener(t *testing.T, network, address string, serve func(net.Conn)) net.Listener {
 	t.Helper()
-	l, err := net.Listen("tcp4", "127.0.0.1:0")
+	l, err := net.Listen(network, address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,9 +404,15 @@ func connect(t *testing.T, port int, command byte, target netip.AddrPort, domain
 		packet = append(packet, 3, byte(len(domain)))
 		packet = append(packet, domain...)
 	} else {
-		packet = append(packet, 1)
-		ip := target.Addr().As4()
-		packet = append(packet, ip[:]...)
+		if target.Addr().Is4() {
+			packet = append(packet, 1)
+			ip := target.Addr().As4()
+			packet = append(packet, ip[:]...)
+		} else {
+			packet = append(packet, 4)
+			ip := target.Addr().As16()
+			packet = append(packet, ip[:]...)
+		}
 	}
 	packet = binary.BigEndian.AppendUint16(packet, target.Port())
 	if _, err := c.Write(packet); err != nil {
@@ -483,8 +493,10 @@ func TestNativeDNSPreservation(t *testing.T) {
 		t.Fatal("production C++ exporter required")
 	}
 	t.Run("WindowsPreparer", testNativeDNSPreservation)
+	t.Run("WindowsIPv6Payload", testNativeIPv6Payload)
 	if apple := os.Getenv("NATIVE_DNS_PREPARER_APPLE"); apple != "" {
 		t.Run("ApplePreparer", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeDNSPreservation(t) })
+		t.Run("AppleIPv6Payload", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeIPv6Payload(t) })
 	}
 }
 

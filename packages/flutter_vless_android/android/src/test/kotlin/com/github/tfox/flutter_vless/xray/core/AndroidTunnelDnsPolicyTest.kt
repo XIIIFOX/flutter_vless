@@ -50,11 +50,8 @@ class AndroidTunnelDnsPolicyTest {
             assertEquals("1.1.1.1", relay.getJSONObject("settings").getString("rewriteAddress"))
             assertFalse(relay.has("proxySettings"))
             val relayRules = relay.getJSONObject("settings").getJSONArray("rules")
-            assertEquals(2, relayRules.length())
-            assertEquals("return", relayRules.getJSONObject(0).getString("action"))
-            assertEquals("28", relayRules.getJSONObject(0).getString("qType"))
-            assertEquals(0, relayRules.getJSONObject(0).getInt("rCode"))
-            assertEquals("direct", relayRules.getJSONObject(1).getString("action"))
+            assertEquals(1, relayRules.length())
+            assertEquals("direct", relayRules.getJSONObject(0).getString("action"))
             assertEquals("proxy", relay.getJSONObject("streamSettings").getJSONObject("sockopt").getString("dialerProxy"))
             val dns = output.getJSONObject("dns")
             assertEquals("tcp://1.1.1.1", dns.getJSONArray("servers").getString(0))
@@ -97,8 +94,8 @@ class AndroidTunnelDnsPolicyTest {
         assertFalse(settings.has("rewriteAddress")); assertFalse(settings.has("rewriteNetwork")); assertFalse(settings.has("rewritePort"))
         val dnsRules = settings.getJSONArray("rules")
         assertEquals(3, dnsRules.length())
-        assertEquals("return", dnsRules.getJSONObject(0).getString("action"))
-        assertEquals("28", dnsRules.getJSONObject(0).getString("qType")); assertEquals(0, dnsRules.getJSONObject(0).getInt("rCode"))
+        assertEquals("hijack", dnsRules.getJSONObject(0).getString("action"))
+        assertEquals("28", dnsRules.getJSONObject(0).getString("qType")); assertFalse(dnsRules.getJSONObject(0).has("rCode"))
         assertEquals("hijack", dnsRules.getJSONObject(1).getString("action")); assertEquals("1", dnsRules.getJSONObject(1).getString("qType"))
         assertEquals("return", dnsRules.getJSONObject(2).getString("action")); assertEquals(5, dnsRules.getJSONObject(2).getInt("rCode"))
         val routing = output.getJSONObject("routing"); val rules = routing.getJSONArray("rules")
@@ -126,8 +123,8 @@ class AndroidTunnelDnsPolicyTest {
             if (dns != null) assertEquals(dns.toString(), output.getJSONObject("dns").toString())
             assertEquals(listOf(AndroidTunnelDnsPolicy.VIRTUAL_SERVER), prepared.systemDnsServers)
             val settings = output.getJSONArray("outbounds").getJSONObject(2).getJSONObject("settings")
-            assertEquals(3, settings.getJSONArray("rules").length()) // A uses Core; no direct-to-VIP fallback.
-            assertEquals("return", settings.getJSONArray("rules").getJSONObject(0).getString("action"))
+            assertEquals(3, settings.getJSONArray("rules").length()) // A/AAAA use Core; no direct-to-VIP fallback.
+            assertEquals("hijack", settings.getJSONArray("rules").getJSONObject(0).getString("action"))
         }
     }
 

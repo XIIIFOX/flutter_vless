@@ -814,8 +814,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   Json dns_rules = Json::array();
   if (!ProtectedDns(config, service_tags, proxy, dns_rules)) return std::nullopt;
   config["outbounds"].push_back({{"tag", relay_tag}, {"protocol", "dns"},
-      {"settings", {{"rules", Json::array({{{"action", "return"}, {"qType", "28"}, {"rCode", 0}},
-                                         {{"action", "hijack"}, {"qType", "1"}},
+      {"settings", {{"rules", Json::array({{{"action", "hijack"}, {"qType", "1,28"}},
                                          {{"action", "return"}, {"rCode", 5}}})}}}});
   config["outbounds"].push_back({{"tag", ipv6_tag}, {"protocol", "blackhole"}});
   for (const auto& outbound : bootstrap.outbounds) config["outbounds"].push_back(outbound);
@@ -824,7 +823,6 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   if (!routing.contains("rules")) routing["rules"] = Json::array();
   if (!routing["rules"].is_array()) return std::nullopt;
   Json rules = Json::array({
-      {{"type", "field"}, {"inboundTag", Json::array({managed_tag})}, {"ip", Json::array({"::/0"})}, {"outboundTag", ipv6_tag}},
       {{"type", "field"}, {"inboundTag", Json::array({managed_tag})}, {"ip", Json::array({std::string(kVirtualDns) + "/32"})}, {"port", "53"}, {"network", "tcp,udp"}, {"outboundTag", relay_tag}}
   });
   for (const auto& rule : dns_rules) rules.push_back(rule);
@@ -839,7 +837,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
 } catch (...) { return std::nullopt; }
 
 // Explicit subnet bypass stays inside the authenticated proxy and below the
-// mandatory DNS/IPv6 rules, never as physical adapter route exceptions.
+// mandatory DNS rules, never as physical adapter route exceptions.
 inline std::optional<std::string> ApplyBypass(const std::string& text, const std::vector<std::string>& cidrs) try {
   for (const auto& cidr : cidrs) {
     const auto slash = cidr.find('/');

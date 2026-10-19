@@ -3,8 +3,8 @@ import NetworkExtension
 import Darwin
 import flutter_vless_privacy
 
-/// Capture IPv6 and reject it at Xray until a dual-stack packet path has been
-/// measured on device. Omitting NEIPv6Settings does not disable physical IPv6.
+/// Capture IPv6 through the same Core routing policy as IPv4. The underlay
+/// bootstrap remains separate from the logical destination address family.
 public enum TunnelIPv6Policy {
     public static let address = "fd00:198:18::1"
     public static let blockTag = "flutter-vless-ipv6-block"
@@ -20,24 +20,10 @@ public enum TunnelIPv6Policy {
     }
 
     static func apply(to config: inout [String: Any], managedInboundTag: String? = nil) -> Bool {
-        // FakeDNS can replace Target even with routeOnly enabled. Its virtual
-        // address pools are incompatible with this literal-IP block policy.
+        // FakeDNS virtual pools require their own qualified packet mapping.
         guard !config.keys.contains(where: { XrayJSONField.matches($0, "fakeDns") }) else { return false }
-        var outbounds = config["outbounds"] as? [[String: Any]] ?? []
-        var serviceTags = XrayServiceTags(configuration: config)
-        let blockTag = serviceTags.next(Self.blockTag)
-        outbounds.append(["tag": blockTag, "protocol": "blackhole"])
-        config["outbounds"] = outbounds
-        var routing = config["routing"] as? [String: Any] ?? [:]
-        var rules = routing["rules"] as? [[String: Any]] ?? []
-        var block: [String: Any] = ["type": "field", "ip": ["::/0"], "outboundTag": blockTag]
-        if let managedInboundTag { block["inboundTag"] = [managedInboundTag] }
-        rules.insert(block, at: 0)
-        routing["rules"] = rules
-        config["routing"] = routing
-        // Xray's IP matcher reads Target; with routeOnly=false sniffing replaces
-        // it with a domain and an IPv6 literal can bypass the block. RouteTarget
-        // still carries the sniffed name for existing domain routing rules.
+        // Keep literal targets while using the sniffed RouteTarget for caller
+        // domain rules. Do not insert a library IPv6 routing override.
         if var inbounds = config["inbounds"] as? [[String: Any]] {
             for index in inbounds.indices {
                 if let managedInboundTag, inbounds[index]["tag"] as? String != managedInboundTag { continue }

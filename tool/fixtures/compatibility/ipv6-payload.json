@@ -1,0 +1,40 @@
+[
+  {
+    "name": "ipv6_payload_with_dual_stack_caller_dns",
+    "config": {
+      "log": {"loglevel": "none"},
+      "dns": {
+        "tag": "caller-dns",
+        "queryStrategy": "UseIP",
+        "hosts": {"payload6.invalid": "2001:db8:41::42"},
+        "servers": ["tcp://9.9.9.9"]
+      },
+      "outbounds": [
+        {"protocol": "socks", "tag": "proxy", "settings": {"servers": [{"address": "endpoint.invalid", "port": 443}]}},
+        {"protocol": "freedom", "tag": "direct"}
+      ],
+      "routing": {"domainStrategy": "AsIs", "rules": [
+        {"type": "field", "ip": ["2001:db8:41::/64"], "outboundTag": "proxy"}
+      ]}
+    }
+  },
+  {
+    "name": "ipv6_payload_retains_caller_ipv4_dns_strategy",
+    "config": {
+      "log": {"loglevel": "none"},
+      "dns": {
+        "tag": "caller-dns",
+        "queryStrategy": "UseIPv4",
+        "hosts": {"payload6.invalid": "2001:db8:41::42"},
+        "servers": ["tcp://9.9.9.9"]
+      },
+      "outbounds": [
+        {"protocol": "socks", "tag": "proxy", "settings": {"servers": [{"address": "endpoint.invalid", "port": 443}]}},
+        {"protocol": "freedom", "tag": "direct"}
+      ],
+      "routing": {"domainStrategy": "AsIs", "rules": [
+        {"type": "field", "ip": ["2001:db8:41::/64"], "outboundTag": "proxy"}
+      ]}
+    }
+  }
+]

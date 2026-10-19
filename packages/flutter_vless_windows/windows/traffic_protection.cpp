@@ -150,9 +150,11 @@ bool TrafficProtection::Install(const std::filesystem::path& xray, const NET_LUI
     add(where, FWP_ACTION_BLOCK, 1, {});
   }
   // No physical IPv6 exception for Xray, sniffed names, applications binding
-  // their own interface, or a newly attached adapter. IPv4 VPN works normally.
+  // their own interface, or a newly attached adapter. IPv6 payload is permitted
+  // only through the exact owned TUN; the outer transport remains IPv4.
   for (auto where : {FWPM_LAYER_ALE_AUTH_CONNECT_V6, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6}) {
     add(where, FWP_ACTION_PERMIT, 100, {loop});
+    if (tunnel) add(where, FWP_ACTION_PERMIT, 80, {interface_});
     add(where, FWP_ACTION_BLOCK, 1, {});
   }
   if (app) FwpmFreeMemory0(reinterpret_cast<void**>(&app));

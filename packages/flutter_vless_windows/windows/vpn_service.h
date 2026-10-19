@@ -88,6 +88,7 @@ class VpnService {
   void RunVpn();
   bool StartWorkers();
   void StopWorkers();
+  bool RetireIPv6Address();
   void StopSession(bool release_protection);
   void UpdateTrafficStats();
   std::atomic<bool> requested_{false};
@@ -118,6 +119,7 @@ class VpnService {
   std::unique_ptr<flutter_vless::native::ProtectedRuntime> private_runtime_;
   std::unique_ptr<flutter_vless::PacketPathProbe> packet_probe_;
   std::vector<MIB_IPFORWARD_ROW2> capture_routes_;
+  std::optional<MIB_UNICASTIPADDRESS_ROW> ipv6_address_;
   std::mutex stats_mutex_;
   int64_t total_upload_ = 0, total_download_ = 0;
  public:

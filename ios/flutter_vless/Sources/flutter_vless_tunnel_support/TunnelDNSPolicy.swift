@@ -3,7 +3,7 @@ import CoreFoundation
 import Darwin
 import flutter_vless_privacy
 
-/// System A queries use the caller's Core DNS client. Transport bootstrap pins
+/// System A and AAAA queries use the caller's Core DNS client. Transport bootstrap pins
 /// live in private, closed routing branches rather than the caller's hosts map.
 public enum TunnelDNSPolicy {
     public static let virtualServer = "198.18.0.2"
@@ -126,7 +126,7 @@ public enum TunnelDNSPolicy {
         if !generated.isEmpty { outbounds.append(["tag": denied, "protocol": "blackhole"]) }
         outbounds.append(["tag": relay, "protocol": "dns", "settings": ["rules": [
             ["action": "hijack", "qType": "1"],
-            ["action": "return", "qType": "28", "rCode": 0],
+            ["action": "hijack", "qType": "28"],
             ["action": "return", "rCode": 5]
         ]]])
         privateRules.insert(["type": "field", "inboundTag": [managedInboundTag], "ip": [virtualServer + "/32"],

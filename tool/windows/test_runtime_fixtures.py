@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
+from unittest.mock import Mock
 
 import runtime_smoke as runtime
 
@@ -19,6 +20,175 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    def test_ipv6_profile_keeps_numeric_ipv4_proxy_and_exact_payload_route(self):
+        ordinary = runtime.config(False, "203.0.113.1", "192.0.2.10")
+        profile = runtime.config(False, "203.0.113.1", "192.0.2.10", ipv6_payload=True)
+        self.assertEqual(ordinary["outbounds"], profile["outbounds"])
+        self.assertEqual("192.0.2.10", profile["outbounds"][0]["settings"]["servers"][0]["address"])
+        self.assertEqual(ordinary["routing"]["rules"][0], profile["routing"]["rules"][0])
+        self.assertEqual({"type": "field", "ip": [runtime.IPV6_PAYLOAD_TARGET + "/128"],
+                          "network": "tcp,udp", "outboundTag": "proxy"}, profile["routing"]["rules"][1])
+        self.assertEqual(runtime.IPV6_PAYLOAD_TARGET, profile["dns"]["hosts"]["ipv6-payload.invalid"])
+        self.assertEqual(ordinary["routing"]["rules"][1:], profile["routing"]["rules"][2:])
+
+    def test_ipv6_marker_state_requires_exact_destination_and_one_shot_nonce(self):
+        address = runtime.socket.inet_pton(runtime.socket.AF_INET6, runtime.IPV6_PAYLOAD_TARGET)
+        for transport in ("tcp", "udp"):
+            for changed in ("kind", "address", "port", "nonce", "no-association"):
+                if transport == "tcp" and changed == "no-association":
+                    continue
+                with self.subTest(transport=transport, changed=changed):
+                    state = runtime.IPv6PayloadState()
+                    payload = state.arm(transport)
+                    control = object()
+                    if transport == "udp" and changed != "no-association":
+                        self.assertTrue(state.control_open(control, "192.0.2.10"))
+                    reply = state.accept(transport, 1 if changed == "kind" else 4,
+                                         bytes(16) if changed == "address" else address,
+                                         1 if changed == "port" else runtime.IPV6_PAYLOAD_PORT,
+                                         b"foreign-marker" if changed == "nonce" else payload,
+                                         "192.0.2.10" if transport == "udp" else None)
+                    self.assertIsNone(reply)
+                    with self.assertRaises(AssertionError):
+                        state.require_observed(transport, payload)
+                    state.control_close(control)
+                    state.close()
+        state = runtime.IPv6PayloadState()
+        payload = state.arm("tcp")
+        self.assertEqual(b"accepted-" + payload, state.accept("tcp", 4, address, runtime.IPV6_PAYLOAD_PORT, payload))
+        state.require_observed("tcp", payload)
+        self.assertIsNone(state.accept("tcp", 4, address, runtime.IPV6_PAYLOAD_PORT, payload))
+
+    def test_ipv6_socks_tcp_verifies_captured_atyp_target_and_bytes(self):
+        state = runtime.IPv6PayloadState()
+        payload = state.arm("tcp")
+        address = runtime.socket.inet_pton(runtime.socket.AF_INET6, runtime.IPV6_PAYLOAD_TARGET)
+        stream = bytearray(b"\x05\x01\x00\x05\x01\x00\x04" + address
+                           + runtime.IPV6_PAYLOAD_PORT.to_bytes(2, "big") + payload)
+        client = Mock()
+        def recv(count):
+            result = bytes(stream[:count]); del stream[:count]; return result
+        client.recv.side_effect = recv
+        server = SimpleNamespace(ipv6_payload=state, server_address=("192.0.2.10", 18582))
+        runtime.Socks(client, ("192.0.2.10", 50000), server)
+        self.assertEqual(b"accepted-" + payload, client.sendall.call_args.args[0])
+        self.assertEqual(bytearray(), stream)
+        state.require_observed("tcp", payload)
+        state.close(); state.require_clean()
+
+    def test_ipv6_socks_udp_association_replies_with_same_numeric_ipv4_endpoint(self):
+        state = runtime.IPv6PayloadState()
+        stream = bytearray(b"\x05\x01\x00\x05\x03\x00\x01" + bytes(6))
+        client = Mock()
+        def recv(count):
+            result = bytes(stream[:count]); del stream[:count]; return result
+        client.recv.side_effect = recv
+        server = SimpleNamespace(ipv6_payload=state, server_address=("192.0.2.10", 18582))
+        runtime.Socks(client, ("192.0.2.10", 50000), server)
+        self.assertEqual(b"\x05\x00\x00\x01\xc0\x00\x02\x0a" + (18582).to_bytes(2, "big"), client.sendall.call_args.args[0])
+        self.assertFalse(state.controls)
+        state.close(); state.require_clean()
+
+    def test_ipv6_datagram_requires_live_association_and_exact_unfragmented_header(self):
+        for changed in (None, "fragment", "ipv4", "target", "port", "nonce", "no-association"):
+            with self.subTest(changed=changed):
+                state = runtime.IPv6PayloadState()
+                payload = state.arm("udp")
+                control = object()
+                if changed != "no-association":
+                    state.control_open(control, "192.0.2.10")
+                address = runtime.socket.inet_pton(runtime.socket.AF_INET6, runtime.IPV6_PAYLOAD_TARGET)
+                prefix = b"\0\0" + (b"\1" if changed == "fragment" else b"\0") + (b"\1" if changed == "ipv4" else b"\4")
+                packet = prefix + (bytes(16) if changed == "target" else address) \
+                    + (1 if changed == "port" else runtime.IPV6_PAYLOAD_PORT).to_bytes(2, "big") \
+                    + (b"foreign" if changed == "nonce" else payload)
+                relay = Mock()
+                runtime.IPv6PayloadDatagram((packet, relay), ("192.0.2.10", 50001), SimpleNamespace(ipv6_payload=state))
+                if changed is None:
+                    relay.sendto.assert_called_once_with(packet[:22] + b"accepted-" + payload, ("192.0.2.10", 50001))
+                    state.require_observed("udp", payload)
+                else:
+                    relay.sendto.assert_not_called()
+                    self.assertTrue(state.errors)
+                state.control_close(control)
+                state.close()
+
+    def test_ipv6_state_close_interrupts_only_owned_controls_and_revokes_admission(self):
+        state = runtime.IPv6PayloadState()
+        owned = Mock()
+        owned.close.side_effect = lambda: state.control_close(owned)
+        self.assertTrue(state.control_open(owned, "192.0.2.10"))
+        state.close()
+        owned.shutdown.assert_called_once_with(runtime.socket.SHUT_RDWR)
+        owned.close.assert_called_once()
+        self.assertFalse(state.control_open(object(), "192.0.2.10"))
+        with self.assertRaises(AssertionError):
+            state.arm("tcp")
+        state.require_clean()
+
+    def test_ipv6_client_requires_owned_tun_source_and_independent_proxy_observation(self):
+        for udp in (False, True):
+            for changed in (None, "source", "reply", "no-observation"):
+                with self.subTest(udp=udp, changed=changed):
+                    state = runtime.IPv6PayloadState()
+                    client = Mock()
+                    client.__enter__ = Mock(return_value=client)
+                    client.__exit__ = Mock(return_value=False)
+                    client.getsockname.return_value = ("::1" if changed == "source" else runtime.IPV6_TUN_SOURCE, 50000, 0, 0)
+                    response = bytearray()
+                    def send(payload):
+                        if changed != "no-observation":
+                            address = runtime.socket.inet_pton(runtime.socket.AF_INET6, runtime.IPV6_PAYLOAD_TARGET)
+                            state.accept("udp" if udp else "tcp", 4, address, runtime.IPV6_PAYLOAD_PORT, payload)
+                        response.extend(bytes(len(b"accepted-" + payload)) if changed == "reply" else b"accepted-" + payload)
+                    def recv(count):
+                        reply = bytes(response[:count]); del response[:count]; return reply
+                    client.sendall.side_effect = send
+                    client.recv.side_effect = recv
+                    # UDP state normally has the independently authenticated
+                    # TCP association; this fake client only tests publication.
+                    with patch.object(runtime.socket, "socket", return_value=client) as factory:
+                        if changed is None:
+                            self.assertIn("IPv6", runtime.ipv6_payload_request(state, udp))
+                        else:
+                            with self.assertRaises(AssertionError):
+                                runtime.ipv6_payload_request(state, udp)
+                    factory.assert_called_once_with(runtime.socket.AF_INET6,
+                                                    runtime.socket.SOCK_DGRAM if udp else runtime.socket.SOCK_STREAM)
+                    client.connect.assert_called_once_with((runtime.IPV6_PAYLOAD_TARGET, runtime.IPV6_PAYLOAD_PORT))
+
+    def test_ipv6_aaaa_probe_requires_protected_source_and_exact_caller_answer(self):
+        for tcp in (False, True):
+            for changed in (None, "source", "empty", "question", "address"):
+                with self.subTest(tcp=tcp, changed=changed):
+                    client = Mock()
+                    client.__enter__ = Mock(return_value=client)
+                    client.__exit__ = Mock(return_value=False)
+                    client.getsockname.return_value = ("192.0.2.10" if changed == "source" else "10.0.85.2", 50000)
+                    response = bytearray()
+                    def send(data):
+                        query = data[2:] if tcp else data
+                        self.assertEqual(("ipv6-payload.invalid", len(query)), runtime.dns_question(query))
+                        self.assertEqual(b"\x00\x1c\x00\x01", query[-4:])
+                        question_bytes = bytes(len(query) - 12) if changed == "question" else query[12:]
+                        answer = query[:2] + b"\x81\x80\x00\x01" + (bytes(2) if changed == "empty" else b"\x00\x01") \
+                            + bytes(4) + question_bytes + b"\xc0\x0c\x00\x1c\x00\x01\x00\x00\x00\x00\x00\x10" \
+                            + (bytes(16) if changed == "address" else runtime.socket.inet_pton(runtime.socket.AF_INET6, runtime.IPV6_PAYLOAD_TARGET))
+                        response.extend((len(answer).to_bytes(2, "big") if tcp else b"") + answer)
+                    def recv(count):
+                        reply = bytes(response[:count]); del response[:count]; return reply
+                    client.sendall.side_effect = send
+                    client.recv.side_effect = recv
+                    with patch.object(runtime.socket, "socket", return_value=client) as factory:
+                        if changed is None:
+                            self.assertIn("AAAA", runtime.ipv6_payload_dns(tcp))
+                        else:
+                            with self.assertRaises(AssertionError):
+                                runtime.ipv6_payload_dns(tcp)
+                    factory.assert_called_once_with(runtime.socket.AF_INET,
+                                                    runtime.socket.SOCK_STREAM if tcp else runtime.socket.SOCK_DGRAM)
+                    client.connect.assert_called_once_with(("198.18.0.2", 53))
+
     def test_explicit_asset_root_contains_only_verified_custom_fixture(self):
         with tempfile.TemporaryDirectory() as directory:
             owner, fixture = runtime.create_asset_root(Path(directory))

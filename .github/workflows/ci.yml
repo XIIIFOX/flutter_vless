@@ -263,7 +263,7 @@ jobs:
         run: |
           swift package --package-path ios/flutter_vless resolve
           tool/test_ios_hev_auth.sh
-      - name: Test real iOS Xray authentication and DNS in simulator
+      - name: Test real iOS Xray and HEV packets in simulator
         timeout-minutes: 18
         run: |
           SIMULATOR_UDID="$(xcrun simctl create 'Flutter Vless Security' com.apple.CoreSimulator.SimDeviceType.iPhone-16)"
@@ -272,6 +272,8 @@ jobs:
           xcrun simctl boot "$SIMULATOR_UDID"
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b
           REQUIRE_CORE_PREFLIGHT=1 tool/test_ios_privacy_runtime.sh
+          HEV=ios/flutter_vless/.build/artifacts/tun2sockskit/HevSocks5Tunnel/HevSocks5Tunnel.xcframework
+          bash tool/test_ios_packet_bridge.sh "$HEV/ios-arm64_x86_64-simulator"
       - name: Test bounded Apple Xray diagnostics store and typed native options
         run: |
           tool/test_bounded_native_log_store.sh
@@ -301,12 +303,14 @@ jobs:
         run: |
           flutter build macos --config-only
           xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
-      - name: Test macOS protection policies and real localhost runtime
+      - name: Test macOS protection policies, runtime and HEV packets
         timeout-minutes: 15
         run: |
           bash tool/test_macos_tunnel_support.sh
           bash tool/test_macos_manager_policy.sh
           REQUIRE_CORE_PREFLIGHT=1 bash tool/test_macos_privacy_runtime.sh
+          HEV=ios/flutter_vless/.build/artifacts/tun2sockskit/HevSocks5Tunnel/HevSocks5Tunnel.xcframework
+          bash tool/test_macos_packet_bridge.sh "$HEV/macos-arm64_x86_64"
       - name: Preserve Apple synthetic runtime evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -317,6 +321,8 @@ jobs:
           path: |
             build/ios_privacy_runtime_probe/runtime.log
             build/macos_privacy_runtime_probe/runtime.log
+            build/ios_packet_bridge_probe/runtime.log
+            build/macos_packet_bridge_probe/runtime.log
 
   windows:
     name: Windows native plugin build

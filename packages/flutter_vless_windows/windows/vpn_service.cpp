@@ -2,6 +2,7 @@
 #include "native_runtime.h"
 #include "diagnostics_log.h"
 #include "xray_config.h"
+#include "owned_address.h"
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 
@@ -61,6 +62,13 @@ bool TunnelReady(NET_LUID& luid) {
   InetPtonA(AF_INET, "10.0.85.2", &address.Address.Ipv4.sin_addr);
   return GetUnicastIpAddressEntry(&address) == NO_ERROR && address.DadState == IpDadStatePreferred
       && address.OnLinkPrefixLength == 24;
+}
+bool TunnelIPv6Ready(const NET_LUID& luid) {
+  MIB_UNICASTIPADDRESS_ROW address{}; InitializeUnicastIpAddressEntry(&address);
+  address.InterfaceLuid = luid; address.Address.Ipv6.sin6_family = AF_INET6;
+  if (InetPtonA(AF_INET6, "fd00:198:18::2", &address.Address.Ipv6.sin6_addr) != 1) return false;
+  return GetUnicastIpAddressEntry(&address) == NO_ERROR && address.DadState == IpDadStatePreferred
+      && address.OnLinkPrefixLength == 64 && !address.SkipAsSource;
 }
 }
 VpnService::VpnService() = default;
@@ -188,6 +196,9 @@ void VpnService::RunVpn() {
 bool VpnService::StartWorkers() {
   using namespace flutter_vless;
   auto fail = [](const char* stage) { Event(stage); return false; };
+  // A previous adapter can outlive its child. Keep cleanup ownership and deny
+  // a replacement until its exact address is retired or verified absent.
+  if (!RetireIPv6Address()) return fail("Previous owned Wintun IPv6 address cleanup remains pending");
   auto underlay = Underlay(&underlay_luid_);
   if (!underlay) return fail("No usable underlay for native recovery");
   underlay_name_ = *underlay;
@@ -242,6 +253,25 @@ bool VpnService::StartWorkers() {
   }
   if (!addressed) return fail("Wintun IPv4 address did not become ready");
   if (!assigned) Event("Reusing the existing ready Wintun IPv4 address");
+  MIB_UNICASTIPADDRESS_ROW ipv6{}; InitializeUnicastIpAddressEntry(&ipv6);
+  ipv6.InterfaceLuid = luid; ipv6.Address.Ipv6.sin6_family = AF_INET6;
+  if (InetPtonA(AF_INET6, "fd00:198:18::2", &ipv6.Address.Ipv6.sin6_addr) != 1) return fail("Invalid owned Wintun IPv6 address");
+  ipv6.OnLinkPrefixLength = 64;
+  ipv6.PrefixOrigin = IpPrefixOriginManual; ipv6.SuffixOrigin = IpSuffixOriginManual;
+  ipv6.ValidLifetime = ipv6.PreferredLifetime = 0xffffffff;
+  ipv6.SkipAsSource = FALSE;
+  const auto ipv6_status = CreateUnicastIpAddressEntry(&ipv6);
+  if (ipv6_status == NO_ERROR) ipv6_address_ = ipv6;
+  else if (ipv6_status != ERROR_OBJECT_ALREADY_EXISTS) {
+    Event(("Cannot assign the owned Wintun IPv6 address, code=" + std::to_string(ipv6_status)).c_str()); return false;
+  }
+  bool ipv6_ready = false;
+  for (int i = 0; i < 50 && requested_.load() && tun2socks_process_->IsRunning(); ++i) {
+    if (TunnelIPv6Ready(luid)) { ipv6_ready = true; break; }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  if (!ipv6_ready) return fail("Wintun IPv6 address did not become ready");
+  if (ipv6_status == ERROR_OBJECT_ALREADY_EXISTS) Event("Reusing the existing ready Wintun IPv6 address");
   if (!native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"dnsservers",
       L"name=flutter_vless_tun", L"source=static", L"address=198.18.0.2", L"validate=no"})) return fail("Wintun address or virtual DNS did not become ready");
   for (auto prefix : {std::pair<const char*, UINT8>{"0.0.0.0", UINT8{1}}, {"128.0.0.0", UINT8{1}}, {xray_config::kVirtualDns, UINT8{32}}}) {
@@ -255,6 +285,19 @@ bool VpnService::StartWorkers() {
     // Never delete or claim an existing administrator/other-session route.
     const auto status = CreateIpForwardEntry2(&row);
     if (status != NO_ERROR) { Event(("Cannot install an owned capture route, code=" + std::to_string(status)).c_str()); return false; }
+    capture_routes_.push_back(row);
+  }
+  for (const auto* prefix : {"::", "8000::"}) {
+    MIB_IPFORWARD_ROW2 row{}; InitializeIpForwardEntry(&row);
+    row.InterfaceLuid = luid; row.DestinationPrefix.Prefix.Ipv6.sin6_family = AF_INET6;
+    row.DestinationPrefix.PrefixLength = 1;
+    if (InetPtonA(AF_INET6, prefix, &row.DestinationPrefix.Prefix.Ipv6.sin6_addr) != 1) return fail("Invalid owned IPv6 capture prefix");
+    // On-link L3 route: the Wintun worker receives the original IPv6 packet.
+    // Never replace a physical IPv6 default or permit physical Xray IPv6.
+    row.NextHop.Ipv6.sin6_family = AF_INET6;
+    row.Metric = 0; row.Protocol = static_cast<NL_ROUTE_PROTOCOL>(MIB_IPPROTO_NETMGMT);
+    const auto status = CreateIpForwardEntry2(&row);
+    if (status != NO_ERROR) { Event(("Cannot install an owned IPv6 capture route, code=" + std::to_string(status)).c_str()); return false; }
     capture_routes_.push_back(row);
   }
   if (!protection_.Install(xray_executable_path_, &luid)) { Event(("Cannot authorize the Wintun interface, code=" + std::to_string(protection_.Error())).c_str()); return false; }
@@ -271,10 +314,20 @@ void VpnService::StopWorkers() {
   // The separate WFP barrier remains installed, including during route removal.
   for (const auto& route : capture_routes_) DeleteIpForwardEntry2(&route);
   capture_routes_.clear();
+  const bool ipv6_retired = RetireIPv6Address();
   tun2socks_process_.reset(); xray_process_.reset();
+  if (!ipv6_retired) RetireIPv6Address(); // adapter teardown can complete a pending deletion
   packet_probe_.reset();
   flutter_vless::native::RemovePrivateConfig(temp_config_path_);
   flutter_vless::native::RemovePrivateConfig(tun_config_path_);
+}
+bool VpnService::RetireIPv6Address() {
+  return flutter_vless::native::RetireOwnedAddress(ipv6_address_, [](const MIB_UNICASTIPADDRESS_ROW& address) {
+    const auto status = DeleteUnicastIpAddressEntry(&address);
+    if (status == NO_ERROR || status == ERROR_NOT_FOUND) return true;
+    Event(("Owned Wintun IPv6 address cleanup failed, code=" + std::to_string(status)).c_str());
+    return false;
+  });
 }
 void VpnService::UpdateTrafficStats() {
   if (!api_port_) return;

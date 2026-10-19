@@ -13,21 +13,26 @@ private final class ProbeFlow: TunnelPacketFlow {
     }
     func writePackets(_ packets: [Data], withProtocols protocols: [NSNumber]) -> Bool {
         condition.lock()
-        self.packets.append(contentsOf: zip(packets, protocols).filter { $1.int32Value == AF_INET }.map { $0.0 })
+        guard packets.count == protocols.count, zip(packets, protocols).allSatisfy({ packet, family in
+            guard let first = packet.first else { return false }
+            return (first >> 4 == 4 && family.int32Value == AF_INET) ||
+                   (first >> 4 == 6 && family.int32Value == AF_INET6)
+        }) else { condition.unlock(); return false }
+        self.packets.append(contentsOf: packets)
         condition.broadcast(); condition.unlock()
         return true
     }
-    func send(_ data: Data) throws {
-        try send([data])
+    func send(_ data: Data, family: Int32 = AF_INET) throws {
+        try send([data], family: family)
     }
-    func send(_ batch: [Data]) throws {
+    func send(_ batch: [Data], family: Int32 = AF_INET) throws {
         condition.lock()
         let deadline = Date().addingTimeInterval(5)
         while callback == nil {
             if !condition.wait(until: deadline) { condition.unlock(); throw POSIXError(.ETIMEDOUT) }
         }
         let callback = self.callback; self.callback = nil; condition.unlock()
-        callback?(batch, Array(repeating: NSNumber(value: AF_INET), count: batch.count))
+        callback?(batch, Array(repeating: NSNumber(value: family), count: batch.count))
     }
     func receive(where matches: (Data) -> Bool) throws -> Data {
         condition.lock(); defer { condition.unlock() }
@@ -39,8 +44,12 @@ private final class ProbeFlow: TunnelPacketFlow {
     }
 }
 
-@main struct PacketBridgeProbe {
+#if !PACKET_BRIDGE_IOS_APPLICATION
+@main
+#endif
+struct PacketBridgeProbe {
     static func main() throws {
+        setbuf(stdout, nil)
         let listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
         guard listener >= 0 else { throw POSIXError(.EIO) }
         defer { close(listener) }
@@ -51,16 +60,34 @@ private final class ProbeFlow: TunnelPacketFlow {
         let bound = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
-        guard bound == 0, listen(listener, 1) == 0 else { throw POSIXError(.EIO) }
+        guard bound == 0, listen(listener, 3) == 0 else { throw POSIXError(.EIO) }
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
         _ = withUnsafeMutablePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &length) }
         }
         let port = UInt16(bigEndian: address.sin_port)
+        let relay = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+        guard relay >= 0 else { throw POSIXError(.EIO) }
+        defer { close(relay) }
+        let relayBound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(relay, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard relayBound == 0 else { throw POSIXError(.EIO) }
+        var relayTimeout = timeval(tv_sec: 5, tv_usec: 0)
+        guard setsockopt(relay, SOL_SOCKET, SO_RCVTIMEO, &relayTimeout, socklen_t(MemoryLayout.size(ofValue: relayTimeout))) == 0 else { throw POSIXError(.EIO) }
         let transferred = DispatchSemaphore(value: 0)
+        let ipv6TCPTransferred = DispatchSemaphore(value: 0)
+        let ipv6UDPTransferred = DispatchSemaphore(value: 0)
+        let associationClosed = DispatchSemaphore(value: 0)
+        let stubDone = DispatchSemaphore(value: 0)
+        let tcp6Payload = Data(("bridge-ipv6-tcp-" + UUID().uuidString).utf8)
+        let udp6Payload = Data(("bridge-ipv6-udp-" + UUID().uuidString).utf8)
+        let tcp6Reply = Data("accepted-".utf8) + tcp6Payload
+        let udp6Reply = Data("accepted-".utf8) + udp6Payload
         let payload = Data("bridge-fixture".utf8)
         let bulk = Data((0..<(8 * 1024 * 1024)).map { UInt8($0 % 251) })
         DispatchQueue.global().async {
+            defer { stubDone.signal() }
             let client = accept(listener, nil, nil)
             guard client >= 0 else { return }
             defer { close(client) }
@@ -85,6 +112,48 @@ private final class ProbeFlow: TunnelPacketFlow {
                   write(client, bulk),
                   let uploaded = read(client, bulk.count), uploaded == bulk else { return }
             transferred.signal()
+
+            let tcp6 = accept(listener, nil, nil)
+            guard tcp6 >= 0 else { return }
+            defer { close(tcp6) }
+            guard configure(tcp6), handshake(tcp6, command: 1, target: ipv6Target, port: ipv6Port),
+                  write(tcp6, Data([5, 0, 0, 1, 127, 0, 0, 1, 0, 0])),
+                  read(tcp6, tcp6Payload.count) == tcp6Payload,
+                  write(tcp6, tcp6Reply) else { return }
+            ipv6TCPTransferred.signal()
+
+            let control = accept(listener, nil, nil)
+            guard control >= 0 else { return }
+            defer { close(control) }
+            // UDP ASSOCIATE describes the client relay socket, not the payload
+            // target. Its zero tuple is intentionally distinct from ATYP4 below.
+            guard configure(control), handshake(control, command: 3),
+                  write(control, Data([5, 0, 0, 1, 127, 0, 0, 1, UInt8(port >> 8), UInt8(port & 255)])) else { return }
+            var packet = [UInt8](repeating: 0, count: 2048)
+            var peer = sockaddr_storage()
+            var peerLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
+            let count = withUnsafeMutablePointer(to: &peer) { peer in
+                peer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    recvfrom(relay, &packet, packet.count, 0, $0, &peerLength)
+                }
+            }
+            let header = Data([0, 0, 0, 4] + ipv6Target + [UInt8(ipv6Port >> 8), UInt8(ipv6Port & 255)])
+            guard count == header.count + udp6Payload.count,
+                  Data(packet.prefix(count)) == header + udp6Payload,
+                  peer.ss_family == sa_family_t(AF_INET) else { return }
+            let response = header + udp6Reply
+            let sent = response.withUnsafeBytes { bytes in
+                withUnsafePointer(to: &peer) { peer in
+                    peer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        sendto(relay, bytes.baseAddress, bytes.count, 0, $0, peerLength)
+                    }
+                }
+            }
+            guard sent == response.count else { return }
+            ipv6UDPTransferred.signal()
+            var byte: UInt8 = 0
+            guard recv(control, &byte, 1, 0) == 0 else { return }
+            associationClosed.signal()
         }
         let flow = ProbeFlow()
         let bridge = try TunnelPacketBridge(flow: flow, mtu: 1500) {
@@ -161,6 +230,37 @@ private final class ProbeFlow: TunnelPacketFlow {
                          downloadSeconds, Double(bulk.count * 8) / downloadSeconds / 1_000_000,
                          uploadSeconds, Double(bulk.count * 8) / uploadSeconds / 1_000_000))
             print("Packet bridge: \(bridge.statistics())")
+
+            try flow.send(ipv6TCP(sequence: 4000, ack: 0, flags: 2), family: AF_INET6)
+            let synack6 = try flow.receive { packet in
+                guard let tcp = ipv6Transport(packet, protocol: 6), tcp.count >= 20 else { return false }
+                return tcp[0..<4] == Data([UInt8(ipv6Port >> 8), UInt8(ipv6Port & 255), 0xc0, 1]) && tcp[13] & 0x12 == 0x12
+            }
+            guard let syn6 = ipv6Transport(synack6, protocol: 6) else { throw POSIXError(.EBADMSG) }
+            let seq6 = syn6[4..<8].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+            try flow.send(ipv6TCP(sequence: 4001, ack: seq6 &+ 1, flags: 16), family: AF_INET6)
+            try flow.send(ipv6TCP(sequence: 4001, ack: seq6 &+ 1, flags: 24, payload: tcp6Payload), family: AF_INET6)
+            let returnedTCP = try flow.receive { packet in
+                guard let tcp = ipv6Transport(packet, protocol: 6), tcp.count >= 20 else { return false }
+                let offset = Int(tcp[12] >> 4) * 4
+                return offset >= 20 && offset <= tcp.count && Data(tcp.dropFirst(offset)) == tcp6Reply
+            }
+            guard let tcp6 = ipv6Transport(returnedTCP, protocol: 6), tcp6[0..<4] == Data([UInt8(ipv6Port >> 8), UInt8(ipv6Port & 255), 0xc0, 1]),
+                  tcp6[4..<8].reduce(UInt32(0), { ($0 << 8) | UInt32($1) }) == seq6 &+ 1,
+                  ipv6TCPTransferred.wait(timeout: .now() + 5) == .success else { throw POSIXError(.EBADMSG) }
+            try flow.send(ipv6TCP(sequence: UInt32(4001 + tcp6Payload.count), ack: seq6 &+ 1 &+ UInt32(tcp6Reply.count), flags: 16), family: AF_INET6)
+            print("PASS shipped HEV: IPv6 TCP exact target and nonce through IPv4 SOCKS and AF_INET6 packetFlow")
+
+            try flow.send(ipv6UDP(payload: udp6Payload), family: AF_INET6)
+            let returnedUDP = try flow.receive { packet in
+                guard let udp = ipv6Transport(packet, protocol: 17), udp.count >= 8 else { return false }
+                return Data(udp.dropFirst(8)) == udp6Reply
+            }
+            guard let udp6 = ipv6Transport(returnedUDP, protocol: 17),
+                  udp6[0..<4] == Data([UInt8(ipv6Port >> 8), UInt8(ipv6Port & 255), 0xc0, 2]),
+                  Int(udp6[4]) * 256 + Int(udp6[5]) == udp6.count,
+                  ipv6UDPTransferred.wait(timeout: .now() + 5) == .success else { throw POSIXError(.EBADMSG) }
+            print("PASS shipped HEV: IPv6 UDP exact target and nonce through IPv4 SOCKS and AF_INET6 packetFlow")
         } catch {
             var upPackets = 0, upBytes = 0, downPackets = 0, downBytes = 0
             hev_socks5_tunnel_stats(&upPackets, &upBytes, &downPackets, &downBytes)
@@ -173,7 +273,72 @@ private final class ProbeFlow: TunnelPacketFlow {
             fputs("FAIL HEV shutdown\n", stderr); exit(1)
         }
         bridge.shutdown()
+        guard associationClosed.wait(timeout: .now() + 5) == .success,
+              stubDone.wait(timeout: .now() + 5) == .success else { throw POSIXError(.ETIMEDOUT) }
         print("PASS shipped HEV: packetFlow -> owned datagram bridge -> HEV TCP -> loopback SOCKS -> packetFlow; clean shutdown")
+    }
+
+    private static let ipv6Source: [UInt8] = [0xfd, 0, 1, 0x98, 0, 0x18, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]
+    private static let ipv6Target: [UInt8] = [0x20, 1, 0x0d, 0xb8, 0, 0x41, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x42]
+    private static let ipv6Port: UInt16 = 45678
+
+    private static func configure(_ fd: Int32) -> Bool {
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        var enabled: Int32 = 1
+        return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout))) == 0 &&
+               setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout))) == 0 &&
+               setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout.size(ofValue: enabled))) == 0
+    }
+
+    private static func handshake(_ fd: Int32, command: UInt8, target: [UInt8]? = nil, port: UInt16 = 0) -> Bool {
+        guard let greeting = read(fd, 2), greeting[0] == 5,
+              let methods = read(fd, Int(greeting[1])), methods.contains(0),
+              write(fd, Data([5, 0])), let request = read(fd, 4),
+              request[0] == 5, request[1] == command, request[2] == 0 else { return false }
+        if let target {
+            return request[3] == 4 && read(fd, 18) == Data(target + [UInt8(port >> 8), UInt8(port & 255)])
+        }
+        // HEV UDP ASSOCIATE uses an unspecified IPv4 or IPv6 client tuple.
+        let count = request[3] == 1 ? 6 : request[3] == 4 ? 18 : 0
+        return count > 0 && read(fd, count) == Data(repeating: 0, count: count)
+    }
+
+    private static func bytes(_ value: UInt32) -> [UInt8] {
+        [24, 16, 8, 0].map { UInt8(truncatingIfNeeded: value >> $0) }
+    }
+
+    private static func ipv6Packet(_ transport: [UInt8], protocol number: UInt8) -> Data {
+        Data([0x60, 0, 0, 0, UInt8(transport.count >> 8), UInt8(transport.count & 255), number, 64] +
+             ipv6Source + ipv6Target + transport)
+    }
+
+    private static func ipv6TCP(sequence: UInt32, ack: UInt32, flags: UInt8, payload: Data = Data()) -> Data {
+        var tcp: [UInt8] = [0xc0, 1, UInt8(ipv6Port >> 8), UInt8(ipv6Port & 255)] + bytes(sequence) + bytes(ack) +
+            [0x50, flags, 0xff, 0xff, 0, 0, 0, 0] + payload
+        let sum = checksum(ipv6Source + ipv6Target + bytes(UInt32(tcp.count)) + [0, 0, 0, 6] + tcp)
+        tcp[16] = UInt8(sum >> 8); tcp[17] = UInt8(sum & 255)
+        return ipv6Packet(tcp, protocol: 6)
+    }
+
+    private static func ipv6UDP(payload: Data) -> Data {
+        let length = payload.count + 8
+        var udp = [UInt8(0xc0), 2, UInt8(ipv6Port >> 8), UInt8(ipv6Port & 255), UInt8(length >> 8), UInt8(length & 255), 0, 0] + payload
+        let calculated = checksum(ipv6Source + ipv6Target + bytes(UInt32(length)) + [0, 0, 0, 17] + udp)
+        let sum: UInt16 = calculated == 0 ? 0xffff : calculated
+        udp[6] = UInt8(sum >> 8); udp[7] = UInt8(sum & 255)
+        return ipv6Packet(udp, protocol: 17)
+    }
+
+    /// Only the exact reverse flow with a valid mandatory IPv6 transport checksum
+    /// is evidence. An unrelated v4 packet, address, port or corrupt reply cannot pass.
+    private static func ipv6Transport(_ packet: Data, protocol number: UInt8) -> Data? {
+        guard packet.count >= 48, packet[0] >> 4 == 6, packet[6] == number,
+              packet[8..<24] == Data(ipv6Target), packet[24..<40] == Data(ipv6Source),
+              Int(packet[4]) * 256 + Int(packet[5]) == packet.count - 40 else { return nil }
+        let transport = Array(packet.dropFirst(40))
+        if number == 17 && (transport.count < 8 || (transport[6] == 0 && transport[7] == 0)) { return nil }
+        guard checksum(ipv6Target + ipv6Source + bytes(UInt32(transport.count)) + [0, 0, 0, number] + transport) == 0 else { return nil }
+        return Data(transport)
     }
 
     private static func tcpPayload(_ packet: Data) -> (UInt32, Data)? {

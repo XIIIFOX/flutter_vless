@@ -533,7 +533,7 @@ instrument session-recovery "$CLASS_PREFIX.SessionRecoveryDeviceTest" 3 0
 instrument session-replacement "$CLASS_PREFIX.SessionReplacementDeviceTest" 1 0
 instrument port-compatibility "$CLASS_PREFIX.PortCompatibilityDeviceTest" 1 0
 instrument session-delay "$CLASS_PREFIX.SessionDelayDeviceTest" 1 0
-instrument caller-root-dns "$CLASS_PREFIX.CallerRootDnsDeviceTest" 2 0
+instrument caller-root-dns "$CLASS_PREFIX.CallerRootDnsDeviceTest" 3 0
 HOST_CLASS="$CLASS_PREFIX.ProtectedHostTrafficTest"
 instrument protected-host "$HOST_CLASS#hostUIDTCPAndUDPTraverseProxy,$HOST_CLASS#explicitHostExclusionAndProxyOnlyRemainExplicit,$HOST_CLASS#refusedProtectionStopsRuntimeBeforeVPN" 3 0
 instrument controlled-domain-routing "$CLASS_PREFIX.ControlledDomainRoutingTest#sniffedDomainRulesSelectDirectAndProxyAndSurviveRecovery" 1 0

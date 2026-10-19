@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Add owned IPv6 tunnel addressing/routes and permit IPv6 only on that exact tunnel interface. Keep physical IPv6 blocked, preserve caller IPv6 routes and DNS query strategy, and add TCP/UDP recovery and address-cleanup regressions.
 * Apply `geoAssetsDirectory` to preflight, proxy/VPN startup and saved quick profiles. Override both child data-root aliases, retain separate certificate lookup and leave explicit roots untouched; add native and actual traffic coverage.
 * Freeze listener address environment references before private port allocation and child launch. Do not probe or remap Unix listener TCP ports; fix the MSVC build of optional private statistics ports.
 * Retain imported API/services and existing stats/policy sections in VPN and proxy modes. Query only a library-owned statistics endpoint; let profiles run when private statistics are unavailable.

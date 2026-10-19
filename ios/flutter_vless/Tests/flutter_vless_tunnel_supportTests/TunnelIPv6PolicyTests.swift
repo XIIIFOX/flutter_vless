@@ -15,7 +15,7 @@ final class TunnelIPv6PolicyTests: XCTestCase {
         XCTAssertEqual(settings.excludedRoutes?.first?.destinationNetworkPrefixLength, 128)
     }
 
-    func testIPv6BlockPrecedesAppDirectRuleAndSniffingPreservesIP() throws {
+    func testIPv6UsesCallerRoutingAndSniffingPreservesIP() throws {
         let direct: [String: Any] = ["type": "field", "domain": ["full:control.example"], "outboundTag": "direct"]
         var config: [String: Any] = [
             "inbounds": [["protocol": "socks", "sniffing": ["enabled": true, "routeOnly": false]]],
@@ -24,14 +24,13 @@ final class TunnelIPv6PolicyTests: XCTestCase {
         ]
         XCTAssertTrue(TunnelIPv6Policy.apply(to: &config))
         let rules = try XCTUnwrap((config["routing"] as? [String: Any])?["rules"] as? [[String: Any]])
-        XCTAssertEqual(rules.first?["ip"] as? [String], ["::/0"])
-        XCTAssertEqual(rules.first?["outboundTag"] as? String, TunnelIPv6Policy.blockTag)
-        XCTAssertEqual(rules.last! as NSDictionary, direct as NSDictionary)
+        XCTAssertEqual(rules as NSArray, [direct] as NSArray)
+        XCTAssertEqual(config["outbounds"] as? NSArray, [["protocol": "freedom", "tag": "direct"]] as NSArray)
         let inbound = try XCTUnwrap((config["inbounds"] as? [[String: Any]])?.first)
         XCTAssertEqual((inbound["sniffing"] as? [String: Any])?["routeOnly"] as? Bool, true)
-        XCTAssertTrue(TunnelIPv6Policy.apply(to: &config), "An imported tag must be isolated")
+        XCTAssertTrue(TunnelIPv6Policy.apply(to: &config))
         let second = try XCTUnwrap((config["routing"] as? [String: Any])?["rules"] as? [[String: Any]])
-        XCTAssertEqual(second[0]["outboundTag"] as? String, TunnelIPv6Policy.blockTag + "-1")
+        XCTAssertEqual(second as NSArray, rules as NSArray, "Repeated preparation must not add a routing override")
     }
 
     func testFakeDNSCannotReplaceIPv6TargetDuringSniffing() {
@@ -58,7 +57,8 @@ final class TunnelIPv6PolicyTests: XCTestCase {
         XCTAssertNil(output["Routing"])
         XCTAssertNil(output["Inbounds"])
         let rules = try XCTUnwrap((output["routing"] as? [String: Any])?["rules"] as? [[String: Any]])
-        XCTAssertEqual(rules.first?["outboundTag"] as? String, TunnelIPv6Policy.blockTag)
+        XCTAssertFalse(rules.contains { ($0["ip"] as? [String]) == ["::/0"] })
+        XCTAssertEqual(rules.last?["outboundTag"] as? String, "direct")
         let inbounds = try XCTUnwrap(output["inbounds"] as? [[String: Any]])
         XCTAssertEqual((inbounds[0]["sniffing"] as? [String: Any])?["routeOnly"] as? Bool, true)
         if let directory = ProcessInfo.processInfo.environment["TUNNEL_DNS_FIXTURES"] {

@@ -140,10 +140,9 @@ internal object AndroidTunnelDnsPolicy {
         config.put("routing", routing)
         val relay = JSONObject().put("tag", relayTag).put("protocol", "dns")
             .put("settings", JSONObject().put("rewriteNetwork", "tcp").put("rewriteAddress", "1.1.1.1")
-                // The VPN service blocks IPv6. Raw DNS relay bypasses the
-                // internal queryStrategy, so answer AAAA with NOERROR/NODATA.
+                // This explicit override carries both address families through
+                // the selected proxy; it never uses a physical DNS fallback.
                 .put("rewritePort", 53).put("rules", JSONArray()
-                    .put(JSONObject().put("action", "return").put("qType", "28").put("rCode", 0))
                     .put(JSONObject().put("action", "direct"))))
             .put("streamSettings", JSONObject().put("sockopt", JSONObject().put("dialerProxy", selectedTag)))
         config.put("outbounds", JSONArray(outbounds).put(relay))
@@ -187,11 +186,11 @@ internal object AndroidTunnelDnsPolicy {
         userRules.forEach(rules::put)
         routing.put("rules", rules)
         config.put("routing", routing)
-        // A is answered by Core's unchanged root client. The current Android
-        // interface blocks IPv6, so AAAA is explicit NODATA. Other record types
-        // are REFUSED, never forwarded directly to the virtual address.
+        // Both address families are answered by Core's unchanged root client,
+        // which applies caller queryStrategy (including UseIPv4) itself. Other
+        // record types are REFUSED, never forwarded to the virtual address.
         val dnsRules = JSONArray()
-            .put(JSONObject().put("action", "return").put("qType", "28").put("rCode", 0))
+            .put(JSONObject().put("action", "hijack").put("qType", "28"))
             .put(JSONObject().put("action", "hijack").put("qType", "1"))
             .put(JSONObject().put("action", "return").put("rCode", 5))
         config.put("outbounds", JSONArray(outbounds).put(JSONObject().put("tag", relayTag)
@@ -208,14 +207,14 @@ internal object AndroidTunnelDnsPolicy {
             return keys.singleOrNull()?.let(value::opt)
         }
         val engine = field(config, "fakedns")
-        require(engine == null || engine == JSONObject.NULL) { "FakeDNS is unavailable in the IPv4 VPN DNS bridge" }
+        require(engine == null || engine == JSONObject.NULL) { "FakeDNS is unavailable in the VPN DNS bridge" }
         val dns = field(config, "dns") as? JSONObject ?: return
         val servers = field(dns, "servers") as? JSONArray ?: return
         for (index in 0 until servers.length()) {
             val server = servers.opt(index)
             val address = if (server is JSONObject) field(server, "address") else server
             require(address !is String || fold(address) != "fakedns") {
-                "FakeDNS is unavailable in the IPv4 VPN DNS bridge"
+                "FakeDNS is unavailable in the VPN DNS bridge"
             }
         }
     }

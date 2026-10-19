@@ -172,13 +172,13 @@ final class TunnelDNSPolicyTests: XCTestCase {
         XCTAssertEqual((primary["settings"] as? [String: Any])?["address"] as? String, "proxy.example")
     }
 
-    func testSystemAQueriesUseRootClientAndUnsupportedTypesNeverDirectFromVirtualDNS() throws {
+    func testSystemAddressQueriesUseRootClientAndUnsupportedTypesNeverDirectFromVirtualDNS() throws {
         var config: [String: Any] = ["outbounds": [["tag": "proxy", "protocol": "http", "settings": ["address": "203.0.113.7", "port": 443]]]]
         XCTAssertNotNil(TunnelDNSPolicy.apply(to: &config, managedInboundTag: "fixture-tun", resolveIPv4: { _ in XCTFail("Literal endpoint must not resolve"); return nil }))
         let relay = try XCTUnwrap((config["outbounds"] as? [[String: Any]])?.first { ($0["protocol"] as? String) == "dns" })
         let rules = try XCTUnwrap((relay["settings"] as? [String: Any])?["rules"] as? [[String: Any]])
         XCTAssertEqual(rules.first { ($0["qType"] as? String) == "1" }?["action"] as? String, "hijack")
-        XCTAssertEqual(rules.first { ($0["qType"] as? String) == "28" }?["action"] as? String, "return")
+        XCTAssertEqual(rules.first { ($0["qType"] as? String) == "28" }?["action"] as? String, "hijack")
         XCTAssertEqual(rules.last?["action"] as? String, "return")
         XCTAssertEqual(rules.last?["rCode"] as? Int, 5)
         XCTAssertFalse(rules.contains { ($0["action"] as? String) == "direct" })

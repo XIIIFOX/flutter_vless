@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Retain IPv6 tunnel capture and caller IPv6 routing instead of inserting a blanket block. Delegate A/AAAA to preserved caller DNS and add shipped-HEV IPv6 TCP/UDP packet fixtures; IPv6-only bootstrap and NAT64 remain unqualified.
 * Permit explicit custom-only or asset-free data directories without unrelated standard GeoDAT files. Keep certificate lookup separate and validate referenced files through Core; add shared custom GeoSite runtime coverage for both Apple platforms.
 * Freeze listener address environment references before cross-process profile persistence and Unix/TCP allocation. Preserve explicit empty values and source JSON; reject recursive listener references.
 * Preserve existing stats/policy sections, including explicit null, disabled counters and levels-only policy. Add defaults only when a root section is absent; keep caller API/services intact.

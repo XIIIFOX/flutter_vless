@@ -170,6 +170,11 @@ The Windows backend does not download Xray automatically.
   before testing localhost defaults, IPv6 or FakeDNS. Use a fresh browser
   connection after changing a DNS or routing rule.
 - Use proxy-only mode first when you want the smallest runtime path.
+- The [IPv6 payload fixtures](../tool/fixtures/compatibility/ipv6-payload.json)
+  preserve caller `UseIP` or `UseIPv4` DNS strategy. Controlled CI checks cover
+  IPv6 destinations through an IPv4 proxy; IPv6-only transport endpoints,
+  NAT64 and handover remain separate qualification work. Windows still blocks
+  physical IPv6, including Core direct egress.
 - Use VPN/tunnel mode only after platform setup is complete.
 - Import a known-good share link or raw Xray config from the clipboard.
 - Watch `state`, `connectionState`, upload, and download counters after

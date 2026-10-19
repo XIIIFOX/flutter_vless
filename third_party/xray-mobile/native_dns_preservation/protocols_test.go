@@ -65,6 +65,8 @@ func TestProtocolCorpusBuilds(t *testing.T) {
 	}
 	testListenAddresses(t, false)
 	testAssetFiles(t, false)
+	testIPv6PayloadPreparation(t, false)
+	testIPv6RuntimeDocumentsBuild(t)
 }
 
 // File-only native preparation and Core Build. No core.Instance is created,
@@ -130,6 +132,7 @@ func testNativeProtocolPreparation(t *testing.T) {
 	}
 	testListenAddresses(t, true)
 	testAssetFiles(t, true)
+	testIPv6PayloadPreparation(t, true)
 }
 
 func foldedRoot(object map[string]any, name string) (any, bool) {

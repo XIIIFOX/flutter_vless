@@ -4,6 +4,54 @@
 #include <fstream>
 using namespace flutter_vless::xray_config;
 void Require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+void IPv6PayloadCases(const std::string& only = "") {
+  const auto source = Parse(R"({"inbounds":[],"outbounds":[{"tag":"proxy","protocol":"socks","settings":{"servers":[{"address":"endpoint.invalid","port":443}]}},{"tag":"direct","protocol":"freedom"}],"dns":{"queryStrategy":"UseIP","hosts":{"payload.invalid":["198.51.100.7","2001:db8::7"]},"servers":["tcp://1.1.1.1"]},"routing":{"rules":[{"type":"field","ip":["2001:db8::/32"],"network":"tcp,udp","outboundTag":"proxy"}]}})");
+  auto prepare = [](const Json& value) {
+    return PrepareProtectedVpn(value.dump(), "session-user", "session-password", "Ethernet",
+        [](const std::string& host) { return host == "endpoint.invalid" ? "192.0.2.5" : ""; });
+  };
+  std::map<std::string, std::function<void()>> cases;
+  cases["captured-payload"] = [&] {
+    const auto output = prepare(source); Require(output.has_value(), "IPv4 proxy with IPv6 payload profile rejected");
+    const auto config = Parse(*output);
+    Require(config["routing"]["rules"].back() == source["routing"]["rules"][0], "caller IPv6 TCP/UDP routing changed");
+    for (const auto& rule : config["routing"]["rules"]) {
+      Require(!(rule.value("inboundTag", Json::array()) == Json::array({kManagedInbound})
+          && rule.value("ip", Json::array()) == Json::array({"::/0"})), "captured IPv6 payload is still blocked before caller routing");
+    }
+    // Enabling an inner IPv6 destination must not enable an outer physical
+    // IPv6 socket, change the caller endpoint, or open the private pin scope.
+    Require(config["outbounds"][0]["settings"] == source["outbounds"][0]["settings"], "IPv6 payload changed the outer proxy endpoint");
+    Require(config["outbounds"][1]["settings"]["domainStrategy"] == "ForceIPv4", "physical direct egress lost its IPv4-only boundary");
+    bool closed_pin = false;
+    for (const auto& rule : config["routing"]["rules"]) {
+      if (rule.value("outboundTag", "") == kIpv6Block && rule.contains("inboundTag")
+          && rule["inboundTag"] != Json::array({kManagedInbound}) && rule.size() == 3) closed_pin = true;
+    }
+    Require(closed_pin, "unmatched private transport bootstrap can fall through to caller routing");
+  };
+  cases["dns-aaaa"] = [&] {
+    const auto output = prepare(source); Require(output.has_value(), "dual-family caller DNS profile rejected");
+    const auto config = Parse(*output);
+    Require(config["dns"] == source["dns"], "IPv6 adaptation rewrote caller DNS hosts/strategy/servers");
+    const auto relay = std::find_if(config["outbounds"].begin(), config["outbounds"].end(),
+        [](const Json& value) { return value.value("tag", "") == kDnsRelay; });
+    Require(relay != config["outbounds"].end(), "IPv6 payload lost protected system DNS relay");
+    Require((*relay)["settings"]["rules"] == Json::array({
+        {{"action", "hijack"}, {"qType", "1,28"}}, {{"action", "return"}, {"rCode", 5}}}),
+        "system AAAA must use caller Core DNS rather than unconditional NODATA or a raw relay");
+    Require(!relay->contains("streamSettings") && !relay->contains("proxySettings"), "system IPv6 DNS bypassed the root client");
+  };
+  cases["caller-ipv4-policy"] = [&] {
+    auto profile = source; profile["dns"]["queryStrategy"] = "UseIPv4";
+    profile["dns"]["servers"][0] = {{"address", "tcp://1.1.1.1"}, {"queryStrategy", "UseIPv4"}, {"tag", "caller-dns"}};
+    const auto output = prepare(profile); Require(output.has_value(), "caller IPv4-only DNS policy rejected");
+    Require(Parse(*output)["dns"] == profile["dns"], "IPv6 payload adaptation widened caller IPv4 DNS policy");
+  };
+  if (!only.empty()) {
+    const auto found = cases.find(only); Require(found != cases.end(), "unknown IPv6 test case"); found->second();
+  } else for (const auto& item : cases) item.second();
+}
 void ProtocolCompatibilityCases(const std::string& only = "") {
   const auto source = Parse(R"({"inbounds":[],"outbounds":[{"tag":"proxy","protocol":"socks","settings":{"servers":[{"address":"endpoint.invalid","port":443}]}},{"tag":"direct","protocol":"freedom"},{"tag":"block","protocol":"blackhole"}],"dns":{"queryStrategy":"UseIPv4","servers":["tcp://1.1.1.1"]},"routing":{"rules":[]}})");
   auto prepare = [](const Json& value) {
@@ -103,6 +151,7 @@ void ProtocolCompatibilityCases(const std::string& only = "") {
   } else for (const auto& item : cases) item.second();
 }
 int main(int argc, char** argv) try {
+  if (argc == 3 && std::string(argv[1]) == "--ipv6-case") { IPv6PayloadCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--protocol-case") { ProtocolCompatibilityCases(argv[2]); return 0; }
   if (argc != 1) {
     if (argc != 7 || std::string(argv[1]) != "--prepare-dns-fixture") return 2;
@@ -117,6 +166,7 @@ int main(int argc, char** argv) try {
     output << *result;
     return output.good() ? 0 : 4;
   }
+  IPv6PayloadCases();
   ProtocolCompatibilityCases();
   const auto source = Parse(R"({
     "log":{"access":"private-canary.log","error":"secret.log","loglevel":"debug","dnsLog":true},
@@ -143,9 +193,8 @@ int main(int argc, char** argv) try {
   Require(config["inbounds"][0]["settings"]["auth"] == "password", "unauthenticated VPN listener");
   Require(config["inbounds"][0]["sniffing"]["routeOnly"] == true, "IPv6 sniffing replaces target");
   auto rules = config["routing"]["rules"];
-  Require(rules[0]["ip"] == Json::array({"::/0"}), "IPv6 does not precede bypass rules");
-  Require(rules[1]["inboundTag"] == Json::array({kManagedInbound}) && rules[1]["ip"] == Json::array({std::string(kVirtualDns) + "/32"})
-      && rules[1]["port"] == "53" && rules[1]["network"] == "tcp,udp" && rules[1]["outboundTag"] == kDnsRelay,
+  Require(rules[0]["inboundTag"] == Json::array({kManagedInbound}) && rules[0]["ip"] == Json::array({std::string(kVirtualDns) + "/32"})
+      && rules[0]["port"] == "53" && rules[0]["network"] == "tcp,udp" && rules[0]["outboundTag"] == kDnsRelay,
       "system DNS adapter is not scoped to the private input and exact virtual DNS destination");
   const auto relay = std::find_if(config["outbounds"].begin(), config["outbounds"].end(),
       [](const Json& outbound) { return outbound.value("tag", "") == kDnsRelay; });
@@ -153,9 +202,9 @@ int main(int argc, char** argv) try {
   Require(!relay->contains("proxySettings"), "removed proxySettings emitted");
   Require(!relay->contains("streamSettings"), "root DNS adapter must not create a raw relay transport");
   Require((*relay)["settings"]["rules"] == Json::array({
-      {{"action", "return"}, {"qType", "28"}, {"rCode", 0}}, {{"action", "hijack"}, {"qType", "1"}},
+      {{"action", "hijack"}, {"qType", "1,28"}},
       {{"action", "return"}, {"rCode", 5}}}),
-      "system A must use caller Core DNS; AAAA is NODATA and unsupported records are explicitly refused");
+      "system A/AAAA must use caller Core DNS and unsupported records must be explicitly refused");
   Require(rules[rules.size()-2] == source["routing"]["rules"][0] && rules.back() == source["routing"]["rules"][1], "domain bypass rules reordered or removed");
   Require(config["outbounds"][1]["streamSettings"]["sockopt"]["interface"] == "Ethernet", "direct sockets reenter capture");
   const auto& stream = config["outbounds"][0]["streamSettings"];
@@ -168,19 +217,19 @@ int main(int argc, char** argv) try {
   Require(loopback["protocol"] == "loopback", "bootstrap is not isolated through Core dispatcher");
   const auto pin_input = loopback["settings"]["inboundTag"].get<std::string>();
   Require(pin_input != "caller-dns" && pin_input != "caller-dns-tcp" && pin_input != "caller-dns-doh", "bootstrap inherited DNS client identity");
-  Require(rules[2]["inboundTag"] == Json::array({pin_input}) && rules[2]["domain"] == Json::array({"full:endpoint.invalid"})
-      && rules[2]["port"] == "443", "physical pin must require exact private context, hostname and port");
-  const auto& pin_egress = find_outbound(config, rules[2]["outboundTag"].get<std::string>());
+  Require(rules[1]["inboundTag"] == Json::array({pin_input}) && rules[1]["domain"] == Json::array({"full:endpoint.invalid"})
+      && rules[1]["port"] == "443", "physical pin must require exact private context, hostname and port");
+  const auto& pin_egress = find_outbound(config, rules[1]["outboundTag"].get<std::string>());
   Require(pin_egress["protocol"] == "freedom" && pin_egress["settings"]["redirect"] == "192.0.2.5:0"
       && pin_egress["streamSettings"]["sockopt"]["interface"] == "Ethernet", "pin lost numeric destination, original port or underlay binding");
-  Require(rules[3]["inboundTag"] == Json::array({pin_input}) && rules[3]["outboundTag"] == kIpv6Block
-      && rules[3].size() == 3, "unmatched bootstrap context can fall through to caller routing");
+  Require(rules[2]["inboundTag"] == Json::array({pin_input}) && rules[2]["outboundTag"] == kIpv6Block
+      && rules[2].size() == 3, "unmatched bootstrap context can fall through to caller routing");
   auto physical_options = source;
   physical_options["outbounds"][0]["sendThrough"] = "192.0.2.25";
   physical_options["outbounds"][0]["streamSettings"]["sockopt"] = {{"tcpFastOpen", true}, {"tcpKeepAliveIdle", 30}, {"mark", 7}};
   auto options_prepared = prepare(physical_options); Require(options_prepared.has_value(), "physical socket option profile rejected");
   auto options_config = Parse(*options_prepared);
-  const auto& options_leaf = find_outbound(options_config, options_config["routing"]["rules"][2]["outboundTag"].get<std::string>());
+  const auto& options_leaf = find_outbound(options_config, options_config["routing"]["rules"][1]["outboundTag"].get<std::string>());
   Require(options_leaf["sendThrough"] == "192.0.2.25" && options_leaf["streamSettings"]["sockopt"] == Json{{"tcpFastOpen", true},
       {"tcpKeepAliveIdle", 30}, {"mark", 7}, {"domainStrategy", "ForceIPv4"}, {"interface", "Ethernet"}}, "private leaf discarded caller physical socket options/gateway");
 
@@ -194,7 +243,7 @@ int main(int argc, char** argv) try {
     const auto effective = Parse(*prepared);
     const auto& server = effective["dns"]["servers"][0];
     Require(server["address"] == "tcp://1.1.1.1" && server["tag"] == kDnsUpstream, "missing DNS can use captured OS resolver");
-    Require(effective["routing"]["rules"][2] == Json{{"type", "field"}, {"inboundTag", Json::array({kDnsUpstream})},
+    Require(effective["routing"]["rules"][1] == Json{{"type", "field"}, {"inboundTag", Json::array({kDnsUpstream})},
         {"ip", Json::array({"1.1.1.1/32"})}, {"port", "53"}, {"network", "tcp"}, {"outboundTag", "proxy"}}, "native default DNS is not scoped and proxied");
     if (empty_kind == 3) Require(effective["dns"]["hosts"] == profile["dns"]["hosts"] && effective["dns"]["queryStrategy"] == "UseIPv4", "empty DNS policy discarded caller hosts/strategy");
   }
@@ -204,7 +253,7 @@ int main(int argc, char** argv) try {
   auto local_prepared = prepare(local); Require(local_prepared.has_value(), "explicit localhost native default rejected");
   auto expected_local = local["dns"]; expected_local["servers"][0]["Address"] = "tcp://1.1.1.1";
   Require(Parse(*local_prepared)["dns"] == expected_local, "localhost adaptation discarded source entry policy/tag");
-  Require(Parse(*local_prepared)["routing"]["rules"][2]["inboundTag"] == Json::array({"caller-local"}), "localhost native policy lost its effective client tag");
+  Require(Parse(*local_prepared)["routing"]["rules"][1]["inboundTag"] == Json::array({"caller-local"}), "localhost native policy lost its effective client tag");
   local["dns"]["servers"][0]["Tag"] = "";
   auto empty_tag = prepare(local); Require(empty_tag.has_value() && !Parse(*empty_tag)["dns"]["servers"][0].contains("tag"), "native DNS added a duplicate folded tag alias");
   for (const auto& address : {"fakedns", "tcp+local://1.1.1.1", "https+local://dns.example/dns-query", "quic+local://1.1.1.1", "tls://1.1.1.1", "tcp://[2001:db8::1]", "unknown://1.1.1.1"}) {
@@ -261,7 +310,7 @@ int main(int argc, char** argv) try {
   auto multi_config = Parse(*multi_prepared);
   Require(multi_config["outbounds"][0]["settings"] == source["outbounds"][0]["settings"]
       && find_outbound(multi_config, "proxy-backup")["settings"] == backup["settings"], "independent outbound identities/settings changed");
-  Require(multi_config["routing"]["rules"][4]["domain"] == Json::array({"full:endpoint.invalid"}) && multi_config["routing"]["rules"][4]["port"] == "8443", "same-host second outbound pin lost its independent port");
+  Require(multi_config["routing"]["rules"][3]["domain"] == Json::array({"full:endpoint.invalid"}) && multi_config["routing"]["rules"][3]["port"] == "8443", "same-host second outbound pin lost its independent port");
   auto dormant_address = source;
   dormant_address["outbounds"][0]["streamSettings"]["address"] = "ignored.invalid";
   dormant_address["outbounds"][0]["streamSettings"]["port"] = 444;
@@ -295,7 +344,7 @@ int main(int argc, char** argv) try {
     auto bad = source; bad["inbounds"][0][key] = "0.0.0.0"; Require(!prepare(bad), "ambiguous listen accepted");
   }
   Require(config["inbounds"][1] == source["inbounds"][0], "user listener/auth/sniffing were rewritten");
-  Require(rules[0]["inboundTag"] == Json::array({kManagedInbound}), "IPv6 policy must scope to private adapter");
+  Require(rules[0]["inboundTag"] == Json::array({kManagedInbound}), "system DNS policy must scope to private adapter");
   auto extra = source;
   extra["inbounds"].push_back({{"tag", "socks-direct"}, {"protocol", "socks"}, {"listen", "127.0.0.1"}, {"port", 10820}, {"settings", {{"auth", "noauth"}}}});
   extra["inbounds"].push_back({{"tag", "custom-http"}, {"protocol", "http"}, {"listen", "127.0.0.1"}, {"port", "10807-10810"}, {"settings", {{"accounts", Json::array({{{"user", "app"}, {"pass", "app-secret"}}})}}}});
@@ -321,8 +370,8 @@ int main(int argc, char** argv) try {
   auto isolated = prepare(service_references); Require(isolated.has_value(), "service references rejected");
   auto protected_references = Parse(*isolated);
   Require(protected_references["inbounds"][0]["tag"] == std::string(kManagedInbound) + "-2", "adapter inherited user reference/API tag");
-  Require(protected_references["routing"]["rules"][0]["outboundTag"] == std::string(kIpv6Block) + "-1", "IPv6 service inherited reverse tag");
-  Require(protected_references["routing"]["rules"][1]["outboundTag"] == std::string(kDnsRelay) + "-1", "DNS service inherited user reference");
+  Require(protected_references["routing"]["rules"][2]["outboundTag"] == std::string(kIpv6Block) + "-1", "closed bootstrap service inherited reverse tag");
+  Require(protected_references["routing"]["rules"][0]["outboundTag"] == std::string(kDnsRelay) + "-1", "DNS service inherited user reference");
   bad = source; bad["outbounds"][0]["settings"]["vnext"][0]["address"] = "2001:db8::1"; Require(!prepare(bad), "unsupported IPv6 endpoint accepted");
   bad = source; bad["outbounds"][0]["streamSettings"]["sockopt"] = {{"addressPortStrategy", "srv"}}; Require(!prepare(bad), "system SRV resolver accepted");
   auto aliases = source;
@@ -337,6 +386,6 @@ int main(int argc, char** argv) try {
   auto protected_bypass = prepare(Parse(*bypass));
   Require(protected_bypass.has_value(), "bypass preparation failed");
   auto bypass_rules = Parse(*protected_bypass)["routing"]["rules"];
-  Require(bypass_rules[1]["outboundTag"] == kDnsRelay && bypass_rules[bypass_rules.size()-Parse(*bypass)["routing"]["rules"].size()]["ip"][0] == "0.0.0.0/0", "subnet bypass overrides DNS protection");
+  Require(bypass_rules[0]["outboundTag"] == kDnsRelay && bypass_rules[bypass_rules.size()-Parse(*bypass)["routing"]["rules"].size()]["ip"][0] == "0.0.0.0/0", "subnet bypass overrides DNS protection");
   std::cout << "PASS desktop DNS, IPv6, privacy, auth, aliases and domain-routing security boundaries\n";
 } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

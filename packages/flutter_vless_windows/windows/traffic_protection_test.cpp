@@ -35,6 +35,25 @@ bool permits(Flow flow) {
   }
   return !chosen || chosen->action==FWP_ACTION_PERMIT;
 }
+void require_tunnel_only_ipv6(UINT64 tunnel) {
+  for (bool inbound : {false, true}) {
+    for (UINT8 protocol : {static_cast<UINT8>(IPPROTO_TCP), static_cast<UINT8>(IPPROTO_UDP)}) {
+      Flow flow;flow.v6=true;flow.inbound=inbound;flow.protocol=protocol;flow.interface_=tunnel;
+      assert(permits(flow)); // inner IPv6 packet must reach the owned Wintun
+      for (UINT64 physical : {UINT64{0}, UINT64{99}}) {
+        flow.interface_=physical;assert(!permits(flow));
+        flow.xray=true;flow.elevated=true;assert(!permits(flow)); // no physical exception, even for Xray
+        flow.xray=false;flow.elevated=false;
+      }
+    }
+  }
+  for (const auto& rule : live) {
+    const bool v6 = same(rule.layer,FWPM_LAYER_ALE_AUTH_CONNECT_V6) || same(rule.layer,FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6);
+    if (v6 && rule.action==FWP_ACTION_PERMIT && !rule.loop) {
+      assert(rule.interface_==tunnel && !rule.app && !rule.elevated && !rule.service_app && !rule.service);
+    }
+  }
+}
 }
 extern "C" {
 DWORD WINAPI FwpmEngineOpen0(const wchar_t*,UINT32,SEC_WINNT_AUTH_IDENTITY_W*,const FWPM_SESSION0* session,HANDLE* engine) {
@@ -118,6 +137,7 @@ int main() {
     Flow loop;loop.loop=true;assert(permits(loop));loop.v6=true;assert(permits(loop));
     Flow dhcp;dhcp.protocol=IPPROTO_UDP;dhcp.local=68;dhcp.remote=67;assert(!permits(dhcp));dhcp.service_app=true;assert(!permits(dhcp));dhcp.service=true;assert(permits(dhcp));
     NET_LUID tun{};tun.Value=42;assert(protection.Install(L"C:\\app\\xray.exe",&tun));
+    require_tunnel_only_ipv6(tun.Value);
     Flow client;client.interface_=42;assert(permits(client));
     client.interface_=99;assert(!permits(client)); // new physical adapter
     dns.interface_=42;assert(permits(dns));dns.interface_=99;assert(!permits(dns));
@@ -126,6 +146,7 @@ int main() {
     for(int failure=0;failure<static_cast<int>(count);++failure){
       fail_add=failure;assert(!protection.Install(L"C:\\app\\xray.exe",&tun));
       assert(live.size()==count && !permits({}) && !permits(v6));
+      require_tunnel_only_ipv6(tun.Value);
     }
     fail_add=-1;
     // Runtime exit does not call Release; destructor closes only engine handles.

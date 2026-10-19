@@ -136,13 +136,14 @@ first DNS increment. The eight requirements below remain the long-term list.
    requirements, expanding the corpus when a concrete gap is found.
 
 The DNS MVP uses an address-only virtual resolver at `198.18.0.2:53`, scoped to
-the private VPN adapter. A uses Core's preserved root DNS; AAAA returns successful
-NODATA while forwarding is IPv4-only; other record types return REFUSED.
+the private VPN adapter. A and AAAA now use Core's preserved root DNS; an explicit
+caller `UseIPv4` still produces successful AAAA NODATA. Other record types return REFUSED.
 Imported listeners do not acquire this private path. Proxy-only and measurement
 preparation retain their separate behavior.
 
-The default Android CI job now runs the production adapter and its two focused
-caller-DNS TUN tests in parallel with desktop Core checks. It uses the existing
+The default Android CI job runs the production adapter and its two focused
+caller-DNS TUN tests in parallel with desktop Core checks; a third IPv6 payload
+case is added in this increment and awaits runtime acceptance. It uses the existing
 `--no-capture` mode: functional Wi-Fi DNS/system-policy tests remain mandatory,
 while the report explicitly marks physical packet capture unverified. Cellular
 capture/handover qualification remains separate because the emulator may not
@@ -163,7 +164,7 @@ pins live in private closed routing branches, preserving logical endpoints and
 TLS/HTTP names. Unqualified local/QUIC resolver paths, system-family strategies,
 scripts and FakeDNS fail preparation rather than silently using OS fallback.
 The pinned Core has no `tls://` DoT implementation. These limitations, arbitrary
-DNS record types and dual-stack/FakeDNS support remain open; this MVP does not
+DNS record types and full dual-stack/FakeDNS support remain open; this MVP does not
 complete item 1. Test compilation and runtime results are recorded separately.
 
 [CI on 6c19e2d](https://github.com/XIIIFOX/flutter_vless/actions/runs/39172041164)
@@ -292,8 +293,53 @@ contains one full domain and no standard GeoDAT files. File-only native
 preparation and pinned Core build require a missing-root failure followed by
 success with the selected custom-only root. Android TUN, Apple proxy and Windows
 runtime fixtures require actual HTTP traffic whose route depends on that custom
-file. These new remote traffic results are pending; compilation alone is not
-runtime qualification.
+file. [Android on cecac3a](https://github.com/XIIIFOX/flutter_vless/actions/runs/39179227305)
+passes both caller-root TUN cases within 35 native checks. [Windows on cecac3a](https://github.com/XIIIFOX/flutter_vless/actions/runs/39179235345)
+passes 366 proxy/portable and VPN rows on Windows 2022/2025, including the custom
+root and rejection without replacing a working session. [Apple on bea89db](https://github.com/XIIIFOX/flutter_vless/actions/runs/39180284967)
+passes the custom-root traffic marker on iOS simulator and remote macOS with the
+rebuilt unpublished Core. Windows explicit-root recovery/quick-profile paths
+have source/compile coverage, not a separate explicit-root runtime qualification.
+
+### Minimum IPv6 payload adaptation
+
+Private address DNS delegates A and AAAA to the unchanged caller DNS root. An
+explicit `UseIPv4` remains authoritative. Android captures IPv6 with a tunnel
+ULA and default route. Apple keeps its existing IPv6 capture; Apple/Windows
+remove the managed blanket IPv6 block before caller routing. Windows adds an
+owned ULA and split default routes, and permits IPv6 only on the exact tunnel
+LUID while retaining its physical IPv6 block. Failed address deletion retains
+cleanup ownership and prevents a replacement from claiming the old address.
+
+Android keeps its existing descriptor protection and protected OS DNS; Apple
+keeps Network Extension capture and Core's existing provider egress. Intentional
+caller-selected Core direct IPv6 is distinct from application bypass. Windows
+physical IPv6, including direct Core IPv6, remains blocked in this slice. This
+increment does not introduce a new family restriction for imported listeners
+or already accepted transports on Android/Apple.
+
+The shared [two-config corpus](../tool/fixtures/compatibility/ipv6-payload.json)
+checks both DNS strategies against production preparation and pinned Core Build.
+Regression tests first reproduced AAAA suppression and managed IPv6 blocks.
+Local preparation passes for both C++ and Apple exporters without starting Core.
+Android passes 139 JVM checks and compiles a third caller-root device fixture.
+Apple pure policy checks and both shipped HEV fixture targets compile. Windows
+policy, cleanup and runtime-fixture checks pass locally without running VPN.
+
+New remote runtime gates require actual IPv6 TCP/UDP payloads through an IPv4
+proxy, exact targets/nonces, and preserved caller AAAA policy. Separate HEV
+binary checks exercise framed IPv6 TCP/UDP packets on macOS and iOS simulator;
+the simulator check does not establish physical iOS Network Extension behavior.
+Windows also rechecks bytes after recovery and owned route/address cleanup.
+These new gates are pending. IPv6-only transport endpoints, NAT64, cross-family
+handover and physical IPv6 bypass qualification remain open. The physical
+iPhone and host Mac VPN are not used by this increment.
+
+The preceding [bea89db Android run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39180284967)
+passes 34 native checks and three Flutter checks, including caller DNS/assets,
+but fails one strict Always-on readiness check with `AUTH_PROBE_FAILED`. Its
+bounded logs do not identify the underlying error. This remains an unresolved
+runtime issue; the unchanged Android tree previously passed on cecac3a.
 
 Port grammar progress (2026-10-18): the Dart, Kotlin, Swift and C++ paths now
 share a 20-case corpus checked against the pinned Core decoder/build path.
@@ -551,12 +597,12 @@ Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |
 | --- | --- | --- |
-| 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private A queries. Ordinary Core tests pass on all three desktop systems, Android TUN passes both new DNS cases within 35 native checks, and iOS/macOS native runtime variants pass in CI. Localhost adaptation, IPv4-only answers and unsupported paths are documented above. Full advanced/FakeDNS semantics remain open. |
-| 2. IPv6 | Pending | Current tests prove blocking, not dual-stack forwarding, IPv6-only endpoint or NAT64 support. |
+| 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private address queries. The original DNS increment passes Core/native runtime and Android TUN checks. New AAAA forwarding is awaiting runtime acceptance. Localhost adaptation and unsupported paths are documented above. Full advanced/FakeDNS semantics remain open. |
+| 2. IPv6 | Partial; payload runtime pending | IPv6 capture/routing and AAAA preparation pass focused regressions. New TCP/UDP Core, Android TUN, HEV binary and Windows recovery gates await CI. IPv6-only endpoints, NAT64, cross-family handover and physical bypass qualification remain open. |
 | 3. Protocol/transport matrix | Partial | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP preparation fixes and a seven-case pinned Core build corpus pass native tests. Imported loopback/DNS traffic passes ordinary Core acceptance on all three desktop systems at dacfd59; new protocol handshakes, XHTTP penetrate and the full matrix remain open. |
 | 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Source-inbound context, explicit VPN default selection, prefix-selector isolation and exact adapter counters remain open. |
 | 5. Ports/addresses | Partial | Shared 20-case port, 12-case service-tag, 21-case numeric API and 36-case service-listener fixtures cover allocation. Real Android/iPhone list/range/env/Unix and tag-collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. OS port checks, service-name resolution, prefix-selector isolation, bind retries and broader proxy-only parity remain open. |
-| 6. Assets/import syntax | Partial | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit data roots now propagate across all native backends; custom-only roots use Core file validation and a shared GeoSite fixture. New platform traffic checks are pending. Relative certificate portability, managed asset import/lifetime and explicit multi-document merging remain open. |
+| 6. Assets/import syntax | Partial; data-root increment qualified | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit roots propagate across native backends; custom GeoSite traffic passes Android TUN, both Apple preview runtimes and Windows 2022/2025. Relative certificate portability, managed asset import/lifetime and explicit multi-document merging remain open. |
 | 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |
 | 8. Runtime corpus | Partial | Shared port/syntax fixtures and platform/device HTTP, DNS, routing and recovery checks exist. The complete ECH/DoH/QUIC/protocol corpus and remaining physical options acceptance are not complete. |
 
@@ -574,15 +620,16 @@ contracts; this does not implement Core multi-file override/merge semantics.
    DNS loops, endpoint bootstrap and additional resolver modes. DoT needs a
    supporting Core implementation before it can be admitted.
 2. **Complete IPv6 forwarding.** Carry TCP/UDP and DNS across both address
-   families, including IPv6-only endpoints, NAT64 and network handover. Current
-   Apple/Windows forwarding blocks IPv6 instead of providing full dual stack.
+   families, including IPv6-only endpoints, NAT64 and network handover. The
+   minimum payload increment above still needs runtime acceptance; Windows
+   retains its physical IPv6 restriction.
 3. **Broaden native protocol/transport acceptance.** Test every protocol and
    transport in the pinned core against each packaged artifact. Include XHTTP
    download settings, Reality/TLS variants, QUIC/UDP, chaining, mux, balancers,
    observatory and reverse routing; remove wrapper whitelists only after socket
    protection and bootstrap behavior are established for that path.
 4. **Finish full-document passthrough.** Preserve imported API/services/stats
-   alongside private statistics (Android/Windows currently replace API settings),
+   alongside private statistics (the minimum preservation increment is implemented),
    and isolate all injected DNS/probe rules to their own adapter. Define which
    imported input backs VPN traffic and carry its `inboundTag` routing context
    into the private adapter; retaining the original rules alone does not make

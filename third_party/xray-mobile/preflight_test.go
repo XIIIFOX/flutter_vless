@@ -2,10 +2,95 @@ package XRay
 
 import (
 	"bytes"
+	"encoding/json"
 	"net"
+	"os"
+	"reflect"
+	"slices"
 	"strconv"
 	"testing"
 )
+
+func TestPreflightEnvironmentIsolation(t *testing.T) {
+	const existing = "FLVLESS_PREFLIGHT_ENV_EXISTING"
+	const absent = "FLVLESS_PREFLIGHT_ENV_ABSENT"
+	t.Setenv(existing, "working-session")
+	prior, wasPresent := os.LookupEnv(absent)
+	if err := os.Unsetenv(absent); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if wasPresent {
+			_ = os.Setenv(absent, prior)
+		} else {
+			_ = os.Unsetenv(absent)
+		}
+	})
+	for _, tc := range []struct {
+		name string
+		json string
+		want int64
+	}{
+		{"absent", `{}`, 0},
+		{"null", `{"env":null}`, 0},
+		{"empty", `{"env":{}}`, 0},
+		{"replace-existing", `{"env":{"` + existing + `":"candidate"}}`, 5},
+		{"introduce-key", `{"env":{"` + absent + `":"candidate"}}`, 5},
+		{"null-clears-existing", `{"env":{"` + existing + `":null}}`, 5},
+		{"null-introduces-empty", `{"env":{"` + absent + `":null}}`, 5},
+		{"folded-field", `{"EnV":{"` + existing + `":"candidate"}}`, 5},
+		{"invalid-key", `{"env":{"invalid=key":"candidate"}}`, 5},
+		{"mixed-invalid-key", `{"env":{"` + existing + `":"candidate","":"invalid"}}`, 5},
+		{"before-static-build-failure", `{"env":{"` + existing + `":"candidate"},"outbounds":[{"protocol":"private-canary"}]}`, 5},
+		{"static-build-failure", `{"outbounds":[{"protocol":"private-canary"}]}`, 3 | 2<<8 | 1<<16},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Reset only test-owned keys so every case starts with the same
+			// present/absent state, including when exposing the old mutation bug.
+			if err := os.Setenv(existing, "working-session"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Unsetenv(absent); err != nil {
+				t.Fatal(err)
+			}
+			beforeEnvironment := os.Environ()
+			slices.Sort(beforeEnvironment)
+			input := []byte(tc.json)
+			original := append([]byte(nil), input...)
+			beforeRuntime := coreInstance
+			got := CheckPrivate(input)
+			afterEnvironment := os.Environ()
+			slices.Sort(afterEnvironment)
+			if !slices.Equal(beforeEnvironment, afterEnvironment) {
+				t.Error("CheckPrivate changed the process environment")
+			}
+			if !bytes.Equal(input, original) || coreInstance != beforeRuntime {
+				t.Error("CheckPrivate changed caller data or the existing runtime")
+			}
+			if got != tc.want {
+				t.Errorf("closed result: got %d, want %d", got, tc.want)
+			}
+			// The shared privacy path must retain Env for StartPrivate. This
+			// interim refusal belongs to CheckPrivate, not profile rewriting.
+			prepared, _, _, err := privateConfig(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var source, candidate map[string]json.RawMessage
+			if json.Unmarshal(input, &source) != nil || json.Unmarshal(prepared, &candidate) != nil {
+				t.Fatal("privacy document is not JSON")
+			}
+			for key, value := range source {
+				if key == "env" || key == "EnV" {
+					var expected, retained any
+					if json.Unmarshal(value, &expected) != nil || json.Unmarshal(candidate[key], &retained) != nil || !reflect.DeepEqual(expected, retained) {
+						t.Error("privacy preparation rewrote the caller Env feature")
+					}
+				}
+			}
+		})
+	}
+}
 
 func TestPreflightUsesPinnedCoreWithoutBinding(t *testing.T) {
 	// Keep the requested port occupied. A check must still succeed because it

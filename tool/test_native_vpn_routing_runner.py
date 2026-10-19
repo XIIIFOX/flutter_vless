@@ -150,7 +150,7 @@ class RunnerGuards(unittest.TestCase):
             selected=runner.selected_tests(root,'app/dispatcher')
             self.assertEqual(selected,['TestNativeVPNRoutingPure'])
             self.assertEqual(runner.test_pattern(selected),'^(TestNativeVPNRoutingPure)$')
-            self.assertEqual(runner.selected_tests(root,'app/dispatcher',runtime=True),[runner.RUNTIME_TEST])
+            self.assertEqual(runner.selected_tests(root,'app/dispatcher',runtime=True),[runner.RUNTIME_TEST,runner.RUNTIME_TEST+'Child'])
             (package/'selected_test.go').write_text('func TestOther(t *testing.T) {}\n')
             for runtime in [False,True]:
                 with self.assertRaises(ValueError):runner.selected_tests(root,'app/dispatcher',runtime=runtime)

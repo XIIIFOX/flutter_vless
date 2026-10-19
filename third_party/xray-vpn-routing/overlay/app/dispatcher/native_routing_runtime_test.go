@@ -108,7 +108,7 @@ func TestNativeVPNRoutingRuntime(t *testing.T) {
 		if err == nil {
 			defer late.Close()
 			nativeRuntimeClosed(t, late, until)
-		} else if !errors.Is(err, syscall.ECONNREFUSED) && !errors.Is(err, syscall.ECONNRESET) {
+		} else if !errors.Is(err, syscall.ECONNREFUSED) && !nativeRuntimeReset(err, runtime.GOOS) {
 			t.Fatal("late private control was not explicitly refused", err)
 		}
 		if !time.Now().Before(until) {
@@ -483,6 +483,41 @@ func (f *nativeRuntimeFixture) tcp(t *testing.T, port int, host string, targetPo
 	f.exchangeMarker(t, c, marker, label)
 }
 
+// Winsock returns WSAECONNRESET (10054), whereas Go's portable ECONNRESET is
+// a distinct application errno on Windows. Match the typed error chain only;
+// neither timeout nor an error message alone establishes an explicit closure.
+func nativeRuntimeReset(err error, goos string) bool {
+	return errors.Is(err, syscall.ECONNRESET) ||
+		goos == "windows" && errors.Is(err, syscall.Errno(10054))
+}
+
+func TestNativeVPNRoutingClosureErrors(t *testing.T) {
+	wrapped := func(err error) error {
+		return &net.OpError{Op: "read", Net: "tcp4", Err: &os.SyscallError{Syscall: "wsarecv", Err: err}}
+	}
+	for _, tc := range []struct {
+		name  string
+		err   error
+		goos  string
+		reset bool
+	}{
+		{"portable-reset", wrapped(syscall.ECONNRESET), runtime.GOOS, true},
+		{"windows-wrapped-reset", wrapped(syscall.Errno(10054)), "windows", true},
+		{"windows-reset-not-other-os", wrapped(syscall.Errno(10054)), "linux", false},
+		{"windows-abort-not-reset", wrapped(syscall.Errno(10053)), "windows", false},
+		{"timeout-is-not-reset", wrapped(os.ErrDeadlineExceeded), "windows", false},
+		{"eof-is-separately-checked", wrapped(io.EOF), "windows", false},
+		{"unknown-error", wrapped(syscall.EACCES), "windows", false},
+		{"message-is-not-proof", errors.New("wsarecv: An existing connection was forcibly closed by the remote host."), "windows", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nativeRuntimeReset(tc.err, tc.goos); got != tc.reset {
+				t.Fatalf("typed reset classification=%t, expected=%t", got, tc.reset)
+			}
+		})
+	}
+}
+
 func nativeRuntimeClosed(t *testing.T, c net.Conn, until time.Time) {
 	t.Helper()
 	_ = c.SetReadDeadline(until)
@@ -494,7 +529,7 @@ func nativeRuntimeClosed(t *testing.T, c net.Conn, until time.Time) {
 	if failure, ok := err.(net.Error); ok && failure.Timeout() {
 		t.Fatal("timeout is not connection closure")
 	}
-	if !errors.Is(err, io.EOF) && !errors.Is(err, syscall.ECONNRESET) && !errors.Is(err, syscall.EPIPE) {
+	if !errors.Is(err, io.EOF) && !nativeRuntimeReset(err, runtime.GOOS) && !errors.Is(err, syscall.EPIPE) {
 		t.Fatal("unexpected connection failure", err)
 	}
 }
@@ -502,7 +537,7 @@ func (f *nativeRuntimeFixture) blocked(t *testing.T, port int, host string) {
 	t.Helper()
 	c, _ := f.connect(t, port, 1, host, 443)
 	defer c.Close()
-	if err := nativeRuntimeWriteFrame(c, []byte(f.nonce+"/blocked")); err != nil && !errors.Is(err, syscall.EPIPE) && !errors.Is(err, syscall.ECONNRESET) {
+	if err := nativeRuntimeWriteFrame(c, []byte(f.nonce+"/blocked")); err != nil && !errors.Is(err, syscall.EPIPE) && !nativeRuntimeReset(err, runtime.GOOS) {
 		t.Fatal(err)
 	}
 	nativeRuntimeClosed(t, c, time.Now().Add(2*time.Second))

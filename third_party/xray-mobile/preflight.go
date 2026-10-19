@@ -15,11 +15,15 @@ func init() {
 
 // CheckPrivate performs Core's decode/build stages without creating a runtime,
 // opening listeners, replacing coreInstance, or changing process environment.
+// Nonempty Env is refused before Build: pinned Core applies every decoded Env
+// entry process-wide, including null string values decoded as empty strings.
+// This is an interim preflight limitation, not scoped support for the feature;
+// the caller document and StartPrivate's existing Env behavior stay unchanged.
 // It returns only a closed numeric result; no input, filenames or Core error
 // strings cross the native boundary. This is an additive bridge capability.
 //
 // ABI 1: low byte = stage (0 success, 1 privacy, 2 decode, 3 build,
-// 4 internal failure); next byte = section (1 inbound, 2 outbound);
+// 4 internal failure, 5 environment policy); next byte = section (1 inbound, 2 outbound);
 // remaining bits = index + 1, or zero when no safe location is available.
 func CheckPrivate(config []byte) (result int64) {
 	defer func() {
@@ -34,6 +38,9 @@ func CheckPrivate(config []byte) (result int64) {
 	decoded, err := serial.DecodeJSONConfig(bytes.NewReader(prepared))
 	if err != nil {
 		return 2
+	}
+	if len(decoded.Env) != 0 {
+		return 5
 	}
 	if _, err = decoded.Build(); err == nil {
 		return 0

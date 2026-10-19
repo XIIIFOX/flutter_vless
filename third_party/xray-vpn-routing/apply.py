@@ -57,6 +57,26 @@ def copy_and_apply(source, destination, *, go='go', caches=None):
 def patches():
     dispatcher = 'app/dispatcher/default.go'
     return [
+        ('core/xray.go', '''func NewWithContext(ctx context.Context, config *Config) (*Instance, error) {
+	server := &Instance{ctx: ctx}
+
+	done, err := initInstanceWithConfig(config, server)
+	if done {
+		return nil, err
+	}
+
+	return server, nil
+}''', '''func NewWithContext(ctx context.Context, config *Config) (*Instance, error) {
+	server := &Instance{ctx: ctx}
+
+	done, err := initInstanceWithConfig(config, server)
+	if done {
+		nativeRoutingConstructionFailed(ctx, server)
+		return nil, err
+	}
+
+	return server, nil
+}'''),
         (dispatcher, 'type DefaultDispatcher struct {\n', 'type DefaultDispatcher struct {\n\tnativeRouting *nativeRoutingDispatcher\n'),
         (dispatcher, '\t\td := new(DefaultDispatcher)\n', '\t\td := new(DefaultDispatcher)\n\t\tif err := d.bindNativeVPNRouting(ctx); err != nil { return nil, err }\n'),
         (dispatcher, 'func (*DefaultDispatcher) Start() error {\n\treturn nil\n}', 'func (d *DefaultDispatcher) Start() error {\n\treturn d.nativeStart()\n}'),

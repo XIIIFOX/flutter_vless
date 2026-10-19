@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Reject nonempty root `env` before in-process Apple Core preflight can change a working session's process environment. Return a fixed `environment-policy` error and protect cached older checkers; keep profile data and separate-process Android/Windows checking unchanged. Scoped Apple `env` support remains open.
 * Add `certificateAssetsDirectory` for relative TLS certificate/key files on every native platform. Bind Core-built TLS and XHTTP download paths before preflight, retain absolute/inline/reload settings and recovery paths, and reject unsupported older backends. Add shared file/Core controls and controlled TLS traffic coverage.
 * Accept Core-equivalent missing, null, empty and case-insensitive `none` socket address/port strategies across native adapters. Preserve raw caller values and existing protected routing; keep active endpoint overrides and malformed values closed. Add shared WebSocket/XHTTP upload/download/direct preparation controls.
 * Admit Core's exact IPv4-mapped DNS addresses on Apple and Windows without rewriting caller DNS. Keep genuine IPv6 restrictions unchanged; add shared Core-equivalence controls, Android preservation checks and mapped-host DoH traffic coverage.

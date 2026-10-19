@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CAPABILITY = ROOT / 'third_party/xray-vpn-routing'
 MOBILE = ROOT / 'third_party/xray-mobile'
 EVIDENCE = ROOT / 'build/native_vpn_routing'
-PACKAGES = [('routing', 'features/routing'), ('dispatcher', 'app/dispatcher'),
+PACKAGES = [('core', 'core'), ('routing', 'features/routing'), ('dispatcher', 'app/dispatcher'),
             ('inbound', 'app/proxyman/inbound')]
 RUNTIME_TEST = 'TestNativeVPNRoutingRuntime'
 
@@ -98,7 +98,7 @@ def selected_tests(overlay, package, *, runtime=False):
     if runtime:
         if RUNTIME_TEST not in names:
             raise ValueError('Requested runtime fixture is absent')
-        return [RUNTIME_TEST]
+        return sorted(name for name in names if name.startswith(RUNTIME_TEST))
     names = sorted(name for name in names if not name.startswith(RUNTIME_TEST))
     if not names:
         raise ValueError('No selected pure routing tests in ' + package)
@@ -162,7 +162,7 @@ def main(argv=None):
         validate_mobile_pin(manifest, (MOBILE / 'go.mod').read_text(), (MOBILE / 'go.sum').read_text())
         selections = {name: selected_tests(CAPABILITY / 'overlay', package) for name, package in PACKAGES}
         if arguments.run_runtime:
-            selected_tests(CAPABILITY / 'overlay', 'app/dispatcher', runtime=True)
+            runtime_selection = selected_tests(CAPABILITY / 'overlay', 'app/dispatcher', runtime=True)
         environment = child_environment(os.environ)
         go = Path(shutil.which(arguments.go) or arguments.go).resolve()
         gofmt = go.with_name('gofmt.exe' if os.name == 'nt' else 'gofmt')
@@ -212,9 +212,9 @@ def main(argv=None):
                     cwd=core, environment=environment, seconds=45, results=results)
             require_pass(name + '-pure', selections[name], results)
         if arguments.run_runtime:
-            checked('runtime', [str(binaries['dispatcher']), '-test.run', '^' + RUNTIME_TEST + '$', '-test.v', '-test.timeout=75s'],
+            checked('runtime', [str(binaries['dispatcher']), '-test.run', test_pattern(runtime_selection), '-test.v', '-test.timeout=75s'],
                     cwd=core, environment=environment, seconds=90, results=results)
-            require_pass('runtime', [RUNTIME_TEST], results)
+            require_pass('runtime', runtime_selection, results)
         if source_snapshot() != snapshot:
             raise ValueError('Routing overlay/runner inputs changed during verification')
         report['source_snapshot_unchanged'] = True

@@ -16,8 +16,11 @@ not add per-packet re-routing inside one established association.
 `dispatcher.ContextWithNativeVPNRouting` takes this owner and immutable generated
 private guard rules. The host must seal the owner against the returned Core
 instance before `Start`, and close the owner on construction/start failure as
-well as normal shutdown. The dispatcher also seals at its own Start boundary.
-Native runtime preparation, exact final-document selection, failure cleanup and
+well as normal shutdown. The optional `NewWithContext` failure hook revokes the
+owner before closing the partial Core, retaining the original construction
+error. Unseeded construction keeps upstream behavior. The dispatcher also seals
+at its own Start boundary.
+Native runtime preparation, exact final-document selection, startup cleanup and
 binary capability negotiation still need launcher integration.
 
 For admitted flows, generated DNS/probe/bootstrap guards see physical inbound

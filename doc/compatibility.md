@@ -332,9 +332,20 @@ private guards precede forced detours; the unchanged live caller router receives
 only an inbound-tag view, with an explicit default after its complete miss.
 Pure regressions cover the actual DNS/IP router pass, API additions/removals,
 foreign-instance rejection, revocation and actual inert mux-session cleanup.
-An isolated TCP/UDP/DNS byte fixture is prepared for all three desktop CI systems;
-its runtime acceptance is pending. Native launcher/capability integration and
+The isolated TCP/UDP/DNS byte fixture passes all four scenarios on Linux and
+macOS at [78ade5c](https://github.com/XIIIFOX/flutter_vless/actions/runs/39214337019),
+with exact committed sources, drained workers and zero OS-resolver attempts.
+Windows reached all scenarios but its closure assertion did not recognize the
+platform's typed `WSAECONNRESET` value; that assertion is corrected without
+accepting timeout/unknown errors, with new pure controls. Fresh Windows runtime
+acceptance remains pending. Native launcher/capability integration and
 device acceptance remain open; no public routing option is enabled by this seam.
+
+The optional constructor also revokes its owner and closes partially created
+Core features when `NewWithContext` fails, preserving the original error.
+Unseeded constructors retain upstream behavior. Inert cleanup tests pass;
+the actual early-construction failure fixture is CI-only and still needs its
+new runtime acceptance before a native launcher is enabled.
 
 The fifth case adds an explicit null tag on the default direct outbound. Core
 decodes this as untagged; Windows previously rejected it before preflight.
@@ -734,6 +745,19 @@ Both success and rejection must remove the temporary runtime. Android already
 checks its final candidate with its bundled Core before the service transaction. Safe effective-config diffs,
 complete asset diagnostics, bind-race handling and rollback from later runtime
 failures are still pending; item 7 is not complete.
+
+Apple's in-process preflight now refuses nonempty root `env` with the fixed
+`environment-policy` stage and `feature: env` before Core Build. Pinned Core
+otherwise calls `os.Setenv` even for null string values and before a later
+configuration failure, which can modify the working process. Both Apple native
+entry paths also reject canonical nonempty `env` before calling a cached older
+checker. Absent, null and empty maps retain normal checking. The original profile
+and `StartPrivate` are not rewritten; this is an explicit interim compatibility
+refusal, not scoped support for root `env`. Existing inherited `env:` address and
+port bindings are separate. Android and Windows check in separate child
+processes and keep that behavior. Supporting candidate environment changes
+inside Apple preflight still requires scoped Core building; changing and
+restoring global environment variables would not isolate a running session.
 
 Service identifier progress (2026-10-18): Android, both Apple packages and
 Windows reserve definitions and exact references before allocating private

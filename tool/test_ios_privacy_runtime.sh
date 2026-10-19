@@ -7,7 +7,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/build/ios_privacy_runtime_probe"
 BUNDLE=dev.tfox.security-runtime-probe
 mkdir -p "$OUT/modules" "$OUT/Probe.app"
-trap 'xcrun simctl uninstall "$SIMULATOR_UDID" "$BUNDLE" >/dev/null 2>&1 || true' EXIT
+PROBE_LAUNCHED_AT=
+cleanup_probe() {
+    local status=$?
+    trap - EXIT
+    if [ "$status" -ne 0 ] && [ -n "$PROBE_LAUNCHED_AT" ]; then
+        python3 "$ROOT/tool/run_apple_runtime_probe.py" --collect-ios-termination "$OUT/runtime.log" --launched-at "$PROBE_LAUNCHED_AT" || true
+    fi
+    xcrun simctl uninstall "$SIMULATOR_UDID" "$BUNDLE" >/dev/null 2>&1 || true
+    exit "$status"
+}
+trap cleanup_probe EXIT
 python3 - "$ROOT" "$OUT" <<'PY'
 from pathlib import Path
 import base64, plistlib, sys
@@ -41,6 +51,7 @@ echo 'PROBE_PHASE=ios-install-begin'
 xcrun simctl install "$SIMULATOR_UDID" "$OUT/Probe.app"
 echo 'PROBE_PHASE=ios-install-complete'
 echo 'PROBE_PHASE=ios-runtime-begin'
+PROBE_LAUNCHED_AT="$(python3 -c 'import time; print(time.time())')"
 SIMCTL_CHILD_REQUIRE_CORE_PREFLIGHT="${REQUIRE_CORE_PREFLIGHT:-0}" \
     python3 "$ROOT/tool/run_apple_runtime_probe.py" --timeout 600 --ios-simulator "$SIMULATOR_UDID" -- \
     xcrun simctl launch --console "$SIMULATOR_UDID" "$BUNDLE" 2>&1 | tee "$OUT/runtime.log"

@@ -1,13 +1,120 @@
 #!/usr/bin/env python3
 """Bound a single owned Apple probe; stdout/stderr remain available to tee."""
 import argparse
+import json
 import math
+import os
+from pathlib import Path
+import re
 import signal
+import stat
 import subprocess
 import sys
 
 IOS_BUNDLE = 'dev.tfox.security-runtime-probe'
 STOP_SECONDS = 5
+MAX_IPS_BYTES = 2 * 1024 * 1024
+MAX_IPS_REPORTS = 16
+
+
+def _ips_documents(path, launched_at):
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    descriptor = os.open(path, flags)
+    with os.fdopen(descriptor, 'rb') as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_IPS_BYTES or info.st_mtime < launched_at:
+            return None
+        raw = source.read(MAX_IPS_BYTES + 1)
+    if len(raw) > MAX_IPS_BYTES:
+        return None
+    text = raw.decode('utf-8')
+    decoder = json.JSONDecoder()
+    first, end = decoder.raw_decode(text.lstrip())
+    remaining = text.lstrip()[end:].strip()
+    second = json.loads(remaining) if remaining else first
+    return (first, second) if isinstance(first, dict) and isinstance(second, dict) else None
+
+
+def collect_ios_termination(log_path, launched_at, reports_directory=None):
+    """Read bounded, identity-matched crash metadata; never infer app success."""
+    unavailable = {'state': 'unavailable', 'reason': 'no-matching-report'}
+    if not math.isfinite(launched_at) or launched_at <= 0:
+        return {'state': 'unavailable', 'reason': 'invalid-launch-time'}
+    try:
+        with Path(log_path).open('rb') as source:
+            source.seek(0, os.SEEK_END)
+            source.seek(max(0, source.tell() - 65536))
+            text = source.read(65536).decode('utf-8', errors='replace')
+        matches = re.findall(r'^' + re.escape(IOS_BUNDLE) + r': ([1-9][0-9]{0,9})\r?$', text, re.MULTILINE)
+        pids = {int(value) for value in matches if int(value) <= 2147483647}
+        if len(pids) != 1:
+            return {'state': 'unavailable', 'reason': 'app-pid-unavailable'}
+        pid = pids.pop()
+        directory = Path(reports_directory) if reports_directory is not None else Path.home() / 'Library/Logs/DiagnosticReports'
+        candidates = []
+        with os.scandir(directory) as entries:
+            for index, entry in enumerate(entries):
+                if index >= 512:
+                    break
+                if not entry.name.startswith('Probe') or not entry.name.endswith('.ips') or not entry.is_file(follow_symlinks=False):
+                    continue
+                info = entry.stat(follow_symlinks=False)
+                if info.st_mtime >= launched_at and info.st_size <= MAX_IPS_BYTES:
+                    candidates.append((info.st_mtime, entry.path))
+        for _, path in sorted(candidates, reverse=True)[:MAX_IPS_REPORTS]:
+            try:
+                documents = _ips_documents(path, launched_at)
+                if documents is None:
+                    continue
+                header, body = documents
+                bundle_info = body.get('bundleInfo')
+                bundles = [header.get('bundleID')]
+                if isinstance(bundle_info, dict):
+                    bundles.append(bundle_info.get('CFBundleIdentifier'))
+                bundles = [value for value in bundles if value is not None]
+                if not bundles or any(value != IOS_BUNDLE for value in bundles):
+                    continue
+                if type(body.get('pid')) is not int or body['pid'] != pid or body.get('procName') != 'Probe':
+                    continue
+                termination = body.get('termination')
+                exception = body.get('exception')
+                termination = termination if isinstance(termination, dict) else {}
+                exception = exception if isinstance(exception, dict) else {}
+                result = {'state': 'matched', 'pid': pid, 'reason': 'termination'}
+                namespaces = {'FRONTBOARD', 'RUNNINGBOARD', 'SPRINGBOARD', 'SIGNAL', 'CODESIGNING', 'DYLD', 'JETSAM', 'WATCHDOG', 'LIBSYSTEM', 'TCC', 'ENDPOINTSECURITY', 'ASSERTIOND', 'EXC_GUARD', 'EXEC'}
+                namespace = termination.get('namespace')
+                result['namespace'] = namespace if isinstance(namespace, str) and namespace in namespaces else 'unknown'
+                code = termination.get('code')
+                if type(code) is int and 0 <= code <= 0xffffffffffffffff:
+                    result['code'] = code
+                    if code == 0x8badf00d:
+                        result['reason'] = 'watchdog'
+                signals = {'SIGABRT', 'SIGKILL', 'SIGTERM', 'SIGSEGV', 'SIGBUS', 'SIGILL', 'SIGPIPE', 'SIGTRAP', 'SIGQUIT', 'SIGXCPU', 'SIGXFSZ'}
+                signal_name = exception.get('signal')
+                if isinstance(signal_name, str) and signal_name in signals:
+                    result['signal'] = signal_name
+                types = {'EXC_BAD_ACCESS', 'EXC_BAD_INSTRUCTION', 'EXC_ARITHMETIC', 'EXC_EMULATION', 'EXC_SOFTWARE', 'EXC_BREAKPOINT', 'EXC_CRASH', 'EXC_RESOURCE', 'EXC_GUARD', 'EXC_CORPSE_NOTIFY'}
+                exception_type = exception.get('type')
+                if isinstance(exception_type, str) and exception_type in types:
+                    result['exception'] = exception_type
+                return result
+            except (OSError, UnicodeError, ValueError, RecursionError):
+                continue
+        return unavailable
+    except OSError:
+        return {'state': 'unavailable', 'reason': 'metadata-unavailable'}
+
+
+def append_ios_termination(log_path, launched_at):
+    metadata = collect_ios_termination(log_path, launched_at)
+    line = 'PROBE_IOS_TERMINATION=' + json.dumps(metadata, separators=(',', ':'), sort_keys=True)
+    assert len(line.encode('utf-8')) <= 2048
+    try:
+        with Path(log_path).open('a', encoding='utf-8') as output:
+            output.write('\n' + line + '\n')
+    except OSError:
+        pass
+    print(line, flush=True)
 
 
 class Interrupted(Exception):
@@ -86,8 +193,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--timeout', type=float, default=600)
     parser.add_argument('--ios-simulator')
+    parser.add_argument('--collect-ios-termination', metavar='RUNTIME_LOG')
+    parser.add_argument('--launched-at', type=float)
     parser.add_argument('command', nargs=argparse.REMAINDER)
     arguments = parser.parse_args()
+    if arguments.collect_ios_termination is not None:
+        if arguments.launched_at is None or arguments.command or arguments.ios_simulator is not None:
+            parser.error('Termination metadata requires only a runtime log and launch time')
+        append_ios_termination(arguments.collect_ios_termination, arguments.launched_at)
+        return 0
     command = arguments.command
     if command[:1] == ['--']:
         command = command[1:]

@@ -3,6 +3,17 @@ final class ProbeLogger: NSObject, XRayLoggerProtocol {
     func logInput(_ s: String?) { print("CALLBACK=\(s ?? "nil")") }
 }
 let canary = "privacy-canary.invalid"
+private func runtimeProbeSocket() -> Int32 {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { print("PROBE_SOCKET_FAILED=create"); exit(1) }
+    var noSignal: Int32 = 1
+    guard setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+        close(fd)
+        print("PROBE_SOCKET_FAILED=nosigpipe")
+        exit(1)
+    }
+    return fd
+}
 func runRawRuntimeProbe() {
     let logger = ProbeLogger()
     print("RUNTIME=\(XRayGetVersion())")
@@ -14,7 +25,7 @@ func runRawRuntimeProbe() {
     """.utf8)
     error = nil
     if XRayStart(config, logger, &error) {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        let fd = runtimeProbeSocket()
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
@@ -58,9 +69,10 @@ func runModes() async {
                 let log = decoded["log"] as! [String:Any]
                 precondition(log["access"] as? String == "none" && log["error"] as? String == "none")
                 precondition(log["loglevel"] as? String == (["error","none"].contains(level) ? level : "warning"))
+                print("MODE_BEGIN=\(mode);LEVEL=\(level)")
                 var error: NSError?
                 if !XRayStartPrivate(prepared,logger,&error) { print("START_FAILURE mode=\(mode) error=\(error?.localizedDescription ?? "nil")");exit(1) }
-                let fd = socket(AF_INET, SOCK_STREAM, 0)
+                let fd = runtimeProbeSocket()
                 var address = sockaddr_in(); address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
                 let port = (decoded["inbounds"] as! [[String: Any]])[0]["port"] as! Int
                 address.sin_family = sa_family_t(AF_INET);address.sin_port = UInt16(port).bigEndian

@@ -135,6 +135,19 @@ first DNS increment. The eight requirements below remain the long-term list.
 4. Remaining IPv6, diagnostics, recovery and device acceptance from the eight
    requirements, expanding the corpus when a concrete gap is found.
 
+Track the small delivery gates separately from the eight full requirements:
+
+| Minimum increment | Status | Acceptance boundary |
+| --- | --- | --- |
+| Preserve caller DNS and private A/AAAA path | Qualified | Shared Core traffic on Linux/macOS/Windows, Android TUN and native Apple DNS generations; advanced DNS/FakeDNS stays open. |
+| Protocol/transport preparation and controlled XHTTP | Qualified | Shared pinned-Core corpus and controlled payloads; the exhaustive external-server matrix is deferred. |
+| Imported API/services/stats/policy | Qualified | Shared preparation and API/traffic gates, including Windows service acceptance. |
+| Port/address syntax and explicit data/certificate roots | Qualified baseline | Shared Core/native controls and the targeted runtime cases below; OS allocation/reload and managed import lifetime remain open. |
+| Source inbound and explicit VPN default | In progress | Shared factory traffic passes all three Core runners; native consumers and device acceptance remain. |
+
+Each qualified row refers to the specific checks recorded below. It does not
+mark an entire long-term requirement complete.
+
 The DNS MVP uses an address-only virtual resolver at `198.18.0.2:53`, scoped to
 the private VPN adapter. A and AAAA now use Core's preserved root DNS; an explicit
 caller `UseIPv4` still produces successful AAAA NODATA. Other record types return REFUSED.
@@ -337,7 +350,9 @@ macOS at [78ade5c](https://github.com/XIIIFOX/flutter_vless/actions/runs/3921433
 with exact committed sources, drained workers and zero OS-resolver attempts.
 Windows closure assertions now recognize typed `WSAECONNRESET` and
 `WSAECONNABORTED` only on Windows, with pure controls retaining timeout and
-unknown-error rejection. Fresh Windows runtime acceptance remains pending.
+unknown-error rejection. All three Core runners pass the routing and constructor
+fixtures at [ada26d6](https://github.com/XIIIFOX/flutter_vless/actions/runs/39218706245),
+using identical copied Core source bytes and drained resources.
 Native launcher/capability integration and
 device acceptance remain open; no public routing option is enabled by this seam.
 
@@ -346,8 +361,8 @@ Core features when `NewWithContext` fails, preserving the original error.
 Unseeded constructors retain upstream behavior. Inert cleanup tests pass;
 the actual early-construction failure fixture passes on all three Core runners
 at [9bfe38b](https://github.com/XIIIFOX/flutter_vless/actions/runs/39216266631).
-The Linux/macOS runners also pass the routing traffic and cleanup scenarios;
-the Windows routing closure assertion above still needs fresh acceptance.
+The subsequent ada26d6 run also passes the routing traffic and cleanup scenarios
+on all three systems, including the Windows closure assertions above.
 
 The shared mobile factory now validates a strict launcher-owned spec against
 the digest of the final JSON and retains the exact compiled private inbound.
@@ -358,9 +373,34 @@ Stop revokes the owner before Core.Close. Both ordinary and optional artifacts
 pass pure lifecycle/spec/preflight checks. Default artifacts report capability
 zero; the optional tagged artifact reports one. A disposable iOS preview also
 compiles device/simulator bridge headers. The actual factory traffic,
-active-candidate rejection, bounded Stop and fresh restart fixture is CI-only
-and awaits its first acceptance. Native Android/Apple/Windows consumers still
+active-candidate rejection, bounded Stop and fresh restart fixture passes all
+four cases on Linux, macOS and Windows at ada26d6. Each run uses the committed
+source (including Windows checkout line-ending conversion), completes cleanup
+and records zero OS-resolver attempts. Native Android/Apple/Windows consumers still
 need to adopt the new check/start ABI; no public option is enabled yet.
+
+The additive CLI now shares that factory's config/spec validation and lifecycle.
+Ordinary/capable builds pass registration, stock-version, capability and real
+decode/build Check controls, plus fake-backend cancellation/Stop tests. These
+safe CLI checks construct no Core; foreground CLI traffic and native launcher
+adoption remain separate. Both Apple shims also qualify static legacy/current,
+partial-symbol and unknown-version archives on arm64/x86_64. Capability probing
+does not trial Start or Check, and unsupported Start returns a fixed error.
+
+The Android emulator at ada26d6 passes all 37 native cases without skips and
+three Flutter cases, including the four protected system-DNS scenarios. This
+does not identify the earlier intermittent empty HTTP ready response. A
+confirmed fixture gap is corrected separately: the cellular-skip branch now
+waits for Wi-Fi restoration and controlled traffic in its finally block.
+
+The same run's Apple privacy app stops reporting after ten of twelve modes,
+so that entire Apple job is not qualified. Earlier DNS/routing/asset markers
+do not substitute for the two missing privacy modes. The fixture now guards
+its owned client sockets against SIGPIPE and records each mode's entry. A
+failure-only collector retains bounded termination metadata for the exact
+test bundle/process/PID, preserving the original failure and uninstall. These
+fixture changes do not establish the cause of the original termination or
+qualify the missing modes before a fresh runtime result.
 
 The fifth case adds an explicit null tag on the default direct outbound. Core
 decodes this as untagged; Windows previously rejected it before preflight.

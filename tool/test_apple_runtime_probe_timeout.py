@@ -1,15 +1,140 @@
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
 import run_apple_runtime_probe as probe
+
+
+class AppleTerminationMetadataTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.reports = self.root / 'reports'
+        self.reports.mkdir()
+        self.log = self.root / 'runtime.log'
+        self.log.write_text('PROBE_PROCESS_STARTED=owned-child;pid=7\n' + probe.IOS_BUNDLE + ': 27841\n')
+        self.launched = time.time() - 5
+
+    def write_report(self, name='Probe-current.ips', *, pid=27841, bundle=probe.IOS_BUNDLE, process='Probe', two_documents=True):
+        header = {'bundleID': bundle, 'unknown': 'privacy-canary.invalid'}
+        body = {'pid': pid, 'procName': process, 'bundleInfo': {'CFBundleIdentifier': bundle},
+                'termination': {'namespace': 'FRONTBOARD', 'code': 0x8badf00d, 'reasons': ['synthetic-password-canary']},
+                'exception': {'type': 'EXC_CRASH', 'signal': 'SIGKILL'},
+                'procPath': '/private/canary', 'threads': ['local-password-canary']}
+        path = self.reports / name
+        path.write_text((json.dumps(header) + '\n' if two_documents else '') + json.dumps(body))
+        return path
+
+    def collect(self):
+        return probe.collect_ios_termination(self.log, self.launched, self.reports)
+
+    def test_two_json_documents_match_owned_app_not_simctl_and_redact(self):
+        self.write_report()
+        metadata = self.collect()
+        self.assertEqual({'state': 'matched', 'pid': 27841, 'reason': 'watchdog', 'namespace': 'FRONTBOARD',
+                          'code': 0x8badf00d, 'signal': 'SIGKILL', 'exception': 'EXC_CRASH'}, metadata)
+        self.assertNotIn('canary', json.dumps(metadata))
+
+    def test_single_document_supported_and_unknown_freeform_values_discarded(self):
+        path = self.write_report(two_documents=False)
+        body = json.loads(path.read_text())
+        body['termination'] = {'namespace': 'synthetic-password-canary', 'code': 'private-code', 'indicator': 'private-reason'}
+        body['exception'] = {'type': 'private-type', 'signal': 'private-signal'}
+        path.write_text(json.dumps(body))
+        self.assertEqual({'state': 'matched', 'pid': 27841, 'reason': 'termination', 'namespace': 'unknown'}, self.collect())
+
+    def test_wrong_pid_bundle_and_process_never_match(self):
+        for values in ({'pid': 7}, {'bundle': 'another.bundle'}, {'process': 'AnotherProcess'}):
+            with self.subTest(values=values):
+                self.write_report(**values)
+                self.assertEqual('unavailable', self.collect()['state'])
+
+    def test_conflicting_bundle_identity_never_matches(self):
+        path = self.write_report()
+        header, body = path.read_text().split('\n', 1)
+        path.write_text(json.dumps({'bundleID': 'another.bundle'}) + '\n' + body)
+        self.assertEqual('unavailable', self.collect()['state'])
+
+    def test_stale_oversized_malformed_and_symlink_reports_never_match(self):
+        stale = self.write_report('Probe-stale.ips')
+        os.utime(stale, (self.launched - 1, self.launched - 1))
+        (self.reports / 'Probe-large.ips').write_bytes(b' ' * (probe.MAX_IPS_BYTES + 1))
+        (self.reports / 'Probe-bad.ips').write_text('{malformed')
+        (self.reports / 'Probe-deep.ips').write_text('[' * 2000 + '0' + ']' * 2000)
+        unrelated = self.root / 'outside.ips'
+        unrelated.write_text(self.write_report('Probe-template.ips').read_text())
+        (self.reports / 'Probe-template.ips').unlink()
+        (self.reports / 'Probe-link.ips').symlink_to(unrelated)
+        self.assertEqual('unavailable', self.collect()['state'])
+
+    def test_opened_report_mtime_is_rechecked_after_directory_scan(self):
+        path = self.write_report()
+        os.utime(path, (self.launched - 1, self.launched - 1))
+        entry = mock.Mock(name=path.name, path=str(path))
+        entry.name = path.name
+        entry.is_file.return_value = True
+        entry.stat.return_value = mock.Mock(st_mtime=time.time(), st_size=path.stat().st_size)
+        with mock.patch.object(probe.os, 'scandir', return_value=contextlib.nullcontext([entry])):
+            self.assertEqual('unavailable', self.collect()['state'])
+
+    def test_missing_or_ambiguous_app_pid_never_uses_owned_console_pid(self):
+        self.write_report()
+        for text in ('PROBE_PROCESS_STARTED=owned-child;pid=27841\n',
+                     probe.IOS_BUNDLE + ': 27841\n' + probe.IOS_BUNDLE + ': 12345\n'):
+            with self.subTest(text=text):
+                self.log.write_text(text)
+                self.assertEqual('app-pid-unavailable', self.collect()['reason'])
+
+    def test_report_read_count_is_bounded(self):
+        for index in range(probe.MAX_IPS_REPORTS + 3):
+            self.write_report(f'Probe-{index}.ips', pid=7)
+        with mock.patch.object(probe, '_ips_documents', wraps=probe._ips_documents) as read:
+            self.assertEqual('unavailable', self.collect()['state'])
+        self.assertEqual(probe.MAX_IPS_REPORTS, read.call_count)
+
+    def test_appended_metadata_is_small_and_preserves_existing_runtime_log(self):
+        self.write_report()
+        previous = self.log.read_text()
+        with mock.patch.object(probe, 'collect_ios_termination', return_value=self.collect()), contextlib.redirect_stdout(io.StringIO()) as output:
+            probe.append_ios_termination(self.log, self.launched)
+        self.assertTrue(self.log.read_text().startswith(previous))
+        self.assertLessEqual(len(output.getvalue().encode('utf-8')), 2048)
+        self.assertNotIn('canary', output.getvalue())
+
+    def test_failure_only_shell_trap_preserves_primary_exit_and_uninstall(self):
+        root = Path(probe.__file__).resolve().parent.parent
+        source = (root / 'tool/test_ios_privacy_runtime.sh').read_text()
+        trap = source[source.index('cleanup_probe() {'):source.index('trap cleanup_probe EXIT')]
+        fake_bin = self.root / 'bin'
+        fake_bin.mkdir()
+        fake_xcrun = fake_bin / 'xcrun'
+        fake_xcrun.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$UNINSTALL_RECORD"\nexit 17\n')
+        fake_xcrun.chmod(0o700)
+        home = self.root / 'home'
+        reports = home / 'Library/Logs/DiagnosticReports'
+        reports.mkdir(parents=True)
+        (reports / 'Probe-current.ips').write_text(self.write_report().read_text())
+        environment = dict(os.environ, HOME=str(home), PATH=str(fake_bin) + os.pathsep + os.environ['PATH'], UNINSTALL_RECORD=str(self.root / 'uninstall.log'))
+        for status in (19, 0):
+            with self.subTest(status=status):
+                self.log.write_text(probe.IOS_BUNDLE + ': 27841\n')
+                command = 'set -euo pipefail\nROOT="$1"\nOUT="$2"\nSIMULATOR_UDID=owned-disposable\nBUNDLE=dev.tfox.security-runtime-probe\nPROBE_LAUNCHED_AT="$3"\n' + trap + '\ntrap cleanup_probe EXIT\nexit ' + str(status)
+                result = subprocess.run(['bash', '-c', command, 'fixture', str(root), str(self.root), str(self.launched)],
+                                        env=environment, text=True, capture_output=True, timeout=5)
+                self.assertEqual(status, result.returncode)
+                self.assertEqual(status != 0, 'PROBE_IOS_TERMINATION=' in self.log.read_text())
+        self.assertEqual(['simctl uninstall owned-disposable ' + probe.IOS_BUNDLE] * 2,
+                         (self.root / 'uninstall.log').read_text().splitlines())
 
 
 class AppleRuntimeProbeTimeoutTest(unittest.TestCase):

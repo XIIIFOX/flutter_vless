@@ -134,12 +134,12 @@ class ProtectedHostTrafficTest {
                     android.os.ParcelFileDescriptor.AutoCloseInputStream(it).readBytes()
                 }
             }
+            repeat(150) {
+                if (!physical(android.net.NetworkCapabilities.TRANSPORT_WIFI)) Thread.sleep(200)
+            }
+            assertTrue(physical(android.net.NetworkCapabilities.TRANSPORT_WIFI))
+            assertTrue(awaitRequest().contains(marker))
         }
-        repeat(150) {
-            if (!physical(android.net.NetworkCapabilities.TRANSPORT_WIFI)) Thread.sleep(200)
-        }
-        assertTrue(physical(android.net.NetworkCapabilities.TRANSPORT_WIFI))
-        assertTrue(awaitRequest().contains(marker))
     }
 
     @Test fun emulatorCellularCaptureTransportReady() {

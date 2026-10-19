@@ -48,6 +48,23 @@ pinned Core checksum and checks generated bridge headers without replacing a
 shipped artifact. The receipt records compile expectations separately from
 runtime acceptance.
 
+The additive `flutter_vless_vpn_routing_cli` tag registers `native-routing`
+in ordinary Core's main package. With the factory tag it exposes capability,
+check and foreground run commands over the same private config/spec pair.
+It retains ordinary commands and restores their upstream logger after importing
+the mobile bridge. The private command emits only fixed status/code JSON.
+The executable owns signal cancellation; successful Start is followed by one
+Stop before the command returns. Capability refusal precedes file reads.
+Android's existing FD protection and Windows service identity still need to be
+wired into the opt-in build and launch paths.
+
+`tool/test_native_routing_cli.py` compiles both CLI modes in further disposable
+module copies. It executes only stock `version`, native capabilities and native
+Check; main registration/logging and lifecycle tests use inert fakes. It never
+executes ordinary `run -test`, which constructs Core before reporting its result.
+The Apple compatibility shim independently checks the actual linked ABI;
+missing check/start entries or a version other than one remain unsupported.
+
 For admitted flows, generated DNS/probe/bootstrap guards see physical inbound
 metadata first, ahead of a forced detour. The real caller router then sees a
 view overriding only `GetInboundTag`. Its complete `IPIfNonMatch` DNS/IP pass,

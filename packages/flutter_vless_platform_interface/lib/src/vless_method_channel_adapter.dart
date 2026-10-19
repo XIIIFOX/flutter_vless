@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'vless_platform.dart';
 import 'vless_status.dart';
 import 'android_dns_policy.dart';
+import 'vpn_routing_options.dart';
 import 'vless_options.dart';
 
 class VlessMethodChannelAdapter extends VlessPlatform {
@@ -137,7 +138,12 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     String? certificateAssetsDirectory,
     AndroidDnsPolicy androidDnsPolicy = AndroidDnsPolicy.config,
     String? androidDnsProxyOutboundTag,
+    VpnRoutingOptions? vpnRouting,
   }) async {
+    vpnRouting?.validate();
+    if (vpnRouting != null && proxyOnly) {
+      throw ArgumentError('VPN routing selections require a VPN session.');
+    }
     if (androidDnsProxyOutboundTag != null &&
         (androidDnsPolicy != AndroidDnsPolicy.proxy ||
             androidDnsProxyOutboundTag.trim().isEmpty)) {
@@ -153,6 +159,9 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     if (certificateAssetsDirectory != null) {
       await _requireSecurityCapability('certificateAssetsDirectory');
     }
+    if (vpnRouting != null) {
+      await _requireSecurityCapability('vpnRouting');
+    }
     final arguments = <String, Object?>{
       'remark': remark,
       'config': config,
@@ -164,6 +173,7 @@ class VlessMethodChannelAdapter extends VlessPlatform {
         'android_dns_policy': androidDnsPolicy.name,
       if (androidDnsProxyOutboundTag != null)
         'android_dns_proxy_outbound_tag': androidDnsProxyOutboundTag,
+      if (vpnRouting != null) 'vpn_routing': vpnRouting.toMap(),
     };
     if (geoAssetsDirectory != null) {
       arguments['geo_assets_directory'] = geoAssetsDirectory;

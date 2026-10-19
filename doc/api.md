@@ -112,6 +112,17 @@ Optional parameters:
 - `androidDnsProxyOutboundTag`: optional selected proxy tag, only with proxy DNS.
   Unsupported native backends reject explicitly requested new guarantees before
   starting or reconfiguring a session.
+- `vpnRouting`: optional `VpnRoutingOptions` for one VPN session. Its
+  `sourceInboundIndex` uses the original JSON's zero-based `inbounds` index and
+  supplies that input's `inboundTag` context to VPN routing. It does not copy
+  accounts, sniffing or other inbound settings. `defaultOutboundTag` selects the
+  exact named outbound for unmatched VPN traffic; null/empty retains Core's
+  default. Caller rules, imported listeners and private DNS/probe rules remain.
+  Omit the whole option for ordinary startup; an explicit empty option still
+  requires the routing factory. Proxy-only requests and unsupported runtimes
+  fail before replacing the current session. Factory-capable runtime artifacts
+  are currently unpublished CI previews, so ordinary published binaries cannot
+  use this option yet. Update the copied Apple provider together with the plugin.
 
 Validation:
 

@@ -5,6 +5,7 @@ library;
 
 export 'src/vless_platform.dart';
 export 'src/android_dns_policy.dart';
+export 'src/vpn_routing_options.dart';
 export 'src/vless_options.dart';
 export 'src/vless_status.dart';
 export 'src/vless_method_channel_adapter.dart';

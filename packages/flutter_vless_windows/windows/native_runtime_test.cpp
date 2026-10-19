@@ -4,6 +4,8 @@
 #include "protected_runtime.h"
 #include "packet_path_probe.h"
 #include <aclapi.h>
+#include <shellapi.h>
+#include <algorithm>
 #include <cassert>
 #include <iostream>
 #include <fstream>
@@ -13,6 +15,23 @@
 
 int main(int argc, char** argv) {
   using namespace flutter_vless::native;
+  if (argc == 3 && std::string(argv[1]) == "child-parent-stdin") {
+    int count = 0; auto arguments = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (!arguments || count != 3) return 8;
+    const fs::path receipt(arguments[2]); LocalFree(arguments);
+    std::cout << "PARENT_STDIN_READY" << std::flush;
+    char byte; DWORD read = 0;
+    for (;;) {
+      if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), &byte, 1, &read, nullptr)) {
+        if (GetLastError() != ERROR_BROKEN_PIPE) return 10;
+        break;
+      }
+      if (!read) break;
+    }
+    std::ofstream stopped(receipt, std::ios::binary | std::ios::trunc);
+    stopped << "PARENT_EOF_STOPPED"; stopped.close();
+    return stopped.good() ? 0 : 9;
+  }
   if (argc == 2 && std::string(argv[1]) == "child-assets") {
     wchar_t dotted[32768]{}, alternate[32768]{};
     const bool selected = GetEnvironmentVariableW(L"xray.location.asset", dotted, 32768)
@@ -98,6 +117,33 @@ int main(int argc, char** argv) {
   assert(output.size() <= 128 * 1024);
   assert(!Command(self, {L"capture-failure"}, output, 10000));
   std::cout << "PASS bounded command output, actual stalled-child termination and nonzero exit\n";
+  {
+    fs::path receipt; assert(WritePrivateConfig("", receipt));
+    auto child = Launch(self, {L"child-parent-stdin", receipt.wstring()}, true, std::nullopt, true);
+    assert(child && child->hStdInWrite);
+    std::string ready;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    HANDLE reader = reinterpret_cast<HANDLE>(child->hStdOutRead);
+    while (ready != "PARENT_STDIN_READY" && std::chrono::steady_clock::now() < deadline && child->IsRunning()) {
+      DWORD available = 0, count = 0; char bytes[64];
+      if (PeekNamedPipe(reader, nullptr, 0, nullptr, &available, nullptr) && available) {
+        assert(ReadFile(reader, bytes, std::min<DWORD>(available, sizeof(bytes)), &count, nullptr));
+        ready.append(bytes, count); assert(ready.size() <= 64);
+      } else Sleep(10);
+    }
+    assert(ready == "PARENT_STDIN_READY" && child->IsRunning());
+    const auto pid = GetProcessId(reinterpret_cast<HANDLE>(child->hProcess));
+    const auto before_close = std::chrono::steady_clock::now(); child.reset();
+    assert(std::chrono::steady_clock::now() - before_close < std::chrono::seconds(5));
+    std::ifstream received(receipt, std::ios::binary);
+    const std::string stopped((std::istreambuf_iterator<char>(received)), std::istreambuf_iterator<char>());
+    received.close(); assert(stopped == "PARENT_EOF_STOPPED");
+    if (HANDLE exited = OpenProcess(SYNCHRONIZE, FALSE, pid)) {
+      assert(WaitForSingleObject(exited, 0) == WAIT_OBJECT_0); CloseHandle(exited);
+    } else assert(GetLastError() == ERROR_INVALID_PARAMETER);
+    RemovePrivateConfig(receipt); assert(receipt.empty());
+    std::cout << "WINDOWS_ROUTING_PARENT_STDIN_PASS=1\n";
+  }
   // CrossOver can run this process-only subset without Core, listeners, WFP,
   // TUN, administrator changes, system proxy or any VPN configuration.
 #ifdef FLUTTER_VLESS_PROCESS_CAPTURE_ONLY

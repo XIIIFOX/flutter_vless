@@ -100,6 +100,28 @@ import Security
             entry.start(arguments: arguments)
             precondition(entry.reachedQueue)
         }
+        for capability: Int64 in [0, 2] {
+            SDK.routingCapability = capability
+            let entry = NativeStartEntryProbe()
+            entry.start(arguments: ["vpn_routing": [String: Any]()])
+            precondition(!entry.reachedQueue && entry.lastErrorCode == "VPN_ROUTING_UNAVAILABLE")
+        }
+        SDK.routingCapability = 1
+        for raw: Any in [false, ["unknown": 0], ["sourceInboundIndex": -1], ["sourceInboundIndex": true],
+                         ["sourceInboundIndex": 1.0], ["sourceInboundIndex": 1], ["defaultOutboundTag": "private-generated"]] {
+            let entry = NativeStartEntryProbe()
+            entry.start(arguments: ["vpn_routing": raw])
+            precondition(!entry.reachedQueue && entry.lastErrorCode == "INVALID_VPN_ROUTING")
+        }
+        let proxyRouting = NativeStartEntryProbe()
+        proxyRouting.start(arguments: ["proxy_only": true, "vpn_routing": [:]])
+        precondition(!proxyRouting.reachedQueue)
+        for raw: Any in [NSNull(), [String: Any](), ["sourceInboundIndex": 0]] {
+            let entry = NativeStartEntryProbe()
+            entry.start(arguments: ["vpn_routing": raw])
+            precondition(entry.reachedQueue)
+        }
+        SDK.routingCapability = 0
         let provider = ProviderEntryProbe()
         provider.keychain = keychain
         let oldProfile = NETunnelProviderProtocol()
@@ -160,7 +182,31 @@ import Security
         precondition(notifiedReference == optionMetadata["xrayConfigReference"] as? Data)
         try await verifyReadinessWithoutOnDemand(manager)
         try await manager.stop(waitForDisconnect:true)
+        let routingSaves = SDK.saves, routingStops = SDK.stopCalls
+        manager.vpnRouting = try NativeRoutingIntent()
+        do { try await manager.start(); preconditionFailure("Unavailable routing runtime mutated the profile") }
+        catch NativeRoutingSpecError.unsupportedRuntime {}
+        precondition(SDK.saves == routingSaves && SDK.stopCalls == routingStops)
+        SDK.routingCapability = 1
+        try await manager.start()
+        let routingMetadata = (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+        precondition((routingMetadata["vpnRouting"] as? [String: Any])?.isEmpty == true)
+        precondition(routingMetadata["source_sha256"] == nil && routingMetadata["auth_user"] == nil)
+        SDK.profile!.connection.status = .connected
+        let beforeSelectionChange = SDK.saves
+        manager.vpnRouting = nil
+        do { try await manager.start(); preconditionFailure("Changed routing intent reused a live provider") } catch {}
+        precondition(SDK.saves == beforeSelectionChange)
+        manager.vpnRouting = try NativeRoutingIntent()
+        try await manager.stop(waitForDisconnect: true)
+        manager.nativeOptions = try VlessNativeOptions()
+        try await manager.start()
+        let retainedSelection = (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+        precondition((retainedSelection["vpnRouting"] as? [String: Any])?.isEmpty == true)
+        try await manager.stop(waitForDisconnect: true)
+        manager.vpnRouting = nil; SDK.routingCapability = 0
         try await manager.removeFromPreferences()
+        print("PASS Apple routing host admission, selection-only persistence and active-profile identity")
         print("PASS: preference-load errors; transactional Keychain rollback/migration/cleanup; permission privacy; cold-start secret denial; traffic protection and proxy-switch teardown")
     }
 }

@@ -35,6 +35,7 @@ private struct Log {
 }
 private let pluginLog = Log()
 private struct LocalProxyCredentials {}
+private struct NativeRoutingIntent {}
 private final class PluginXRayLogger {
     func reset() {}
     func record(source: String, message: String) {}
@@ -71,6 +72,7 @@ private final class Proxy {
 private final class Manager {
     var remark = "old", xrayConfig = Data("old".utf8), bypassSubnets: [String] = []
     var proxyOnly = false, geoAssetsDirectory: String?
+    var vpnRouting: NativeRoutingIntent?
     var certificateAssetsDirectory: String? = "/fixture/old-certificate-assets"
     func stop(waitForDisconnect: Bool) async throws { precondition(waitForDisconnect); events.append("vpn-stop") }
     func start() async throws { events.append("vpn-start") }

@@ -9,9 +9,11 @@ NATIVE_DNS_PREVIEW=""
 NATIVE_DNS_PREVIEW_SHA=""
 NATIVE_TUN_PREVIEW=""
 NATIVE_TUN_PREVIEW_SHA=""
+NATIVE_ROUTING_PREVIEW=""
+NATIVE_ROUTING_PREVIEW_SHA=""
 usage() {
   cat <<'USAGE'
-Usage: tool/test_android_security_emulator.sh [--no-capture] [--native-dns-preview BUILD_DIRECTORY] [--native-tun-preview BUILD_DIRECTORY]
+Usage: tool/test_android_security_emulator.sh [--no-capture] [--native-dns-preview BUILD_DIRECTORY] [--native-tun-preview BUILD_DIRECTORY] [--native-routing-preview BUILD_DIRECTORY]
 
 Use an already booted, dedicated emulator. ANDROID_SERIAL selects it explicitly;
 otherwise exactly one online emulator must be present. Physical devices are refused.
@@ -26,6 +28,8 @@ instrumentation APK, never to the ordinary plugin/runtime or release artifacts.
 The additional TUN preview requires both separately verified executables. It
 runs five actual TUN/browser scenarios on this emulator after the ordinary
 regression suites; the default and Core-only paths do not start this service.
+The routing preview adds two factory-consumer tests after the ordinary suites;
+the ordinary tests continue using the checksum-verified official runtime.
 USAGE
 }
 while [ "$#" -gt 0 ]; do
@@ -40,6 +44,11 @@ while [ "$#" -gt 0 ]; do
       shift
       if [ "$#" -eq 0 ] || [ -z "$1" ]; then usage >&2; exit 2; fi
       NATIVE_TUN_PREVIEW="$1"
+      ;;
+    --native-routing-preview)
+      shift
+      if [ "$#" -eq 0 ] || [ -z "$1" ]; then usage >&2; exit 2; fi
+      NATIVE_ROUTING_PREVIEW="$1"
       ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -283,9 +292,9 @@ PY
   # even when a shell parser error leaves EXIT with a stale zero status.
   if [ "$result" -eq 0 ] && [ "$PHASE" != complete ]; then result=1; fi
   if [ "$original_result" -ne 0 ]; then result=$original_result; fi
-  python3 - "$OUT_DIR" "$SERIAL" "$result" "$PHASE" "$CAPTURE_DNS" "$NATIVE_TUN_PREVIEW" <<'PY'
+  python3 - "$OUT_DIR" "$SERIAL" "$result" "$PHASE" "$CAPTURE_DNS" "$NATIVE_TUN_PREVIEW" "${NATIVE_ROUTING_PREVIEW:-}" <<'PY'
 import json, pathlib, sys
-output, serial, code, phase, capture, tun_requested = sys.argv[1:]
+output, serial, code, phase, capture, tun_requested, routing_requested = sys.argv[1:]
 checks = []
 for line in (pathlib.Path(output) / 'checks.tsv').read_text().splitlines():
     name, count, skipped = line.split('\t')
@@ -293,6 +302,8 @@ for line in (pathlib.Path(output) / 'checks.tsv').read_text().splitlines():
 summary = {'passed': code == '0', 'exit_code': int(code), 'emulator': serial,
            'checks': checks, 'dns_physical_capture_requested': capture == '1',
            'dns_physical_capture_verified': any(check['name'] == 'physical-dns-capture' for check in checks),
+           'native_routing_preview_requested': bool(routing_requested),
+           'native_routing_preview_verified': any(check['name'] == 'native-routing-selection' and check['passed_tests'] == 2 and check['skipped_tests'] == 0 for check in checks),
            'native_tun_preview_requested': bool(tun_requested),
            'native_tun_preview_verified': any(check['name'] == 'native-preview-vpn' and check['passed_tests'] == 5 and check['skipped_tests'] == 0 for check in checks),
            'instrumentation_passed_tests': sum(check['passed_tests'] for check in checks if check['name'] != 'physical-dns-capture'),
@@ -378,6 +389,26 @@ print(tun['artifact_sha256'])
 PY
 )"
 fi
+if [ -n "$NATIVE_ROUTING_PREVIEW" ]; then
+  PHASE=verify-native-routing-preview
+  bounded 30 "$OUT_DIR/native-routing-preview-verification.json" python3 "$ROOT_DIR/tool/verify_android_routing_preview.py" --directory "$NATIVE_ROUTING_PREVIEW"
+  NATIVE_ROUTING_PREVIEW="$(python3 - "$NATIVE_ROUTING_PREVIEW" <<'PY'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).absolute())
+PY
+)"
+  NATIVE_ROUTING_PREVIEW_SHA="$(python3 - "$OUT_DIR/native-routing-preview-verification.json" "$OUT_DIR/native-preview-verification.json" <<'PY'
+from pathlib import Path
+import json,sys
+routing = json.load(open(sys.argv[1]))
+if Path(sys.argv[2]).exists() and json.load(open(sys.argv[2]))['arch'] != routing['arch']:
+    raise SystemExit('Native preview executables require the same ABI.')
+print(routing['artifact_sha256'])
+PY
+)"
+  PREVIEW_GRADLE_ARGS+=("-PflutterVlessNativeRoutingPreviewDir=$NATIVE_ROUTING_PREVIEW")
+fi
 # Keep the ordinary APK's VPN service set intact. Android opts the entire app
 # out of Always-on if any declared VPN service opts out, as this private host
 # deliberately does. Only the final five-case suite receives the second APK.
@@ -394,6 +425,10 @@ if [ -n "$NATIVE_DNS_PREVIEW" ]; then
   PHASE=verify-preview-apk
   PREVIEW_APK_ARGS=(--apk "$APK" --core-verification "$OUT_DIR/native-preview-verification.json")
   bounded 30 "$OUT_DIR/native-preview-apk-verification.json" python3 "$ROOT_DIR/tool/verify_android_preview_apk.py" "${PREVIEW_APK_ARGS[@]}"
+fi
+if [ -n "$NATIVE_ROUTING_PREVIEW" ]; then
+  PHASE=verify-routing-preview-apk
+  bounded 30 "$OUT_DIR/native-routing-preview-apk-verification.json" python3 "$ROOT_DIR/tool/verify_android_routing_preview.py" --directory "$NATIVE_ROUTING_PREVIEW" --apk "$APK"
 fi
 PHASE=install
 bounded 90 "$OUT_DIR/install.log" "$ADB" -s "$SERIAL" install -r -t "$APK"
@@ -594,6 +629,28 @@ fi
 instrument physical-dns "$HOST_CLASS#physicalNetworkResolverControl" 1 0 -e checkPhysicalDns true
 install_os_adversary
 instrument system-vpn-policy "$CLASS_PREFIX.SessionSystemPolicyDeviceTest" 4 0
+if [ -n "$NATIVE_ROUTING_PREVIEW" ]; then
+  # OS Forget above may revoke this disposable package's consent.
+  PHASE=native-routing-selection
+  bounded 20 "$OUT_DIR/native-routing-preview-vpn-owner.log" "$ADB" -s "$SERIAL" shell settings --user 0 get secure always_on_vpn_app
+  python3 - "$OUT_DIR/native-routing-preview-vpn-owner.log" <<'PY'
+from pathlib import Path
+import sys
+if Path(sys.argv[1]).read_text().strip() != 'null':
+    raise SystemExit('Ordinary OS-policy suite did not release its VPN owner.')
+PY
+  bounded 20 "$OUT_DIR/native-routing-preview-stop-ordinary.log" "$ADB" -s "$SERIAL" shell am force-stop "$PACKAGE"
+  bounded 20 "$OUT_DIR/native-routing-preview-authorize.log" "$ADB" -s "$SERIAL" shell appops set "$PACKAGE" ACTIVATE_VPN allow
+  bounded 20 "$OUT_DIR/native-routing-preview-permission.log" "$ADB" -s "$SERIAL" shell appops get "$PACKAGE" ACTIVATE_VPN
+  python3 - "$OUT_DIR/native-routing-preview-permission.log" <<'PY'
+from pathlib import Path
+import re,sys
+if not re.search(r'ACTIVATE_VPN:\s*allow\b',Path(sys.argv[1]).read_text()):
+    raise SystemExit('Routing fixture did not receive VPN consent.')
+PY
+  instrument native-routing-selection "$CLASS_PREFIX.NativeRoutingSelectionDeviceTest" 2 0 \
+    -e routingPreviewSha256 "$NATIVE_ROUTING_PREVIEW_SHA"
+fi
 if [ -n "$NATIVE_TUN_PREVIEW" ]; then
   # The preceding OS Forget test may revoke consent. Restore only this
   # disposable package's explicitly authorized permission, never OS lockdown.
@@ -614,6 +671,9 @@ PY
   bounded 30 "$OUT_DIR/native-preview-vpn-apk-verification.json" python3 "$ROOT_DIR/tool/verify_android_preview_apk.py" \
     --apk "$APK" --core-verification "$OUT_DIR/native-preview-verification.json" \
     --tun-verification "$OUT_DIR/native-tun-preview-verification.json"
+  if [ -n "$NATIVE_ROUTING_PREVIEW" ]; then
+    bounded 30 "$OUT_DIR/native-routing-preview-tun-apk-verification.json" python3 "$ROOT_DIR/tool/verify_android_routing_preview.py" --directory "$NATIVE_ROUTING_PREVIEW" --apk "$APK"
+  fi
   PHASE=native-preview-vpn-install
   bounded 90 "$OUT_DIR/native-preview-vpn-install.log" "$ADB" -s "$SERIAL" install -r -t "$APK"
   bounded 20 "$OUT_DIR/native-preview-vpn-stop-updated.log" "$ADB" -s "$SERIAL" shell am force-stop "$PACKAGE"

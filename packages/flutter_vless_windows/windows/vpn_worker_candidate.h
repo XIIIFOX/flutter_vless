@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <utility>
+#include <type_traits>
 
 namespace flutter_vless::native {
 // One finalized worker attempt. It retains the checked file through launch
@@ -26,11 +27,16 @@ class VpnWorkerCandidate {
     auto candidate = std::unique_ptr<VpnWorkerCandidate>(new VpnWorkerCandidate(
         make_probe(), underlay, identity, std::move(remove)));
     if (!candidate->probe_ || !candidate->probe_->Start()
-        || !candidate->probe_->Configure(config, managed_port)) return nullptr;
+        || !candidate->probe_->Configure(config, managed_port, &candidate->probe_guards_)) return nullptr;
     candidate->bytes_ = config.dump();
     // Check must write these exact bytes and test this exact file. Neither
     // serialization nor probe configuration is repeated before its launch.
-    if (!check(candidate->bytes_, candidate->path_) || candidate->path_.empty()) return nullptr;
+    bool accepted;
+    if constexpr (std::is_invocable_r_v<bool, Check, const std::string&, std::filesystem::path&,
+        std::string&, std::filesystem::path&, const std::vector<int64_t>&>) {
+      accepted = check(candidate->bytes_, candidate->path_, candidate->metadata_, candidate->metadata_path_, candidate->probe_guards_);
+    } else accepted = check(candidate->bytes_, candidate->path_);
+    if (!accepted || candidate->path_.empty() || candidate->metadata_.empty() != candidate->metadata_path_.empty()) return nullptr;
     return candidate;
   }
 
@@ -39,7 +45,13 @@ class VpnWorkerCandidate {
   const std::string& Underlay() const { return underlay_; }
   uint64_t Identity() const { return identity_; }
   const Probe& PacketProbe() const { return *probe_; }
-  void RemoveFile() { if (!path_.empty()) remove_(path_); }
+  bool Routing() const { return !metadata_.empty(); }
+  const std::string& Metadata() const { return metadata_; }
+  const std::filesystem::path& MetadataPath() const { return metadata_path_; }
+  void RemoveFile() {
+    if (!path_.empty()) remove_(path_);
+    if (!metadata_path_.empty()) remove_(metadata_path_);
+  }
 
  private:
   VpnWorkerCandidate(std::unique_ptr<Probe> probe, std::string underlay,
@@ -60,5 +72,8 @@ class VpnWorkerCandidate {
   RemoveConfig remove_;
   std::string bytes_;
   std::filesystem::path path_;
+  std::string metadata_;
+  std::filesystem::path metadata_path_;
+  std::vector<int64_t> probe_guards_;
 };
 }  // namespace flutter_vless::native

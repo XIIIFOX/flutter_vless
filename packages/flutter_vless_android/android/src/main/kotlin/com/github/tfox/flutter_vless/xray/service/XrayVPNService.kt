@@ -17,6 +17,7 @@ import com.github.tfox.flutter_vless.xray.core.AndroidTunnelDnsPolicy
 import com.github.tfox.flutter_vless.xray.core.LocalProxyCredentials
 import com.github.tfox.flutter_vless.xray.core.LocalProxyAccessPolicy
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
+import com.github.tfox.flutter_vless.xray.core.NativeRuntimeConfig
 import com.github.tfox.flutter_vless.xray.core.XrayDiagnosticsStore
 import com.github.tfox.flutter_vless.xray.core.XrayDiagnosticsStore.Event
 import com.github.tfox.flutter_vless.xray.core.StartupReadiness
@@ -44,6 +45,7 @@ class XrayVPNService : VpnService() {
     private var config: XrayConfig? = null
     private var sourceConfig: XrayConfig? = null
     private var prepared: JSONObject? = null
+    private var routingPreparation: NativeRoutingPreparation? = null
     private var pendingRuntime: Pair<Long, SessionRuntimeCandidate<SessionReadinessProbe>>? = null
     private var dnsServers = listOf(AndroidTunnelDnsPolicy.VIRTUAL_SERVER)
     private var credentials: LocalProxyCredentials? = null
@@ -215,8 +217,12 @@ class XrayVPNService : VpnService() {
         val candidate = incoming.copy(BLOCKED_APPS = ArrayList(incoming.BLOCKED_APPS), BYPASS_SUBNETS = ArrayList(incoming.BYPASS_SUBNETS))
         val secret = LocalProxyCredentials.generate()
         var candidateDnsServers = dnsServers
+        var candidateRouting: NativeRoutingPreparation? = null
         val (json, finalCandidate, candidateCredentials) = try {
             XrayCoreManager.validateConfiguration(candidate)
+            if (candidate.VPN_ROUTING_SELECTION_JSON != null)
+                require(XrayCoreManager.supportsNativeRouting(this)) { "Native VPN routing is unavailable" }
+            if (request != requests.get()) return false
             val dns = if (candidate.PROXY_ONLY) null else AndroidTunnelDnsPolicy.prepare(candidate.V2RAY_FULL_JSON_CONFIG, candidate.ANDROID_DNS_POLICY,
                 candidate.ANDROID_DNS_PROXY_OUTBOUND_TAG, candidate.BYPASS_SUBNETS) {
                 XraySocketProtector.resolveBootstrapHostname(this, it)
@@ -225,12 +231,12 @@ class XrayVPNService : VpnService() {
                 candidate.V2RAY_FULL_JSON_CONFIG = dns.configJson
                 candidateDnsServers = dns.systemDnsServers
             }
-            val runtime = XrayCoreManager.buildRuntimeConfigJson(candidate, noBackupFilesDir, secret, dns)
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(candidate, noBackupFilesDir, secret, dns, routingPrepared = { candidateRouting=it })
             val localCredentials = if (candidate.PROXY_ONLY)
                 LocalProxyAccessPolicy.credentialsForProxyOnly(runtime, candidate.LOCAL_SOCKS5_PORT) else secret
             // The candidate probe/rule belong to this request. Final native
             // preflight happens before profiles, generations or active workers change.
-            Triple(runtime, finalizeRuntime(candidate, runtime), localCredentials)
+            Triple(runtime, finalizeRuntime(candidate, runtime, candidateRouting, secret.username, capabilityChecked=true), localCredentials)
         } catch (_: Exception) {
             event(Event.CONFIG_REJECTED)
             return false
@@ -265,7 +271,7 @@ class XrayVPNService : VpnService() {
                     }.onFailure { NativeQuickAccess.profile(this).disarm() }
                     NativeQuickAccess.refresh(this)
                 }
-                prepared = json; dnsServers = candidateDnsServers
+                prepared = json; dnsServers = candidateDnsServers; routingPreparation = candidateRouting
                 // Keep this separate from active readinessProbe: the queued first
                 // restart still drains old workers before adopting the new probe.
                 pendingRuntime = owner to accepted
@@ -276,11 +282,19 @@ class XrayVPNService : VpnService() {
         })
     }
 
-    private fun finalizeRuntime(current: XrayConfig, base: JSONObject) = SessionRuntimeCandidate.prepare(
-        base, createProbe = {
-            if (current.PROXY_ONLY) null else createReadinessProbe(base)
-        }, configure = { probe, json -> probe.configure(json, current.LOCAL_SOCKS5_PORT) },
-        validate = { final -> XrayCoreManager.validateNative(this, final, current.GEO_ASSETS_DIRECTORY) })
+    private fun finalizeRuntime(current: XrayConfig, base: JSONObject,
+                                routing: NativeRoutingPreparation? = routingPreparation,
+                                authUser: String = credentials?.username.orEmpty(), capabilityChecked: Boolean = false): SessionRuntimeCandidate<SessionReadinessProbe> {
+        if (current.VPN_ROUTING_SELECTION_JSON != null) {
+            requireNotNull(routing) { "Native VPN routing preparation unavailable" }
+            if (!capabilityChecked) require(XrayCoreManager.supportsNativeRouting(this)) { "Native VPN routing unavailable" }
+        }
+        return SessionRuntimeCandidate.prepare(
+            base, createProbe = { if (current.PROXY_ONLY) null else createReadinessProbe(base) },
+            configure = { probe, json -> probe.configure(json, current.LOCAL_SOCKS5_PORT) },
+            validate = { final -> XrayCoreManager.validateNative(this, final, current.GEO_ASSETS_DIRECTORY) },
+            freeze = { final -> routing?.freeze(final, authUser) ?: NativeRuntimeConfig.freeze(final) })
+    }
 
     /** Test seam supplies an inert probe; normal startup still uses the existing owned listener. */
     internal fun createReadinessProbe(base: JSONObject) = SessionReadinessProbe(SessionReadinessProbe.selectHost(base))
@@ -312,7 +326,8 @@ class XrayVPNService : VpnService() {
                     XraySocketProtector.resolveBootstrapHostname(this, it)
                 }
                 current.V2RAY_FULL_JSON_CONFIG = dns.configJson
-                prepared = XrayCoreManager.buildRuntimeConfigJson(current, noBackupFilesDir, credentials, dns)
+                prepared = XrayCoreManager.buildRuntimeConfigJson(current, noBackupFilesDir, credentials, dns,
+                    routingPrepared = { routingPreparation=it })
                 dnsServers = dns.systemDnsServers
             }
             candidate = takePendingRuntime(owner) ?: finalizeRuntime(current, requireNotNull(prepared))
@@ -487,7 +502,7 @@ class XrayVPNService : VpnService() {
         finally {
             stopWorkers()
             runCatching { tun?.close() }; tun = null
-            config = null; sourceConfig = null; prepared = null; credentials = null
+            config = null; sourceConfig = null; prepared = null; routingPreparation = null; credentials = null
             event(Event.SESSION_STOP)
             XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED)
             stopForeground(STOP_FOREGROUND_REMOVE)

@@ -26,7 +26,7 @@ source=(root/'ios/flutter_vless/Sources/flutter_vless/FlutterVlessPlugin.swift')
 # Preserve actual runner implementations; no duplicated config transformation.
 head=source[:source.index('public class FlutterVlessPlugin:')].replace('import Flutter\n','')
 asset=source[source.index('private func configureXrayAssetLocation'):source.index('final class PacketTunnelManager:')]
-harness=(root/'tool/fixtures/ios_local_auth_probe.swift').read_text()+'\n'+(root/'tool/fixtures/ios_dns_runtime_probe.swift').read_text()+'\n'+(root/'tool/fixtures/ios_privacy_probe.swift').read_text()
+harness=(root/'tool/fixtures/ios_local_auth_probe.swift').read_text()+'\n'+(root/'tool/fixtures/ios_dns_runtime_probe.swift').read_text()+'\n'+(root/'tool/fixtures/apple_native_routing_runtime.swift').read_text()+'\n'+(root/'tool/fixtures/ios_privacy_probe.swift').read_text()
 harness=harness.replace('__ASSET_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/asset-files.json').read_bytes()).decode('ascii'))
 harness=harness.replace('__DIRECT_ONLY_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/direct-only.json').read_bytes()).decode('ascii'))
 harness=harness.replace('__SELECTOR_TRAFFIC_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/selector-traffic.json').read_bytes()).decode('ascii'))
@@ -53,6 +53,7 @@ echo 'PROBE_PHASE=ios-install-complete'
 echo 'PROBE_PHASE=ios-runtime-begin'
 PROBE_LAUNCHED_AT="$(python3 -c 'import time; print(time.time())')"
 SIMCTL_CHILD_REQUIRE_CORE_PREFLIGHT="${REQUIRE_CORE_PREFLIGHT:-0}" \
+SIMCTL_CHILD_REQUIRE_VPN_ROUTING="${REQUIRE_VPN_ROUTING:-0}" \
     python3 "$ROOT/tool/run_apple_runtime_probe.py" --timeout 600 --ios-simulator "$SIMULATOR_UDID" -- \
     xcrun simctl launch --console "$SIMULATOR_UDID" "$BUNDLE" 2>&1 | tee "$OUT/runtime.log"
 echo 'PROBE_PHASE=ios-runtime-complete'
@@ -66,6 +67,9 @@ for marker in ['privacy-canary.invalid','synthetic-password-canary','d2719f44-f5
 for mode in ['tunnel','proxy-only','delay']:
  for level in ['debug','warning','error','none']:
   assert f'MODE_PASS={mode};LEVEL={level}' in text, f'Missing mode {mode}/{level}'
+if os.environ.get('REQUIRE_VPN_ROUTING') == '1':
+    for marker in ['NATIVE_ROUTING_RUNTIME_PASS=0','NATIVE_ROUTING_RUNTIME_PASS=1','NATIVE_ROUTING_RUNTIME_DRAIN_PASS']:
+        assert marker in text, marker
 if os.environ.get('REQUIRE_CORE_PREFLIGHT') == '1':
  for generation in [0,1]:
   assert f'PREFLIGHT_RUNNING_SESSION_PASS={generation}' in text

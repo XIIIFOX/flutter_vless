@@ -17,6 +17,7 @@
 #include "protected_runtime.h"
 #include "packet_path_probe.h"
 #include "vpn_worker_candidate.h"
+#include "native_routing_spec.h"
 #include "proxy_service.h" // For ProcessHandle and helper functions
 
 namespace fs = std::filesystem;
@@ -55,7 +56,9 @@ class VpnService {
    * 5. Configures the OS network interface and routes.
    */
   bool Start(const std::string& config, const flutter_vless::NativeOptions& options = {},
-      flutter_vless::asset_location::Root assets = std::nullopt);
+      flutter_vless::asset_location::Root assets = std::nullopt,
+      std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing = std::nullopt,
+      std::function<void()> admitted = {});
 
   /**
    * @brief Stops the VPN service and cleans up resources.
@@ -91,7 +94,9 @@ class VpnService {
   using WorkerCandidate = flutter_vless::native::VpnWorkerCandidate<flutter_vless::PacketPathProbe>;
   std::unique_ptr<WorkerCandidate> PrepareWorkerCandidate(const std::string& base,
       uint16_t managed_port, flutter_vless::native::ProtectedRuntime& runtime,
-      const flutter_vless::asset_location::Root& assets);
+      const flutter_vless::asset_location::Root& assets,
+      const std::optional<flutter_vless::native_routing::NativeRoutingIntent>& routing,
+      const flutter_vless::xray_config::VpnRoutingProvenance& provenance, const std::string& auth_user);
   void StopWorkers();
   bool RetireIPv6Address();
   void StopSession(bool release_protection);
@@ -123,6 +128,8 @@ class VpnService {
   std::unique_ptr<flutter_vless::native::ProtectedRuntime> private_runtime_;
   std::unique_ptr<WorkerCandidate> pending_candidate_;
   std::unique_ptr<WorkerCandidate> worker_candidate_;
+  std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing_intent_;
+  flutter_vless::xray_config::VpnRoutingProvenance routing_provenance_;
   std::vector<MIB_IPFORWARD_ROW2> capture_routes_;
   std::optional<MIB_UNICASTIPADDRESS_ROW> ipv6_address_;
   std::mutex stats_mutex_;

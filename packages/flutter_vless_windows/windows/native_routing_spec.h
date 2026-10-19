@@ -40,12 +40,21 @@ struct NativeRoutingResult {
   std::optional<NativeRoutingEnvelope> envelope;
   NativeRoutingError error = NativeRoutingError::none;
 };
+struct NativeRoutingIntentResult {
+  std::optional<NativeRoutingIntent> intent;
+  NativeRoutingError error = NativeRoutingError::none;
+};
 
 // BCrypt on Windows. There is no non-Windows production hash fallback.
 std::optional<std::string> SHA256Exact(std::string_view bytes) noexcept;
 
 class NativeRoutingSpec {
  public:
+  // Native MethodChannel map only. Null is the ordinary path; an empty map
+  // opts in. This never reads intent from the caller's Xray document.
+  static NativeRoutingIntentResult ParseIntent(std::string_view json);
+  static NativeRoutingError ValidateSource(std::string_view configuration,
+      const std::optional<NativeRoutingIntent>& intent);
   // Metadata only: no config rewriting, Core construction or process state.
   // Go preflight remains authoritative for the complete compiled Core shape.
   // Nil intent returns the ordinary path without even parsing or hashing JSON.

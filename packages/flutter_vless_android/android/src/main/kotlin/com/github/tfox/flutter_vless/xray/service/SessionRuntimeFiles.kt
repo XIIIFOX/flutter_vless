@@ -7,7 +7,7 @@ import java.io.File
 /** Bounded cleanup of this service's known files, never arbitrary app or standalone-delay files. */
 internal object SessionRuntimeFiles {
     private val uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-    private val owned = Regex("(?:(?:xray|validate)-$uuid\\.json|tun-$uuid\\.yaml|fd-[0-9a-f]{8}-[0-9a-f]{3})")
+    private val owned = Regex("(?:(?:xray|validate)-$uuid(?:\\.spec)?\\.json|tun-$uuid\\.yaml|fd-[0-9a-f]{8}-[0-9a-f]{3})")
 
     fun removeAbandoned(directory: File) {
         // A cold service may inherit files after process death. Never remove files still referenced
@@ -23,7 +23,7 @@ internal object SessionRuntimeFiles {
                     val count = input.read(bytes)
                     if (count <= 0) emptyList() else bytes.copyOf(count).toString(Charsets.UTF_8).split('\u0000')
                 }
-                if (arguments.firstOrNull()?.substringAfterLast('/') in setOf("libxray.so", "libtun2socks.so")) active.addAll(arguments)
+                if (arguments.firstOrNull()?.substringAfterLast('/') in setOf("libxray.so", "libxray_routing_preview.so", "libtun2socks.so")) active.addAll(arguments)
             }
         }
         cleanup(directory, active)

@@ -20,7 +20,9 @@ EVIDENCE = ROOT / 'build/native_routing_cli'
 MODULE = 'github.com/EbrahimTahernejad/xray-mobile'
 CLI_TAG = 'flutter_vless_vpn_routing_cli'
 FACTORY_TAG = 'flutter_vless_vpn_routing'
-MAIN_TESTS = ['TestNativeRoutingCLIStockLogger', 'TestNativeRoutingCLIRegisteredOnce']
+MAIN_TESTS = ['TestNativeRoutingCLIStockLogger', 'TestNativeRoutingCLIRegisteredOnce',
+              'TestNativeRoutingCLIParentInputLifecycle', 'TestNativeRoutingCLIParentInputRefusal',
+              'TestNativeRoutingCLIParentInputGrammar', 'TestNativeRoutingCLIParentInputOrdinaryForeground']
 NATIVE_TESTS = ['TestNativeCLIGrammarAndCapabilityBeforeRead', 'TestNativeCLICheckAndInputFailures',
                 'TestNativeCLIRunOwnsSameBytesAndStop', 'TestNativeCLIRunRefusesBeforeStartAndOwnsCancellation',
                 'TestNativeCLIRunWaitsForCancellation']

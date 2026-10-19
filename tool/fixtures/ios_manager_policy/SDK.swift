@@ -47,6 +47,7 @@ class NEOnDemandRuleConnect: NEOnDemandRule {
 }
 enum SDKError: Error { case unavailable }
 enum SDK {
+    static var routingCapability: Int64 = 0
     static var profile: NETunnelProviderManager?
     static var failAllLoads = false
     static var failAfterNextSave = false
@@ -60,6 +61,7 @@ enum SDK {
     static var delayedStop = false
     static var providerResponse: Data?
 }
+func FLVlessCoreRoutingCapability() -> Int64 { SDK.routingCapability }
 class NETunnelProviderManager {
     var protocolConfiguration: NEVPNProtocol?
     var localizedDescription: String?

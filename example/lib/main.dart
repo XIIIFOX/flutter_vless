@@ -5,6 +5,7 @@ import 'package:flutter_vless_example/routing.dart';
 import 'options.dart';
 import 'options_storage.dart';
 import 'profile_import.dart';
+import 'vpn_routing.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -59,6 +60,7 @@ class _HomePageState extends State<HomePage> {
   final TextEditingController config = TextEditingController(text: '{}');
   final TextEditingController certificateDirectory = TextEditingController();
   bool proxyOnly = false;
+  VpnRoutingOptions? vpnRouting;
   List<String> bypassSubnets = [];
   List<String> blockedApps = [];
 
@@ -148,6 +150,7 @@ class _HomePageState extends State<HomePage> {
       remark: remark,
       config: config.text,
       proxyOnly: proxyOnly,
+      vpnRouting: proxyOnly ? null : vpnRouting,
       bypassSubnets: bypassSubnets,
       blockedApps: blockedApps,
       certificateAssetsDirectory: certificateDirectory.text.isEmpty
@@ -401,7 +404,14 @@ class _HomePageState extends State<HomePage> {
           } on ArgumentError {
             if (!context.mounted) return;
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Check the JSON configuration before connecting.'),
+              content: Text('Check the configuration and VPN routing choices.'),
+            ));
+          } on UnsupportedError {
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text(
+                'The installed backend does not support these VPN options.',
+              ),
             ));
           }
         },
@@ -449,6 +459,15 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
             const SizedBox(height: 8),
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: config,
+              builder: (context, draft, child) => VpnRoutingPanel(
+                config: draft.text,
+                proxyOnly: proxyOnly,
+                value: vpnRouting,
+                onChanged: (value) => setState(() => vpnRouting = value),
+              ),
+            ),
             ExpansionTile(
               title: const Text('Certificate files'),
               children: [

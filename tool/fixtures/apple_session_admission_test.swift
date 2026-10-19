@@ -92,10 +92,12 @@ final class FixtureProvider: @unchecked Sendable {
     var hevLogURL: URL?
     // Read counters only after their owner queue is drained.
     var coreStarts = 0, workerStarts = 0, coreStops = 0, healthChecks = 0
+    var startedPairs: [(Data, Data?)] = []
     var drainHook: (() -> Void)?, coreHook: (() -> Void)?, workerHook: (() -> Void)?
     var rejectCore = false, rejectHealth = false
-    func startXRay(xrayConfig: Data, geoAssetsDirectory: String?) throws {
+    func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data? = nil) throws {
         coreStarts += 1
+        startedPairs.append((xrayConfig, routingMetadata))
         coreHook?()
         if rejectCore { throw SyntheticFailure.core }
     }
@@ -316,6 +318,21 @@ final class FixtureProvider: @unchecked Sendable {
         precondition(task.isCancelled)
         _ = try? await task.value
         print("PASS preparation cancellation is epoch-scoped")
+
+        // Actual recovery must reuse the admitted pair, without rebuilding its
+        // digest/credentials or falling back to the ordinary native entry point.
+        let retained = FixtureProvider(), retainedEpoch = retained.sessionAdmission.begin()
+        let configBytes = Data("final-config-canary".utf8), metadataBytes = Data("final-spec-canary".utf8)
+        let retainedSpec = FixtureProvider.RuntimeSpec(epoch: retainedEpoch, options: FixtureOptions(retries: 2),
+            config: configBytes, port: 10808, geoAssetsDirectory: nil, credentials: LocalProxyCredentials(), routingMetadata: metadataBytes)
+        precondition(retained.startTunnelWatchdog(retainedSpec))
+        retained.recover(retainedEpoch); retained.flush()
+        retained.recover(retainedEpoch); retained.flush()
+        precondition(retained.startedPairs.count == 2)
+        precondition(retained.startedPairs.allSatisfy { $0.0 == configBytes && $0.1 == metadataBytes })
+        precondition(retained.runtimeSpec?.config == configBytes && retained.runtimeSpec?.routingMetadata == metadataBytes)
+        await retained.stop()
+        print("PASS native recovery retains exact admitted routing config and metadata")
 
         // Unexpected errors remain diagnostic failures rather than silently
         // being treated as Stop/cancellation.

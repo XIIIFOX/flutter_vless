@@ -97,6 +97,7 @@ public enum TunnelXrayConfigPreparer {
                   var configJSON = TunnelConfigKeys.normalize(input) else {
                 return nil
             }
+            try NativeRoutingSpec.validateSource(jsonData, intent: routingIntent)
             var messages: [String] = []
             let importedCount = (configJSON["inbounds"] as? [[String: Any]])?.count ?? 0
             if let index = routingIntent?.sourceInboundIndex {

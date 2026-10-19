@@ -4,7 +4,7 @@ import CryptoKit
 
 /// Native-only choices. This index addresses the ORIGINAL caller inbounds.
 /// The preparer must separately supply its provenance-backed final mapping.
-public struct NativeRoutingIntent: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
+public struct NativeRoutingIntent: Sendable, Equatable, CustomStringConvertible, CustomDebugStringConvertible {
     public let sourceInboundIndex: Int?
     public let defaultOutboundTag: String?
 
@@ -12,6 +12,45 @@ public struct NativeRoutingIntent: Sendable, CustomStringConvertible, CustomDebu
         guard sourceInboundIndex.map({ $0 >= 0 }) ?? true else { throw NativeRoutingSpecError.invalidIntent }
         self.sourceInboundIndex = sourceInboundIndex
         self.defaultOutboundTag = defaultOutboundTag
+    }
+
+    /// Only the trusted channel/profile metadata may request the factory.
+    /// An empty dictionary is an explicit request; absent/null is ordinary.
+    public static func parse(_ value: Any?) throws -> NativeRoutingIntent? {
+        guard let value, !(value is NSNull) else { return nil }
+        guard let object = value as? [String: Any],
+              Set(object.keys).isSubset(of: ["sourceInboundIndex", "defaultOutboundTag"]) else {
+            throw NativeRoutingSpecError.invalidIntent
+        }
+        var index: Int?
+        if let raw = object["sourceInboundIndex"] {
+            guard let number = raw as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  !["f", "d"].contains(String(cString: number.objCType)),
+                  let integer = Int(number.stringValue), integer >= 0 else {
+                throw NativeRoutingSpecError.invalidIntent
+            }
+            index = integer
+        }
+        var tag: String?
+        if let raw = object["defaultOutboundTag"], !(raw is NSNull) {
+            guard let string = raw as? String else { throw NativeRoutingSpecError.invalidIntent }
+            tag = string
+        }
+        return try NativeRoutingIntent(sourceInboundIndex: index, defaultOutboundTag: tag)
+    }
+
+    /// Persist choices only. Session credentials/digests/compiled indices belong
+    /// to the provider's freshly prepared envelope, never to the saved profile.
+    public var dictionary: [String: Any] {
+        var result: [String: Any] = [:]
+        if let sourceInboundIndex { result["sourceInboundIndex"] = sourceInboundIndex }
+        if let defaultOutboundTag, !defaultOutboundTag.isEmpty { result["defaultOutboundTag"] = defaultOutboundTag }
+        return result
+    }
+
+    public static func == (lhs: NativeRoutingIntent, rhs: NativeRoutingIntent) -> Bool {
+        lhs.sourceInboundIndex == rhs.sourceInboundIndex
+            && (lhs.defaultOutboundTag ?? "").utf8.elementsEqual((rhs.defaultOutboundTag ?? "").utf8)
     }
 
     public var description: String { "NativeRoutingIntent(<private>)" }
@@ -38,6 +77,7 @@ public struct NativeRoutingEnvelope: Sendable, CustomStringConvertible, CustomDe
 public enum NativeRoutingSpecError: Error, LocalizedError, Sendable {
     case invalidIntent, malformedConfiguration, invalidManagedInbound
     case invalidSourceInbound, invalidDefaultOutbound, invalidGuardRules
+    case unsupportedRuntime, coreRejected
 
     public var errorDescription: String? {
         switch self {
@@ -47,11 +87,47 @@ public enum NativeRoutingSpecError: Error, LocalizedError, Sendable {
         case .invalidSourceInbound: return "Invalid native routing source selection."
         case .invalidDefaultOutbound: return "Invalid native routing default selection."
         case .invalidGuardRules: return "Invalid native routing guard selection."
+        case .unsupportedRuntime: return "Native VPN routing is unavailable in this Xray runtime."
+        case .coreRejected: return "Xray rejected the final native VPN routing configuration."
         }
     }
 }
 
 public enum NativeRoutingSpec {
+    public static func requireRuntime(_ capability: Int64) throws {
+        guard capability == 1 else { throw NativeRoutingSpecError.unsupportedRuntime }
+    }
+
+    /// Validate selections against caller handlers before any private handler is
+    /// appended. Generated bootstrap/DNS tags cannot become a caller default.
+    public static func validateSource(_ data: Data, intent: NativeRoutingIntent?) throws {
+        guard let intent else { return }
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw NativeRoutingSpecError.malformedConfiguration
+        }
+        if let index = intent.sourceInboundIndex {
+            guard let inputs = try field(root, "inbounds") as? [[String: Any]], inputs.indices.contains(index) else {
+                throw NativeRoutingSpecError.invalidSourceInbound
+            }
+        }
+        if let selected = intent.defaultOutboundTag, !selected.isEmpty {
+            guard let outputs = try field(root, "outbounds") as? [[String: Any]] else {
+                throw NativeRoutingSpecError.invalidDefaultOutbound
+            }
+            var matches = 0
+            for output in outputs where try equal(tag(output), selected) { matches += 1 }
+            guard matches == 1 else { throw NativeRoutingSpecError.invalidDefaultOutbound }
+        }
+    }
+
+    public static func check(_ envelope: NativeRoutingEnvelope, capability: () -> Int64,
+                             check: (Data, Data) -> Int64) throws {
+        try requireRuntime(capability())
+        guard check(envelope.configurationData, envelope.metadataData) == 0 else {
+            throw NativeRoutingSpecError.coreRejected
+        }
+    }
+
     /// This creates metadata only: it never normalizes, rebuilds or runs Core.
     /// A nil trusted intent keeps the ordinary path, regardless of caller JSON.
     /// Go preflight remains authoritative for the complete compiled Core shape.

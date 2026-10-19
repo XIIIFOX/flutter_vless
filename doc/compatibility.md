@@ -143,7 +143,7 @@ Track the small delivery gates separately from the eight full requirements:
 | Protocol/transport preparation and controlled XHTTP | Qualified | Shared pinned-Core corpus and controlled payloads; the exhaustive external-server matrix is deferred. |
 | Imported API/services/stats/policy | Qualified | Shared preparation and API/traffic gates, including Windows service acceptance. |
 | Port/address syntax and explicit data/certificate roots | Qualified baseline | Shared Core/native controls and the targeted runtime cases below; OS allocation/reload and managed import lifetime remain open. |
-| Source inbound and explicit VPN default | In progress | Shared factory traffic passes all three Core runners; native consumers and device acceptance remain. |
+| Source inbound and explicit VPN default | In progress | Shared factory traffic passes all three Core runners; native consumer wiring and example controls are implemented, with enabled-runtime and device acceptance pending. |
 
 Each qualified row refers to the specific checks recorded below. It does not
 mark an entire long-term requirement complete.
@@ -401,7 +401,7 @@ to a new directory and supports Linux, macOS and Windows targets. Both use
 verified copies of the pinned Core/mobile sources and retain source/cache
 integrity receipts. Android x86_64, Darwin arm64 and Windows amd64 artifacts
 compile locally without executing them. These are unpublished build paths;
-production launchers have not adopted them.
+these build results alone did not qualify native launcher adoption.
 
 Apple preparation can also freeze a native-only routing intent after all
 adapter and DNS transformations. Its metadata hashes those exact final bytes,
@@ -410,7 +410,7 @@ the preparer. A caller rule with a matching service name does not become a
 private guard. Mirrored pure tests cover this metadata, ordinary preparation
 and DNS. Both actual iOS and macOS preparation modules export synthetic pairs
 which pass the shared Go Check on the remote macOS runner without constructing
-Core. Provider adoption and device traffic acceptance remain open.
+Core. Native consumer runtime and device traffic acceptance are tracked below.
 
 Matching native-only Kotlin and C++ encoders retain that same byte/digest and
 selection contract. Focused JVM and portable C++ tests exercise their ordinary
@@ -420,7 +420,29 @@ The C++ Windows hash implementation uses BCrypt; all 42 checks pass under real
 Windows/MSVC, and its exported pair passes Go Check. Android passes 202 JVM
 checks, including the 11 encoder cases, and its exported pair also passes Go
 Check. CI pairs each platform's metadata producer with the shared Go validator.
-These helpers do not yet expose or enable a public routing option.
+Those codec results alone did not qualify native consumers.
+
+The subsequent implementation adds per-session `VpnRoutingOptions` to Dart and
+all native launchers. A strict selection-only channel map identifies the
+original inbound and exact default tag; it cannot supply private metadata.
+Native preparation records only its own DNS/probe guard indices, freezes the
+final bytes and digest, and uses that same pair for Check and Start. Requested
+routing requires capability one before profile/state publication or old-session
+replacement, without a legacy fallback. Recovery rebuilds and checks a fresh
+pair; quick profiles retain the user selection. Ordinary omitted-option paths
+retain their existing runtime. The example exposes both choices and keeps
+stale selections visible. Local causal/fake admission, codec and compile/link
+checks pass; enabled Android, Apple and Windows runtime gates are pending CI.
+Published runtime artifacts remain unchanged, so this does not yet qualify the
+option for a released application or complete long-term requirement 4.
+
+The final-config preflight baseline at `4f887ae` passes the three Core jobs,
+Dart, Android JVM, unsigned Apple builds/runtime and Windows plugin checks.
+Its Android tile fixture did not establish active listening after registration;
+the focused `a7bc584` follow-up corrects that setup and passes all 37 native
+cases plus three Flutter cases, without skips. Windows 2022/2025 also pass the
+410 ordinary proxy/portable/VPN result rows and exact final preflight checks.
+These baseline results do not substitute for the new enabled-routing gates.
 
 The Android emulator at 5c41b3e passes 36 native cases and three Flutter cases,
 including the four protected system-DNS scenarios. One native case skips because

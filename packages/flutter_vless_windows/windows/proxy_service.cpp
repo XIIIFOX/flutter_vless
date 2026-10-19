@@ -70,6 +70,12 @@ ProcessHandle::~ProcessHandle() {
 }
 
 void ProcessHandle::Close() {
+  if (hStdInWrite) {
+    CloseHandle(reinterpret_cast<HANDLE>(hStdInWrite)); hStdInWrite = 0;
+    // Only opt-in private CLI workers receive this pipe. EOF requests their
+    // synchronous factory Stop before the existing job/termination fallback.
+    if (hProcess && IsRunning()) WaitForSingleObject(reinterpret_cast<HANDLE>(hProcess), 3000);
+  }
   if (hJob) { CloseHandle(reinterpret_cast<HANDLE>(hJob)); hJob = 0; }
   if (hProcess) {
     HANDLE process = reinterpret_cast<HANDLE>(hProcess);

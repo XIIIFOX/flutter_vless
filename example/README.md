@@ -26,6 +26,28 @@ directory name.
   rebinding ports owned by the active VPN. Normal VPN profiles keep those fields.
   Standalone profile delay on Windows is still unimplemented and returns `-1`.
 
+## Per-session VPN routing
+
+The **VPN routing** controls choose an original input's inbound-tag context and
+an explicit default outbound without editing the imported JSON. For example:
+
+```dart
+await flutterVless.startVless(
+  remark: 'Imported profile',
+  config: fullJson,
+  vpnRouting: const VpnRoutingOptions(
+    sourceInboundIndex: 0,
+    defaultOutboundTag: 'proxy',
+  ),
+);
+```
+
+The index refers to the original `inbounds` array, including index zero. Edited
+profiles retain stale selections visibly and reject them on Connect. These
+controls require VPN mode and a factory-capable runtime; current published
+artifacts do not include that capability. CI uses unpublished previews on all
+platforms. Turning the control off retains ordinary startup.
+
 ## External data files
 
 Pass an existing absolute directory with `geoAssetsDirectory` when calling

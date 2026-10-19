@@ -21,6 +21,91 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    def test_native_routing_profile_requires_source_alias_and_non_first_default(self):
+        profile = runtime.native_routing_config("192.0.2.10", 15353)
+        self.assertEqual("blackhole", profile["outbounds"][0]["protocol"])
+        self.assertEqual("selected-default", profile["outbounds"][2]["tag"])
+        self.assertEqual("caller-source", profile["inbounds"][0]["tag"])
+        self.assertEqual(f"192.0.2.10:{runtime.PORTS['direct']}", profile["outbounds"][1]["settings"]["redirect"])
+        self.assertEqual(["tcp://192.0.2.10:15353"], profile["dns"]["servers"])
+        rules = profile["routing"]["rules"]
+        self.assertEqual(["caller-dns"], rules[0]["inboundTag"])
+        self.assertEqual(["caller-source"], rules[1]["inboundTag"])
+        self.assertEqual(["full:alias.invalid"], rules[1]["domain"])
+        self.assertFalse(any(rule.get("outboundTag") == "selected-default" for rule in rules))
+
+    def test_native_routing_gate_proves_payload_rejection_recovery_and_drains(self):
+        for defect in (None, "alias", "fallback", "exit", "cleanup"):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary); children = []; payloads = []
+                origin = SimpleNamespace(direct_only_lock=runtime.threading.Lock(), direct_only_active="prior")
+                def launch(command, **kwargs):
+                    child = Mock(pid=400 + len(children)); child.poll.return_value = None
+                    def wait(timeout):
+                        child.poll.return_value = 0
+                        return 9 if defect == "exit" and command[1] == "run-vpn-routing" else 0
+                    child.wait.side_effect = wait; children.append(child)
+                    if command[1] == "run-vpn-routing":
+                        kwargs["stdout"].write("START_RETURN=1\nREJECTED_ROUTING_PRESERVED=1\n")
+                        kwargs["stdout"].flush()
+                    return child
+                def request(host, vpn):
+                    self.assertTrue(vpn); payloads.append(host)
+                    if defect == "alias" and host == "alias.invalid": return "PROXY-FIXTURE"
+                    if defect == "fallback" and host == "fallback.invalid": return "DIRECT-FIXTURE"
+                    return "DIRECT-FIXTURE" if host == "alias.invalid" else "PROXY-FIXTURE"
+                with patch.object(runtime.subprocess, "Popen", side_effect=launch), \
+                     patch.object(runtime.subprocess, "check_output", return_value=json.dumps({"Routes": 1 if defect == "cleanup" else 0, "IPv6Addresses": 0})), \
+                     patch.object(runtime, "native", return_value="0") as native, \
+                     patch.object(runtime, "request", side_effect=request), \
+                     patch.object(runtime, "direct_only_dns") as dns, \
+                     patch.object(runtime, "kill_worker") as kill, \
+                     patch.object(runtime, "await_state") as state, \
+                     patch.object(runtime.time, "sleep"), patch("builtins.print") as printed:
+                    rows = []
+                    args = (directory / "runtime_probe.exe", directory, "192.0.2.10",
+                            SimpleNamespace(server_address=("192.0.2.10", 15353)), origin, rows)
+                    if defect is None:
+                        runtime.native_routing_gate(*args)
+                        self.assertEqual(8, len(rows)); self.assertTrue(all(row["passed"] for row in rows))
+                        self.assertEqual(["alias.invalid", "fallback.invalid"] * 4, payloads)
+                        self.assertEqual(5, dns.call_count)
+                        kill.assert_called_once_with(400, "xray.exe")
+                        self.assertEqual([False, True], [call.args[1] for call in state.call_args_list])
+                        self.assertTrue((directory / "vpn-native-routing-0.state.json.reject-routing").exists())
+                        printed.assert_called_once_with("WINDOWS_NATIVE_ROUTING_TRAFFIC_PASS=2", flush=True)
+                    else:
+                        with self.assertRaises(AssertionError): runtime.native_routing_gate(*args)
+                        printed.assert_not_called()
+                    self.assertIsNone(origin.direct_only_active)
+                    self.assertEqual(4 if defect is None else 2, len(children))
+                    for child in children: child.wait.assert_called(); child.kill.assert_not_called()
+                    self.assertTrue(any(call.args[1] == "release-protection" for call in native.call_args_list))
+
+    def test_native_routing_gate_failure_preserves_error_and_reaps_forced_children(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary); children = []
+            origin = SimpleNamespace(direct_only_lock=runtime.threading.Lock(), direct_only_active=None)
+            failure = RuntimeError("synthetic payload failure")
+            def launch(command, **kwargs):
+                child = Mock(pid=500 + len(children)); child.poll.return_value = None
+                child.wait.side_effect = [subprocess.TimeoutExpired(command, 1), 0]
+                children.append(child)
+                if command[1] == "run-vpn-routing":
+                    kwargs["stdout"].write("START_RETURN=1\n"); kwargs["stdout"].flush()
+                return child
+            with patch.object(runtime.subprocess, "Popen", side_effect=launch), \
+                 patch.object(runtime, "native", side_effect=OSError("synthetic cleanup failure")), \
+                 patch.object(runtime, "request", side_effect=failure), patch("builtins.print") as printed:
+                with self.assertRaises(RuntimeError) as raised:
+                    runtime.native_routing_gate(directory / "runtime_probe.exe", directory, "192.0.2.10",
+                        SimpleNamespace(server_address=("192.0.2.10", 15353)), origin, [])
+            self.assertIs(failure, raised.exception)
+            self.assertEqual(2, len(children))
+            for child in children:
+                child.kill.assert_called_once(); self.assertEqual(2, child.wait.call_count)
+            printed.assert_not_called()
+
     def test_direct_only_profiles_preserve_default_order_and_dns_tag_route(self):
         corpus_path = Path(runtime.__file__).resolve().parents[2] / "tool/fixtures/compatibility/direct-only.json"
         original = corpus_path.read_bytes()

@@ -200,6 +200,7 @@ probe='''private final class StartProbe {
  let controlGroup: String? = nil
  func start(proxyOnly: Bool) -> Task<Void, Error> {
  let effectiveConfigData = Data("new".utf8)
+ let vpnRouting: NativeRoutingIntent? = nil
  let preparedProxyConfig: Proxy.Prepared? = proxyOnly ? Proxy.Prepared(data: Data("prepared-new".utf8)) : nil
  let geoAssetsDirectory: String? = nil
  let certificateAssetsDirectory: String? = "/fixture/new-certificate-assets"
@@ -232,3 +233,6 @@ for PLATFORM in 0 1; do
     xcrun swiftc -O -parse-as-library "$IOS" "$ROOT/ios/flutter_vless/Sources/flutter_vless/NativeOperationQueue.swift" "$OUT/transaction-$PLATFORM.swift" -o "$OUT/transaction-$PLATFORM"
     "$OUT/transaction-$PLATFORM"
 done
+
+# Execute the real provider final admission/start branches against inert APIs.
+python3 "$ROOT/tool/test_apple_native_routing_admission.py"

@@ -198,26 +198,30 @@ int main(int argc,char** argv) {
   if(argc<3)return 2;
   std::ifstream input{std::filesystem::path(arguments[2])};std::string config((std::istreambuf_iterator<char>(input)),{});
   const bool no_reconnect = action == "run-vpn-no-reconnect";
-  bool vpn=action=="run-vpn" || no_reconnect;
+  const bool routing_requested = action == "run-vpn-routing";
+  bool vpn=action=="run-vpn" || no_reconnect || routing_requested;
   if(!vpn && action!="run-proxy")return 2;
   if(vpn && !isolated)return 20;
   auto& manager=V2rayManager::GetInstance();
   flutter_vless::asset_location::Root assets;
   if (arguments.size() > 6) assets = std::filesystem::path(arguments[6]);
   flutter_vless::NativeOptions options; options.reconnect_enabled = !no_reconnect;
-  bool started=manager.Start(config,!vpn,options,assets);std::cout<<"START_RETURN="<<started<<std::endl;
+  std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing;
+  if (routing_requested) routing = flutter_vless::native_routing::NativeRoutingIntent{0, "selected-default"};
+  bool started=manager.Start(config,!vpn,options,assets,routing);std::cout<<"START_RETURN="<<started<<std::endl;
   if(!started){manager.Stop();std::cout<<manager.GetProviderDebugSnapshot()<<std::endl;return 3;}
   int seconds=argc>3?std::stoi(argv[3]):20;
   const std::filesystem::path stop_file = arguments.size() > 4 ? arguments[4] : L"";
   const std::filesystem::path state_file = arguments.size() > 5 ? arguments[5] : L"";
   const std::filesystem::path reject_file = state_file.empty() ? L"" : state_file.wstring() + L".reject";
+  const std::filesystem::path reject_routing = state_file.empty() ? L"" : state_file.wstring() + L".reject-routing";
   for(int i=0;i<seconds;i++){
     if (!stop_file.empty() && std::filesystem::exists(stop_file)) break;
     if (!reject_file.empty() && std::filesystem::exists(reject_file)) {
       std::ifstream candidate(reject_file);
       const std::string invalid((std::istreambuf_iterator<char>(candidate)), {});
       candidate.close();
-      const bool rejected = !manager.Start(invalid, !vpn, options, assets) && manager.IsRunning();
+      const bool rejected = !manager.Start(invalid, !vpn, options, assets, routing) && manager.IsRunning();
       std::filesystem::remove(reject_file);
       std::cout << "REJECTED_REPLACEMENT_PRESERVED=" << rejected << std::endl;
       if (!rejected) { manager.Stop(); return 26; }
@@ -226,6 +230,13 @@ int main(int argc,char** argv) {
         std::cout << "REJECTED_ASSET_ROOT_PRESERVED=" << invalid_root_rejected << std::endl;
         if (!invalid_root_rejected) { manager.Stop(); return 27; }
       }
+    }
+    if (routing_requested && !reject_routing.empty() && std::filesystem::exists(reject_routing)) {
+      const auto invalid = flutter_vless::native_routing::NativeRoutingIntent{0, "missing-default"};
+      const bool rejected = !manager.Start(config, false, options, assets, invalid) && manager.IsRunning();
+      std::filesystem::remove(reject_routing);
+      std::cout << "REJECTED_ROUTING_PRESERVED=" << rejected << std::endl;
+      if (!rejected) { manager.Stop(); return 28; }
     }
     if (!state_file.empty()) {
       std::ofstream state(state_file);

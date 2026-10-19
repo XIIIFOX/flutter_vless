@@ -132,7 +132,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
-    expect(find.text('Check the JSON configuration before connecting.'),
+    expect(find.text('Check the configuration and VPN routing choices.'),
         findsOneWidget);
     expect(tester.takeException(), isNull);
   });

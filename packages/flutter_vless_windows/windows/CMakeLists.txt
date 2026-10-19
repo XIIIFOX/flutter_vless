@@ -31,6 +31,7 @@ set(PLUGIN_NAME "flutter_vless_windows")
 add_library(${PLUGIN_NAME}_plugin SHARED
   "diagnostics_log.cpp"
   "native_runtime.cpp"
+  "native_routing_spec.cpp"
   "protected_runtime.cpp"
   "packet_path_probe.cpp"
   "traffic_protection.cpp"

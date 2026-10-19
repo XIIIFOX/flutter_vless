@@ -20,7 +20,9 @@ internal object AndroidTunnelDnsPolicy {
         val bootstrapHostnames: Set<String> = emptySet(),
         val bootstrapAddresses: Set<String> = emptySet(),
         /** Native-only identity shared with the adapter builder, never imported from JSON. */
-        val managedInboundTag: String? = null
+        val managedInboundTag: String? = null,
+        /** Only indices inserted by this preparer, not inferred from caller rules. */
+        val guardRuleIndices: List<Int> = emptyList()
     )
 
     /** Perform preflight without querying DNS or modifying the caller's configuration. */
@@ -171,7 +173,7 @@ internal object AndroidTunnelDnsPolicy {
         // Explicit proxy policy owns system DNS. No local/+local/OS fallback is retained.
         config.put("dns", JSONObject().put("hosts", hosts).put("servers", JSONArray().put("tcp://1.1.1.1"))
             .put("tag", upstreamTag).put("queryStrategy", "UseIP").put("disableFallback", true))
-        return Prepared(config.toString(), listOf(VIRTUAL_SERVER), names, addresses, managedInboundTag)
+        return Prepared(config.toString(), listOf(VIRTUAL_SERVER), names, addresses, managedInboundTag, listOf(0, 1))
     }
 
     /**
@@ -220,7 +222,7 @@ internal object AndroidTunnelDnsPolicy {
             .put(JSONObject().put("action", "return").put("rCode", 5))
         config.put("outbounds", JSONArray(outbounds).put(JSONObject().put("tag", relayTag)
             .put("protocol", "dns").put("settings", JSONObject().put("rules", dnsRules))))
-        return Prepared(config.toString(), listOf(VIRTUAL_SERVER), managedInboundTag = managedInboundTag)
+        return Prepared(config.toString(), listOf(VIRTUAL_SERVER), managedInboundTag = managedInboundTag, guardRuleIndices = listOf(0))
     }
 
     private fun schemaFold(value: String) = value.replace('\u017f', 's').replace('\u212a', 'k').lowercase(Locale.ROOT)

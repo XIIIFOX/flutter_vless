@@ -112,7 +112,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                 catch (_: Exception) { result.error("QUICK_ACCESS_UNAVAILABLE","Cannot clear the retained profile in the background",null) }
             }
             "getSecurityCapabilities" -> result.success(mapOf("androidProxyDns" to true, "iosKeychainReference" to false,
-                "certificateAssetsDirectory" to true))
+                "certificateAssetsDirectory" to true, "vpnRouting" to true))
             "startVless" -> {
                 val certificateArgument = call.argument<Any>("certificate_assets_directory")
                 if (certificateArgument != null && certificateArgument !is String) {
@@ -126,6 +126,13 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                 config.ANDROID_DNS_POLICY = call.argument("android_dns_policy") ?: "config"
                 config.ANDROID_DNS_PROXY_OUTBOUND_TAG = call.argument("android_dns_proxy_outbound_tag")
                 config.PROXY_ONLY = call.argument<Boolean>("proxy_only") == true
+                try {
+                    config.VPN_ROUTING_SELECTION_JSON = com.github.tfox.flutter_vless.xray.service.NativeRoutingSelection.encode(
+                        call.argument<Any>("vpn_routing"), config.PROXY_ONLY)
+                } catch (_: Exception) {
+                    result.error("INVALID_CONFIG", "Invalid VPN routing selection", null)
+                    return
+                }
                 config.V2RAY_FULL_JSON_CONFIG = call.argument("config") ?: ""
                 config.GEO_ASSETS_DIRECTORY = call.argument("geo_assets_directory")
                 config.CERTIFICATE_ASSETS_DIRECTORY = certificateArgument as? String

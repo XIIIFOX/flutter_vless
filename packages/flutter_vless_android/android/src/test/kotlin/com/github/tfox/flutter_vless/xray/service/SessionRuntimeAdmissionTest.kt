@@ -29,7 +29,7 @@ class SessionRuntimeAdmissionTest {
             .apply { isAccessible = true }.invoke(service, profile, true, 1L, false) as Boolean
     } catch (error: InvocationTargetException) { throw error.targetException }
 
-    private fun fixture(rejectFinal: Boolean = false, staleDuringCheck: Boolean = false, failSave: Boolean = false) {
+    private fun fixture(rejectFinal: Boolean = false, staleDuringCheck: Boolean = false, failSave: Boolean = false, routingCapability: Int? = null) {
         val directory = Files.createTempDirectory("native-service-admission").toFile()
         val service = Mockito.mock(XrayVPNService::class.java, Answers.CALLS_REAL_METHODS)
         Mockito.doReturn(directory).`when`(service).filesDir
@@ -40,8 +40,12 @@ class SessionRuntimeAdmissionTest {
         Mockito.`when`(probe.configure(anyJson(), Mockito.anyInt())).thenAnswer {
             JSONObject(it.getArgument<JSONObject>(0).toString()).apply {
                 getJSONArray("outbounds").put(JSONObject().put("tag", "synthetic-final-probe").put("protocol", "freedom"))
-                getJSONObject("routing").getJSONArray("rules").put(JSONObject().put("type", "field")
-                    .put("inboundTag", JSONArray().put("synthetic-private")).put("outboundTag", "synthetic-final-probe"))
+                val rules=getJSONObject("routing").getJSONArray("rules")
+                val managed=getJSONArray("inbounds").getJSONObject(0).getString("tag")
+                getJSONObject("routing").put("rules",JSONArray().put(JSONObject().put("type", "field")
+                    .put("inboundTag", JSONArray().put(managed)).put("outboundTag", "synthetic-final-probe")).also { next ->
+                        for(index in 0 until rules.length()) next.put(rules.get(index))
+                    })
             }
         }
         val requests = AtomicLong(1); val recovery = SessionRecoveryPolicy().apply { activate() }
@@ -55,7 +59,8 @@ class SessionRuntimeAdmissionTest {
         val previous = processField.get(XrayCoreManager); val oldChild = Mockito.mock(Process::class.java)
         processField.set(XrayCoreManager, oldChild)
         val incoming = XrayConfig(V2RAY_FULL_JSON_CONFIG = """{"inbounds":[],"outbounds":[{"protocol":"freedom"}],"routing":{"rules":[]}}""",
-            GEO_ASSETS_DIRECTORY = directory.absolutePath, PLUGIN_OPTIONS_JSON = "{}")
+            GEO_ASSETS_DIRECTORY = directory.absolutePath, PLUGIN_OPTIONS_JSON = "{}",
+            VPN_ROUTING_SELECTION_JSON = if(routingCapability == null) null else "{}")
         var checkedFinal = false
         try {
             Mockito.mockConstruction(ProcessBuilder::class.java) { builder, construction ->
@@ -63,10 +68,22 @@ class SessionRuntimeAdmissionTest {
                 Mockito.`when`(builder.redirectErrorStream(true)).thenReturn(builder)
                 Mockito.`when`(builder.environment()).thenReturn(mutableMapOf())
                 Mockito.`when`(builder.start()).thenAnswer {
-                    checkedFinal = File(args.last()).readText().contains("synthetic-final-probe")
-                    if (staleDuringCheck) requests.incrementAndGet()
+                    val capability=args.last()=="capabilities"
+                    if (!capability) {
+                        val path=if(args.contains("--config")) args[args.indexOf("--config")+1] else args.last()
+                        checkedFinal = File(path).readText().contains("synthetic-final-probe")
+                        if(args.contains("--spec")) {
+                            val data=File(path).readBytes()
+                            val metadata=JSONObject(File(args[args.indexOf("--spec")+1]).readText())
+                            val hash=java.security.MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it) }
+                            assertEquals(hash,metadata.getString("source_sha256"))
+                            assertEquals("[0,2]",metadata.getJSONArray("guard_rule_indices").toString())
+                        }
+                        if (staleDuringCheck) requests.incrementAndGet()
+                    }
                     Mockito.mock(Process::class.java).also { child ->
-                        Mockito.`when`(child.inputStream).thenReturn(ByteArrayInputStream(byteArrayOf()))
+                        val output=if(capability) "{\"stage\":\"capabilities\",\"code\":0,\"capability\":$routingCapability}" else if(routingCapability != null) "{\"stage\":\"check\",\"code\":0}" else ""
+                        Mockito.`when`(child.inputStream).thenReturn(ByteArrayInputStream(output.toByteArray()))
                         Mockito.`when`(child.errorStream).thenReturn(ByteArrayInputStream(byteArrayOf()))
                         Mockito.`when`(child.outputStream).thenReturn(ByteArrayOutputStream())
                         Mockito.`when`(child.isAlive).thenReturn(false)
@@ -76,19 +93,21 @@ class SessionRuntimeAdmissionTest {
             }.use { builds ->
                 if (failSave) assertSame(saveFailure, assertThrows(IllegalStateException::class.java) { accept(service, incoming) })
                 else assertFalse(accept(service, incoming))
-                assertEquals(1, builds.constructed().size)
+                assertEquals(if(routingCapability == 1) 2 else 1, builds.constructed().size)
             }
-            assertTrue("Actual service native preflight must include generated readiness rule", checkedFinal)
+            if(routingCapability == 0) assertFalse(checkedFinal) else assertTrue("Actual service native preflight must include generated readiness rule", checkedFinal)
             assertSame(active, XrayVPNService::class.java.getDeclaredField("config").apply { isAccessible = true }.get(service))
             assertEquals(1L, recovery.generation)
             assertSame(oldChild, processField.get(XrayCoreManager))
             Mockito.verify(oldChild, Mockito.never()).destroy()
             Mockito.verify(oldChild, Mockito.never()).destroyForcibly()
-            Mockito.verify(probe).close()
+            if(routingCapability == 0) Mockito.verify(probe,Mockito.never()).close() else Mockito.verify(probe).close()
             if (!failSave) Mockito.verify(profiles, Mockito.never()).save(anyProfile())
         } finally { processField.set(XrayCoreManager, previous); directory.deleteRecursively() }
     }
     @Test fun finalNativeRejectionNeverSavesOrStopsAnExistingAcceptedSession() = fixture(rejectFinal = true)
     @Test fun stopDuringSlowFinalCheckClosesOnlyCandidateAndDoesNotReplaceActiveSession() = fixture(staleDuringCheck = true)
     @Test fun profileSaveFailureClosesCandidateAndLeavesOldWorkersAndGenerationUntouched() = fixture(failSave = true)
+    @Test fun unsupportedInstalledRuntimeRefusesBeforeProbeProfileOrActiveStop() = fixture(routingCapability=0)
+    @Test fun requestedRoutingChecksFinalConfigAndSpecBeforeRejectingWithoutChangingActiveSession() = fixture(routingCapability=1,rejectFinal=true)
 }

@@ -92,7 +92,7 @@ def main():
     (output / 'probe.log').write_text(result.stdout + result.stderr)
     print(result.stdout, end='')
     assert result.returncode == 0, (result.returncode, result.stderr)
-    assert len([line for line in result.stdout.splitlines() if line.startswith('PASS ')]) == 8
+    assert len([line for line in result.stdout.splitlines() if line.startswith('PASS ')]) == 9
     assert PROVIDERS[args.platform].read_text() == source and GATES[args.platform].read_bytes() == gate
     assert fixture_path.read_text() == fixture_source, 'Source changed during verification'
     (output / 'result.json').write_text(json.dumps({

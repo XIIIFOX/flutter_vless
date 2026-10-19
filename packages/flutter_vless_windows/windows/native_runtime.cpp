@@ -1,6 +1,7 @@
 #include "native_runtime.h"
 #include "protected_runtime.h"
 #include "xray_config.h"
+#include "native_routing_protocol.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -71,7 +72,7 @@ std::optional<fs::path> FindBundledFile(const wchar_t* name) {
 }
 
 std::unique_ptr<ProcessHandle> Launch(const fs::path& exe,
-    const std::vector<std::wstring>& arguments, bool capture, const asset_location::Root& assets) {
+    const std::vector<std::wstring>& arguments, bool capture, const asset_location::Root& assets, bool parent_stdin) {
   if (exe.empty() || !exe.is_absolute() || !asset_location::Valid(assets)) return nullptr;
   // Refuse replacement of the image until CreateProcess has opened it.
   HANDLE image = CreateFileW(exe.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
@@ -83,6 +84,7 @@ std::unique_ptr<ProcessHandle> Launch(const fs::path& exe,
   }
   SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
   HANDLE read = nullptr, write = nullptr;
+  HANDLE input_read = nullptr, input_write = nullptr;
   HANDLE null = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
       FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING, 0, nullptr);
   if (null == INVALID_HANDLE_VALUE || (capture && !CreatePipe(&read, &write, &security, 0))) {
@@ -90,20 +92,30 @@ std::unique_ptr<ProcessHandle> Launch(const fs::path& exe,
     CloseHandle(image); return nullptr;
   }
   if (read) SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0);
+  if (parent_stdin && (!CreatePipe(&input_read, &input_write, &security, 0)
+      || !SetHandleInformation(input_write, HANDLE_FLAG_INHERIT, 0))) {
+    if (input_read) CloseHandle(input_read);
+    if (input_write) CloseHandle(input_write);
+    if (read) CloseHandle(read);
+    if (write) CloseHandle(write);
+    CloseHandle(null); CloseHandle(image); return nullptr;
+  }
   STARTUPINFOEXW startup{};
   startup.StartupInfo.cb = sizeof(startup);
   startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-  startup.StartupInfo.hStdInput = null;
+  startup.StartupInfo.hStdInput = parent_stdin ? input_read : null;
   startup.StartupInfo.hStdOutput = capture ? write : null;
   startup.StartupInfo.hStdError = null;
   SIZE_T size = 0;
   InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
   std::vector<unsigned char> storage(size);
   startup.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
-  HANDLE inherited[] = {null, write};
+  std::vector<HANDLE> inherited{null};
+  if (capture) inherited.push_back(write);
+  if (parent_stdin) inherited.push_back(input_read);
   bool initialized = InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &size) != FALSE;
   bool attributes = initialized && UpdateProcThreadAttribute(startup.lpAttributeList, 0,
-      PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof(HANDLE) * (capture ? 2 : 1), nullptr, nullptr);
+      PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited.data(), sizeof(HANDLE) * inherited.size(), nullptr, nullptr);
   std::wstring command = Quote(exe.wstring());
   for (const auto& arg : arguments) command += L" " + Quote(arg);
   PROCESS_INFORMATION process{};
@@ -133,17 +145,25 @@ std::unique_ptr<ProcessHandle> Launch(const fs::path& exe,
       &startup.StartupInfo, &process);
   if (ok && !AssignProcessToJobObject(job, process.hProcess)) {
     TerminateProcess(process.hProcess, 1);
+    WaitForSingleObject(process.hProcess, 3000);
     CloseHandle(process.hProcess); CloseHandle(process.hThread); ok = false;
   }
   if (initialized) DeleteProcThreadAttributeList(startup.lpAttributeList);
   CloseHandle(image); CloseHandle(null);
   if (write) CloseHandle(write);
-  if (!ok) { if (read) CloseHandle(read); if (job) CloseHandle(job); return nullptr; }
+  if (input_read) CloseHandle(input_read);
+  if (!ok) {
+    if (input_write) CloseHandle(input_write);
+    if (read) CloseHandle(read);
+    if (job) CloseHandle(job);
+    return nullptr;
+  }
   auto result = std::make_unique<ProcessHandle>();
   result->hProcess = reinterpret_cast<std::uintptr_t>(process.hProcess);
   result->hThread = reinterpret_cast<std::uintptr_t>(process.hThread);
   result->hJob = reinterpret_cast<std::uintptr_t>(job);
   result->hStdOutRead = reinterpret_cast<std::uintptr_t>(read);
+  result->hStdInWrite = reinterpret_cast<std::uintptr_t>(input_write);
   if (ResumeThread(process.hThread) == static_cast<DWORD>(-1)) return nullptr;
   return result;
 }
@@ -246,6 +266,21 @@ bool CheckPreparedConfig(const std::string& config, ProtectedRuntime& runtime,
   if (WaitForSingleObject(handle, 10000) != WAIT_OBJECT_0) return false;
   DWORD code = 1;
   return GetExitCodeProcess(handle, &code) && code == 0;
+} catch (...) { return false; }
+bool RoutingCapability(const ProtectedRuntime& runtime, const asset_location::Root& assets) {
+  std::string output;
+  return Command(runtime.Executable(), {L"native-routing", L"capabilities"}, output, 3000, assets)
+      && native_routing::SuccessfulReply(output, "capabilities", true);
+}
+bool CheckRoutingPreparedConfig(const std::string& config, const std::string& metadata,
+    ProtectedRuntime& runtime, fs::path& config_path, fs::path& metadata_path,
+    const asset_location::Root& assets) try {
+  if (!config_path.empty() || !metadata_path.empty() || !asset_location::Valid(assets)
+      || !xray_config::Parse(config).is_object() || !xray_config::Parse(metadata).is_object()) return false;
+  if (!runtime.WriteConfig(config, config_path) || !runtime.WriteConfig(metadata, metadata_path)) return false;
+  std::string output;
+  return Command(runtime.Executable(), {L"native-routing", L"check", L"--config", config_path.wstring(),
+      L"--spec", metadata_path.wstring()}, output, 10000, assets) && native_routing::SuccessfulReply(output, "check");
 } catch (...) { return false; }
 bool SocksReady(uint16_t port, const std::string& user, const std::string& password) {
   WSADATA data{};

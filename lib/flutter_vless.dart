@@ -158,6 +158,9 @@ class FlutterVless {
   /// [androidDnsPolicy] defaults to preserving the supplied config. The `proxy`
   /// policy protects virtual system DNS through [androidDnsProxyOutboundTag]
   /// or the unambiguous proxy outbound; unsupported backends reject it.
+  /// [vpnRouting] selects the original inbound's tag context and/or a
+  /// default VPN outbound without rewriting caller rules. It requires a runtime
+  /// built with VPN routing support and cannot be used in proxy-only mode.
   Future<void> startVless({
     required String remark,
     required String config,
@@ -168,6 +171,7 @@ class FlutterVless {
     String? certificateAssetsDirectory,
     AndroidDnsPolicy androidDnsPolicy = AndroidDnsPolicy.config,
     String? androidDnsProxyOutboundTag,
+    VpnRoutingOptions? vpnRouting,
     String? notificationDisconnectButtonName,
   }) async {
     final normalizedConfig = _normalizeConfigString(config);
@@ -182,6 +186,7 @@ class FlutterVless {
       certificateAssetsDirectory: certificateAssetsDirectory,
       androidDnsPolicy: androidDnsPolicy,
       androidDnsProxyOutboundTag: androidDnsProxyOutboundTag,
+      vpnRouting: vpnRouting,
       notificationDisconnectButtonName:
           notificationDisconnectButtonName ?? options.notification.buttonLabel,
     );

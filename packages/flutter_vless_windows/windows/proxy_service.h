@@ -151,6 +151,7 @@ struct ProcessHandle {
   std::uintptr_t hThread = 0;
   std::uintptr_t hStdOutRead = 0;
   std::uintptr_t hStdErrRead = 0;
+  std::uintptr_t hStdInWrite = 0;
 
   ProcessHandle();
   ~ProcessHandle();

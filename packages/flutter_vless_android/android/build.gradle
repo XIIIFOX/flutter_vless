@@ -96,6 +96,8 @@ android {
 // service/tests require both independently verified development executables.
 def nativeDnsPreviewInput = findProperty('flutterVlessNativeDnsPreviewDir')
 def nativeTunPreviewInput = findProperty('flutterVlessNativeTunPreviewDir')
+def nativeRoutingPreviewInput = findProperty('flutterVlessNativeRoutingPreviewDir')
+def nativePreviewArch = null
 if (nativeTunPreviewInput && !nativeDnsPreviewInput) {
     throw new GradleException('Native TUN preview also requires Native DNS preview')
 }
@@ -118,6 +120,7 @@ if (nativeDnsPreviewInput) {
         return [directory: directory, metadata: new groovy.json.JsonSlurper().parseText(verificationOutput)]
     }
     def preview = verifyPreview(nativeDnsPreviewInput.toString(), 'tool/verify_android_dns_preview.py', 'Native DNS preview')
+    nativePreviewArch = preview.metadata.arch
     android.sourceSets.androidTest.jniLibs.srcDir(new File(preview.directory, 'jniLibs'))
     android.sourceSets.androidTest.java.srcDir('src/nativeDnsPreviewTest/kotlin')
     if (nativeTunPreviewInput) {
@@ -130,6 +133,26 @@ if (nativeDnsPreviewInput) {
         android.sourceSets.debug.java.srcDir('src/nativeDnsPreview/kotlin')
         android.sourceSets.debug.manifest.srcFile('src/nativeDnsPreview/AndroidManifest.xml')
     }
+}
+
+// Optional consumer acceptance adds no production source or service.
+if (nativeRoutingPreviewInput) {
+    def repositoryRoot = new File(projectDir, '../../..').canonicalFile
+    def directory = file(nativeRoutingPreviewInput.toString()).canonicalFile
+    def verification = new ProcessBuilder('python3', new File(repositoryRoot, 'tool/verify_android_routing_preview.py').absolutePath,
+        '--directory', directory.absolutePath).directory(repositoryRoot).redirectErrorStream(true).start()
+    if (!verification.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
+        verification.destroyForcibly(); verification.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+        throw new GradleException('Native routing preview verification timed out')
+    }
+    def output = verification.inputStream.getText('UTF-8')
+    if (verification.exitValue() != 0) throw new GradleException('Native routing preview verification failed: ' + output)
+    def metadata = new groovy.json.JsonSlurper().parseText(output)
+    if (nativePreviewArch != null && nativePreviewArch != metadata.arch) {
+        throw new GradleException('Native preview executables require the same ABI')
+    }
+    android.sourceSets.androidTest.jniLibs.srcDir(new File(directory, 'jniLibs'))
+    android.sourceSets.androidTest.java.srcDir('src/nativeRoutingPreviewTest/kotlin')
 }
 
 dependencies {

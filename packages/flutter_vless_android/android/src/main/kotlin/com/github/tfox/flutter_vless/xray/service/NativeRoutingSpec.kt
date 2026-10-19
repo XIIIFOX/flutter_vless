@@ -87,6 +87,20 @@ internal object NativeRoutingSpec {
         return NativeRoutingEnvelope(frozen, metadata.toString().toByteArray(Charsets.UTF_8), digest)
     }
 
+    /** Validate the user selection against ORIGINAL arrays before any private input/output is appended. */
+    fun validateOriginal(source: String, intent: NativeRoutingIntent?) {
+        if (intent == null) return
+        val root=parse(source.toByteArray(Charsets.UTF_8))
+        val rawInputs=field(root, "inbounds")
+        val inputs=if (rawInputs == null || rawInputs === JSONObject.NULL) emptyList() else
+            objects(rawInputs, NativeRoutingSpecFailure.INVALID_SOURCE_INBOUND)
+        if (intent.sourceInboundIndex != null && intent.sourceInboundIndex !in inputs.indices)
+            fail(NativeRoutingSpecFailure.INVALID_SOURCE_INBOUND)
+        val tag=intent.defaultOutboundTag.orEmpty()
+        if (tag.isNotEmpty() && objects(field(root, "outbounds"), NativeRoutingSpecFailure.INVALID_DEFAULT_OUTBOUND)
+                .count { tag(it) == tag } != 1) fail(NativeRoutingSpecFailure.INVALID_DEFAULT_OUTBOUND)
+    }
+
     private fun parse(bytes: ByteArray): JSONObject {
         try {
             val text = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)

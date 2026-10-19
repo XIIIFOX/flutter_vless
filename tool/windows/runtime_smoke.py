@@ -843,13 +843,114 @@ def direct_only_gate(probe, directory, address, dns, origin, results):
         time.sleep(2)
 
 
+def native_routing_config(address, dns_port):
+    return {
+        "inbounds": [{"tag": "caller-source", "protocol": "socks", "listen": "127.0.0.1", "port": PORTS["inbound"],
+                      "settings": {"auth": "noauth", "udp": True}}],
+        "outbounds": [{"tag": "first-blocked", "protocol": "blackhole"},
+                      {"tag": "source-route", "protocol": "freedom", "settings": {"redirect": f"{address}:{PORTS['direct']}"}},
+                      {"tag": "selected-default", "protocol": "socks", "settings": {"servers": [{"address": address, "port": PORTS["proxy"]}]}},
+                      {"tag": "dns-direct", "protocol": "freedom"}],
+        "dns": {"tag": "caller-dns", "disableCache": True, "servers": [f"tcp://{address}:{dns_port}"]},
+        "routing": {"domainStrategy": "AsIs", "rules": [
+            {"type": "field", "inboundTag": ["caller-dns"], "ip": [address + "/32"], "port": str(dns_port), "network": "tcp", "outboundTag": "dns-direct"},
+            {"type": "field", "inboundTag": ["caller-source"], "domain": ["full:alias.invalid"], "outboundTag": "source-route"}]}}
+
+
+def native_routing_gate(probe, directory, address, dns, origin, results):
+    # This is a separate opt-in profile. The preceding ordinary-input isolation
+    # assertions remain untouched and do not run with an aliased adapter.
+    with origin.direct_only_lock:
+        origin.direct_only_active = None
+    for cycle in range(2):
+        label = "vpn-native-routing-" + str(cycle)
+        profile, stop, state, guard_stop = [directory / (label + suffix) for suffix in (".json", ".stop", ".state.json", ".guard-stop")]
+        for stale in (stop, state, guard_stop, Path(str(state) + ".reject-routing")):
+            stale.unlink(missing_ok=True)
+        profile.write_text(json.dumps(native_routing_config(address, dns.server_address[1])))
+        log_path = directory / (label + ".log")
+        with log_path.open("w") as log:
+            process = subprocess.Popen([str(probe), "run-vpn-routing", str(profile), "240", str(stop), str(state)],
+                                       cwd=directory, stdout=log, stderr=log)
+            guard = None
+            primary = None
+            try:
+                guard = subprocess.Popen([str(probe), "guard", str(process.pid), "240", str(guard_stop)], cwd=directory, stdout=log, stderr=log)
+                deadline = time.monotonic() + 65
+                while "START_RETURN=1" not in log_path.read_text(errors="replace"):
+                    assert process.poll() is None and time.monotonic() < deadline, "Native routing VPN did not become ready"
+                    time.sleep(0.1)
+                def payloads():
+                    assert request("alias.invalid", True) == "DIRECT-FIXTURE", "Source-inbound alias did not match its caller rule"
+                    assert request("fallback.invalid", True) == "PROXY-FIXTURE", "Explicit non-first default did not receive unmatched traffic"
+                payloads()
+                results.append(dict(mode=label, check="native source alias and explicit non-first fallback", passed=True))
+                for tcp in (False, True):
+                    direct_only_dns(dns, tcp)
+                results.append(dict(mode=label, check="private DNS and readiness probe survive source alias", passed=True))
+                if cycle == 0:
+                    Path(str(state) + ".reject-routing").touch()
+                    deadline = time.monotonic() + 25
+                    while "REJECTED_ROUTING_PRESERVED=1" not in log_path.read_text(errors="replace"):
+                        assert process.poll() is None and time.monotonic() < deadline, "Invalid routing selection replaced live workers"
+                        time.sleep(0.1)
+                    payloads()
+                    results.append(dict(mode=label, check="invalid routing candidate preserves both caller paths", passed=True))
+                    kill_worker(process.pid, "xray.exe")
+                    await_state(state, False); await_state(state, True, timeout=60)
+                    payloads()
+                    direct_only_dns(dns, True)
+                    results.append(dict(mode=label, check="native routing selection and private guards survive worker recovery", passed=True))
+                stop.touch()
+                assert process.wait(timeout=25) == 0, "Native routing Stop failed"
+                assert native(probe, "policy-count") == "0", "Native routing Stop retained WFP filters"
+                inventory = json.loads(subprocess.check_output(["powershell", "-NoProfile", "-Command",
+                    "[pscustomobject]@{Routes=@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1','::/1','8000::/1') }).Count; "
+                    "IPv6Addresses=@(Get-NetIPAddress -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -eq 'flutter_vless_tun' -and $_.IPAddress -eq 'fd00:198:18::2' }).Count} | ConvertTo-Json -Compress"], text=True, timeout=25))
+                assert inventory == {"Routes": 0, "IPv6Addresses": 0}, "Native routing Stop retained routes/address"
+                results.append(dict(mode=label, check="native routing Stop removes WFP routes and owned address", passed=True))
+            except BaseException as error:
+                primary = error
+                raise
+            finally:
+                cleanup_error = None
+                def cleanup(operation):
+                    nonlocal cleanup_error
+                    try: operation()
+                    except BaseException as error:
+                        if cleanup_error is None: cleanup_error = error
+                def stop_process():
+                    if process.poll() is None:
+                        stop.touch()
+                        try: process.wait(timeout=15)
+                        except subprocess.TimeoutExpired:
+                            process.kill(); process.wait(timeout=5)
+                def stop_guard():
+                    guard_stop.touch()
+                    if guard is not None:
+                        try: guard.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            guard.kill(); guard.wait(timeout=5)
+                cleanup(stop_process)
+                cleanup(lambda: native(probe, "release-protection"))
+                cleanup(stop_guard)
+                if cleanup_error is not None:
+                    if primary is None: raise cleanup_error
+                    if hasattr(primary, "add_note"): primary.add_note("NATIVE_ROUTING_CLEANUP_FAILED")
+        time.sleep(2)
+    print("WINDOWS_NATIVE_ROUTING_TRAFFIC_PASS=2", flush=True)
+
+
 def main():
     global PROBE, REAL_DNS
     parser = argparse.ArgumentParser()
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--vpn", action="store_true")
+    parser.add_argument("--native-routing", action="store_true", help="Append the separate native-routing profile; requires --vpn and an optional factory binary")
     parser.add_argument("--wine-bottle", help="CrossOver bottle for proxy-only tests on macOS")
     args = parser.parse_args()
+    if args.native_routing and not args.vpn:
+        raise SystemExit("Native routing acceptance requires the disposable VPN runner")
     if args.vpn and (os.name != "nt" or os.environ.get("GITHUB_ACTIONS") != "true"):
         raise SystemExit("Full VPN tests require a disposable GitHub Windows runner")
     REAL_DNS = args.vpn
@@ -1173,6 +1274,8 @@ def main():
             time.sleep(2)
         if args.vpn:
             direct_only_gate(probe, directory, direct_address, direct_dns, servers[0], results)
+            if args.native_routing:
+                native_routing_gate(probe, directory, direct_address, direct_dns, servers[0], results)
     finally:
         for process, stop in adapters:
             stop.touch()

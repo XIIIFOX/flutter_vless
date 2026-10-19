@@ -1179,9 +1179,15 @@ inline bool ProtectedDns(Json& config, ServiceTags& tags, const std::string& pro
   return true;
 }
 
+struct VpnRoutingProvenance {
+  size_t original_inbound_count = 0;
+  std::string managed_tag;
+  std::vector<int64_t> guard_rule_indices;
+};
 inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
     const std::string& username, const std::string& password, const std::string& interface_name,
-    const std::function<std::string(const std::string&)>& resolve) try {
+    const std::function<std::string(const std::string&)>& resolve,
+    VpnRoutingProvenance* provenance = nullptr) try {
   auto config = Parse(text);
   if (username.empty() || password.empty() || username.size() > 255 || password.size() > 255 || interface_name.empty()
       || !Normalize(config) || config.contains("fakeDns") || config.contains("fakedns")) return std::nullopt;
@@ -1189,11 +1195,14 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   if (!ValidBootstrapChains(config["outbounds"])) return std::nullopt;
   ServiceTags service_tags(config);
   auto& inbounds = config["inbounds"];
+  VpnRoutingProvenance generated;
+  generated.original_inbound_count = inbounds.size();
   // Keep every imported listener intact. tun2socks gets a separate loopback
   // listener with native session authentication, never a caller's public input.
   auto port = AvailablePort(config, 10807);
   if (!port) return std::nullopt;
   auto managed_tag = service_tags.Next(kManagedInbound);
+  generated.managed_tag = managed_tag;
   Json inbound = {{"tag", managed_tag}, {"protocol", "socks"}, {"listen", "127.0.0.1"}, {"port", *port},
       {"settings", {{"auth", "password"}, {"accounts", Json::array({{{"user", username}, {"pass", password}}})}, {"udp", true}, {"ip", "127.0.0.1"}}},
       {"sniffing", {{"enabled", true}, {"routeOnly", true}, {"destOverride", Json::array({"http", "tls", "quic"})}}}};
@@ -1261,14 +1270,20 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   Json rules = Json::array({
       {{"type", "field"}, {"inboundTag", Json::array({managed_tag})}, {"ip", Json::array({std::string(kVirtualDns) + "/32"})}, {"port", "53"}, {"network", "tcp,udp"}, {"outboundTag", relay_tag}}
   });
-  for (const auto& rule : dns_rules) rules.push_back(rule);
-  for (const auto& rule : bootstrap.rules) rules.push_back(rule);
+  generated.guard_rule_indices.push_back(0);
+  for (const auto& rule : dns_rules) {
+    generated.guard_rule_indices.push_back(static_cast<int64_t>(rules.size())); rules.push_back(rule);
+  }
+  for (const auto& rule : bootstrap.rules) {
+    generated.guard_rule_indices.push_back(static_cast<int64_t>(rules.size())); rules.push_back(rule);
+  }
   for (const auto& rule : routing["rules"]) rules.push_back(rule);
   routing["rules"] = rules;
   const bool owned_api = !config.contains("api");
   const auto api_port = owned_api ? AvailablePort(config, 10086) : std::optional<uint16_t>{uint16_t{0}};
   if (!api_port || !AddApi(config, *api_port)) return std::nullopt;
   if (owned_api) config["api"]["tag"] = service_tags.Next("flutter-vless-stats");
+  if (provenance) *provenance = std::move(generated);
   return config.dump();
 } catch (...) { return std::nullopt; }
 

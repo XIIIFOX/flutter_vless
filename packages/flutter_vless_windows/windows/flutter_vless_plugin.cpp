@@ -134,7 +134,10 @@ class FlutterVlessPlugin : public flutter::Plugin {
   NativeTaskQueue operations_;
   flutter_vless::NativeOptions native_options_;
   std::unique_ptr<flutter_vless::SystemTray> tray_;
-  struct QuickProfile { std::string config; flutter_vless::asset_location::Root assets; };
+  struct QuickProfile {
+    std::string config; flutter_vless::asset_location::Root assets;
+    std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing;
+  };
   std::optional<QuickProfile> quick_profile_; // Access only on operations_. Never persisted in plaintext.
   std::atomic<unsigned> options_generation_{0};
   std::atomic<int> last_tray_state_{-1};
@@ -153,7 +156,7 @@ class FlutterVlessPlugin : public flutter::Plugin {
         StopStatusTimer(); V2rayManager::GetInstance().Stop(); is_running_ = false;
         SendStatusToUI(flutter::EncodableList{flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("DISCONNECTED")});
       } else if (available && quick_profile_) {
-        const bool ready = V2rayManager::GetInstance().Start(quick_profile_->config, false, options, quick_profile_->assets);
+        const bool ready = V2rayManager::GetInstance().Start(quick_profile_->config, false, options, quick_profile_->assets, quick_profile_->routing);
         is_running_ = ready || V2rayManager::GetInstance().IsProtecting();
         if (is_running_) { start_time_ = std::chrono::steady_clock::now(); StartStatusTimer(); }
         available = is_running_.load();
@@ -359,7 +362,8 @@ void FlutterVlessPlugin::HandleMethodCall(
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   if (method_call.method_name() == "getSecurityCapabilities") {
     result->Success(flutter::EncodableValue(flutter::EncodableMap{
-      {flutter::EncodableValue("certificateAssetsDirectory"), flutter::EncodableValue(true)}}));
+      {flutter::EncodableValue("certificateAssetsDirectory"), flutter::EncodableValue(true)},
+      {flutter::EncodableValue("vpnRouting"), flutter::EncodableValue(true)}}));
   } else if (method_call.method_name() == "getCapabilities") {
     result->Success(flutter::EncodableValue(flutter::EncodableMap{
       {flutter::EncodableValue("optionsVersion"), flutter::EncodableValue(1)},
@@ -427,6 +431,29 @@ void FlutterVlessPlugin::HandleMethodCall(
           }
         }
 
+        std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing;
+        try {
+          const auto found = arguments->find(flutter::EncodableValue("vpn_routing"));
+          if (found != arguments->end() && !found->second.IsNull()) {
+            const auto* map = std::get_if<flutter::EncodableMap>(&found->second);
+            if (!map || proxy_only) throw std::invalid_argument("routing");
+            for (const auto& entry : *map) {
+              const auto* key = std::get_if<std::string>(&entry.first);
+              if (!key) throw std::invalid_argument("routing");
+              if (*key == "sourceInboundIndex") {
+                if (!std::get_if<int32_t>(&entry.second) && !std::get_if<int64_t>(&entry.second))
+                  throw std::invalid_argument("routing");
+              } else if (*key == "defaultOutboundTag") {
+                if (!entry.second.IsNull() && !std::get_if<std::string>(&entry.second)) throw std::invalid_argument("routing");
+              } else throw std::invalid_argument("routing");
+            }
+            auto parsed = flutter_vless::native_routing::NativeRoutingSpec::ParseIntent(OptionJson(found->second).dump());
+            if (parsed.error != flutter_vless::native_routing::NativeRoutingError::none || !parsed.intent)
+              throw std::invalid_argument("routing");
+            routing = std::move(parsed.intent);
+          }
+        } catch (...) { result->Error("INVALID_ROUTING", "Invalid VPN routing options"); return; }
+
         if (!proxy_only) {
           std::vector<std::string> cidrs;
           auto bypass = arguments->find(flutter::EncodableValue("bypass_subnets"));
@@ -448,14 +475,14 @@ void FlutterVlessPlugin::HandleMethodCall(
         
         const auto options = native_options_;
         const auto generation = options_generation_.load();
-        operations_.Submit([this, config, proxy_only, assets, shared_result, options, generation]() {
+        operations_.Submit([this, config, proxy_only, assets, routing, shared_result, options, generation]() {
           std::lock_guard<std::mutex> lock(lifecycle_mutex_);
           LogMessage("Starting Xray...");
-          const bool ready = V2rayManager::GetInstance().Start(config, proxy_only, options, assets);
+          const bool ready = V2rayManager::GetInstance().Start(config, proxy_only, options, assets, routing);
           const bool protecting = V2rayManager::GetInstance().IsProtecting();
           is_running_ = V2rayManager::GetInstance().IsRunning() || protecting;
           if (ready && proxy_only) quick_profile_.reset();
-          if (ready && !proxy_only && options.quick_enabled && generation == options_generation_.load()) quick_profile_ = QuickProfile{config, assets};
+          if (ready && !proxy_only && options.quick_enabled && generation == options_generation_.load()) quick_profile_ = QuickProfile{config, assets, routing};
           if (ready) {
             start_time_ = std::chrono::steady_clock::now();
             StartStatusTimer();

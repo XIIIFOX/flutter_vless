@@ -4,6 +4,7 @@
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'vless_status.dart';
 import 'android_dns_policy.dart';
+import 'vpn_routing_options.dart';
 import 'vless_options.dart';
 import 'method_channel_vless_platform.dart';
 
@@ -79,6 +80,7 @@ abstract class VlessPlatform extends PlatformInterface {
     String? certificateAssetsDirectory,
     AndroidDnsPolicy androidDnsPolicy = AndroidDnsPolicy.config,
     String? androidDnsProxyOutboundTag,
+    VpnRoutingOptions? vpnRouting,
   }) {
     throw UnimplementedError('startVless() has not been implemented.');
   }

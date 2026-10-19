@@ -87,7 +87,31 @@ import Security
         await manager.refreshForwardingState()
         precondition(!manager.forwardingReady)
         try await manager.stop(waitForDisconnect:true)
+        let routingSaves = SDK.saves, routingStops = SDK.stopCalls
+        manager.vpnRouting = try NativeRoutingIntent()
+        do { try await manager.start(); fatalError("Unavailable routing runtime changed the profile") }
+        catch NativeRoutingSpecError.unsupportedRuntime {}
+        precondition(SDK.saves == routingSaves && SDK.stopCalls == routingStops)
+        SDK.routingCapability = 1
+        try await manager.start()
+        let routingMetadata = (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+        precondition((routingMetadata["vpnRouting"] as? [String: Any])?.isEmpty == true)
+        precondition(routingMetadata["source_sha256"] == nil && routingMetadata["auth_user"] == nil)
+        SDK.profile!.connection.status = .connected
+        let beforeSelectionChange = SDK.saves
+        manager.vpnRouting = nil
+        do { try await manager.start(); fatalError("Changed routing intent reused a live provider") } catch {}
+        precondition(SDK.saves == beforeSelectionChange)
+        manager.vpnRouting = try NativeRoutingIntent()
+        try await manager.stop(waitForDisconnect: true)
+        manager.nativeOptions = try VlessNativeOptions()
+        try await manager.start()
+        let retainedSelection = (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+        precondition((retainedSelection["vpnRouting"] as? [String: Any])?.isEmpty == true)
+        try await manager.stop(waitForDisconnect: true)
+        manager.vpnRouting = nil; SDK.routingCapability = 0
         try await manager.removeFromPreferences()
+        print("PASS macOS routing selection persistence, capability admission and active-profile identity")
         print("PASS macOS manager: mandatory policy, private persistence, readiness, live-config rejection, subnet policy, failed disarm, ordered stop and secret cleanup")
     }
 }

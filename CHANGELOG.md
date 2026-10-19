@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Add per-session `VpnRoutingOptions` for an original inbound's tag context and an explicit default outbound on Android, iOS, macOS and Windows. Wire native admission, exact final config/metadata preflight, recovery and saved quick profiles; expose example controls. Factory-capable binaries remain unpublished previews pending runtime/device acceptance.
+* Validate frozen native configurations before replacing working sessions on every backend, retaining the exact checked bytes through startup and recovery.
 * Add static Apple routing ABI negotiation that refuses cached, incomplete and unknown runtimes before forwarding. Add an unpublished shared CLI entry for private capability/check/start lifecycle; preserve stock command logging. Keep native launcher adoption separate.
 * Wait for Wi-Fi restoration and controlled traffic even when the Android cellular handover test is skipped, before the next DNS scenario starts.
 * Add an unpublished, capability-gated mobile routing factory bound to the final config digest and exact compiled inbound. Preserve active sessions on rejected starts, seal before Start, revoke before Close, and compile optional Apple previews from disposable modules. Native launcher adoption and device acceptance remain separate.

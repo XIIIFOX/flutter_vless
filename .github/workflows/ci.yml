@@ -157,6 +157,12 @@ jobs:
           flutter pub get
           flutter analyze
           flutter test
+      - name: Test example routing controls and connection feedback
+        working-directory: example
+        run: |
+          flutter pub get
+          flutter analyze lib/vpn_routing.dart test/vpn_routing_test.dart
+          flutter test test/vpn_routing_test.dart test/widget_test.dart
 
   android-native:
     if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all'
@@ -207,6 +213,7 @@ jobs:
           python3 tool/test_android_flutter_smoke_retry.py
           python3 tool/test_android_emulator_failure_capture.py
           python3 tool/test_android_routing_builder.py
+          python3 tool/test_android_routing_preview.py
       - name: Verify Maven Central Android runtime resolution
         run: tool/test_android_maven_runtime.sh
       - name: Preserve Android routing metadata checks
@@ -234,6 +241,16 @@ jobs:
         with:
           channel: stable
           cache: true
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: third_party/xray-mobile/go.mod
+          cache-dependency-path: third_party/xray-mobile/go.sum
+      - name: Build unpublished Android routing runtime for instrumentation only
+        run: |
+          sdk_manager_path="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)"
+          test -n "$sdk_manager_path"
+          "$sdk_manager_path" "ndk;28.2.13676358"
+          python3 tool/build_android_routing_preview.py --output build/android-native-routing-preview --ndk "$ANDROID_SDK_ROOT/ndk/28.2.13676358" --arch x86_64
       - name: Enable KVM group perms
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -252,7 +269,7 @@ jobs:
             adb -s emulator-5554 shell settings put global mobile_data_always_on 1
             (cd example && flutter pub get)
             python3 tool/test_android_flutter_smoke.py --serial emulator-5554
-            ANDROID_SERIAL=emulator-5554 tool/test_android_security_emulator.sh --no-capture
+            ANDROID_SERIAL=emulator-5554 tool/test_android_security_emulator.sh --no-capture --native-routing-preview build/android-native-routing-preview
             python3 tool/test_android_separate_uid.py --serial emulator-5554 --output build/android-separate-uid-results.json
       - name: Preserve Android security test evidence
         if: always()
@@ -267,6 +284,8 @@ jobs:
             build/android-native-dns-preview/verification.json
             build/android-native-tun-preview/result.json
             build/android-native-tun-preview/verification.json
+            build/android-native-routing-preview/result.json
+            build/android-native-routing-preview/verification.json
           if-no-files-found: ignore
 
   ios:
@@ -314,7 +333,7 @@ jobs:
       - name: Check optional bridge and build unpublished iOS Core preview
         run: |
           tool/test_apple_core_preflight_bridge.sh
-          tool/build_apple_core_preview.sh ios build/apple-core-preview/ios
+          tool/build_apple_core_preview.sh ios build/apple-core-preview/ios --vpn-routing
           rm -rf ios/XRay.xcframework
           cp -R build/apple-core-preview/ios/XRay.xcframework ios/XRay.xcframework
       - name: Test iOS profile transactions and operation ordering
@@ -337,7 +356,7 @@ jobs:
           trap 'xcrun simctl shutdown "$SIMULATOR_UDID"; xcrun simctl delete "$SIMULATOR_UDID"' EXIT
           xcrun simctl boot "$SIMULATOR_UDID"
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b
-          REQUIRE_CORE_PREFLIGHT=1 tool/test_ios_privacy_runtime.sh
+          REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 tool/test_ios_privacy_runtime.sh
           HEV=ios/flutter_vless/.build/artifacts/tun2sockskit/HevSocks5Tunnel/HevSocks5Tunnel.xcframework
           # The checksum-pinned simulator HEV slice is a link-only stub.
           # Its packet runtime must be checked on a physical iOS device.
@@ -362,7 +381,7 @@ jobs:
             "FRAMEWORK_SEARCH_PATHS=\$(inherited) $FLUTTER_SDK/bin/cache/artifacts/engine/ios/Flutter.xcframework/ios-arm64" build
       - name: Build unpublished macOS Core preview
         run: |
-          tool/build_apple_core_preview.sh macos build/apple-core-preview/macos
+          tool/build_apple_core_preview.sh macos build/apple-core-preview/macos --vpn-routing
           rm -rf packages/flutter_vless_macos/macos/XRay.xcframework
           cp -R build/apple-core-preview/macos/XRay.xcframework packages/flutter_vless_macos/macos/XRay.xcframework
       - name: Build example macOS app
@@ -377,7 +396,7 @@ jobs:
         run: |
           bash tool/test_macos_tunnel_support.sh
           bash tool/test_macos_manager_policy.sh
-          REQUIRE_CORE_PREFLIGHT=1 bash tool/test_macos_privacy_runtime.sh
+          REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 bash tool/test_macos_privacy_runtime.sh
           HEV=ios/flutter_vless/.build/artifacts/tun2sockskit/HevSocks5Tunnel/HevSocks5Tunnel.xcframework
           bash tool/test_macos_packet_bridge.sh "$HEV/macos-arm64_x86_64"
       - name: Preserve Apple synthetic runtime evidence

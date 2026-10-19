@@ -66,7 +66,8 @@ bool TunnelIPv6Ready(const NET_LUID& luid) {
 VpnService::VpnService() = default;
 VpnService::~VpnService() { Shutdown(); }
 bool VpnService::Start(const std::string& config, const flutter_vless::NativeOptions& options,
-    flutter_vless::asset_location::Root assets) {
+    flutter_vless::asset_location::Root assets,
+    std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing, std::function<void()> admitted) {
   using namespace flutter_vless;
   if (!asset_location::Valid(assets)) return false;
   // Validate before retiring an existing session. No setup failure is reported
@@ -78,6 +79,9 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     Event("VPN requires administrator rights and bundled native executables"); return false;
   }
   if (!protection_.Inspect()) { Event(("Windows traffic protection is unavailable, code=" + std::to_string(protection_.Error())).c_str()); return false; }
+  if (native_routing::NativeRoutingSpec::ValidateSource(config, routing) != native_routing::NativeRoutingError::none) {
+    Event("Native VPN routing selection rejected; active session preserved"); return false;
+  }
   auto underlay = Underlay();
   auto user = native::RandomHex(16), password = native::RandomHex(32);
   auto cache = bootstrap_cache_;
@@ -94,11 +98,16 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     if (!address.empty()) cache[key] = address;
     return address;
   };
-  auto prepared = underlay ? xray_config::PrepareProtectedVpn(config, user, password, *underlay, resolve) : std::nullopt;
+  xray_config::VpnRoutingProvenance provenance;
+  auto prepared = underlay ? xray_config::PrepareProtectedVpn(config, user, password, *underlay, resolve, &provenance) : std::nullopt;
   if (!prepared) {
     Event("VPN configuration rejected or endpoint bootstrap unavailable");
     if (!protection_.Active()) protection_.Release();
     return false;
+  }
+  if (routing && routing->source_inbound_index && (*routing->source_inbound_index < 0
+      || static_cast<uint64_t>(*routing->source_inbound_index) >= provenance.original_inbound_count)) {
+    Event("Native VPN routing source selection rejected; active session preserved"); return false;
   }
   const auto owned_api_port = xray_config::OwnedApiPort(config, *prepared).value_or(0);
   auto runtime = std::make_unique<native::ProtectedRuntime>();
@@ -108,15 +117,17 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     return false;
   }
   const auto managed_port = xray_config::Port(xray_config::Parse(*prepared)["inbounds"][0]);
-  auto candidate = managed_port ? PrepareWorkerCandidate(*prepared, *managed_port, *runtime, assets) : nullptr;
+  auto candidate = managed_port ? PrepareWorkerCandidate(*prepared, *managed_port, *runtime, assets, routing, provenance, user) : nullptr;
   if (!candidate) {
     Event("Xray configuration check rejected final VPN document; active session preserved");
     return false;
   }
+  if (admitted) admitted();
   if (requested_.load()) StopSession(false);
   bootstrap_cache_ = std::move(cache);
   private_runtime_ = std::move(runtime);
   pending_candidate_ = std::move(candidate);
+  routing_intent_ = std::move(routing); routing_provenance_ = std::move(provenance);
   xray_executable_path_ = private_runtime_->Executable(); tun2socks_executable_path_ = *tun;
   options_ = options;
   current_config_ = *prepared; username_ = user; password_ = password;
@@ -150,6 +161,7 @@ void VpnService::StopSession(bool release) {
   private_runtime_.reset();
   if (release && !protection_.Release()) Event("Traffic protection cleanup failed; restart as administrator and stop again");
   username_.clear(); password_.clear(); current_config_.clear(); api_port_ = 0;
+  routing_intent_.reset(); routing_provenance_ = {};
   asset_directory_.reset();
   if (release) bootstrap_cache_.clear();
   std::lock_guard<std::mutex> lock(stats_mutex_); total_upload_ = 0; total_download_ = 0;
@@ -194,14 +206,32 @@ void VpnService::RunVpn() {
 }
 std::unique_ptr<VpnService::WorkerCandidate> VpnService::PrepareWorkerCandidate(
     const std::string& base, uint16_t managed_port, flutter_vless::native::ProtectedRuntime& runtime,
-    const flutter_vless::asset_location::Root& assets) {
+    const flutter_vless::asset_location::Root& assets,
+    const std::optional<flutter_vless::native_routing::NativeRoutingIntent>& routing,
+    const flutter_vless::xray_config::VpnRoutingProvenance& provenance, const std::string& auth_user) {
+  if (routing && !flutter_vless::native::RoutingCapability(runtime, assets)) {
+    Event("Bundled runtime does not support native VPN routing"); return nullptr;
+  }
   UINT64 identity = 0;
   const auto underlay = Underlay(&identity);
   if (!underlay) return nullptr;
   auto candidate = WorkerCandidate::Prepare(base, *underlay, identity, managed_port,
       [] { return std::make_unique<flutter_vless::PacketPathProbe>(); },
-      [&](const std::string& bytes, fs::path& path) {
-        return flutter_vless::native::CheckPreparedConfig(bytes, runtime, path, assets);
+      [&](const std::string& bytes, fs::path& path, std::string& metadata, fs::path& metadata_path,
+          const std::vector<int64_t>& probe_guards) {
+        if (!routing) return flutter_vless::native::CheckPreparedConfig(bytes, runtime, path, assets);
+        std::vector<int64_t> guards = probe_guards;
+        // PacketPathProbe owns one prepended rule; provenance comes from its
+        // actual Configure call, and from the protected preparer's insertions.
+        for (const auto index : provenance.guard_rule_indices)
+          guards.push_back(index + static_cast<int64_t>(probe_guards.size()));
+        const auto mapped = routing->source_inbound_index
+            ? std::optional<int64_t>{*routing->source_inbound_index + 1} : std::nullopt;
+        auto frozen = flutter_vless::native_routing::NativeRoutingSpec::Freeze(bytes, 0,
+            provenance.managed_tag, auth_user, routing, mapped, guards);
+        if (frozen.error != flutter_vless::native_routing::NativeRoutingError::none || !frozen.envelope) return false;
+        metadata = frozen.envelope->metadata_data();
+        return flutter_vless::native::CheckRoutingPreparedConfig(bytes, metadata, runtime, path, metadata_path, assets);
       }, flutter_vless::native::RemovePrivateConfig);
   // A slow check must not admit a snapshot whose adapter already changed.
   UINT64 current_identity = 0;
@@ -218,7 +248,7 @@ bool VpnService::StartWorkers() {
   if (!RetireIPv6Address()) return fail("Previous owned Wintun IPv6 address cleanup remains pending");
   if (!private_runtime_) return fail("Private VPN runtime is unavailable");
   worker_candidate_ = pending_candidate_ ? std::move(pending_candidate_)
-      : PrepareWorkerCandidate(current_config_, socks_port_, *private_runtime_, asset_directory_);
+      : PrepareWorkerCandidate(current_config_, socks_port_, *private_runtime_, asset_directory_, routing_intent_, routing_provenance_, username_);
   if (!worker_candidate_) return fail("Final VPN recovery configuration check failed");
   UINT64 current_identity = 0;
   const auto current_underlay = Underlay(&current_identity);
@@ -226,7 +256,11 @@ bool VpnService::StartWorkers() {
       || current_identity != worker_candidate_->Identity()) return fail("Checked VPN underlay changed before launch");
   underlay_name_ = worker_candidate_->Underlay();
   underlay_luid_ = worker_candidate_->Identity();
-  xray_process_ = native::Launch(xray_executable_path_, {L"run", L"-config", worker_candidate_->Path().wstring()}, false, asset_directory_);
+  const auto command = worker_candidate_->Routing()
+      ? std::vector<std::wstring>{L"native-routing", L"run", L"--parent-stdin", L"--config", worker_candidate_->Path().wstring(),
+          L"--spec", worker_candidate_->MetadataPath().wstring()}
+      : std::vector<std::wstring>{L"run", L"-config", worker_candidate_->Path().wstring()};
+  xray_process_ = native::Launch(xray_executable_path_, command, false, asset_directory_, worker_candidate_->Routing());
   if (!xray_process_) return fail("Cannot launch the protected Xray process");
   bool listening = false;
   for (int i = 0; i < 60 && requested_.load() && xray_process_->IsRunning(); ++i) {

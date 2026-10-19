@@ -124,6 +124,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let port: Int
         let geoAssetsDirectory: String?
         let credentials: LocalProxyCredentials
+        let routingMetadata: Data?
+
+        init(epoch: TunnelSessionAdmission.Epoch, options: VlessNativeOptions, config: Data, port: Int,
+             geoAssetsDirectory: String?, credentials: LocalProxyCredentials, routingMetadata: Data? = nil) {
+            self.epoch = epoch; self.options = options; self.config = config; self.port = port
+            self.geoAssetsDirectory = geoAssetsDirectory; self.credentials = credentials
+            self.routingMetadata = routingMetadata
+        }
     }
 
     private func setForwardingReady(_ ready: Bool, epoch: TunnelSessionAdmission.Epoch) {
@@ -164,6 +172,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // fallback; opening the app performs its transactional migration.
         let config = try TunnelSecretProfile.load(providerConfiguration,
             providerBundleIdentifier: configuration.providerBundleIdentifier ?? "")
+        let routingIntent = try NativeRoutingIntent.parse(providerConfiguration["vpnRouting"])
+        if routingIntent != nil { try NativeRoutingSpec.requireRuntime(FLVlessCoreRoutingCapability()) }
+        try NativeRoutingSpec.validateSource(config, intent: routingIntent)
         let options = try VlessNativeOptions(providerConfiguration["options"] as? [String: Any])
         TunnelDebugStore.shared.configure(groupIdentifier: providerConfiguration["groupIdentifier"] as? String, options: options)
         let epoch = sessionAdmission.begin()
@@ -189,7 +200,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // prepared endpoints when restarting workers within this same tunnel.
         let credentials = try LocalProxyCredentials.generate()
         let preparation = Task {
-            try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: config, credentials: credentials,
+            try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: config, credentials: credentials, routingIntent: routingIntent,
                 resolveIPv4: { resolveIPv4Addresses(for: $0).first })
         }
         setStartupPreparation(preparation, epoch: epoch)
@@ -207,15 +218,22 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             throw tunnelError("Tunnel preparation cancelled or incompatible")
         }
         let addresses = prepared.bootstrapAddresses
+        guard (routingIntent == nil) == (prepared.routingEnvelope == nil) else {
+            throw NativeRoutingSpecError.invalidIntent
+        }
 
         // Native Control Center/On Demand starts bypass the app entry point.
         // Check the final generated document before installing protected routes.
-        if FLVlessHasCorePreflight() {
+        if prepared.routingEnvelope != nil || FLVlessHasCorePreflight() {
             var assetError: NSError?
             guard XRaySetAssetLocation(providerConfiguration["geoAssetsDirectory"] as? String ?? "", &assetError) else {
                 throw tunnelError("Xray asset configuration failed before route installation")
             }
-            try CorePreflightPolicy.validate(prepared.data, check: FLVlessCheckCorePrivate)
+            if let envelope = prepared.routingEnvelope {
+                try NativeRoutingSpec.check(envelope, capability: FLVlessCoreRoutingCapability, check: FLVlessCheckCoreRoutingPrivate)
+            } else {
+                try CorePreflightPolicy.validate(prepared.data, check: FLVlessCheckCorePrivate)
+            }
             rememberTunnelLog("Core configuration checked before route installation")
         } else {
             rememberTunnelLog("Core preflight unavailable in legacy runtime")
@@ -238,8 +256,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         guard sessionAdmission.isCurrent(epoch), !preparation.isCancelled else { throw CancellationError() }
         rememberTunnelLog("Protected tunnel routes and virtual DNS installed")
 
-        let spec = RuntimeSpec(epoch: epoch, options: options, config: prepared.data, port: parsed.inboundPort,
-            geoAssetsDirectory: providerConfiguration["geoAssetsDirectory"] as? String, credentials: credentials)
+        let spec = RuntimeSpec(epoch: epoch, options: options, config: prepared.routingEnvelope?.configurationData ?? prepared.data, port: parsed.inboundPort,
+            geoAssetsDirectory: providerConfiguration["geoAssetsDirectory"] as? String, credentials: credentials,
+            routingMetadata: prepared.routingEnvelope?.metadataData)
         guard startTunnelWatchdog(spec) else { throw CancellationError() }
         // NE connected only means the routes are installed. The plugin
         // queries forwarding readiness before publishing CONNECTED.
@@ -305,7 +324,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startNativeRuntime(_ spec: RuntimeSpec) throws {
         guard sessionAdmission.permitsRuntime(spec.epoch) else { throw CancellationError() }
         nativeRuntimeEpoch = spec.epoch
-        try startXRay(xrayConfig: spec.config, geoAssetsDirectory: spec.geoAssetsDirectory)
+        try startXRay(xrayConfig: spec.config, geoAssetsDirectory: spec.geoAssetsDirectory, routingMetadata: spec.routingMetadata)
         guard sessionAdmission.permitsRuntime(spec.epoch) else { throw CancellationError() }
         try startSocks5Tunnel(serverPort: spec.port, credentials: spec.credentials, epoch: spec.epoch)
         guard sessionAdmission.permitsRuntime(spec.epoch) else { throw CancellationError() }
@@ -573,7 +592,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    private func startXRay(xrayConfig: Data, geoAssetsDirectory: String?) throws {
+    private func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data? = nil) throws {
+        if routingMetadata != nil { try NativeRoutingSpec.requireRuntime(FLVlessCoreRoutingCapability()) }
         // This limits the Go runtime only. HEV session caps and bounded Swift/C
         // diagnostics below protect the rest of the extension memory budget.
         XRaySetMemoryLimit()
@@ -599,7 +619,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         // Start XRay with the config data
         tunnelLog.info("Starting XRay version=\(XRayGetVersion(), privacy: .public) configBytes=\(xrayConfig.count, privacy: .public)")
-        let started = XRayStartPrivate(xrayConfig, logger, &error)
+        let started: Bool
+        if let routingMetadata {
+            started = FLVlessStartCoreRoutingPrivate(xrayConfig, routingMetadata, logger, &error)
+        } else {
+            started = XRayStartPrivate(xrayConfig, logger, &error)
+        }
 
         if started {
             rememberTunnelLog("XRay started successfully")

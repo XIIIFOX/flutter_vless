@@ -23,7 +23,8 @@ class V2rayManager {
   static V2rayManager& GetInstance();
 
   bool Start(const std::string& config, bool proxy_only, const flutter_vless::NativeOptions& options = {},
-      flutter_vless::asset_location::Root assets = std::nullopt);
+      flutter_vless::asset_location::Root assets = std::nullopt,
+      std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing = std::nullopt);
   void Stop();
   void Shutdown();
   bool IsRunning() const;

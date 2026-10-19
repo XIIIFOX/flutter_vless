@@ -5,6 +5,9 @@ import android.content.Context
 import android.content.Intent
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.service.XraySocketProtector
+import com.github.tfox.flutter_vless.xray.service.NativeRoutingSelection
+import com.github.tfox.flutter_vless.xray.service.NativeRoutingSpec
+import com.github.tfox.flutter_vless.xray.service.NativeRoutingPreparation
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import com.github.tfox.flutter_vless.xray.utils.Utilities
 import org.json.JSONArray
@@ -16,7 +19,7 @@ import java.util.concurrent.TimeUnit
 /** Process owner delegates all session transitions to XrayVPNService. */
 object XrayCoreManager {
     @Volatile private var xrayProcess: Process? = null
-    private var runtimeFile: File? = null
+    private var runtimeInputs: NativeRuntimeConfig.Inputs? = null
     private var lastProxyUplink = 0L
     private var lastProxyDownlink = 0L
     private fun nextFreePort(preferredPort: Int, usedPorts: Set<Int>): Int {
@@ -112,6 +115,7 @@ object XrayCoreManager {
 
     internal fun buildRuntimeConfigJson(config: XrayConfig, filesDir: File,
         credentials: LocalProxyCredentials? = null, protectedDns: AndroidTunnelDnsPolicy.Prepared? = null,
+        routingPrepared: ((NativeRoutingPreparation) -> Unit)? = null,
         environment: (String) -> String? = System::getenv): JSONObject {
         // The DNS preparer chooses the adapter identity before adding its rule.
         // Accept it only with the exact native-prepared document, including on
@@ -142,6 +146,8 @@ object XrayCoreManager {
         // Raw native logs can contain addresses and secrets even at error level.
         json.put("log", JSONObject().put("loglevel", "none").put("access", "none").put("error", "none"))
         val inbounds = json.optJSONArray("inbounds") ?: JSONArray()
+        val originalInboundCount = inbounds.length()
+        var apiRuleInsertions = 0
         val serviceTags = XrayServiceTags(json)
         val used = XrayPortSpec.serviceListenerPorts(json).toMutableSet()
         var hasSocks = false
@@ -184,6 +190,7 @@ object XrayCoreManager {
             // service, including when the caller intentionally supplied null.
             config.LOCAL_API_PORT = 0
         } else {
+            apiRuleInsertions = 1
             val apiOutboundTag = serviceTags.next("flutter-vless-stats")
             json.put("api", JSONObject().put("tag", apiOutboundTag).put("services", JSONArray().put("StatsService")))
             config.LOCAL_API_PORT = nextFreePort(if (config.LOCAL_API_PORT == 0) 10809 else config.LOCAL_API_PORT, used)
@@ -197,11 +204,19 @@ object XrayCoreManager {
             json.put("routing", routing)
         }
         json.put("inbounds", inbounds)
+        NativeRoutingSelection.decode(config.VPN_ROUTING_SELECTION_JSON, config.PROXY_ONLY)?.let { intent ->
+            val managed=inbounds.getJSONObject(originalInboundCount)
+            routingPrepared?.invoke(NativeRoutingPreparation(intent, originalInboundCount, managed.getString("tag"),
+                intent.sourceInboundIndex, // Imported inputs retain original order; private inputs are appended.
+                protectedDns?.guardRuleIndices.orEmpty().map { it+apiRuleInsertions }))
+        }
         return json
     }
 
     /** Pure preliminary validation in the application process; service repeats before mutation. */
     fun validateConfiguration(config: XrayConfig) {
+        val routingIntent=NativeRoutingSelection.decode(config.VPN_ROUTING_SELECTION_JSON, config.PROXY_ONLY)
+        NativeRoutingSpec.validateOriginal(config.V2RAY_FULL_JSON_CONFIG, routingIntent)
         Utilities.validateAssetsDirectory(config.GEO_ASSETS_DIRECTORY)
         XrayCertificateAssets.validateDirectory(config.CERTIFICATE_ASSETS_DIRECTORY)
         require(config.ANDROID_DNS_POLICY in setOf("config", "proxy")) { "Unsupported Android DNS policy" }
@@ -241,12 +256,28 @@ object XrayCoreManager {
         return buildRuntimeConfigJson(config, filesDir, credentials) to config.LOCAL_SOCKS5_PORT
     }
 
+    /** Only immutable APK-owned reserved names; caller JSON can never choose an executable. */
+    internal fun runtimeExecutable(context: Context, routing: Boolean): File {
+        val directory=File(context.applicationInfo.nativeLibraryDir)
+        val preview=File(directory,"libxray_routing_preview.so")
+        return if(routing && preview.exists()) preview else File(directory,"libxray.so")
+    }
+
+    /** Probe the installed executable on every requested admission/recovery, never a persisted flag. */
+    internal fun supportsNativeRouting(context: Context): Boolean = try {
+        val builder=ProcessBuilder(runtimeExecutable(context,true).absolutePath,
+            "native-routing", "capabilities").redirectErrorStream(true)
+        builder.environment().remove("FLUTTER_VLESS_PROTECT_SOCKET")
+        NativeRoutingCommand.capabilities(BoundedCoreCommand.capture(builder.start(), maxBytes=4096))
+    } catch (_: Exception) { false }
+
     /** Validate the actual native parser before replacing a working session. No raw output escapes. */
     internal fun validateNative(context: Context, configuration: NativeRuntimeConfig, geoAssetsDirectory: String? = null): Boolean =
-        configuration.preflight(context.noBackupFilesDir, launch = { file ->
-            val builder = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
-                "run", "-test", "-config", file.absolutePath).redirectErrorStream(true)
+        configuration.preflightInputs(context.noBackupFilesDir, launch = { inputs ->
+            val executable=runtimeExecutable(context,configuration.hasRouting).absolutePath
+            val builder = ProcessBuilder(*inputs.command(executable, check=true).toTypedArray()).redirectErrorStream(true)
             Utilities.configureXrayAssets(context, builder.environment(), geoAssetsDirectory)
+            if (configuration.hasRouting) builder.environment().remove("FLUTTER_VLESS_PROTECT_SOCKET")
             builder.start()
         })
 
@@ -254,11 +285,11 @@ object XrayCoreManager {
         protector: XraySocketProtector?, ownerGeneration: Long, onExit: (Long, Int) -> Unit): Boolean {
         if (!stopWorkers()) return false
         return try {
-            val file = File(context.noBackupFilesDir, "xray-${UUID.randomUUID()}.json")
-            runtimeFile = file
-            configuration.writeTo(file)
-            val builder = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
-                "run", "-config", file.absolutePath).directory(context.noBackupFilesDir).redirectErrorStream(true)
+            val inputs = configuration.createInputs(context.noBackupFilesDir, "xray")
+            runtimeInputs = inputs
+            val executable=runtimeExecutable(context,configuration.hasRouting).absolutePath
+            val builder = ProcessBuilder(*inputs.command(executable, check=false).toTypedArray())
+                .directory(context.noBackupFilesDir).redirectErrorStream(true)
             Utilities.configureXrayAssets(context, builder.environment(), config.GEO_ASSETS_DIRECTORY)
             if (protector != null) builder.environment()["FLUTTER_VLESS_PROTECT_SOCKET"] = protector.socketName
             val process = builder.start()
@@ -292,7 +323,7 @@ object XrayCoreManager {
             if (!process.waitFor(1, TimeUnit.SECONDS)) process.destroyForcibly()
             if (!process.waitFor(1, TimeUnit.SECONDS)) { xrayProcess = process; return false }
         }
-        runtimeFile?.delete(); runtimeFile = null
+        runtimeInputs?.close(); runtimeInputs = null
         return true
     }
 

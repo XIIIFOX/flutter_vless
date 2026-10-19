@@ -972,7 +972,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         pluginLog.info("Method call: \(call.method, privacy: .public)")
         switch call.method {
         case "getSecurityCapabilities":
-            result(["certificateAssetsDirectory": true])
+            result(["certificateAssetsDirectory": true, "vpnRouting": true])
         case "requestPermission":
             requestPermission(result: result)
         case "initializeVless":
@@ -1121,6 +1121,18 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return
         }
         let proxyOnly = arguments["proxy_only"] as? Bool ?? false
+        let vpnRouting: NativeRoutingIntent?
+        do {
+            vpnRouting = try NativeRoutingIntent.parse(arguments["vpn_routing"])
+            if vpnRouting != nil {
+                guard !proxyOnly else { throw NativeRoutingSpecError.invalidIntent }
+                try NativeRoutingSpec.requireRuntime(FLVlessCoreRoutingCapability())
+            }
+        } catch NativeRoutingSpecError.unsupportedRuntime {
+            result(FlutterError(code: "VPN_ROUTING_UNAVAILABLE", message: NativeRoutingSpecError.unsupportedRuntime.localizedDescription, details: nil)); return
+        } catch {
+            result(FlutterError(code: "INVALID_VPN_ROUTING", message: "Invalid VPN routing selection.", details: nil)); return
+        }
         let bypassArgument = arguments["bypass_subnets"]
         let bypassSubnets = bypassArgument as? [String]
         let hasBypassArgument = bypassArgument != nil && !(bypassArgument is NSNull)
@@ -1139,6 +1151,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             let certificateBound = try XrayCertificatePaths.bind(configData: configData, directory: certificateAssetsDirectory)
             let listenerBound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: certificateBound)
             effectiveConfigData = try XrayAddressEnvironment.bind(configData: listenerBound)
+            try NativeRoutingSpec.validateSource(effectiveConfigData, intent: vpnRouting)
             try DesktopBypassPolicy.validate(bypassSubnets ?? [])
             if proxyOnly {
                 preparedProxyConfig = try ProxyOnlyRunner.prepare(configData: effectiveConfigData)
@@ -1146,6 +1159,8 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 try LocalProxyAccessPolicy.validateVPN(configData: effectiveConfigData)
                 preparedProxyConfig = nil
             }
+        } catch is NativeRoutingSpecError {
+            result(FlutterError(code: "INVALID_VPN_ROUTING", message: "Invalid VPN routing selection.", details: nil)); return
         } catch is XrayCertificatePaths.Failure {
             result(FlutterError(code: "CERTIFICATE_ASSETS_ERROR", message: "Unable to prepare certificate file paths.", details: nil)); return
         } catch LocalProxyAccessError.portEnvironment(let index) {
@@ -1183,6 +1198,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 self.proxyOnlyRunner.clearDiagnostics()
                 manager.remark = remark
                 manager.xrayConfig = effectiveConfigData
+                manager.vpnRouting = vpnRouting
                 manager.bypassSubnets = bypassSubnets ?? []
                 manager.proxyOnly = false
                 manager.geoAssetsDirectory = geoAssetsDirectory
@@ -1316,6 +1332,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 final class PacketTunnelManager: ObservableObject {
     var didSaveQuickProfile: ((Data) -> Void)?
     var nativeOptions = try! VlessNativeOptions()
+    var vpnRouting: NativeRoutingIntent?
     var providerBundleIdentifier: String?
     var groupIdentifier: String?
     let keychainAccessGroup: String?
@@ -1464,7 +1481,7 @@ final class PacketTunnelManager: ObservableObject {
         if let old = (loaded.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
            let legacy = old["xrayConfig"] as? Data {
             let store = try secretStore()
-            var safe = launchMetadata(from: old)
+            var safe = try launchMetadata(from: old)
             safe["keychainAccessGroup"] = store.accessGroup
             try await persist(legacy, metadata: safe, manager: loaded, activate: loaded.isEnabled,
                               preserveRecoveryPolicy: true, store: store)
@@ -1472,7 +1489,7 @@ final class PacketTunnelManager: ObservableObject {
         try await cleanupUnusedSecrets()
     }
 
-    private func launchMetadata(from old: [String: Any]? = nil) -> [String: Any] {
+    private func launchMetadata(from old: [String: Any]? = nil) throws -> [String: Any] {
         // Allowlist metadata; never carry arbitrary legacy dictionary entries
         // (including passwords/private keys) into the new preference schema.
         var result: [String: Any] = ["configSchemaVersion": TunnelSecretProfile.schemaVersion,
@@ -1480,6 +1497,11 @@ final class PacketTunnelManager: ObservableObject {
             "bypassSubnets": old?["bypassSubnets"] as? [String] ?? bypassSubnets,
             "proxyOnly": old?["proxyOnly"] as? Bool ?? proxyOnly]
         result["options"] = old == nil ? nativeOptions.dictionary : ((try? VlessNativeOptions(old?["options"] as? [String: Any]))?.dictionary ?? nativeOptions.dictionary)
+        let intent = old == nil ? vpnRouting : try NativeRoutingIntent.parse(old?["vpnRouting"])
+        if let intent {
+            try NativeRoutingSpec.requireRuntime(FLVlessCoreRoutingCapability())
+            result["vpnRouting"] = intent.dictionary
+        }
         if let directory = old?["geoAssetsDirectory"] as? String ?? geoAssetsDirectory {
             result["geoAssetsDirectory"] = directory
         }
@@ -1569,7 +1591,7 @@ final class PacketTunnelManager: ObservableObject {
             // of its prior revisions. Require explicit profile removal first.
             throw TunnelSecretError.accessGroupChanged
         }
-        try await persist(xrayConfig, metadata: launchMetadata(), manager: manager, activate: activate, store: store)
+        try await persist(xrayConfig, metadata: try launchMetadata(), manager: manager, activate: activate, store: store)
     }
 
     /// Reconcile only while the provider cannot still hold an earlier revision.
@@ -1606,6 +1628,7 @@ final class PacketTunnelManager: ObservableObject {
 
     func start() async throws {
         try await preferenceOperations.submit {
+            if self.vpnRouting != nil { try NativeRoutingSpec.requireRuntime(FLVlessCoreRoutingCapability()) }
             try self.validateRouting()
             if let active = try await self.loadTunnelProviderManager(),
                [.connecting, .connected, .reasserting, .disconnecting].contains(active.connection.status) {
@@ -1825,9 +1848,13 @@ final class PacketTunnelManager: ObservableObject {
               let metadata = configuration.providerConfiguration,
               let stored = try? TunnelSecretProfile.load(metadata, providerBundleIdentifier: providerBundleIdentifier ?? "", client: keychainClient),
               let options = try? VlessNativeOptions(metadata["options"] as? [String: Any]) else { return false }
+        let storedRouting: NativeRoutingIntent?
+        do { storedRouting = try NativeRoutingIntent.parse(metadata["vpnRouting"]) }
+        catch { return false }
         return stored == xrayConfig && (metadata["bypassSubnets"] as? [String] ?? []) == bypassSubnets
             && (metadata["geoAssetsDirectory"] as? String) == geoAssetsDirectory
             && (metadata["certificateAssetsDirectory"] as? String) == certificateAssetsDirectory && !proxyOnly
+            && storedRouting == vpnRouting
             && NSDictionary(dictionary: options.dictionary).isEqual(to: nativeOptions.dictionary)
     }
 

@@ -24,4 +24,17 @@ class SessionRuntimeFilesTest {
             assertFalse(liveValidation.exists())
         } finally { root.deleteRecursively() }
     }
+    @Test fun routingSidecarsAreRemovedOnlyAfterTheirOwnedChildPathsAreNoLongerActive() {
+        val root=Files.createTempDirectory("routing-sidecar-cleanup").toFile()
+        try {
+            val id="11111111-2222-4333-8444-555555555555"
+            val config=root.resolve("xray-$id.json").apply { writeText("private") }
+            val spec=root.resolve("xray-$id.spec.json").apply { writeText("private") }
+            val caller=root.resolve("caller.spec.json").apply { writeText("caller") }
+            SessionRuntimeFiles.cleanup(root,setOf(config.absolutePath,spec.absolutePath))
+            assertTrue(config.exists()); assertTrue(spec.exists()); assertTrue(caller.exists())
+            SessionRuntimeFiles.cleanup(root,emptySet())
+            assertFalse(config.exists()); assertFalse(spec.exists()); assertTrue(caller.exists())
+        } finally { root.deleteRecursively() }
+    }
 }

@@ -63,7 +63,8 @@ void PacketPathProbe::Serve() {
     closesocket(client);
   }
 }
-bool PacketPathProbe::Configure(xray_config::Json& config, uint16_t managed_port) const {
+bool PacketPathProbe::Configure(xray_config::Json& config, uint16_t managed_port,
+    std::vector<int64_t>* generated_guards) const {
   if (!running_.load() || !config["inbounds"].is_array() || !config["outbounds"].is_array() || !config["routing"]["rules"].is_array()) return false;
   std::string managed_tag;
   for (const auto& inbound : config["inbounds"]) {
@@ -81,6 +82,7 @@ bool PacketPathProbe::Configure(xray_config::Json& config, uint16_t managed_port
       {"type", "field"}, {"inboundTag", xray_config::Json::array({managed_tag})},
       {"ip", xray_config::Json::array({std::string(address) + "/32"})},
       {"port", std::to_string(port_)}, {"network", "tcp"}, {"outboundTag", probe_tag}});
+  if (generated_guards) *generated_guards = {0};
   return true;
 }
 bool PacketPathProbe::Check(const char* destination) const {

@@ -48,6 +48,30 @@ import flutter_vless_privacy
     }
 
     static func main() throws {
+        let absentIntent = try NativeRoutingIntent.parse(nil)
+        let nullIntent = try NativeRoutingIntent.parse(NSNull())
+        precondition(absentIntent == nil && nullIntent == nil)
+        let explicit = try NativeRoutingIntent.parse([:])!
+        precondition(explicit.dictionary.isEmpty)
+        let selectedIntent = try NativeRoutingIntent.parse(["sourceInboundIndex": 0, "defaultOutboundTag": "selected"])!
+        precondition(selectedIntent.sourceInboundIndex == 0 && selectedIntent.defaultOutboundTag == "selected")
+        let nullDefault = try NativeRoutingIntent.parse(["defaultOutboundTag": NSNull()])
+        let emptyDefault = try NativeRoutingIntent.parse(["defaultOutboundTag": ""])
+        precondition(nullDefault == explicit && emptyDefault == explicit)
+        for invalid: Any in [false, 1, [], ["unknown": 0], ["sourceInboundIndex": -1],
+            ["sourceInboundIndex": true], ["sourceInboundIndex": 1.0], ["sourceInboundIndex": NSNull()],
+            ["defaultOutboundTag": 1]] {
+            rejected { _ = try NativeRoutingIntent.parse(invalid) }
+        }
+        for capability: Int64 in [0, 2, -1] {
+            rejected { try NativeRoutingSpec.requireRuntime(capability) }
+        }
+        try NativeRoutingSpec.requireRuntime(1)
+        try NativeRoutingSpec.validateSource(try encoded(document()), intent: selectedIntent)
+        rejected { try NativeRoutingSpec.validateSource(try encoded(document()), intent: NativeRoutingIntent(sourceInboundIndex: 3)) }
+        rejected { try NativeRoutingSpec.validateSource(try encoded(document()), intent: NativeRoutingIntent(defaultOutboundTag: "private-generated")) }
+        checks += 1
+
         let original = try encoded(document())
         let intent = try NativeRoutingIntent(sourceInboundIndex: 0, defaultOutboundTag: "selected")
         let envelope = try freeze(original, intent: intent)!
@@ -60,6 +84,17 @@ import flutter_vless_privacy
         precondition(metadata["default_outbound_tag"] as? String == "selected" && metadata["guard_rule_indices"] as? [Int] == [0, 2])
         precondition(Set(metadata.keys) == ["version", "source_sha256", "managed_inbound_index", "managed_inbound_tag", "auth_user", "source_inbound_index", "default_outbound_tag", "guard_rule_indices"])
         precondition(intent.sourceInboundIndex == 0 && intent.defaultOutboundTag == "selected")
+        var checkCalls = 0
+        try NativeRoutingSpec.check(envelope, capability: { 1 }, check: { config, spec in
+            checkCalls += 1
+            precondition(config == envelope.configurationData && spec == envelope.metadataData)
+            return 0
+        })
+        for capability: Int64 in [0, 2] {
+            rejected { try NativeRoutingSpec.check(envelope, capability: { capability }, check: { _, _ in checkCalls += 1; return 0 }) }
+        }
+        precondition(checkCalls == 1)
+        rejected { try NativeRoutingSpec.check(envelope, capability: { 1 }, check: { _, _ in 21 }) }
         precondition(!String(reflecting: envelope).contains("canary") && !String(describing: intent).contains("selected"))
         checks += 1
 

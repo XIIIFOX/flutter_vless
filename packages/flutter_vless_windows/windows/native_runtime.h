@@ -14,7 +14,7 @@ bool IsAdministrator();
 // Long-lived workers discard raw output; only fixed lifecycle events are logged.
 std::unique_ptr<ProcessHandle> Launch(const fs::path& executable,
     const std::vector<std::wstring>& arguments, bool capture = false,
-    const asset_location::Root& assets = std::nullopt);
+    const asset_location::Root& assets = std::nullopt, bool parent_stdin = false);
 bool Command(const fs::path& executable, const std::vector<std::wstring>& arguments,
     std::string& output, unsigned timeout_ms = 3000, const asset_location::Root& assets = std::nullopt);
 bool SystemCommand(const wchar_t* name, const std::vector<std::wstring>& arguments);
@@ -34,6 +34,10 @@ bool CheckConfig(const std::string& config, const fs::path& executable,
 class ProtectedRuntime;
 bool CheckPreparedConfig(const std::string& config, ProtectedRuntime& runtime,
     fs::path& path, const asset_location::Root& assets = std::nullopt);
+bool RoutingCapability(const ProtectedRuntime& runtime, const asset_location::Root& assets = std::nullopt);
+bool CheckRoutingPreparedConfig(const std::string& config, const std::string& metadata,
+    ProtectedRuntime& runtime, fs::path& config_path, fs::path& metadata_path,
+    const asset_location::Root& assets = std::nullopt);
 bool SocksReady(uint16_t port, const std::string& user = {}, const std::string& password = {});
 }  // namespace flutter_vless::native
 #endif

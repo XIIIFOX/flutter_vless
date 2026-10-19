@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Consume per-session VPN routing selections through host/provider admission and exact checked startup/recovery pairs. Require the optional routing ABI; published runtime pins remain unchanged.
 * Refuse nonempty root `env` before in-process Core preflight, including cached older checker calls. Expose a redacted `environment-policy` error while preserving the working session and original profile; scoped environment support remains open.
 * Add per-start/profile-delay `certificateAssetsDirectory` with typed TLS/XHTTP file binding before preflight and profile persistence. Keep absolute/inline material and reload options; caller files must stay accessible to the provider.
 * Admit XHTTP download settings with parent `sockopt.penetrate` using one closed upload/download pin scope. Preserve caller chains and inactive child socket settings; retain exact endpoint and active ECH checks, with shared preparation and payload regressions.

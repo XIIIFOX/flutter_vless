@@ -82,7 +82,9 @@ V2rayManager& V2rayManager::GetInstance() {
 }
 
 bool V2rayManager::Start(const std::string& config, bool proxy_only, const flutter_vless::NativeOptions& options,
-    flutter_vless::asset_location::Root assets) try {
+    flutter_vless::asset_location::Root assets,
+    std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing) try {
+  if (proxy_only && routing) return false;
   if (!flutter_vless::asset_location::Valid(assets) || !ValidateConfig(config, proxy_only, assets)) {
     flutter_vless::DiagnosticsLog::Instance().Append(
         "runtime", "Xray configuration check rejected candidate; active session preserved");
@@ -92,6 +94,17 @@ bool V2rayManager::Start(const std::string& config, bool proxy_only, const flutt
     flutter_vless::DiagnosticsLog::Instance().Append(
         "runtime", "Stop the active session before changing proxy-only mode or configuration");
     return false;
+  }
+
+  if (routing) {
+    if (!vpn_service_) return false;
+    // The service invokes publication only after capability and the exact
+    // final pair check succeed, while the previous session is still intact.
+    return vpn_service_->Start(config, options, assets, std::move(routing), [&] {
+      flutter_vless::DiagnosticsLog::Instance().Reset();
+      flutter_vless::DiagnosticsLog::Instance().Append("runtime", "Starting Windows VPN routing session");
+      current_config_ = config; proxy_only_ = false; is_running_.store(true);
+    });
   }
 
   flutter_vless::DiagnosticsLog::Instance().Reset();
@@ -114,7 +127,7 @@ bool V2rayManager::Start(const std::string& config, bool proxy_only, const flutt
     std::cerr << "Starting VPN mode with Tun2Socks..." << std::endl;
     if (vpn_service_) {
       is_running_.store(true);
-      return vpn_service_->Start(config, options, assets);
+      return vpn_service_->Start(config, options, assets, std::move(routing));
     }
     return false;
   }

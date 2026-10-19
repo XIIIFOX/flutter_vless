@@ -45,13 +45,14 @@ internal class SessionRuntimeCandidate<P : Closeable> private constructor(
     companion object {
         fun <P : Closeable> prepare(base: JSONObject, createProbe: () -> P?,
                                    configure: (P, JSONObject) -> JSONObject,
-                                   validate: (NativeRuntimeConfig) -> Boolean): SessionRuntimeCandidate<P> {
+                                   validate: (NativeRuntimeConfig) -> Boolean,
+                                   freeze: (JSONObject) -> NativeRuntimeConfig = NativeRuntimeConfig::freeze): SessionRuntimeCandidate<P> {
             var probe: P? = null
             try {
                 val working = JSONObject(base.toString())
                 probe = createProbe()
                 val final = if (probe == null) working else configure(probe, working)
-                val frozen = NativeRuntimeConfig.freeze(final)
+                val frozen = freeze(final)
                 require(validate(frozen)) { "Native configuration rejected" }
                 return SessionRuntimeCandidate(frozen, probe)
             } catch (error: Throwable) {

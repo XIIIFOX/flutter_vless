@@ -21,7 +21,7 @@ head=head[:begin]+'''private struct SystemProxyHelper {
 }
 '''+head[end:]
 asset=source[source.index('private func configureXrayAssetLocation'):]
-harness='\n'.join((root/'tool/fixtures'/name).read_text() for name in ['ios_local_auth_probe.swift','ios_dns_runtime_probe.swift','ios_privacy_probe.swift'])
+harness='\n'.join((root/'tool/fixtures'/name).read_text() for name in ['ios_local_auth_probe.swift','ios_dns_runtime_probe.swift','apple_native_routing_runtime.swift','ios_privacy_probe.swift'])
 harness=(root/'tool/fixtures/macos_runtime_regressions.swift').read_text()+'\n'+harness
 harness=harness.replace('    let markers = [', '    do { try await runMacCounterChecks() } catch { print("MACOS_COUNTERS_FAILED"); exit(1) }\n    let markers = [')
 harness=harness[:harness.index('class ModeDelegate:')]+ '\nTask { await runModes() }; dispatchMain()\n'
@@ -60,6 +60,9 @@ assert 'API_PORT_RESERVATION_PASS=0' in text and 'API_PORT_RESERVATION_PASS=1' i
 assert 'METRICS_PORT_RESERVATION_PASS=0' in text and 'METRICS_PORT_RESERVATION_PASS=1' in text
 assert 'DELAY_API_ISOLATION_PASS' in text
 assert 'METRICS_PASSTHROUGH_PASS=0' in text and 'METRICS_PASSTHROUGH_PASS=1' in text
+if os.environ.get('REQUIRE_VPN_ROUTING') == '1':
+    for marker in ['NATIVE_ROUTING_RUNTIME_PASS=0','NATIVE_ROUTING_RUNTIME_PASS=1','NATIVE_ROUTING_RUNTIME_DRAIN_PASS']:
+        assert marker in text, marker
 if os.environ.get('REQUIRE_CORE_PREFLIGHT') == '1':
     for generation in [0,1]:
         assert f'PREFLIGHT_RUNNING_SESSION_PASS={generation}' in text

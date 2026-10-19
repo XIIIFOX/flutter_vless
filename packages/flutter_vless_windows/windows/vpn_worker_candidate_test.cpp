@@ -15,13 +15,15 @@ struct Probe {
   explicit Probe(State& state) : state_(state) { ++state_.live_probes; }
   ~Probe() { --state_.live_probes; state_.events.push_back("probe-close"); }
   bool Start() { state_.events.push_back("probe-start"); port_ = ++state_.next_port; return state_.start; }
-  bool Configure(flutter_vless::xray_config::Json& config, uint16_t managed_port) const {
+  bool Configure(flutter_vless::xray_config::Json& config, uint16_t managed_port,
+      std::vector<int64_t>* generated = nullptr) const {
     state_.events.push_back("probe-configure");
     if (!state_.configure || managed_port != 19000) return false;
     config["outbounds"].push_back({{"tag", "private-probe"}, {"protocol", "freedom"},
         {"settings", {{"redirect", "127.0.0.1:" + std::to_string(port_)}}}});
     config["routing"]["rules"].insert(config["routing"]["rules"].begin(),
         flutter_vless::xray_config::Json{{"type", "field"}, {"inboundTag", {"private-socks"}}, {"outboundTag", "private-probe"}});
+    if (generated) *generated = {0};
     return true;
   }
   State& state_;

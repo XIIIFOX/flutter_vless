@@ -164,6 +164,46 @@ std::optional<std::string> SHA256Exact(std::string_view bytes) noexcept {
   } catch (...) { return std::nullopt; }
 }
 
+NativeRoutingIntentResult NativeRoutingSpec::ParseIntent(std::string_view json) try {
+  const auto value = Parse(std::string(json));
+  if (value.is_null()) return {};
+  if (!value.is_object()) return {std::nullopt, NativeRoutingError::invalid_intent};
+  NativeRoutingIntent intent;
+  for (auto it = value.begin(); it != value.end(); ++it) {
+    if (it.key() == "sourceInboundIndex") {
+      if (!it->is_number_integer() || (it->is_number_unsigned() && it->get<uint64_t>() > static_cast<uint64_t>(INT64_MAX)))
+        return {std::nullopt, NativeRoutingError::invalid_intent};
+      const auto index = it->get<int64_t>();
+      if (index < 0) return {std::nullopt, NativeRoutingError::invalid_intent};
+      intent.source_inbound_index = index;
+    } else if (it.key() == "defaultOutboundTag") {
+      if (!it->is_null() && !it->is_string()) return {std::nullopt, NativeRoutingError::invalid_intent};
+      if (it->is_string()) intent.default_outbound_tag = it->get<std::string>();
+    } else return {std::nullopt, NativeRoutingError::invalid_intent};
+  }
+  return {intent, NativeRoutingError::none};
+} catch (...) { return {std::nullopt, NativeRoutingError::invalid_intent}; }
+
+NativeRoutingError NativeRoutingSpec::ValidateSource(std::string_view configuration,
+    const std::optional<NativeRoutingIntent>& intent) try {
+  if (!intent) return NativeRoutingError::none;
+  const auto root = Parse(std::string(configuration));
+  if (!root.is_object()) return NativeRoutingError::malformed_configuration;
+  if (intent->source_inbound_index) {
+    const auto inputs = Field(root, "inbounds");
+    if (!Objects(inputs) || !InRange(*intent->source_inbound_index, inputs->size())) return NativeRoutingError::invalid_source_inbound;
+  }
+  if (intent->default_outbound_tag && !intent->default_outbound_tag->empty()) {
+    const auto outputs = Field(root, "outbounds");
+    if (!Objects(outputs)) return NativeRoutingError::invalid_default_outbound;
+    size_t matches = 0;
+    for (const auto& output : *outputs) if (Tag(output) == *intent->default_outbound_tag) ++matches;
+    if (matches != 1) return NativeRoutingError::invalid_default_outbound;
+  }
+  return NativeRoutingError::none;
+} catch (NativeRoutingError error) { return error; }
+catch (...) { return NativeRoutingError::malformed_configuration; }
+
 NativeRoutingResult NativeRoutingSpec::Freeze(std::string_view final_data, int64_t managed_index,
     const std::string& managed_tag, const std::string& user, const std::optional<NativeRoutingIntent>& intent,
     std::optional<int64_t> mapped, const std::vector<int64_t>& guards) {

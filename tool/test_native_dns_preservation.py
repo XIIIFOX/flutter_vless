@@ -52,6 +52,7 @@ def source_snapshot():
     paths.append(ROOT / 'tool/fixtures/compatibility/protocols.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/full-config.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/traffic-counters.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/fakedns.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/direct-only.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/dns-default-tags.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/selector-prefixes.json')

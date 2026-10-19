@@ -2,6 +2,8 @@
 #define FLUTTER_VLESS_XRAY_CONFIG_H_
 
 #include <cstdint>
+#include <cmath>
+#include <limits>
 #include <functional>
 #include <optional>
 #include <string>
@@ -451,7 +453,7 @@ inline std::optional<std::string> PrepareVpn(const std::string& text) {
   return config.dump();
 }
 
-inline constexpr const char* kVirtualDns = "198.18.0.2";
+inline constexpr const char* kVirtualDns = "10.0.85.53";
 inline constexpr const char* kDnsRelay = "flutter-vless-system-dns";
 inline constexpr const char* kDnsUpstream = "flutter-vless-dns-upstream";
 inline constexpr const char* kIpv6Block = "flutter-vless-ipv6-block";
@@ -1032,11 +1034,8 @@ inline std::string DnsDomainLower(std::string value) {
   return value;
 }
 
-// The caller supplies Core's already-parsed Address view. Recognize only
-// IPv4 or the exact IPv4-mapped IPv6 prefix which Core IPAddress collapses;
-// other IPv6 families stay outside this protected IPv4 DNS policy.
-inline std::optional<std::string> DnsIPv4(const std::string& value) {
-  if (Literal4(value)) return value;
+// Numeric IPv6 parsing only; shared by mapped-DNS admission and FakeDNS CIDRs.
+inline std::optional<std::vector<unsigned>> IPv6Words(const std::string& value) {
   const auto compression = value.find("::");
   if (value.find(':') == std::string::npos ||
       (compression != std::string::npos && value.find("::", compression + 2) != std::string::npos)) return std::nullopt;
@@ -1079,10 +1078,116 @@ inline std::optional<std::string> DnsIPv4(const std::string& value) {
   if ((compression == std::string::npos && left.size() != 8) ||
       (compression != std::string::npos && left.size() + right.size() >= 8)) return std::nullopt;
   left.resize(8 - right.size(), 0); left.insert(left.end(), right.begin(), right.end());
-  for (size_t i = 0; i < 5; ++i) if (left[i] != 0) return std::nullopt;
-  if (left[5] != 0xffff) return std::nullopt;
-  return std::to_string(left[6] >> 8) + "." + std::to_string(left[6] & 255) + "." +
-      std::to_string(left[7] >> 8) + "." + std::to_string(left[7] & 255);
+  return left;
+}
+// The caller supplies Core's parsed Address view. Only IPv4 and its exact
+// mapped form belong to the protected IPv4 resolver policy.
+inline std::optional<std::string> DnsIPv4(const std::string& value) {
+  if (Literal4(value)) return value;
+  const auto words = IPv6Words(value);
+  if (!words) return std::nullopt;
+  for (size_t i = 0; i < 5; ++i) if ((*words)[i] != 0) return std::nullopt;
+  if ((*words)[5] != 0xffff) return std::nullopt;
+  return std::to_string((*words)[6] >> 8) + "." + std::to_string((*words)[6] & 255) + "." +
+      std::to_string((*words)[7] >> 8) + "." + std::to_string((*words)[7] & 255);
+}
+
+// A native namespace reservation, not a rewrite of caller FakeDNS pools.
+// Match CIDR prefixes without any OS resolver/socket or platform IP library.
+struct FakeDnsNetwork {
+  std::vector<unsigned> bytes;
+  unsigned prefix = 0;
+};
+inline std::optional<FakeDnsNetwork> FakeDnsCidr(const std::string& text) {
+  const auto slash = text.find('/');
+  if (slash == std::string::npos || slash + 1 == text.size()) return std::nullopt;
+  FakeDnsNetwork result;
+  for (size_t i = slash + 1; i < text.size(); ++i) {
+    if (text[i] < '0' || text[i] > '9') return std::nullopt;
+    result.prefix = result.prefix * 10 + static_cast<unsigned>(text[i] - '0');
+    if (result.prefix > 128) return std::nullopt;
+  }
+  const auto address = text.substr(0, slash);
+  if (Literal4(address)) {
+    if (result.prefix > 32) return std::nullopt;
+    size_t start = 0;
+    for (unsigned i = 0; i < 4; ++i) {
+      const auto dot = address.find('.', start);
+      result.bytes.push_back(static_cast<unsigned>(std::stoul(address.substr(start, dot == std::string::npos ? dot : dot - start))));
+      start = dot + 1;
+    }
+  } else {
+    const auto words = IPv6Words(address);
+    if (!words) return std::nullopt;
+    for (const auto word : *words) { result.bytes.push_back(word >> 8); result.bytes.push_back(word & 255); }
+    // net.IPNet.Contains collapses an IPv4-mapped network with a /96+
+    // mask. It therefore conflicts with the corresponding IPv4 namespace.
+    if (result.prefix >= 96 && std::all_of(result.bytes.begin(), result.bytes.begin() + 10, [](unsigned b) { return b == 0; })
+        && result.bytes[10] == 255 && result.bytes[11] == 255) {
+      result.bytes.erase(result.bytes.begin(), result.bytes.begin() + 12);
+      result.prefix -= 96;
+    }
+  }
+  return result;
+}
+inline bool FakeDnsOverlap(const FakeDnsNetwork& first, const FakeDnsNetwork& second) {
+  if (first.bytes.size() != second.bytes.size()) {
+    auto mapped = first.bytes.size() == 4 ? first : second;
+    mapped.bytes.insert(mapped.bytes.begin(), {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255});
+    mapped.prefix += 96;
+    return FakeDnsOverlap(mapped, first.bytes.size() == 16 ? first : second);
+  }
+  for (unsigned bit = 0; bit < std::min(first.prefix, second.prefix); ++bit) {
+    const auto mask = 1U << (7 - bit % 8);
+    if ((first.bytes[bit / 8] & mask) != (second.bytes[bit / 8] & mask)) return false;
+  }
+  return true;
+}
+inline bool FakeDnsField(const Json& object, const char* name, const Json*& value) {
+  value = nullptr;
+  if (!object.is_object()) return false;
+  for (auto it = object.begin(); it != object.end(); ++it) if (Fold(it.key()) == name) {
+    if (value) return false;
+    value = &it.value();
+  }
+  return true;
+}
+inline bool ProtectedFakeDns(const Json& config, bool& active) {
+  active = false;
+  const Json* engine = nullptr;
+  if (!FakeDnsField(config, "fakedns", engine)) return false;
+  if (engine && !engine->is_null()) {
+    active = true;
+    const auto pool_valid = [](const Json& pool) {
+      const Json *address = nullptr, *size = nullptr;
+      if (!FakeDnsField(pool, "ippool", address) || !FakeDnsField(pool, "poolsize", size)
+          || !address || !address->is_string() || !size || !size->is_number_integer()) return false;
+      if (size->is_number_unsigned() && size->get<uint64_t>() > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) return false;
+      const auto count = size->get<int64_t>();
+      const auto range = FakeDnsCidr(address->get<std::string>());
+      if (!range || count <= 0 || std::log2(static_cast<double>(count)) >= static_cast<double>(range->bytes.size() * 8 - range->prefix)) return false;
+      for (const auto* reserved : {"10.0.85.0/24", "26.26.26.0/30", "fd26:26:26::/126", "fd00:198:18::/64"}) {
+        const auto own = FakeDnsCidr(reserved);
+        if (!own || FakeDnsOverlap(*range, *own)) return false;
+      }
+      return true;
+    };
+    if (engine->is_object()) { if (!pool_valid(*engine)) return false; }
+    else if (engine->is_array()) { for (const auto& pool : *engine) if (!pool_valid(pool)) return false; }
+    else return false;
+  }
+  const Json *dns = nullptr, *servers = nullptr;
+  if (!FakeDnsField(config, "dns", dns)) return false;
+  if (!dns || dns->is_null()) return true;
+  if (!FakeDnsField(*dns, "servers", servers)) return false;
+  if (!servers || servers->is_null()) return true;
+  if (!servers->is_array()) return false;
+  for (const auto& server : *servers) {
+    const Json* address = &server;
+    if (server.is_object() && !FakeDnsField(server, "address", address)) return false;
+    if (address && address->is_string() && Fold(ParsedAddressText(address->get<std::string>())) == "fakedns") active = true;
+  }
+  return true;
 }
 
 inline bool ProtectedDnsAddress(const std::string& address, const Json& hosts) {
@@ -1187,7 +1292,8 @@ inline bool ProtectedDns(Json& config, ServiceTags& tags, const std::string& pro
       // Local/QUIC clients bypass ordinary dispatcher/socket binding. DoT is
       // not implemented by this pinned Core. Keep explicit remote clients as
       // supplied, rather than silently replacing an unsupported protocol.
-      if (value == "fakedns" || value.find("+local") != std::string::npos || value.rfind("quic:", 0) == 0
+      if (value == "fakedns") continue; // Core's private hijack enables its own FakeDNS client.
+      if (value.find("+local") != std::string::npos || value.rfind("quic:", 0) == 0
           || value.rfind("tls:", 0) == 0 || value.rfind("localhost", 0) == 0) return false;
       if (!ProtectedDnsAddress(address.get<std::string>(), dns.value("hosts", Json()))) return false;
     }
@@ -1207,8 +1313,10 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
     const std::function<bool(uint16_t)>& tcp_available = {}) try {
   auto config = Parse(text);
   if (username.empty() || password.empty() || username.size() > 255 || password.size() > 255 || interface_name.empty()
-      || !Normalize(config) || config.contains("fakeDns") || config.contains("fakedns")) return std::nullopt;
+      || !Normalize(config)) return std::nullopt;
   if (!BindEndpointAddresses(config)) return std::nullopt;
+  bool fake_dns = false;
+  if (!ProtectedFakeDns(config, fake_dns)) return std::nullopt;
   if (!ValidBootstrapChains(config["outbounds"])) return std::nullopt;
   ServiceTags service_tags(config);
   auto& inbounds = config["inbounds"];
@@ -1223,6 +1331,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   Json inbound = {{"tag", managed_tag}, {"protocol", "socks"}, {"listen", "127.0.0.1"}, {"port", *port},
       {"settings", {{"auth", "password"}, {"accounts", Json::array({{{"user", username}, {"pass", password}}})}, {"udp", true}, {"ip", "127.0.0.1"}}},
       {"sniffing", {{"enabled", true}, {"routeOnly", true}, {"destOverride", Json::array({"http", "tls", "quic"})}}}};
+  if (fake_dns) inbound["sniffing"]["destOverride"].push_back("fakedns");
   inbounds.insert(inbounds.begin(), inbound);
   const auto relay_tag = service_tags.Next(kDnsRelay);
   const auto ipv6_tag = service_tags.Next(kIpv6Block);

@@ -6,7 +6,7 @@ import flutter_vless_privacy
 /// System A and AAAA queries use the caller's Core DNS client. Transport bootstrap pins
 /// live in private, closed routing branches rather than the caller's hosts map.
 public enum TunnelDNSPolicy {
-    public static let virtualServer = "198.18.0.2"
+    public static let virtualServer = "10.0.85.53"
     private static let endpointProtocols: Set<String> = [
         "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria", "masque", "wireguard"
     ]
@@ -47,6 +47,7 @@ public enum TunnelDNSPolicy {
         guard var output = TunnelConfigKeys.normalize(config) else { return nil }
         do { try bindEndpointEnvironment(to: &output, environment: ProcessInfo.processInfo.environment) }
         catch { return nil }
+        guard TunnelFakeDNSPolicy.active(in: output) != nil else { return nil }
         guard var outbounds = output["outbounds"] as? [[String: Any]], !outbounds.isEmpty else { return nil }
         let primary = primaryEndpointIndex(in: outbounds)
         let tags = outbounds.compactMap { $0["tag"] as? String }.filter { !$0.isEmpty }
@@ -201,8 +202,12 @@ public enum TunnelDNSPolicy {
             // Address.UnmarshalJSON parses the whole value before DNS mode
             // selection. Keep its raw text in JSON, using this view for admission.
             let address = LocalProxyAccessPolicy.coreAddressText(rawAddress)
-            guard !systemStrategy(field(entry, "queryStrategy")), address.lowercased() != "fakedns" else { return false }
-            if address.lowercased() == "localhost" || address.isEmpty {
+            guard !systemStrategy(field(entry, "queryStrategy")) else { return false }
+            if XrayJSONField.matches(address, "fakedns") {
+                // Core's DNS relay enables FakeDNS using this same engine.
+                // Preserve the sentinel and all per-server selection fields.
+                continue
+            } else if address.lowercased() == "localhost" || address.isEmpty {
                 // Explicit remote caller DNS needs no selected proxy. Only the
                 // native protected default requires a qualified detour.
                 guard let selected else { return false }
@@ -396,7 +401,9 @@ public enum TunnelDNSPolicy {
 
     /// Explicit bypasses remain supported except those covering the virtual DNS.
     public static func allowsRouteExclusions(_ cidrs: [String]) -> Bool {
-        let dns: UInt32 = 0xc6120002
+        var virtual = in_addr()
+        guard virtualServer.withCString({ inet_pton(AF_INET, $0, &virtual) }) == 1 else { return false }
+        let dns = UInt32(bigEndian: virtual.s_addr)
         return !cidrs.contains { cidr in
             let parts = cidr.split(separator: "/")
             guard parts.count == 2, let prefix = Int(parts[1]), (0...32).contains(prefix) else { return false }

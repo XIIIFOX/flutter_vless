@@ -232,7 +232,7 @@ VPN listener-isolation guarantees do not apply. Explicit local accounts are
 supported by the configuration model. Standalone delay returns -1 while an
 app-process proxy-only runtime is active, so a probe cannot replace it.
 
-The current provider installs virtual system DNS `198.18.0.2`. Its requests pass
+The current provider installs virtual system DNS `10.0.85.53`. Its requests pass
 through authenticated local SOCKS and a TCP DNS outbound chained to the selected
 remote proxy, including HTTP/SOCKS servers without UDP support. Service DNS rules
 precede application `UDP -> direct` rules. Proxy endpoint names are resolved

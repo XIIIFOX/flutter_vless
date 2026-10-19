@@ -32,6 +32,8 @@ REAL_DNS = False
 IPV6_PAYLOAD_TARGET = "2001:db8:85::7"
 IPV6_TUN_SOURCE = "fd00:198:18::2"
 IPV6_PAYLOAD_PORT = 45678
+FAKEDNS_NAME = "fakedns-payload.invalid"
+FAKEDNS_PORT = 45679
 
 
 class IPv6PayloadState:
@@ -119,6 +121,92 @@ class IPv6PayloadDatagram(socketserver.BaseRequestHandler):
 
 class DatagramServer(socketserver.ThreadingUDPServer):
     daemon_threads = True
+
+
+class FakeDnsPayloadState:
+    """Dedicated observer: exact recovered domain and one-shot opaque bytes."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.drained = threading.Condition(self.lock)
+        self.expected, self.controls = {}, {}
+        self.observed, self.errors = [], []
+        self.closed = False
+
+    def arm(self, transport):
+        with self.lock:
+            assert transport in ("tcp", "udp") and not self.closed and transport not in self.expected
+            payload = ("fakedns-payload-" + transport + "-" + uuid.uuid4().hex).encode("ascii")
+            self.expected[transport] = payload
+            return payload
+
+    def accept(self, transport, kind, address, port, payload, source=None):
+        with self.lock:
+            active = transport == "tcp" or source in self.controls.values()
+            if self.closed or not active or kind != 3 or address != FAKEDNS_NAME.encode("ascii") \
+                    or port != FAKEDNS_PORT or self.expected.get(transport) != payload:
+                self.errors.append("unexpected FakeDNS domain or nonce")
+                return None
+            del self.expected[transport]
+            self.observed.append((transport, payload))
+            return b"accepted-" + payload
+
+    def control_open(self, sock, source):
+        with self.lock:
+            if self.closed: return False
+            self.controls[sock] = source
+            return True
+
+    def control_close(self, sock):
+        with self.drained:
+            self.controls.pop(sock, None)
+            self.drained.notify_all()
+
+    def require_observed(self, transport, payload):
+        with self.lock:
+            assert not self.errors and self.observed.count((transport, payload)) == 1, "Exact FakeDNS domain and nonce not observed"
+
+    def require_drained(self):
+        deadline = time.monotonic() + 3
+        with self.drained:
+            while self.controls:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0, "FakeDNS Stop retained a SOCKS association"
+                self.drained.wait(remaining)
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+            controls = list(self.controls)
+        for control in controls:
+            try: control.shutdown(socket.SHUT_RDWR)
+            except OSError: pass
+            control.close()
+        deadline = time.monotonic() + 3
+        with self.drained:
+            while self.controls:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0, "FakeDNS SOCKS association did not drain"
+                self.drained.wait(remaining)
+
+    def require_clean(self):
+        with self.lock:
+            assert not self.errors and not self.expected and not self.controls, "FakeDNS observer retained failed/outstanding work"
+            assert [kind for kind, _ in self.observed].count("tcp") == 2 \
+                and [kind for kind, _ in self.observed].count("udp") == 2, "FakeDNS restart payload count changed"
+
+
+class FakeDnsPayloadDatagram(socketserver.BaseRequestHandler):
+    def handle(self):
+        packet, relay = self.request
+        state = self.server.fake_dns_payload
+        end = 7 + packet[4] if len(packet) >= 5 else 0
+        if packet[:4] != b"\0\0\0\x03" or end < 8 or len(packet) < end:
+            state.accept("udp", 0, b"", 0, b"", self.client_address[0])
+            return
+        reply = state.accept("udp", 3, packet[5:end - 2], int.from_bytes(packet[end - 2:end], "big"),
+                             packet[end:], self.client_address[0])
+        if reply is not None:
+            relay.sendto(packet[:end] + reply, self.client_address)
 
 
 def ipv6_payload_request(state, udp):
@@ -355,7 +443,8 @@ class Socks(socketserver.BaseRequestHandler):
             count = exact(sock, 1)[0] if kind == 3 else {1: 4, 4: 16}[kind]
             address = exact(sock, count)
             port = int.from_bytes(exact(sock, 2), "big")
-            payload_state = getattr(self.server, "ipv6_payload", None)
+            fake_dns_state = getattr(self.server, "fake_dns_payload", None)
+            payload_state = getattr(self.server, "ipv6_payload", None) or fake_dns_state
             if command == 3 and payload_state is not None:
                 # The relay is the same numeric IPv4 address and port as this
                 # TCP server. A closed transport pin need not admit an unknown
@@ -383,6 +472,11 @@ class Socks(socketserver.BaseRequestHandler):
             if command != 1:
                 return
             sock.sendall(b"\x05\x00\x00\x01\x7f\x00\x00\x01\x00\x00")
+            if fake_dns_state is not None:
+                payload = exact(sock, len(b"fakedns-payload-tcp-") + 32)
+                reply = fake_dns_state.accept("tcp", kind, address, port, payload)
+                if reply is not None: sock.sendall(reply)
+                return
             if kind == 4 and payload_state is not None:
                 payload = exact(sock, len(b"ipv6-payload-tcp-") + 32)
                 reply = payload_state.accept("tcp", kind, address, port, payload)
@@ -449,7 +543,7 @@ def direct_only_dns(server, tcp):
     question = b"\x20" + name[:32].encode() + b"\x07invalid\x00\x00\x01\x00\x01"
     query = b"\x12\x34\x01\x00\x00\x01" + bytes(6) + question
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as sock:
-        sock.settimeout(5); sock.connect(("198.18.0.2", 53))
+        sock.settimeout(5); sock.connect(("10.0.85.53", 53))
         assert sock.getsockname()[0] == "10.0.85.2", "Direct-only DNS bypassed the TUN"
         sock.sendall((len(query).to_bytes(2, "big") if tcp else b"") + query)
         answer = exact(sock, int.from_bytes(exact(sock, 2), "big")) if tcp else sock.recv(4096)
@@ -634,7 +728,7 @@ def protected_dns(tcp):
     before = len(DNS_QUERIES)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as sock:
         sock.settimeout(6)
-        sock.connect(("198.18.0.2", 53))
+        sock.connect(("10.0.85.53", 53))
         assert sock.getsockname()[0] == "10.0.85.2", "DNS did not select the TUN"
         sock.sendall((len(query).to_bytes(2, "big") if tcp else b"") + query)
         response = exact(sock, int.from_bytes(exact(sock, 2), "big")) if tcp else sock.recv(4096)
@@ -648,7 +742,7 @@ def ipv6_payload_dns(tcp):
     query = b"\x85\x28\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00" + question
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as sock:
         sock.settimeout(4)
-        sock.connect(("198.18.0.2", 53))
+        sock.connect(("10.0.85.53", 53))
         assert sock.getsockname()[0] == "10.0.85.2", "AAAA query did not select the protected DNS adapter"
         sock.sendall((len(query).to_bytes(2, "big") if tcp else b"") + query)
         reply = exact(sock, int.from_bytes(exact(sock, 2), "big")) if tcp else sock.recv(4096)
@@ -659,6 +753,55 @@ def ipv6_payload_dns(tcp):
     return "AAAA caller static host through protected " + ("TCP" if tcp else "UDP") + " DNS"
 
 
+def fakedns_answer(query, response):
+    name = query[12:-4]
+    assert len(response) >= 12 and response[:2] == query[:2] and response[2] & 0xfa == 0x80 \
+        and response[3] & 15 == 0 and response[4:12] == b"\0\1\0\1\0\0\0\0", "FakeDNS A reply header changed"
+    assert response[12:len(query)] == query[12:], "FakeDNS A question changed"
+    answer = response[len(query):]
+    if answer.startswith(b"\xc0\x0c"): answer = answer[2:]
+    else:
+        assert answer.startswith(name), "FakeDNS answer name changed"
+        answer = answer[len(name):]
+    assert len(answer) == 14 and answer[:4] == b"\0\1\0\1" and answer[8:10] == b"\0\4", "FakeDNS A record changed"
+    packed = answer[10:]
+    assert packed[0] == 198 and packed[1] in (18, 19), "FakeDNS answer is outside the default pool"
+    return socket.inet_ntoa(packed)
+
+
+def fakedns_query(tcp):
+    labels = b"".join(bytes([len(part)]) + part.encode("ascii") for part in FAKEDNS_NAME.split("."))
+    query = b"\x85\x53\x01\0\0\1\0\0\0\0\0\0" + labels + b"\0\0\1\0\1"
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as sock:
+        sock.settimeout(4)
+        sock.connect(("10.0.85.53", 53))
+        assert sock.getsockname()[0] == "10.0.85.2", "FakeDNS query did not select the TUN"
+        sock.sendall((len(query).to_bytes(2, "big") if tcp else b"") + query)
+        if tcp:
+            size = int.from_bytes(exact(sock, 2), "big")
+            assert 12 <= size <= 4096, "FakeDNS response length is invalid"
+            response = exact(sock, size)
+        else: response = sock.recv(4096)
+    return fakedns_answer(query, response)
+
+
+def fakedns_payload_request(state, address, udp):
+    packed = socket.inet_aton(address)
+    assert packed[0] == 198 and packed[1] in (18, 19), "Payload target is not the returned FakeDNS pool address"
+    transport = "udp" if udp else "tcp"
+    payload = state.arm(transport)
+    expected = b"accepted-" + payload
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM) as sock:
+        sock.settimeout(4)
+        sock.connect((address, FAKEDNS_PORT))
+        assert sock.getsockname()[0] == "10.0.85.2", "FakeDNS payload did not select the TUN"
+        sock.sendall(payload)
+        reply = sock.recv(256) if udp else exact(sock, len(expected))
+        assert reply == expected, "FakeDNS opaque payload reply changed"
+    state.require_observed(transport, payload)
+    return "Opaque " + transport.upper() + " bytes and recovered SOCKS domain"
+
+
 def relayed_dns():
     # An uncached question sent straight to the protected resolver verifies
     # that real runner names are not replaced with the synthetic test address.
@@ -666,7 +809,7 @@ def relayed_dns():
     question = b"".join(bytes([len(part)]) + part.encode() for part in name.split(".")) + b"\x00\x00\x01\x00\x01"
     query = b"\x56\x78\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00" + question
     before = len(DNS_QUERIES)
-    with socket.create_connection(("198.18.0.2", 53), timeout=6) as sock:
+    with socket.create_connection(("10.0.85.53", 53), timeout=6) as sock:
         assert sock.getsockname()[0] == "10.0.85.2", "Real DNS bypassed the TUN"
         sock.sendall(len(query).to_bytes(2, "big") + query)
         response = exact(sock, int.from_bytes(exact(sock, 2), "big"))
@@ -1005,6 +1148,84 @@ def native_routing_proxy(address):
     return server
 
 
+def fakedns_config(address, proxy_port, dns_port):
+    return {"inbounds": [{"tag": "caller-fake-input", "protocol": "socks", "listen": "127.0.0.1", "port": PORTS["inbound"],
+                          "settings": {"auth": "noauth", "udp": True}, "sniffing": {"enabled": True, "routeOnly": False, "destOverride": ["tls"]}}],
+            "outbounds": [{"tag": "caller-block", "protocol": "blackhole"},
+                          {"tag": "fake-proxy", "protocol": "socks", "settings": {"servers": [{"address": address, "port": proxy_port}]}},
+                          {"tag": "caller-direct", "protocol": "freedom"}],
+            "dns": {"tag": "caller-fake-dns", "queryStrategy": "UseIPv4", "disableCache": True,
+                    "servers": [{"address": "fakedns", "domains": ["full:" + FAKEDNS_NAME], "skipFallback": True}, f"tcp://{address}:{dns_port}"]},
+            "routing": {"domainStrategy": "AsIs", "rules": [
+                {"type": "field", "domain": ["full:" + FAKEDNS_NAME], "outboundTag": "fake-proxy"},
+                {"type": "field", "network": "tcp,udp", "outboundTag": "caller-direct"}]}}
+
+
+def fakedns_gate(probe, directory, address, proxy_port, dns_port, payload_state, results):
+    # One implicit default-pool profile, with a fresh engine on each restart.
+    for cycle in range(2):
+        label = "vpn-fakedns-" + str(cycle)
+        profile, stop, state, guard_stop = [directory / (label + suffix) for suffix in (".json", ".stop", ".state.json", ".guard-stop")]
+        for stale in (stop, state, guard_stop): stale.unlink(missing_ok=True)
+        source = json.dumps(fakedns_config(address, proxy_port, dns_port)).encode("utf-8")
+        profile.write_bytes(source)
+        log_path = directory / (label + ".log")
+        with log_path.open("w") as log:
+            process = subprocess.Popen([str(probe), "run-vpn", str(profile), "120", str(stop), str(state)], cwd=directory, stdout=log, stderr=log)
+            guard, primary = None, None
+            try:
+                guard = subprocess.Popen([str(probe), "guard", str(process.pid), "120", str(guard_stop)], cwd=directory, stdout=log, stderr=log)
+                deadline = time.monotonic() + 65
+                while "START_RETURN=1" not in log_path.read_text(errors="replace"):
+                    assert process.poll() is None and time.monotonic() < deadline, "FakeDNS VPN did not become ready"
+                    time.sleep(0.1)
+                udp_ip, tcp_ip = fakedns_query(False), fakedns_query(True)
+                assert udp_ip == tcp_ip, "FakeDNS TCP/UDP did not share the same engine mapping"
+                results.append(dict(mode=label, check="FakeDNS A TCP/UDP use default pool", passed=True))
+                for udp in (False, True):
+                    actual = fakedns_payload_request(payload_state, udp_ip, udp)
+                    results.append(dict(mode=label, check="FakeDNS opaque UDP restored domain" if udp else "FakeDNS opaque TCP restored domain", actual=actual, passed=True))
+                assert await_state(state, True, timeout=5)["protecting"], "FakeDNS displaced the readiness probe or protection"
+                assert profile.read_bytes() == source, "FakeDNS runtime changed the caller profile"
+                stop.touch()
+                assert process.wait(timeout=25) == 0, "FakeDNS Stop failed"
+                payload_state.require_drained()
+                assert native(probe, "policy-count") == "0", "FakeDNS Stop retained WFP filters"
+                inventory = json.loads(subprocess.check_output(["powershell", "-NoProfile", "-Command",
+                    "[pscustomobject]@{Routes=@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1','::/1','8000::/1') }).Count; "
+                    "IPv6Addresses=@(Get-NetIPAddress -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -eq 'flutter_vless_tun' -and $_.IPAddress -eq 'fd00:198:18::2' }).Count} | ConvertTo-Json -Compress"], text=True, timeout=25))
+                assert inventory == {"Routes": 0, "IPv6Addresses": 0}, "FakeDNS Stop retained tunnel routes/address"
+                results.append(dict(mode=label, check="FakeDNS restart Stop removes protection and owned routes", passed=True))
+            except BaseException as error:
+                primary = error
+                raise
+            finally:
+                cleanup_error = None
+                def cleanup(operation):
+                    nonlocal cleanup_error
+                    try: operation()
+                    except BaseException as error:
+                        if cleanup_error is None: cleanup_error = error
+                def stop_process():
+                    if process.poll() is None:
+                        stop.touch()
+                        try: process.wait(timeout=15)
+                        except subprocess.TimeoutExpired: process.kill(); process.wait(timeout=5)
+                def stop_guard():
+                    guard_stop.touch()
+                    if guard is not None:
+                        try: guard.wait(timeout=10)
+                        except subprocess.TimeoutExpired: guard.kill(); guard.wait(timeout=5)
+                cleanup(stop_process)
+                cleanup(lambda: native(probe, "release-protection"))
+                cleanup(stop_guard)
+                if cleanup_error is not None:
+                    if primary is None: raise cleanup_error
+                    if hasattr(primary, "add_note"): primary.add_note("FAKEDNS_CLEANUP_FAILED")
+        time.sleep(2)
+    return 2
+
+
 @contextmanager
 def occupied_private_ports():
     # Only the separate optional-routing scenario holds these owned listeners.
@@ -1126,6 +1347,8 @@ def main():
     adapters = []
     asset_roots = []
     ipv6_payload = None
+    fake_dns_payload = None
+    fake_dns_cycles = 0
     results = []
     external_address = None
     direct_address = "127.0.0.1"
@@ -1171,6 +1394,15 @@ def main():
             servers.append(direct_dns)
             direct_dns.daemon_threads = False  # server_close joins the bounded, owned DNS callbacks.
             direct_dns.questions, direct_dns.questions_lock = [], threading.Lock()
+            fake_dns_payload = FakeDnsPayloadState()
+            fake_proxy = Server((direct_address, 0), Socks)
+            servers.append(fake_proxy)
+            fake_proxy.daemon_threads = False
+            fake_proxy.fake_dns_payload = fake_dns_payload
+            fake_relay = DatagramServer(fake_proxy.server_address, FakeDnsPayloadDatagram)
+            servers.append(fake_relay)
+            fake_relay.daemon_threads = False
+            fake_relay.fake_dns_payload = fake_dns_payload
             if args.native_routing:
                 # The selected default accepts ordinary traffic. It must not
                 # share the prior IPv6 scenario's strict one-shot nonce state.
@@ -1445,6 +1677,8 @@ def main():
                 with occupied_private_ports():
                     native_routing_gate(probe, directory, direct_address, direct_dns, servers[0], results)
                 print("WINDOWS_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2", flush=True)
+            fake_dns_cycles = fakedns_gate(probe, directory, direct_address, fake_proxy.server_address[1],
+                                          direct_dns.server_address[1], fake_dns_payload, results)
     finally:
         primary = sys.exc_info()[1]
         server_cleanup_error = None
@@ -1460,6 +1694,9 @@ def main():
                 ipv6_payload.close()
             except (AssertionError, OSError):
                 results.append(dict(check="IPv6 SOCKS control cleanup", passed=False))
+        if fake_dns_payload is not None:
+            try: fake_dns_payload.close()
+            except (AssertionError, OSError): results.append(dict(check="FakeDNS SOCKS control cleanup", passed=False))
         for server in servers:
             # BaseServer.shutdown waits for serve_forever; calling it on a
             # constructed owner whose worker never started waits forever.
@@ -1485,6 +1722,11 @@ def main():
                 ipv6_payload.require_clean()
             except AssertionError:
                 results.append(dict(check="IPv6 proxy target and nonce ownership", passed=False))
+        if fake_dns_payload is not None:
+            clean = True
+            try: fake_dns_payload.require_clean()
+            except AssertionError: clean = False
+            results.append(dict(check="FakeDNS exact domain and nonce ownership after joined drain", passed=clean))
         for owner in asset_roots:
             try:
                 owner.cleanup()
@@ -1498,6 +1740,9 @@ def main():
     counter_gates = sum(row.get("check") == "owned traffic counter sample" for row in results)
     assert counter_gates == 2 + (2 if args.native_routing else 0), "Owned traffic counter gate count changed"
     print("WINDOWS_TRAFFIC_COUNTER_RUNTIME_PASS=" + str(counter_gates), flush=True)
+    if args.vpn:
+        assert fake_dns_cycles == 2, "FakeDNS restart gate count changed"
+        print("WINDOWS_FAKEDNS_RUNTIME_PASS=2", flush=True)
 
 
 if __name__ == "__main__":

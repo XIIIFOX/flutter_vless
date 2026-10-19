@@ -67,7 +67,7 @@ final class TunnelDNSPolicyTests: XCTestCase {
             let rules = try XCTUnwrap((output["routing"] as? [String: Any])?["rules"] as? [[String: Any]])
             XCTAssertTrue(rules.contains { ($0["inboundTag"] as? [String]) == [server["tag"] as! String] && ($0["outboundTag"] as? String) == "proxy" && ($0["ip"] as? [String]) == ["1.1.1.1/32"] })
             let managed = try XCTUnwrap((output["inbounds"] as? [[String: Any]])?.first?["tag"] as? String)
-            XCTAssertTrue(rules.contains { ($0["ip"] as? [String]) == ["198.18.0.2/32"] && ($0["inboundTag"] as? [String]) == [managed] })
+            XCTAssertTrue(rules.contains { ($0["ip"] as? [String]) == ["10.0.85.53/32"] && ($0["inboundTag"] as? [String]) == [managed] })
             XCTAssertEqual(rules.last! as NSDictionary, applicationRule as NSDictionary)
             XCTAssertEqual(prepared.bootstrapAddresses, ["203.0.113.7"])
             if let directory = ProcessInfo.processInfo.environment["TUNNEL_DNS_FIXTURES"] {
@@ -106,7 +106,7 @@ final class TunnelDNSPolicyTests: XCTestCase {
     }
 
     func testDNSAddressCannotBeExcludedButServerAndLANBypassesRemain() {
-        for subnet in ["198.18.0.2/32", "198.18.0.0/16", "0.0.0.0/0"] {
+        for subnet in ["10.0.85.53/32", "10.0.85.0/24", "0.0.0.0/0"] {
             XCTAssertFalse(TunnelDNSPolicy.allowsRouteExclusions([subnet]))
         }
         XCTAssertTrue(TunnelDNSPolicy.allowsRouteExclusions(["203.0.113.7/32", "192.168.0.0/16", "1.1.1.1/32"]))
@@ -298,7 +298,7 @@ final class TunnelDNSPolicyTests: XCTestCase {
     func testUnsafeDNSPathsAndAmbiguityRejectWithoutMutation() {
         let unsafe: [[String: Any]] = [
             ["servers": ["https+local://1.1.1.1/dns-query"]], ["servers": ["tcp+local://1.1.1.1"]],
-            ["servers": ["quic+local://1.1.1.1"]], ["servers": ["tls://1.1.1.1"]], ["servers": ["fakedns"]], ["servers": ["2001:db8::1"]], ["servers": ["https://[2001:db8::1]/dns-query"]],
+            ["servers": ["quic+local://1.1.1.1"]], ["servers": ["tls://1.1.1.1"]], ["servers": ["2001:db8::1"]], ["servers": ["https://[2001:db8::1]/dns-query"]],
             ["servers": ["https://unmapped.example/dns-query"]], ["servers": ["1.1.1.1"], "useSystemHosts": true],
             ["servers": ["1.1.1.1"], "queryStrategy": "UseSystem"], ["servers": [], "Servers": []],
             ["servers": [["address": "1.1.1.1", "Address": "9.9.9.9"]]], ["script": "caller-script"],
@@ -799,7 +799,7 @@ final class TunnelDNSPolicyTests: XCTestCase {
             XCTAssertEqual((output["dns"] as? [String: Any])?["servers"] as? [String], [server])
             XCTAssertEqual((output["dns"] as? [String: Any])?["hosts"] as? NSDictionary, hosts as NSDictionary)
         }
-        for server in ["fakedns", "[ fakedns ]", "tcp+local://1.1.1.1", "https+local://1.1.1.1/dns-query", "[ ::1 ]"] {
+        for server in ["tcp+local://1.1.1.1", "https+local://1.1.1.1/dns-query", "[ ::1 ]"] {
             let parsed = LocalProxyAccessPolicy.coreAddressText(server)
             let source: [String: Any] = ["dns": ["servers": [server], "hosts": [parsed: "127.0.0.1"]], "outbounds": [["tag": "direct", "protocol": "freedom"]]]
             XCTAssertNil(TunnelXrayConfigPreparer.prepare(jsonData: try JSONSerialization.data(withJSONObject: source), credentials: Self.credentials), "Static hosts cannot qualify a special mode or IPv6 DNS underlay")

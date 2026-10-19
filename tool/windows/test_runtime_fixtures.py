@@ -22,6 +22,202 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    def test_fakedns_socks_delivers_opaque_bytes_only_after_exact_domain_observation(self):
+        name = b"fakedns-payload.invalid"
+        payload = b"fakedns-payload-tcp-" + b"a" * 32
+        incoming = io.BytesIO(b"\x05\x01\x00\x05\x01\x00\x03" + bytes([len(name)]) + name +
+                              (45679).to_bytes(2, "big") + payload)
+        client = Mock()
+        client.recv.side_effect = incoming.read
+        state = Mock()
+        state.accept.return_value = b"accepted-" + payload
+        runtime.Socks(client, ("192.0.2.11", 50000), SimpleNamespace(fake_dns_payload=state))
+        state.accept.assert_called_once_with("tcp", 3, name, 45679, payload)
+        self.assertEqual(b"accepted-" + payload, client.sendall.call_args_list[-1].args[0])
+
+    def test_actual_main_appends_separate_fakedns_gate_without_replacing_old_gates(self):
+        tree = ast.parse(Path(runtime.__file__).read_text())
+        main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
+        calls = [node.func.id for node in ast.walk(main) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+        self.assertEqual(1, calls.count("fakedns_gate"))
+        self.assertEqual(1, calls.count("native_routing_gate"))
+        self.assertEqual(1, calls.count("direct_only_gate"))
+
+    def test_fakedns_state_requires_exact_domain_live_udp_association_and_one_shot_bytes(self):
+        for defect in (None, "kind", "domain", "port", "payload", "unassociated"):
+            with self.subTest(defect=defect):
+                state = runtime.FakeDnsPayloadState()
+                control = Mock()
+                for cycle in range(2):
+                    for transport in ("tcp", "udp"):
+                        payload = state.arm(transport)
+                        if transport == "udp" and defect != "unassociated": state.control_open(control, "192.0.2.11")
+                        kind, domain, port, body = 3, runtime.FAKEDNS_NAME.encode(), runtime.FAKEDNS_PORT, payload
+                        if defect == "kind": kind = 1
+                        if defect == "domain": domain = b"other.invalid"
+                        if defect == "port": port += 1
+                        if defect == "payload": body += b"extra"
+                        reply = state.accept(transport, kind, domain, port, body, "192.0.2.11")
+                        if defect is None or defect == "unassociated" and transport == "tcp":
+                            self.assertEqual(b"accepted-" + payload, reply)
+                        else: self.assertIsNone(reply)
+                        state.control_close(control)
+                    if defect is not None: break
+                state.require_drained()
+                if defect is None:
+                    state.require_clean()
+                    self.assertIsNone(state.accept("tcp", 3, domain, port, payload))
+                with self.assertRaises(AssertionError): state.require_clean()
+
+    def test_fakedns_datagram_requires_domain_header_and_live_owned_control(self):
+        for defect in (None, "frag", "kind", "truncated", "source", "domain"):
+            with self.subTest(defect=defect):
+                state = runtime.FakeDnsPayloadState(); control = Mock(); relay = Mock()
+                state.control_open(control, "192.0.2.11")
+                payload = state.arm("udp"); name = runtime.FAKEDNS_NAME.encode()
+                header = b"\0\0\0\x03" + bytes([len(name)]) + name + runtime.FAKEDNS_PORT.to_bytes(2, "big")
+                packet = header + payload
+                if defect == "frag": packet = packet[:2] + b"\1" + packet[3:]
+                if defect == "kind": packet = packet[:3] + b"\1" + packet[4:]
+                if defect == "truncated": packet = packet[:6]
+                if defect == "domain": packet = packet[:5] + b"x" + packet[6:]
+                peer = ("192.0.2.12" if defect == "source" else "192.0.2.11", 50000)
+                runtime.FakeDnsPayloadDatagram((packet, relay), peer, SimpleNamespace(fake_dns_payload=state))
+                if defect is None:
+                    relay.sendto.assert_called_once_with(header + b"accepted-" + payload, peer)
+                    state.require_observed("udp", payload)
+                else:
+                    relay.sendto.assert_not_called()
+                    with self.assertRaises(AssertionError): state.require_observed("udp", payload)
+                state.control_close(control)
+
+    def test_fakedns_dns_requires_exact_a_reply_default_pool_and_tun_source(self):
+        for tcp in (False, True):
+            for defect in (None, "source", "id", "empty", "outside", "question", "oversize"):
+                with self.subTest(tcp=tcp, defect=defect):
+                    client = Mock(); client.__enter__ = Mock(return_value=client); client.__exit__ = Mock(return_value=False)
+                    client.getsockname.return_value = ("192.0.2.11" if defect == "source" else "10.0.85.2", 50000)
+                    stream = None
+                    def send(data):
+                        nonlocal stream
+                        query = data[2:] if tcp else data
+                        response = query[:2] + b"\x81\x80\0\1\0\1\0\0\0\0" + query[12:] + \
+                            b"\xc0\x0c\0\1\0\1\0\0\0\1\0\4\xc6\x12\0\7"
+                        if defect == "id": response = b"xx" + response[2:]
+                        if defect == "empty": response = response[:6] + b"\0\0" + response[8:]
+                        if defect == "outside": response = response[:-4] + b"\xc0\0\2\7"
+                        if defect == "question": response = response[:13] + b"x" + response[14:]
+                        stream = io.BytesIO(((5000 if defect == "oversize" else len(response)).to_bytes(2, "big") if tcp else b"") + response)
+                    client.sendall.side_effect = send; client.recv.side_effect = lambda count: stream.read(count)
+                    with patch.object(runtime.socket, "socket", return_value=client):
+                        if defect is None or defect == "oversize" and not tcp:
+                            self.assertEqual("198.18.0.7", runtime.fakedns_query(tcp))
+                        else:
+                            with self.assertRaises(AssertionError): runtime.fakedns_query(tcp)
+                    client.connect.assert_called_once_with(("10.0.85.53", 53))
+
+    def test_fakedns_payload_targets_returned_ip_and_requires_independent_domain_observation(self):
+        for udp in (False, True):
+            for defect in (None, "source", "reply", "unobserved"):
+                with self.subTest(udp=udp, defect=defect):
+                    state = runtime.FakeDnsPayloadState(); client = Mock()
+                    client.__enter__ = Mock(return_value=client); client.__exit__ = Mock(return_value=False)
+                    client.getsockname.return_value = ("192.0.2.11" if defect == "source" else "10.0.85.2", 50000)
+                    control = Mock(); state.control_open(control, "192.0.2.11")
+                    response = None
+                    def send(payload):
+                        nonlocal response
+                        transport = "udp" if udp else "tcp"
+                        if defect != "unobserved": state.accept(transport, 3, runtime.FAKEDNS_NAME.encode(), runtime.FAKEDNS_PORT, payload, "192.0.2.11")
+                        response = io.BytesIO((b"wrong" if defect == "reply" else b"accepted-" + payload))
+                    client.sendall.side_effect = send; client.recv.side_effect = lambda count: response.read(count)
+                    with patch.object(runtime.socket, "socket", return_value=client):
+                        if defect is None: runtime.fakedns_payload_request(state, "198.19.0.8", udp)
+                        else:
+                            with self.assertRaises((AssertionError, EOFError)): runtime.fakedns_payload_request(state, "198.19.0.8", udp)
+                    client.connect.assert_called_once_with(("198.19.0.8", runtime.FAKEDNS_PORT))
+                    state.control_close(control)
+
+    def test_fakedns_profile_uses_implicit_pool_domain_route_and_separate_numeric_proxy(self):
+        profile = runtime.fakedns_config("192.0.2.10", 19422, 15353)
+        self.assertNotIn("fakeDns", profile)
+        self.assertEqual("UseIPv4", profile["dns"]["queryStrategy"])
+        self.assertEqual({"address": "fakedns", "domains": ["full:" + runtime.FAKEDNS_NAME], "skipFallback": True}, profile["dns"]["servers"][0])
+        self.assertEqual("tcp://192.0.2.10:15353", profile["dns"]["servers"][1])
+        self.assertEqual({"address": "192.0.2.10", "port": 19422}, profile["outbounds"][1]["settings"]["servers"][0])
+        self.assertEqual(["full:" + runtime.FAKEDNS_NAME], profile["routing"]["rules"][0]["domain"])
+        self.assertEqual({"enabled": True, "routeOnly": False, "destOverride": ["tls"]}, profile["inbounds"][0]["sniffing"])
+
+    def test_fakedns_close_revokes_only_owned_controls_before_final_join(self):
+        state = runtime.FakeDnsPayloadState(); control = Mock(); foreign = Mock()
+        state.control_open(control, "192.0.2.11")
+        control.shutdown.side_effect = lambda how: state.control_close(control)
+        state.close(); state.require_drained()
+        control.shutdown.assert_called_once_with(runtime.socket.SHUT_RDWR); control.close.assert_called_once()
+        foreign.close.assert_not_called()
+        self.assertFalse(state.control_open(foreign, "192.0.2.12"))
+
+    def test_fakedns_gate_proves_two_fresh_sessions_both_payloads_and_strict_stop(self):
+        for defect in (None, "mapping", "probe", "exit", "cleanup"):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary); children = []
+                def launch(command, **kwargs):
+                    child = Mock(pid=600 + len(children)); child.poll.return_value = None
+                    def wait(timeout):
+                        child.poll.return_value = 0
+                        return 9 if defect == "exit" and command[1] == "run-vpn" else 0
+                    child.wait.side_effect = wait; children.append(child)
+                    if command[1] == "run-vpn": kwargs["stdout"].write("START_RETURN=1\n"); kwargs["stdout"].flush()
+                    return child
+                state = Mock()
+                with patch.object(runtime.subprocess, "Popen", side_effect=launch), \
+                     patch.object(runtime.subprocess, "check_output", return_value=json.dumps({"Routes": 1 if defect == "cleanup" else 0, "IPv6Addresses": 0})), \
+                     patch.object(runtime, "native", return_value="0") as native, \
+                     patch.object(runtime, "fakedns_query", side_effect=["198.18.0.7", "198.18.0.8"] if defect == "mapping" else None,
+                                  return_value="198.18.0.7") as dns, \
+                     patch.object(runtime, "fakedns_payload_request", return_value="opaque bytes") as payload, \
+                     patch.object(runtime, "await_state", return_value={"protecting": defect != "probe"}), \
+                     patch.object(runtime.time, "sleep"), patch("builtins.print") as printed:
+                    rows = []
+                    args = (directory / "runtime_probe.exe", directory, "192.0.2.10", 19422, 15353, state, rows)
+                    if defect is None:
+                        self.assertEqual(2, runtime.fakedns_gate(*args))
+                        self.assertEqual(8, len(rows)); self.assertTrue(all(row["passed"] for row in rows))
+                        self.assertEqual([False, True] * 2, [call.args[0] for call in dns.call_args_list])
+                        self.assertEqual([False, True] * 2, [call.args[2] for call in payload.call_args_list])
+                        self.assertTrue(all(call.args[:2] == (state, "198.18.0.7") for call in payload.call_args_list))
+                        self.assertEqual(2, state.require_drained.call_count)
+                        for cycle in range(2):
+                            self.assertEqual(runtime.fakedns_config("192.0.2.10", 19422, 15353), json.loads((directory / f"vpn-fakedns-{cycle}.json").read_text()))
+                    else:
+                        with self.assertRaises(AssertionError): runtime.fakedns_gate(*args)
+                    printed.assert_not_called()  # Only main may qualify after every joined drain.
+                    self.assertEqual(4 if defect is None else 2, len(children))
+                    for child in children: child.wait.assert_called(); child.kill.assert_not_called()
+                    self.assertTrue(any(call.args[1] == "release-protection" for call in native.call_args_list))
+
+    def test_fakedns_gate_preserves_primary_error_and_reaps_forced_owned_children(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary); children = []; primary = RuntimeError("synthetic opaque failure")
+            def launch(command, **kwargs):
+                child = Mock(pid=700 + len(children)); child.poll.return_value = None
+                child.wait.side_effect = [subprocess.TimeoutExpired(command, 1), 0]
+                children.append(child)
+                if command[1] == "run-vpn": kwargs["stdout"].write("START_RETURN=1\n"); kwargs["stdout"].flush()
+                return child
+            with patch.object(runtime.subprocess, "Popen", side_effect=launch), \
+                 patch.object(runtime, "fakedns_query", return_value="198.18.0.7"), \
+                 patch.object(runtime, "fakedns_payload_request", side_effect=primary), \
+                 patch.object(runtime, "native", side_effect=OSError("synthetic cleanup failure")), \
+                 patch.object(runtime.time, "sleep"), patch("builtins.print") as printed:
+                with self.assertRaises(RuntimeError) as caught:
+                    runtime.fakedns_gate(directory / "runtime_probe.exe", directory, "192.0.2.10", 19422, 15353, Mock(), [])
+                self.assertIs(primary, caught.exception); printed.assert_not_called()
+            self.assertEqual(2, len(children))
+            for child in children:
+                child.kill.assert_called_once()
+                self.assertEqual(2, child.wait.call_count)
+
     @staticmethod
     def traffic_state(**changes):
         state = dict(running=True, protecting=True, tick=1, upload=37, download=61,
@@ -527,7 +723,7 @@ class RuntimeFixtureTest(unittest.TestCase):
                         if defect is None: runtime.direct_only_dns(server, tcp)
                         else:
                             with self.assertRaises(AssertionError): runtime.direct_only_dns(server, tcp)
-                    client.connect.assert_called_once_with(("198.18.0.2", 53))
+                    client.connect.assert_called_once_with(("10.0.85.53", 53))
 
     def test_direct_only_origin_observes_denied_host_before_sending_bytes(self):
         handler = runtime.Direct.__new__(runtime.Direct)
@@ -839,7 +1035,7 @@ class RuntimeFixtureTest(unittest.TestCase):
                                 runtime.ipv6_payload_dns(tcp)
                     factory.assert_called_once_with(runtime.socket.AF_INET,
                                                     runtime.socket.SOCK_STREAM if tcp else runtime.socket.SOCK_DGRAM)
-                    client.connect.assert_called_once_with(("198.18.0.2", 53))
+                    client.connect.assert_called_once_with(("10.0.85.53", 53))
 
     def test_explicit_asset_root_contains_only_verified_custom_fixture(self):
         with tempfile.TemporaryDirectory() as directory:

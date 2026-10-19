@@ -1,5 +1,6 @@
 package com.github.tfox.flutter_vless.xray.service
 
+import com.github.tfox.flutter_vless.xray.core.AndroidTunnelDnsPolicy
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -21,7 +22,7 @@ class NativeRoutingSpecTest {
         {"tag":null,"listen":"127.0.0.1","port":19893,"protocol":"socks","settings":{"auth":"noauth"}}
       ],"outbounds":[{"tag":"blocked","protocol":"blackhole"},{"tag":"selected","protocol":"freedom"}],
       "routing":{"rules":[
-        {"type":"field","inboundTag":["$tag"],"ip":["198.18.0.2/32"],"outboundTag":"selected"},
+        {"type":"field","inboundTag":["$tag"],"ip":["${AndroidTunnelDnsPolicy.VIRTUAL_SERVER}/32"],"outboundTag":"selected"},
         {"type":"field","inboundTag":["$tag"],"outboundTag":"blocked","callerMarker":"private-name-lookalike"},
         {"type":"field","inboundTag":"private-bootstrap,private-dns","outboundTag":"blocked"}
       ]},"dns":{"hosts":{"unchanged.invalid":"192.0.2.1"},"servers":["tcp://1.1.1.1"]},

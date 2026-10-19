@@ -329,7 +329,7 @@ bool VpnService::StartWorkers() {
   if (!ipv6_ready) return fail("Wintun IPv6 address did not become ready");
   if (ipv6_status == ERROR_OBJECT_ALREADY_EXISTS) Event("Reusing the existing ready Wintun IPv6 address");
   if (!native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"dnsservers",
-      L"name=flutter_vless_tun", L"source=static", L"address=198.18.0.2", L"validate=no"})) return fail("Wintun address or virtual DNS did not become ready");
+      L"name=flutter_vless_tun", L"source=static", native::Wide(std::string("address=") + xray_config::kVirtualDns), L"validate=no"})) return fail("Wintun address or virtual DNS did not become ready");
   for (auto prefix : {std::pair<const char*, UINT8>{"0.0.0.0", UINT8{1}}, {"128.0.0.0", UINT8{1}}, {xray_config::kVirtualDns, UINT8{32}}}) {
     MIB_IPFORWARD_ROW2 row{}; InitializeIpForwardEntry(&row);
     row.InterfaceLuid = luid; row.DestinationPrefix.Prefix.Ipv4.sin_family = AF_INET;

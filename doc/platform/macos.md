@@ -99,7 +99,7 @@ That note explains the routing, DNS, and packet-tunnel invariants that matter wh
 
 - proxy-only mode and tunnel mode are different code paths
 - the packet tunnel is more sensitive to DNS and route configuration than a normal proxy-only start
-- the provider captures IPv4 and IPv6, publishes virtual DNS `198.18.0.2`, and excludes only prepared transport endpoint addresses
+- the provider captures IPv4 and IPv6, publishes virtual DNS `10.0.85.53`, and excludes only prepared transport endpoint addresses
 - provider readiness combines the HEV worker state with authenticated SOCKS forwarding checks; Network Extension's connected status alone is insufficient
 - use the architecture note before changing packet tunnel logic
 

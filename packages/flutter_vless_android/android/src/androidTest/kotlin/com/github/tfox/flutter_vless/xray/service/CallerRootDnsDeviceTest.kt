@@ -367,7 +367,7 @@ class CallerRootDnsDeviceTest {
         val target = InetAddress.getByName("2001:db8:41::42")
         assertEquals(16, target.address.size)
         DnsFixture(target.address).use { general -> DnsFixture(target.address).use { perDomain ->
-            Ipv4ProxyForIpv6(target).use { proxy ->
+            Ipv4SocksFixture(target.address).use { proxy ->
                 val caller = name("v6-caller"); val hosts = name("v6-hosts"); val system = name("v6-system")
                 val root = JSONObject().put("tag", "caller-root-dns").put("queryStrategy", "UseIP")
                     .put("disableCache", true).put("hosts", JSONObject().put(hosts, target.hostAddress))
@@ -435,9 +435,79 @@ class CallerRootDnsDeviceTest {
         } }
     }
 
-    /** Logical IPv6 destinations are checked in SOCKS frames; both actual
+    private fun fakeTcpPayload(session: Int) = byteArrayOf(0, 0x91.toByte(), 0x23, 0x42) + "fake-tcp-$run-$session".toByteArray()
+    private fun fakeUdpPayload(session: Int) = byteArrayOf(0, 0x92.toByte(), 0x24, 0x43) + "fake-udp-$run-$session".toByteArray()
+
+    @Test fun fakeDnsRestoresOpaqueTcpAndUdpDomainsAcrossFreshSessions() {
+        val host = name("fake-payload")
+        Ipv4SocksFixture(host.toByteArray(Charsets.US_ASCII), 3).use { proxy ->
+            val source = JSONObject().put("inbounds", JSONArray()).put("stats", JSONObject())
+                .put("policy", JSONObject().put("system", JSONObject().put("statsInboundUplink", false)
+                    .put("statsInboundDownlink", false).put("statsOutboundUplink", false).put("statsOutboundDownlink", false)))
+                .put("dns", JSONObject().put("tag", "caller-fake-dns").put("queryStrategy", "UseIPv4")
+                    .put("servers", JSONArray().put("fakedns")))
+                .put("outbounds", JSONArray().put(JSONObject().put("tag", "fake-proxy").put("protocol", "socks")
+                    .put("settings", JSONObject().put("address", "127.0.0.1").put("port", proxy.port)))
+                    .put(JSONObject().put("tag", "blocked").put("protocol", "blackhole")))
+                // Private DNS/readiness guards must precede this caller block.
+                .put("routing", JSONObject().put("rules", JSONArray().put(JSONObject().put("type", "field")
+                    .put("port", "1-18080,18083-65535").put("outboundTag", "blocked"))))
+            val original = source.toString(); var previousRuntime: String? = null
+            for (session in 1..2) {
+                try {
+                    val runtime = start(source)
+                    assertFalse("Implicit FakeDNS engine was rewritten into caller JSON", runtime.has("fakedns"))
+                    previousRuntime?.let { assertNotEquals("Restart reused the old finalized probe/auth config", it, runtime.toString()) }
+                    previousRuntime = runtime.toString()
+                    val sniffing = runtime.getJSONArray("inbounds").getJSONObject(0).getJSONObject("sniffing")
+                    assertTrue(sniffing.getBoolean("routeOnly"))
+                    assertTrue((0 until sniffing.getJSONArray("destOverride").length()).any {
+                        sniffing.getJSONArray("destOverride").getString(it) == "fakedns"
+                    })
+                    proxy.assertPayloads(session - 1, session - 1)
+                    val udpA = query(host, false); val tcpA = query(host, true)
+                    assertA(udpA, false); assertA(tcpA, false)
+                    val address = udpA.takeLast(4).toByteArray()
+                    assertArrayEquals(address, tcpA.takeLast(4).toByteArray())
+                    assertEquals(198, address[0].toInt() and 255)
+                    assertTrue((address[1].toInt() and 255) in 18..19)
+                    val fake = InetAddress.getByAddress(address)
+                    for (tcp in listOf(false, true)) {
+                        val aaaa = query(host, tcp, 28)
+                        assertEquals(0, aaaa[3].toInt() and 15); assertEquals(0, aaaa[6].toInt() or aaaa[7].toInt())
+                        val txt = query(host, tcp, 16)
+                        assertEquals(5, txt[3].toInt() and 15); assertEquals(0, txt[6].toInt() or txt[7].toInt())
+                    }
+                    Socket().use { socket ->
+                        socket.soTimeout = 3000; socket.connect(InetSocketAddress(fake, 18081), 3000)
+                        val payload = fakeTcpPayload(session); socket.getOutputStream().write(payload)
+                        val response = ByteArray(payload.size).also { DataInputStream(socket.getInputStream()).readFully(it) }
+                        assertArrayEquals(payload, response)
+                    }
+                    DatagramSocket().use { socket ->
+                        socket.soTimeout = 3000; val payload = fakeUdpPayload(session)
+                        socket.send(DatagramPacket(payload, payload.size, fake, 18082))
+                        val response = DatagramPacket(ByteArray(512), 512); socket.receive(response)
+                        assertEquals(fake, response.address); assertEquals(18082, response.port)
+                        assertArrayEquals(payload, response.data.copyOf(response.length))
+                    }
+                    proxy.assertPayloads(session, session)
+                    assertEquals(original, source.toString())
+                } finally {
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                    stop()
+                    fun inputsRemain() = context.noBackupFilesDir.listFiles().orEmpty().any { it.name.startsWith("xray-") }
+                    while ((inputsRemain() || !proxy.idle()) && System.nanoTime() < deadline) Thread.sleep(25)
+                    assertFalse("Stop retained native runtime input files", inputsRemain())
+                    assertTrue("Stop retained the owned SOCKS association", proxy.idle())
+                }
+            }
+        }
+    }
+
+    /** Logical IPv6 or FakeDNS domains are checked in SOCKS frames; both actual
      * proxy sockets stay IPv4 loopback. Never connects to the requested target. */
-    private inner class Ipv4ProxyForIpv6(private val target: InetAddress) : Closeable {
+    private inner class Ipv4SocksFixture(private val target: ByteArray, private val targetFamily: Int = 4) : Closeable {
         private val loopback = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
         private val listener = ServerSocket(0, 8, loopback)
         private val relay = try { DatagramSocket(0, loopback) } catch (error: Throwable) { listener.close(); throw error }
@@ -466,11 +536,12 @@ class CallerRootDnsDeviceTest {
                         val bytes = packet.data.copyOf(packet.length)
                         val input = DataInputStream(bytes.inputStream())
                         require(input.readUnsignedShort() == 0 && input.readUnsignedByte() == 0)
-                        require(input.readUnsignedByte() == 4) { "UDP target did not preserve IPv6 ATYP" }
-                        val address = ByteArray(16).also(input::readFully)
-                        require(address.contentEquals(target.address) && input.readUnsignedShort() == 18082)
+                        require(input.readUnsignedByte() == targetFamily) { "UDP target did not preserve logical ATYP" }
+                        val address = socksAddress(input, targetFamily)
+                        require(address.contentEquals(target) && input.readUnsignedShort() == 18082)
                         val payload = ByteArray(input.available()).also(input::readFully)
-                        require(payload.contentEquals("ipv6-udp-$run".toByteArray()))
+                        val expected = if (targetFamily == 3) fakeUdpPayload(udpPayloads.get() + 1) else "ipv6-udp-$run".toByteArray()
+                        require(payload.contentEquals(expected))
                         udpPayloads.incrementAndGet()
                         relay.send(DatagramPacket(bytes, bytes.size, packet.address, packet.port))
                     }
@@ -486,6 +557,11 @@ class CallerRootDnsDeviceTest {
             if (!synchronized(lock) { closed }) failure.compareAndSet(null, error)
         }
 
+        private fun socksAddress(input: DataInputStream, family: Int): ByteArray {
+            val size = when (family) { 1 -> 4; 4 -> 16; 3 -> input.readUnsignedByte().also { require(it in 1..253) }; else -> error("Invalid SOCKS address") }
+            return ByteArray(size).also(input::readFully)
+        }
+
         private fun tcp(socket: Socket) {
             socket.soTimeout = 3000
             val input = DataInputStream(socket.getInputStream()); val output = socket.getOutputStream()
@@ -496,8 +572,7 @@ class CallerRootDnsDeviceTest {
             require(input.readUnsignedByte() == 5)
             val command = input.readUnsignedByte(); require(input.readUnsignedByte() == 0)
             val family = input.readUnsignedByte()
-            val size = when (family) { 1 -> 4; 4 -> 16; else -> error("Expected numeric SOCKS destination") }
-            val address = ByteArray(size).also(input::readFully); val destinationPort = input.readUnsignedShort()
+            val address = socksAddress(input, family); val destinationPort = input.readUnsignedShort()
             if (command == 3) {
                 // Association control tuple is not the per-datagram target.
                 val relayPort = relay.localPort
@@ -505,10 +580,17 @@ class CallerRootDnsDeviceTest {
                 while (input.read() >= 0) { /* Control EOF follows owned Core Stop. */ }
                 return
             }
-            require(command == 1 && family == 4 && address.contentEquals(target.address) && destinationPort == 18081) {
-                "TCP target did not preserve exact IPv6 SOCKS destination"
+            require(command == 1 && family == targetFamily && address.contentEquals(target) && destinationPort == 18081) {
+                "TCP target did not preserve exact logical SOCKS destination"
             }
             output.write(byteArrayOf(5, 0, 0, 1, 127, 0, 0, 1, 0, 0)); output.flush()
+            if (targetFamily == 3) {
+                val expected = fakeTcpPayload(tcpPayloads.get() + 1)
+                val payload = ByteArray(expected.size).also(input::readFully)
+                require(payload.contentEquals(expected))
+                tcpPayloads.incrementAndGet(); output.write(payload); output.flush()
+                return
+            }
             val request = ByteArrayOutputStream()
             while (request.size() < 4096) {
                 val value = input.read(); require(value >= 0); request.write(value)
@@ -521,11 +603,14 @@ class CallerRootDnsDeviceTest {
             output.flush()
         }
 
-        fun assertPayloads() {
+        fun assertPayloads(expectedTcp: Int = 1, expectedUdp: Int? = null) {
             failure.get()?.let { throw AssertionError("Owned IPv6 proxy fixture failed", it) }
-            assertEquals("Missing exact IPv6 TCP SOCKS proof", 1, tcpPayloads.get())
-            assertTrue("Missing exact IPv6 UDP SOCKS proof", udpPayloads.get() >= 1)
+            assertEquals("Missing exact logical TCP SOCKS proof", expectedTcp, tcpPayloads.get())
+            if (expectedUdp == null) assertTrue("Missing exact IPv6 UDP SOCKS proof", udpPayloads.get() >= 1)
+            else assertEquals("Missing exact logical UDP SOCKS proof", expectedUdp, udpPayloads.get())
         }
+
+        fun idle() = synchronized(lock) { active == null }
 
         override fun close() {
             val socket = synchronized(lock) { closed = true; active }

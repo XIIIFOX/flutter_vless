@@ -20,8 +20,7 @@ public enum TunnelIPv6Policy {
     }
 
     static func apply(to config: inout [String: Any], managedInboundTag: String? = nil) -> Bool {
-        // FakeDNS virtual pools require their own qualified packet mapping.
-        guard !config.keys.contains(where: { XrayJSONField.matches($0, "fakeDns") }) else { return false }
+        guard let fakeDNS = TunnelFakeDNSPolicy.active(in: config) else { return false }
         // Keep literal targets while using the sniffed RouteTarget for caller
         // domain rules. Do not insert a library IPv6 routing override.
         if var inbounds = config["inbounds"] as? [[String: Any]] {
@@ -31,6 +30,13 @@ public enum TunnelIPv6Policy {
                 guard proto == "socks" || proto == "http" else { continue }
                 var sniffing = inbounds[index]["sniffing"] as? [String: Any] ?? [:]
                 sniffing["routeOnly"] = true
+                if fakeDNS, managedInboundTag != nil {
+                    var overrides = sniffing["destOverride"] as? [String] ?? []
+                    if !overrides.contains(where: { ["fakedns", "fakedns+others"].contains($0.lowercased()) }) {
+                        overrides.append("fakedns")
+                    }
+                    sniffing["destOverride"] = overrides
+                }
                 inbounds[index]["sniffing"] = sniffing
             }
             config["inbounds"] = inbounds

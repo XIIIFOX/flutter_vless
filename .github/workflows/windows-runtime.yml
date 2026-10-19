@@ -216,6 +216,7 @@ jobs:
           if ($log -notmatch 'WINDOWS_NATIVE_ROUTING_TRAFFIC_PASS=2') { throw 'Native routing traffic proof is incomplete' }
           if ($log -notmatch 'WINDOWS_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2') { throw 'VPN traffic with occupied preferred TCP ports was not tested' }
           if ([regex]::Matches($log, '(?m)^WINDOWS_TRAFFIC_COUNTER_RUNTIME_PASS=4\r?$').Count -ne 1) { throw 'VPN owned-counter acceptance is incomplete' }
+          if ([regex]::Matches($log, '(?m)^WINDOWS_FAKEDNS_RUNTIME_PASS=2\r?$').Count -ne 1) { throw 'FakeDNS TCP/UDP and restart acceptance is incomplete' }
       - name: Restore the disposable runner after any failure
         if: always()
         shell: pwsh

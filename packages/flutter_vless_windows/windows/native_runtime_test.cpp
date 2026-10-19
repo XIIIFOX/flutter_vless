@@ -215,7 +215,7 @@ int main(int argc, char** argv) {
     auto config = flutter_vless::xray_config::Parse(R"({"inbounds":[{"protocol":"socks","listen":"127.0.0.1","port":19000,"tag":"fixture-tun"}],"outbounds":[],"routing":{"rules":[]}})");
     assert(!probe.Configure(config, 19001));
     assert(probe.Configure(config, 19000));
-    assert(config["routing"]["rules"][0]["ip"][0] == "198.18.0.3/32");
+    assert(config["routing"]["rules"][0]["ip"][0] == "10.0.85.54/32");
     assert(config["routing"]["rules"][0]["inboundTag"][0] == "fixture-tun");
     assert(config["outbounds"][0]["settings"]["redirect"].get<std::string>().rfind("127.0.0.1:", 0) == 0);
     auto collision = flutter_vless::xray_config::Parse(R"({"outbounds":[{"protocol":"blackhole","tag":"flutter-vless-packet-probe"}],"routing":{"rules":[]}})");

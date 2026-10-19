@@ -11,6 +11,52 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class XrayCoreManagerTest {
+    @Test fun sharedFakeDnsProfilesPreserveCallerInputsAndEnableOnlyPrivateRestoration() {
+        val cases = JSONArray(requireNotNull(javaClass.getResource("/fakedns.json")).readText())
+        assertEquals(5, cases.length())
+        for (index in 0 until cases.length()) {
+            val item = cases.getJSONObject(index); val label = item.getString("name")
+            val input = item.getJSONObject("config"); val before = input.toString()
+            val prepared = AndroidTunnelDnsPolicy.prepare(before) { error("FakeDNS must not bootstrap endpoints") }
+            val copied = JSONObject(prepared.configJson)
+            assertEquals(label, input.getJSONObject("dns").toString(), copied.getJSONObject("dns").toString())
+            assertEquals(label, input.getJSONArray("inbounds").toString(), copied.getJSONArray("inbounds").toString())
+            val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = prepared.configJson)
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(profile, File("."), credentials, prepared)
+            val originalInputs = input.getJSONArray("inbounds")
+            for (i in 0 until originalInputs.length())
+                assertEquals(label, originalInputs.getJSONObject(i).toString(), runtime.getJSONArray("inbounds").getJSONObject(i).toString())
+            val privateInput = runtime.getJSONArray("inbounds").getJSONObject(originalInputs.length())
+            assertEquals(label, prepared.managedInboundTag, privateInput.getString("tag"))
+            val sniffing = privateInput.getJSONObject("sniffing")
+            assertTrue(label, sniffing.getBoolean("routeOnly"))
+            assertTrue(label, (0 until sniffing.getJSONArray("destOverride").length()).any {
+                sniffing.getJSONArray("destOverride").getString(it) == "fakedns"
+            })
+            assertEquals(label, before, input.toString())
+            assertEquals(label, prepared.configJson, profile.V2RAY_FULL_JSON_CONFIG)
+            for (key in input.keys().asSequence().filter { it.replace('ſ', 's').lowercase() == "fakedns" })
+                assertEquals(label, input.get(key).toString(), runtime.get(key).toString())
+        }
+    }
+
+    @Test fun inactiveFakeDnsAndDiscardedProxyDnsDoNotChangePrivateOrImportedSniffing() {
+        for (engine in listOf<Any?>(null, JSONObject.NULL)) {
+            val source = JSONObject("""{"inbounds":[],"outbounds":[{"tag":"proxy","protocol":"http","settings":{"address":"192.0.2.17","port":443}}],"dns":{"servers":["localhost"]}}""")
+            if (engine != null) source.put("fakeDns", engine)
+            val prepared = AndroidTunnelDnsPolicy.prepare(source.toString())
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(XrayConfig(V2RAY_FULL_JSON_CONFIG = prepared.configJson), File("."), credentials, prepared)
+            assertEquals("[\"http\",\"tls\",\"quic\"]", runtime.getJSONArray("inbounds").getJSONObject(0)
+                .getJSONObject("sniffing").getJSONArray("destOverride").toString())
+        }
+        val source = """{"inbounds":[],"outbounds":[{"tag":"proxy","protocol":"http","settings":{"address":"192.0.2.17","port":443}}],"dns":{"servers":["fakedns"]}}"""
+        val prepared = AndroidTunnelDnsPolicy.prepare(source, "proxy")
+        val runtime = XrayCoreManager.buildRuntimeConfigJson(XrayConfig(V2RAY_FULL_JSON_CONFIG = prepared.configJson,
+            ANDROID_DNS_POLICY = "proxy"), File("."), credentials, prepared)
+        assertEquals("[\"http\",\"tls\",\"quic\"]", runtime.getJSONArray("inbounds").getJSONObject(0)
+            .getJSONObject("sniffing").getJSONArray("destOverride").toString())
+    }
+
     @Test fun availabilityChecksSkipCallerRangesApiAndMetricsWithoutChangingTheirSource() {
         val source = JSONObject("""{"inbounds":[{"tag":"caller","listen":"127.0.0.1","port":"10807-10808","protocol":"dokodemo-door","settings":{"address":"127.0.0.1"}}],"api":{"tag":"caller-api","listen":"127.0.0.1:10809","services":["StatsService"]},"metrics":{"tag":"caller-metrics","listen":"127.0.0.1:+10810"},"outbounds":[{"protocol":"freedom"}]}""")
         val before = source.toString(); val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = before)

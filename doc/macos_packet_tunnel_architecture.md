@@ -55,10 +55,10 @@ installed or during worker recovery.
 | Area | Behavior |
 | --- | --- |
 | Profile protection | `includeAllNetworks = true`, local network exclusions disabled, sleep disconnect disabled; APNs/cellular service exclusions disabled where available |
-| IPv4 | Default capture plus an explicit route to virtual DNS `198.18.0.2` |
+| IPv4 | Default capture plus an explicit route to virtual DNS `10.0.85.53` |
 | IPv6 | Default capture and an Xray `::/0` block rule; application forwarding remains IPv4-only |
 | Endpoint bootstrap | Resolve before installing virtual DNS and retain prepared endpoint mappings during worker recovery; endpoint route exclusions prevent transport loops |
-| System DNS | Publish `198.18.0.2` with `matchDomains = [""]`; relay TCP/UDP DNS through Xray as TCP DNS to `1.1.1.1` via the selected proxy |
+| System DNS | Publish `10.0.85.53` with `matchDomains = [""]`; relay TCP/UDP DNS through Xray as TCP DNS to `1.1.1.1` via the selected proxy |
 | DNS fallback | No physical DNS host-route exclusions or system-resolver fallback after setup |
 | Managed listener | Separate authenticated loopback SOCKS adapter; preserve imported listeners, credentials and tags |
 | Imported management API | Remove it before running Xray |

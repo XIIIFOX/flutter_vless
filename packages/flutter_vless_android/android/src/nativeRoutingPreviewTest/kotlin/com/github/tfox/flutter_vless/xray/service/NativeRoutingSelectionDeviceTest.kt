@@ -184,7 +184,7 @@ class NativeRoutingSelectionDeviceTest {
     private fun dns(host:String) {
         val addresses=InetAddress.getAllByName(host)
         assertTrue("Caller Core hosts did not answer the OS resolver",addresses.any { it.hostAddress=="10.0.2.2" })
-        assertEquals(listOf("198.18.0.2"),manager.getLinkProperties(manager.activeNetwork)?.dnsServers?.map { it.hostAddress })
+        assertEquals(listOf("10.0.85.53"),manager.getLinkProperties(manager.activeNetwork)?.dnsServers?.map { it.hostAddress })
     }
     private fun http(host:String,origin:Origin,other:Origin) {
         val progress=RoutingHttpProgress()

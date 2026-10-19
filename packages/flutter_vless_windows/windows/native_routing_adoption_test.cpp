@@ -30,7 +30,7 @@ struct Probe {
     const auto tag = json["inbounds"][0]["tag"];
     json["outbounds"].push_back({{"tag", "synthetic-owned-probe"}, {"protocol", "freedom"}});
     json["routing"]["rules"].insert(json["routing"]["rules"].begin(), Json{
-        {"type", "field"}, {"inboundTag", Json::array({tag})}, {"ip", Json::array({"198.18.0.3/32"})},
+        {"type", "field"}, {"inboundTag", Json::array({tag})}, {"ip", Json::array({"10.0.85.54/32"})},
         {"outboundTag", "synthetic-owned-probe"}});
     *guards = {0}; return true;
   }

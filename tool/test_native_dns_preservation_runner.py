@@ -16,6 +16,13 @@ spec.loader.exec_module(runner)
 
 
 class PreservationRunnerGuards(unittest.TestCase):
+    def test_snapshot_binds_shared_fakedns_corpus(self):
+        with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
+                mock.patch.object(runner.platform, 'system', return_value='Linux'):
+            snapshot = runner.source_snapshot()
+        self.assertIn('tool/fixtures/compatibility/fakedns.json', snapshot)
+        self.assertEqual(snapshot['tool/fixtures/compatibility/fakedns.json'], 'synthetic-digest')
+
     def test_snapshot_binds_shared_counter_wire_corpus(self):
         seen = []
         def record(path):

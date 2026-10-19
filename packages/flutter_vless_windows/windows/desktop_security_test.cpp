@@ -361,7 +361,7 @@ void DnsAddressCases(const std::string& only = "") {
       Require(result && calls.empty() && Parse(*result)["dns"]["servers"][0] == raw
           && Parse(*result)["dns"]["hosts"] == profile["dns"]["hosts"], "root DNS parsed Address view changed raw JSON or refused Core-equivalent numeric/static remote DNS");
     }
-    for (const auto& raw : {"[ fakedns ]", "[ quic://127.0.0.1 ]", "[ https+local://127.0.0.1/dns-query ]", "[ tls://127.0.0.1 ]"}) {
+    for (const auto& raw : {"[ quic://127.0.0.1 ]", "[ https+local://127.0.0.1/dns-query ]", "[ tls://127.0.0.1 ]"}) {
       EndpointEnvironment environment({{"FLUTTER_VLESS_FIXTURE_DNS_PARSED", raw}});
       std::vector<std::string> calls;
       Require(!prepare(profile, calls), "parsed env DNS Address bypassed unsupported-client refusal");
@@ -382,7 +382,12 @@ void DnsAddressCases(const std::string& only = "") {
     std::vector<std::string> calls, literal_calls;
     const auto result = prepare(profile, calls), expected = prepare(literal, literal_calls);
     Require(result && expected && Parse(*result) == Parse(*expected), "env localhost did not use the protected native DNS replacement");
-    for (const auto& unsafe : {"fakedns", "env:OTHER"}) {
+    {
+      EndpointEnvironment changed({{"FLUTTER_VLESS_FIXTURE_DNS_DEFAULT", "fakedns"}});
+      calls.clear(); const auto fake = prepare(profile, calls);
+      Require(fake && Parse(*fake)["dns"]["servers"][0]["address"] == "fakedns", "bound FakeDNS sentinel rejected or replaced");
+    }
+    for (const auto& unsafe : {"env:OTHER"}) {
       EndpointEnvironment changed({{"FLUTTER_VLESS_FIXTURE_DNS_DEFAULT", unsafe}});
       calls.clear(); Require(!prepare(profile, calls), "env default DNS bypassed unsupported/nested Address refusal");
     }
@@ -1031,7 +1036,72 @@ void ProtocolCompatibilityCases(const std::string& only = "") {
     const auto found = cases.find(only); Require(found != cases.end(), "unknown protocol test case"); found->second();
   } else for (const auto& item : cases) item.second();
 }
+void FakeDnsCases(const std::string& only = "") {
+  std::ifstream input("tool/fixtures/compatibility/fakedns.json");
+  Require(input.good(), "shared FakeDNS corpus required");
+  Json corpus; input >> corpus;
+  Require(corpus.size() == 5, "shared FakeDNS case count changed");
+  bool selected = only.empty();
+  auto prepare = [](const Json& source, unsigned& calls) {
+    return PrepareProtectedVpn(source.dump(), "session-user", "session-password", "Ethernet", [&](const std::string& host) {
+      ++calls; return host == "endpoint.invalid" ? "192.0.2.5" : "";
+    });
+  };
+  for (const auto& fixture : corpus) {
+    const auto name = fixture["name"].get<std::string>();
+    if (!only.empty() && only != name) continue;
+    selected = true;
+    const auto source = fixture["config"], original = source;
+    unsigned calls = 0;
+    const auto result = prepare(source, calls);
+    Require(result.has_value(), "valid FakeDNS profile rejected by native preparation");
+    const auto effective = Parse(*result);
+    Require(calls == 1 && source == original, "FakeDNS queried an extra physical name or mutated source");
+    Require(effective["dns"] == source["dns"] && effective["policy"] == source["policy"], "caller DNS or policy changed");
+    for (auto it = source.begin(); it != source.end(); ++it) if (Fold(it.key()) == "fakedns") {
+      bool found = false;
+      for (auto actual = effective.begin(); actual != effective.end(); ++actual) if (Fold(actual.key()) == "fakedns") {
+        Require(*actual == *it, "caller FakeDNS engine/pools changed"); found = true;
+      }
+      Require(found, "caller FakeDNS root dropped");
+    }
+    Require(effective["inbounds"][1] == source["inbounds"][0], "caller listener/sniffing changed");
+    const auto& sniffing = effective["inbounds"][0]["sniffing"];
+    Require(sniffing["enabled"] == true && sniffing["routeOnly"] == true
+        && sniffing["destOverride"] == Json::array({"http", "tls", "quic", "fakedns"}), "private FakeDNS restoration missing");
+    Require(std::string(kVirtualDns) == "10.0.85.53", "virtual DNS still overlaps Core's default FakeDNS pool");
+  }
+  if (only.empty() || only == "refusals") {
+    selected = true;
+    for (const auto& pool : {
+        Json{{"ipPool", "10.0.85.0/24"}, {"poolSize", 128}},
+        Json{{"ipPool", "26.26.26.0/30"}, {"poolSize", 2}},
+        Json{{"ipPool", "fd26:26:26::/126"}, {"poolSize", 2}},
+        Json{{"ipPool", "fd00:198:18::/64"}, {"poolSize", 1024}},
+        Json{{"ipPool", "::ffff:10.0.85.0/120"}, {"poolSize", 128}},
+        Json{{"ipPool", "::ffff:0:0/80"}, {"poolSize", 1024}},
+        Json{{"ipPool", "0.0.0.0/0"}, {"poolSize", 1024}},
+        Json{{"ipPool", "::/0"}, {"poolSize", 1024}},
+        Json{{"ipPool", "invalid/16"}, {"poolSize", 1024}},
+        Json{{"ipPool", "198.19.0.0/16"}, {"poolSize", 0}},
+        Json{{"ipPool", "198.19.0.0/24"}, {"poolSize", 256}},
+        Json{{"ipPool", "198.19.0.0/16"}, {"poolSize", 1024.0}},
+        Json{{"ipPool", "198.19.0.0/16"}, {"poolSize", true}},
+        Json{{"ipPool", "198.19.0.0/16"}, {"poolSize", "1024"}}}) {
+      auto source = corpus[0]["config"]; source["fakedns"] = pool;
+      const auto original = source; unsigned calls = 0;
+      Require(!prepare(source, calls) && calls == 0 && source == original,
+          "unsafe/malformed FakeDNS pool admitted or bootstrapped before refusal");
+    }
+    auto duplicate = corpus[0]["config"];
+    duplicate["fakedns"] = Json{{"ipPool", "198.19.0.0/16"}, {"IPPOOL", "10.0.85.0/24"}, {"poolSize", 1024}};
+    unsigned calls = 0; Require(!prepare(duplicate, calls) && calls == 0, "ambiguous FakeDNS pool admitted");
+  }
+  Require(selected, "unknown FakeDNS case");
+}
+
 int main(int argc, char** argv) try {
+  if (argc == 3 && std::string(argv[1]) == "--fakedns-case") { FakeDnsCases(argv[2]); return 0; }
   if (argc == 5 && std::string(argv[1]) == "--bind-certificate-fixture") {
     std::ifstream input(argv[2], std::ios::binary);
     if (!input.good()) return 4;
@@ -1080,6 +1150,7 @@ int main(int argc, char** argv) try {
   ProtocolCompatibilityCases();
   EndpointAddressCases();
   DnsAddressCases();
+  FakeDnsCases();
   LogicalAddressCases();
   MappedDnsCases();
   TransportNoneCases();
@@ -1171,9 +1242,9 @@ int main(int argc, char** argv) try {
   Require(Parse(*local_prepared)["routing"]["rules"][1]["inboundTag"] == Json::array({"caller-local"}), "localhost native policy lost its effective client tag");
   local["dns"]["servers"][0]["Tag"] = "";
   auto empty_tag = prepare(local); Require(empty_tag.has_value() && !Parse(*empty_tag)["dns"]["servers"][0].contains("tag"), "native DNS added a duplicate folded tag alias");
-  for (const auto& address : {"fakedns", "tcp+local://1.1.1.1", "https+local://dns.example/dns-query", "quic+local://1.1.1.1", "tls://1.1.1.1", "tcp://[2001:db8::1]", "unknown://1.1.1.1"}) {
+  for (const auto& address : {"tcp+local://1.1.1.1", "https+local://dns.example/dns-query", "quic+local://1.1.1.1", "tls://1.1.1.1", "tcp://[2001:db8::1]", "unknown://1.1.1.1"}) {
     auto unsupported = source; unsupported["dns"]["servers"] = Json::array({address});
-    Require(!prepare(unsupported), "unsupported local/DoT/QUIC/FakeDNS/IPv6 path silently admitted");
+    Require(!prepare(unsupported), "unsupported local/DoT/QUIC/IPv6 path silently admitted");
   }
   for (const auto& strategy : {"UseSystem", "use_sys", "use-system"}) {
     auto unsupported = source; unsupported["dns"]["queryStrategy"] = strategy;
@@ -1255,7 +1326,9 @@ int main(int argc, char** argv) try {
   Require(isolated_dns["inbounds"][0]["tag"] == std::string(kManagedInbound) + "-1" && isolated_dns["dns"] == tag_collision["dns"], "managed DNS inherited root own-link identity");
   Require(find_outbound(isolated_dns, isolated_dns["outbounds"][0]["streamSettings"]["sockopt"]["dialerProxy"].get<std::string>())["settings"]["inboundTag"] == "flutter-vless-bootstrap-input-1", "private physical pin inherited caller DNS own-link tag");
   for (const auto& key : {"FakeDNS", "fakedns", "fakeDnS"}) {
-    auto bad = source; bad[key] = Json::array(); Require(!prepare(bad), "FakeDNS alias bypassed IPv6 policy");
+    auto allowed = source; allowed[key] = Json::array();
+    const auto fake = prepare(allowed); Require(fake.has_value(), "valid empty FakeDNS engine alias refused");
+    Require(Parse(*fake)["fakedns"] == Json::array(), "empty FakeDNS engine changed");
   }
   for (const auto& key : {"Listen", "Li\xC5\xBFten"}) {
     auto bad = source; bad["inbounds"][0][key] = "0.0.0.0"; Require(!prepare(bad), "ambiguous listen accepted");

@@ -450,7 +450,10 @@ func query(t *testing.T, port int, udp bool, name string, qtype uint16) *dns.Msg
 		t.Fatal(err)
 	}
 	var response []byte
-	virtual := netip.MustParseAddrPort("198.18.0.2:53")
+	virtual := netip.MustParseAddrPort("10.0.85.53:53")
+	address := virtual.Addr().As4()
+	header := append([]byte{0, 0, 0, 1}, address[:]...)
+	header = binary.BigEndian.AppendUint16(header, virtual.Port())
 	if udp {
 		c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 		if err != nil {
@@ -459,14 +462,14 @@ func query(t *testing.T, port int, udp bool, name string, qtype uint16) *dns.Msg
 		defer c.Close()
 		control, relay := connect(t, port, 3, c.LocalAddr().(*net.UDPAddr).AddrPort(), "")
 		defer control.Close()
-		packet = append([]byte{0, 0, 0, 1, 198, 18, 0, 2, 0, 53}, packet...)
+		packet = append(header, packet...)
 		if _, err := c.WriteToUDPAddrPort(packet, relay); err != nil {
 			t.Fatal(err)
 		}
 		_ = c.SetReadDeadline(time.Now().Add(4 * time.Second))
 		buffer := make([]byte, 4096)
 		n, peer, err := c.ReadFromUDPAddrPort(buffer)
-		if err != nil || n < 22 || peer != relay || !bytes.Equal(buffer[:10], []byte{0, 0, 0, 1, 198, 18, 0, 2, 0, 53}) {
+		if err != nil || n < 22 || peer != relay || !bytes.Equal(buffer[:10], header) {
 			t.Fatal("exact VIP UDP DNS response missing", err)
 		}
 		response = buffer[10:n]
@@ -506,6 +509,7 @@ func TestNativeDNSPreservation(t *testing.T) {
 		t.Fatal("production C++ exporter required")
 	}
 	t.Run("WindowsPreparer", testNativeDNSPreservation)
+	t.Run("WindowsFakeDNS", testNativeFakeDNS)
 	t.Run("WindowsIPv6Payload", testNativeIPv6Payload)
 	t.Run("WindowsHTTPSDoH", testNativeHTTPSDoH)
 	t.Run("WindowsLogicalAddresses", testNativeLogicalAddresses)
@@ -515,6 +519,7 @@ func TestNativeDNSPreservation(t *testing.T) {
 	t.Run("WindowsXHTTPPenetrate", testNativeXHTTPPenetrate)
 	if apple := os.Getenv("NATIVE_DNS_PREPARER_APPLE"); apple != "" {
 		t.Run("ApplePreparer", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeDNSPreservation(t) })
+		t.Run("AppleFakeDNS", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeFakeDNS(t) })
 		t.Run("AppleIPv6Payload", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeIPv6Payload(t) })
 		t.Run("AppleHTTPSDoH", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeHTTPSDoH(t) })
 		t.Run("AppleLogicalAddresses", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeLogicalAddresses(t) })

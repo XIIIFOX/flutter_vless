@@ -239,7 +239,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
 
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "254.1.1.1")
         settings.mtu = NSNumber(value: tunnelMTU)
-        let ipv4 = NEIPv4Settings(addresses: ["198.18.0.1"], subnetMasks: ["255.255.0.0"])
+        let ipv4 = NEIPv4Settings(addresses: ["10.0.85.2"], subnetMasks: ["255.255.255.0"])
         ipv4.includedRoutes = [NEIPv4Route.default(), NEIPv4Route(destinationAddress: TunnelDNSPolicy.virtualServer, subnetMask: "255.255.255.255")]
         ipv4.excludedRoutes = buildIPv4ExcludedRoutes(
             serverAddresses: addresses.filter { isIPv4Literal($0) }

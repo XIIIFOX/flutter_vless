@@ -1,0 +1,372 @@
+[
+  {
+    "name": "implicit_default_ipv4",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [
+        {
+          "tag": "caller-input",
+          "listen": "127.0.0.1",
+          "port": 10808,
+          "protocol": "socks",
+          "settings": {
+            "auth": "noauth",
+            "udp": true
+          },
+          "sniffing": {
+            "enabled": true,
+            "routeOnly": false,
+            "destOverride": [
+              "tls"
+            ]
+          }
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "http",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "dns": {
+        "tag": "caller-dns",
+        "queryStrategy": "UseIPv4",
+        "hosts": {
+          "full:static.invalid": "192.0.2.14"
+        },
+        "servers": [
+          "fakedns"
+        ]
+      },
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-input"
+            ],
+            "outboundTag": "proxy"
+          }
+        ]
+      },
+      "policy": {
+        "system": {
+          "statsInboundUplink": false,
+          "statsInboundDownlink": false
+        }
+      }
+    }
+  },
+  {
+    "name": "explicit_object_ipv4",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [
+        {
+          "tag": "caller-input",
+          "listen": "127.0.0.1",
+          "port": 10808,
+          "protocol": "socks",
+          "settings": {
+            "auth": "noauth",
+            "udp": true
+          },
+          "sniffing": {
+            "enabled": true,
+            "routeOnly": false,
+            "destOverride": [
+              "tls"
+            ]
+          }
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "http",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "dns": {
+        "tag": "caller-dns",
+        "queryStrategy": "UseIPv4",
+        "hosts": {
+          "full:static.invalid": "192.0.2.14"
+        },
+        "servers": [
+          "fakedns"
+        ]
+      },
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-input"
+            ],
+            "outboundTag": "proxy"
+          }
+        ]
+      },
+      "policy": {
+        "system": {
+          "statsInboundUplink": false,
+          "statsInboundDownlink": false
+        }
+      },
+      "fakeDns": {
+        "ipPool": "198.19.0.0/16",
+        "poolSize": 1024
+      }
+    }
+  },
+  {
+    "name": "explicit_dual_stack",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [
+        {
+          "tag": "caller-input",
+          "listen": "127.0.0.1",
+          "port": 10808,
+          "protocol": "socks",
+          "settings": {
+            "auth": "noauth",
+            "udp": true
+          },
+          "sniffing": {
+            "enabled": true,
+            "routeOnly": false,
+            "destOverride": [
+              "tls"
+            ]
+          }
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "http",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "dns": {
+        "tag": "caller-dns",
+        "queryStrategy": "UseIP",
+        "hosts": {
+          "full:static.invalid": "192.0.2.14"
+        },
+        "servers": [
+          {
+            "address": "fakedns",
+            "domains": [
+              "full:fake.invalid"
+            ],
+            "skipFallback": true,
+            "tag": "caller-fake-dns"
+          },
+          "tcp://1.1.1.1"
+        ]
+      },
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-input"
+            ],
+            "outboundTag": "proxy"
+          }
+        ]
+      },
+      "policy": {
+        "system": {
+          "statsInboundUplink": false,
+          "statsInboundDownlink": false
+        }
+      },
+      "FakeDNS": [
+        {
+          "ipPool": "198.19.0.0/16",
+          "poolSize": 1024
+        },
+        {
+          "ipPool": "fc00::/18",
+          "poolSize": 1024
+        }
+      ]
+    }
+  },
+  {
+    "name": "null_engine_implicit",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [
+        {
+          "tag": "caller-input",
+          "listen": "127.0.0.1",
+          "port": 10808,
+          "protocol": "socks",
+          "settings": {
+            "auth": "noauth",
+            "udp": true
+          },
+          "sniffing": {
+            "enabled": true,
+            "routeOnly": false,
+            "destOverride": [
+              "tls"
+            ]
+          }
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "http",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "dns": {
+        "tag": "caller-dns",
+        "queryStrategy": "UseIPv4",
+        "hosts": {
+          "full:static.invalid": "192.0.2.14"
+        },
+        "servers": [
+          "[ fakedns ]"
+        ]
+      },
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-input"
+            ],
+            "outboundTag": "proxy"
+          }
+        ]
+      },
+      "policy": {
+        "system": {
+          "statsInboundUplink": false,
+          "statsInboundDownlink": false
+        }
+      },
+      "fakeDnſ": null
+    }
+  },
+  {
+    "name": "empty_engine_preserved",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [
+        {
+          "tag": "caller-input",
+          "listen": "127.0.0.1",
+          "port": 10808,
+          "protocol": "socks",
+          "settings": {
+            "auth": "noauth",
+            "udp": true
+          },
+          "sniffing": {
+            "enabled": true,
+            "routeOnly": false,
+            "destOverride": [
+              "tls"
+            ]
+          }
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "http",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "dns": {
+        "tag": "caller-dns",
+        "queryStrategy": "UseIPv4",
+        "hosts": {
+          "full:static.invalid": "192.0.2.14"
+        },
+        "servers": [
+          "fakedns",
+          "tcp://1.1.1.1"
+        ]
+      },
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-input"
+            ],
+            "outboundTag": "proxy"
+          }
+        ]
+      },
+      "policy": {
+        "system": {
+          "statsInboundUplink": false,
+          "statsInboundDownlink": false
+        }
+      },
+      "fakedns": []
+    }
+  }
+]

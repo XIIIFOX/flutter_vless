@@ -177,6 +177,9 @@ object XrayCoreManager {
         val used = XrayPortSpec.serviceListenerPorts(json).toMutableSet()
         var hasSocks = false
         var managedInput: JSONObject? = null
+        // Only a prepared VPN DNS bridge restores FakeDNS destinations.
+        // Standalone delay owns an authenticated temporary input, not a TUN.
+        val restoreFakeDns = !config.PROXY_ONLY && protectedDns != null && AndroidTunnelDnsPolicy.fakeDnsActive(json)
         for (i in 0 until inbounds.length()) {
             val inbound = inbounds.getJSONObject(i)
             val port = inbound.optInt("port", -1)
@@ -199,7 +202,8 @@ object XrayCoreManager {
                 .put("listen", "127.0.0.1").put("port", config.LOCAL_SOCKS5_PORT).put("protocol", "socks")
                 .put("settings", JSONObject().put("auth", "noauth").put("udp", true))
                 .put("sniffing", JSONObject().put("enabled", true).put("routeOnly", true)
-                    .put("destOverride", JSONArray().put("http").put("tls").put("quic"))))
+                    .put("destOverride", JSONArray().put("http").put("tls").put("quic")
+                        .also { if (restoreFakeDns) it.put("fakedns") })))
             managedInput = inbounds.getJSONObject(inbounds.length() - 1)
             used.add(config.LOCAL_SOCKS5_PORT)
         }

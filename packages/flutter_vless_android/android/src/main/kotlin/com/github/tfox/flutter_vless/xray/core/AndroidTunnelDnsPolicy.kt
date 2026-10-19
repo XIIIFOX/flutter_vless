@@ -5,10 +5,11 @@ import org.json.JSONObject
 import java.net.IDN
 import java.net.InetAddress
 import java.util.Locale
+import kotlin.math.log2
 
 /** Explicit system-DNS policy. This helper never performs an OS DNS lookup. */
 internal object AndroidTunnelDnsPolicy {
-    const val VIRTUAL_SERVER = "198.18.0.2"
+    const val VIRTUAL_SERVER = "10.0.85.53"
     const val RELAY_TAG = "flutter-vless-system-dns"
     const val UPSTREAM_TAG = "flutter-vless-dns-upstream"
     const val PROXY_TAG = "flutter-vless-dns-proxy"
@@ -61,6 +62,9 @@ internal object AndroidTunnelDnsPolicy {
 
         val config = JSONObject(configJson)
         bindLogicalAddresses(config, environment)
+        // The explicit policy replaces caller DNS, but a separately configured
+        // FakeDNS engine must still leave the adapter's reserved addresses free.
+        fakeDnsActive(config, inspectServers = false)
         canonicalize(config, "outbounds", "inbounds", "routing", "dns")
         val outbounds = objects(config, "outbounds", required = true)
         val inbounds = objects(config, "inbounds")
@@ -189,7 +193,7 @@ internal object AndroidTunnelDnsPolicy {
         val config = JSONObject(configJson)
         bindLogicalAddresses(config, environment)
         bindRootDnsAddresses(config, environment)
-        requireNoFakeDns(config)
+        fakeDnsActive(config)
         canonicalize(config, "outbounds", "inbounds", "routing")
         val outbounds = objects(config, "outbounds", required = true)
         val serviceTags = XrayServiceTags(config)
@@ -292,19 +296,75 @@ internal object AndroidTunnelDnsPolicy {
         }
     }
 
-    /** Match only Core's engine/server fields, not arbitrary caller host names. */
-    private fun requireNoFakeDns(config: JSONObject) {
+    /** Validate only the Core engine/server schema; never rewrite caller pools. */
+    internal fun fakeDnsActive(config: JSONObject, inspectServers: Boolean = true): Boolean {
         val engine = schemaField(config, "fakedns")
-        require(engine == null || engine == JSONObject.NULL) { "FakeDNS is unavailable in the VPN DNS bridge" }
-        val dns = schemaField(config, "dns") as? JSONObject ?: return
-        val servers = schemaField(dns, "servers") as? JSONArray ?: return
+        val explicit = engine != null && engine != JSONObject.NULL
+        val pools = when (engine) {
+            null, JSONObject.NULL -> emptyList()
+            is JSONObject -> listOf(engine)
+            is JSONArray -> (0 until engine.length()).map {
+                engine.opt(it) as? JSONObject ?: throw IllegalArgumentException("Invalid FakeDNS pool")
+            }
+            else -> throw IllegalArgumentException("Invalid FakeDNS engine")
+        }
+        val reserved = listOf("10.0.85.0/24", "26.26.26.0/30", "fd26:26:26::/126", "fd00:198:18::/64",
+            "::ffff:10.0.85.0/120", "::ffff:26.26.26.0/126").map(::fakePoolNetwork)
+        for (pool in pools) {
+            val cidr = schemaField(pool, "ippool") as? String
+                ?: throw IllegalArgumentException("Invalid FakeDNS pool CIDR")
+            val range = fakePoolNetwork(cidr)
+            val size = when (val value = schemaField(pool, "poolsize")) {
+                is Byte, is Short, is Int, is Long -> (value as Number).toLong()
+                is java.math.BigInteger -> try { value.longValueExact() } catch (_: ArithmeticException) {
+                    throw IllegalArgumentException("Invalid FakeDNS pool size")
+                }
+                else -> throw IllegalArgumentException("Invalid FakeDNS pool size")
+            }
+            require(size > 0 && log2(size.toDouble()) < range.address.size * 8 - range.prefix) {
+                "FakeDNS pool size exceeds its address capacity"
+            }
+            require(reserved.none(range::overlaps)) { "FakeDNS pool overlaps a reserved adapter range" }
+        }
+        if (explicit || !inspectServers) return explicit
+        val dns = schemaField(config, "dns") as? JSONObject ?: return false
+        val servers = schemaField(dns, "servers") as? JSONArray ?: return false
         for (index in 0 until servers.length()) {
             val server = servers.opt(index)
             val address = if (server is JSONObject) schemaField(server, "address") else server
-            require(address !is String || schemaFold(XrayPortSpec.coreAddressText(address)) != "fakedns") {
-                "FakeDNS is unavailable in the VPN DNS bridge"
-            }
+            if (address is String && schemaFold(XrayPortSpec.coreAddressText(address)) == "fakedns") return true
         }
+        return false
+    }
+
+    private data class FakePoolNetwork(val address: ByteArray, val prefix: Int) {
+        fun overlaps(other: FakePoolNetwork): Boolean {
+            if (address.size != other.address.size) return false
+            for (bit in 0 until minOf(prefix, other.prefix)) {
+                val mask = 1 shl (7 - bit % 8)
+                if ((address[bit / 8].toInt() and mask) != (other.address[bit / 8].toInt() and mask)) return false
+            }
+            return true
+        }
+    }
+
+    private fun fakePoolNetwork(cidr: String): FakePoolNetwork {
+        val parts = cidr.split('/')
+        require(parts.size == 2 && parts[1].matches(Regex("[0-9]+"))) { "Invalid FakeDNS pool CIDR" }
+        if (parts[0].contains(':') && parts[0].contains('.'))
+            require(literalAddress(parts[0].substringAfterLast(':'), allowBrackets = false)?.address?.size == 4) {
+                "Invalid FakeDNS pool CIDR"
+            }
+        // ParseCIDR accepts plain numeric addresses, not scopes, brackets or
+        // whitespace. Lexical validation in literalAddress prevents DNS lookup.
+        val parsed = literalAddress(parts[0], allowBrackets = false)?.address
+            ?: throw IllegalArgumentException("Invalid FakeDNS pool CIDR")
+        // Java collapses IPv4-mapped IPv6 to four bytes; preserve its CIDR family.
+        val address = if (parts[0].contains(':') && parsed.size == 4)
+            ByteArray(10) + byteArrayOf(0xff.toByte(), 0xff.toByte()) + parsed else parsed
+        val prefix = parts[1].toIntOrNull() ?: throw IllegalArgumentException("Invalid FakeDNS pool CIDR")
+        require(prefix in 0..address.size * 8) { "Invalid FakeDNS pool CIDR" }
+        return FakePoolNetwork(address, prefix)
     }
 
     private fun prepareStream(stream: JSONObject, pinEndpoint: (String) -> Unit, independentDownload: Boolean = false,
@@ -357,7 +417,8 @@ internal object AndroidTunnelDnsPolicy {
             require(prefix != null && prefix in 0..32) { "Invalid excluded route prefix" }
             val number = address.fold(0L) { acc, byte -> (acc shl 8) or (byte.toLong() and 255) }
             val mask = if (prefix == 0) 0L else (0xffffffffL shl (32 - prefix)) and 0xffffffffL
-            (number and mask) == (0xc6120002L and mask)
+            val virtual = VIRTUAL_SERVER.split('.').fold(0L) { acc, byte -> (acc shl 8) or byte.toLong() }
+            (number and mask) == (virtual and mask)
         }
     }
 
@@ -373,7 +434,7 @@ internal object AndroidTunnelDnsPolicy {
         return InetAddress.getByAddress(bytes.map { it.toInt().toByte() }.toByteArray())
     }
 
-    private fun isVirtualAddress(address: InetAddress): Boolean = address.address.contentEquals(byteArrayOf(198.toByte(), 18, 0, 2))
+    private fun isVirtualAddress(address: InetAddress): Boolean = address.address.contentEquals(literalAddress(VIRTUAL_SERVER)!!.address)
 
     internal fun canonicalHostname(raw: String): String {
         require(raw == raw.trim() && !raw.contains(':') && !raw.contains('/') && !raw.contains('%') && !raw.contains('[')) { "Invalid proxy endpoint hostname" }

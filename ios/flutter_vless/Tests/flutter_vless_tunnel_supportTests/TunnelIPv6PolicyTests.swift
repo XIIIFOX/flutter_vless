@@ -33,10 +33,10 @@ final class TunnelIPv6PolicyTests: XCTestCase {
         XCTAssertEqual(second as NSArray, rules as NSArray, "Repeated preparation must not add a routing override")
     }
 
-    func testFakeDNSCannotReplaceIPv6TargetDuringSniffing() {
+    func testValidFakeDNSPoolAliasesPreserveCoreEngine() {
         for key in ["fakeDns", "fakedns", "FakeDNS", "fakeDnſ", "faKeDns"] {
             var config: [String: Any] = [key: [["ipPool": "fc00::/18", "poolSize": 1000]]]
-            XCTAssertFalse(TunnelIPv6Policy.apply(to: &config))
+            XCTAssertTrue(TunnelIPv6Policy.apply(to: &config))
         }
     }
 

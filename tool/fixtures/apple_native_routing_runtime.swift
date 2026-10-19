@@ -25,7 +25,7 @@ func runNativeRoutingRuntimeChecks() throws {
                 ["tag": "alias-target", "protocol": "freedom", "settings": ["redirect": "127.0.0.1:18096"]],
                 ["tag": "selected-default", "protocol": "freedom", "settings": ["redirect": "127.0.0.1:18097"]]],
             "routing": ["domainStrategy": "IPIfNonMatch", "rules": [
-                ["type": "field", "inboundTag": [sourceTag], "ip": ["198.18.0.2"], "port": "53", "outboundTag": "caller-block"],
+                ["type": "field", "inboundTag": [sourceTag], "ip": [TunnelDNSPolicy.virtualServer], "port": "53", "outboundTag": "caller-block"],
                 ["type": "field", "inboundTag": [sourceTag], "domain": ["full:alias.invalid"], "outboundTag": "alias-target"]]]]
         let source = try JSONSerialization.data(withJSONObject: raw)
         let intent = try NativeRoutingIntent(sourceInboundIndex: 0, defaultOutboundTag: "selected-default")

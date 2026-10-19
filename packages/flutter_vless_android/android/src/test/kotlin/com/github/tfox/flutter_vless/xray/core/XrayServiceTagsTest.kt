@@ -120,7 +120,7 @@ class XrayServiceTagsTest {
             assertEquals(dns.managedInboundTag, adapter.getString("tag"))
             val dnsRule = runtime.getJSONObject("routing").getJSONArray("rules").getJSONObject(2)
             assertEquals(dns.managedInboundTag, dnsRule.getJSONArray("inboundTag").getString(0))
-            assertEquals("198.18.0.2/32", dnsRule.getJSONArray("ip").getString(0))
+            assertEquals("10.0.85.53/32", dnsRule.getJSONArray("ip").getString(0))
         }
         assertThrows(IllegalArgumentException::class.java) {
             XrayCoreManager.buildRuntimeConfigJson(config.copy(), File("."), secret)

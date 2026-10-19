@@ -162,7 +162,7 @@ struct PacketBridgeProbe {
         let config = """
         tunnel:
           mtu: 1500
-          ipv4: 198.18.0.1
+          ipv4: 10.0.85.2
         socks5:
           address: 127.0.0.1
           port: \(port)

@@ -6,6 +6,26 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AndroidTunnelDnsPolicyTest {
+    @Test fun fakeDnsBridgeUsesAnAddressOutsideTheDefaultFakePools() {
+        val prepared = AndroidTunnelDnsPolicy.prepare(config(outbound()).toString())
+        assertEquals(listOf("10.0.85.53"), prepared.systemDnsServers)
+        assertEquals("10.0.85.53/32", JSONObject(prepared.configJson).getJSONObject("routing")
+            .getJSONArray("rules").getJSONObject(0).getJSONArray("ip").getString(0))
+    }
+
+    @Test fun fakeDnsReservedPoolOverlapIsRefusedBeforeProxyBootstrap() {
+        for (pool in listOf("10.0.85.0/24", "26.26.26.0/30", "fd26:26:26::/126", "fd00:198:18::/64",
+                "::ffff:10.0.85.0/120", "::ffff:26.26.26.0/126", "::ffff:0:0/80")) {
+            val input = config(outbound()).put("fakeDns", JSONObject().put("ipPool", pool).put("poolSize", 1))
+            val before = input.toString(); var callbacks = 0
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+                AndroidTunnelDnsPolicy.prepare(before, "proxy") { callbacks++; listOf("192.0.2.17") }
+            }
+            assertEquals("Overlapping FakeDNS engine reached physical bootstrap", 0, callbacks)
+            assertEquals(before, input.toString())
+        }
+    }
+
     private fun outbound(protocol: String = "http", tag: String? = "proxy", address: String = "proxy.test"): JSONObject {
         val endpoint = JSONObject().put("address", address).put("port", 443)
             .put("users", JSONArray().put(JSONObject().put("user", "remote-user").put("pass", "remote-password")
@@ -38,7 +58,7 @@ class AndroidTunnelDnsPolicyTest {
             val originalUserRules = input.getJSONObject("routing").getJSONArray("rules")
             val prepared = prepare(input)
             val output = JSONObject(prepared.configJson)
-            assertEquals(listOf("198.18.0.2"), prepared.systemDnsServers)
+            assertEquals(listOf("10.0.85.53"), prepared.systemDnsServers)
             assertEquals(setOf("proxy.test"), prepared.bootstrapHostnames)
             assertEquals(setOf("192.0.2.17"), prepared.bootstrapAddresses)
             val outbounds = output.getJSONArray("outbounds")
@@ -59,7 +79,7 @@ class AndroidTunnelDnsPolicyTest {
             assertEquals("192.0.2.17", dns.getJSONObject("hosts").getJSONArray("proxy.test").getString(0))
             val rules = output.getJSONObject("routing").getJSONArray("rules")
             assertEquals("proxy", rules.getJSONObject(0).getString("outboundTag"))
-            assertEquals("198.18.0.2/32", rules.getJSONObject(1).getJSONArray("ip").getString(0))
+            assertEquals("10.0.85.53/32", rules.getJSONObject(1).getJSONArray("ip").getString(0))
             assertEquals(prepared.managedInboundTag, rules.getJSONObject(1).getJSONArray("inboundTag").getString(0))
             assertEquals("tcp,udp", rules.getJSONObject(1).getString("network"))
             assertEquals(AndroidTunnelDnsPolicy.RELAY_TAG, rules.getJSONObject(1).getString("outboundTag"))
@@ -102,7 +122,7 @@ class AndroidTunnelDnsPolicyTest {
         assertEquals("IPIfNonMatch", routing.getString("domainStrategy"))
         val bridge = rules.getJSONObject(0)
         assertEquals(prepared.managedInboundTag, bridge.getJSONArray("inboundTag").getString(0))
-        assertEquals("198.18.0.2/32", bridge.getJSONArray("ip").getString(0))
+        assertEquals("10.0.85.53/32", bridge.getJSONArray("ip").getString(0))
         assertEquals("53", bridge.getString("port")); assertEquals("tcp,udp", bridge.getString("network"))
         assertEquals(relay.getString("tag"), bridge.getString("outboundTag"))
         val userRules = input.getJSONObject("routing").getJSONArray("rules")
@@ -176,25 +196,50 @@ class AndroidTunnelDnsPolicyTest {
         assertEquals(input.getJSONArray("inbounds").toString(), output.getJSONArray("inbounds").toString())
     }
 
-    @Test fun configModeRejectsFakeDnsBeforeInstallingAnIncompatibleIpv4Bridge() {
+    @Test fun configModeAcceptsFakeDnsAndDoesNotInterpretUnrelatedHostKeysAsAnEngine() {
         for (key in listOf("fakeDns", "FAKEDNS", "fakeDnſ")) {
-            for (value in listOf<Any>(JSONObject(), JSONArray())) {
+            for (value in listOf<Any>(JSONObject().put("ipPool", "198.19.0.0/16").put("poolSize", 1024), JSONArray())) {
                 val source = config(outbound()).put(key, value).toString()
-                rejected { AndroidTunnelDnsPolicy.prepare(source) }
+                assertTrue(AndroidTunnelDnsPolicy.fakeDnsActive(JSONObject(AndroidTunnelDnsPolicy.prepare(source).configJson)))
             }
         }
         for (address in listOf("fakedns", "FakeDNS", "fakednſ")) {
             for (server in listOf<Any>(address, JSONObject().put("Addreſſ", address))) {
                 val input = config(outbound()).put("DNS", JSONObject().put("SerVerſ", JSONArray().put(server)))
                 input.remove("dns")
-                rejected { AndroidTunnelDnsPolicy.prepare(input.toString()) }
+                assertTrue(AndroidTunnelDnsPolicy.fakeDnsActive(JSONObject(AndroidTunnelDnsPolicy.prepare(input.toString()).configJson)))
             }
         }
         // A null engine is not a configured Core app. Hosts may legitimately
         // contain this word; do not use arbitrary recursive string matching.
         val allowed = config(outbound()).put("fakeDns", JSONObject.NULL)
         allowed.getJSONObject("dns").put("hosts", JSONObject().put("fakedns", "192.0.2.1"))
-        AndroidTunnelDnsPolicy.prepare(allowed.toString())
+        assertFalse(AndroidTunnelDnsPolicy.fakeDnsActive(JSONObject(AndroidTunnelDnsPolicy.prepare(allowed.toString()).configJson)))
+    }
+
+    @Test fun fakeDnsPoolShapeCapacityAndNumericCidrValidationRemainStrict() {
+        fun input(pool: Any) = config(outbound()).put("fakeDns", pool).toString()
+        for (cidr in listOf("pool.invalid/24", "198.19.0.0/33", "[fc00::]/18", "fc00::%en0/18",
+                " fc00::/18", "fc00::\u0000/18", "198.019.0.0/16", "::ffff:198.019.0.0/112")) {
+            rejected { AndroidTunnelDnsPolicy.prepare(input(JSONObject().put("ipPool", cidr).put("poolSize", 1))) }
+        }
+        for (size in listOf<Any>(0, -1, "1024", JSONObject.NULL, java.math.BigInteger("9223372036854775808"))) {
+            rejected { AndroidTunnelDnsPolicy.prepare(input(JSONObject().put("ipPool", "198.19.0.0/16").put("poolSize", size))) }
+        }
+        // JSONObject's writer normalizes 1.0 to 1; retain the caller's actual
+        // decimal spelling so this exercises Core's int64 decoding boundary.
+        rejected { AndroidTunnelDnsPolicy.prepare(input(JSONObject().put("ipPool", "198.19.0.0/16").put("poolSize", 1))
+            .replace("\"poolSize\":1", "\"poolSize\":1.0")) }
+        for (pool in listOf<Any>("198.19.0.0/16", JSONObject(), JSONArray().put(JSONObject.NULL),
+                JSONObject().put("ipPool", "198.19.0.0/30").put("poolSize", 4),
+                JSONObject().put("ipPool", "fc00::/65").put("poolSize", Long.MAX_VALUE))) {
+            rejected { AndroidTunnelDnsPolicy.prepare(input(pool)) }
+        }
+        for ((cidr, size) in listOf("198.19.0.0/30" to 3L, "fc00::/65" to (1L shl 62), "198.19.0.0/00024" to 255L)) {
+            val source = input(JSONObject().put("ipPool", cidr).put("poolSize", size))
+            AndroidTunnelDnsPolicy.prepare(source)
+            assertEquals(source, JSONObject(source).toString())
+        }
     }
 
     @Test fun untaggedSingleProxyGetsReservedTagAndAmbiguousProxiesRequireSelection() {
@@ -213,10 +258,10 @@ class AndroidTunnelDnsPolicyTest {
     @Test fun virtualEndpointRoutingConflictsRejectBeforeResolution() {
         val invalid = mutableListOf<JSONObject>()
         invalid.add(config(outbound(), outbound("socks")))
-        invalid.add(config(outbound(address = "198.18.0.2")))
-        invalid.add(config(outbound(address = "::ffff:198.18.0.2")))
+        invalid.add(config(outbound(address = "10.0.85.53")))
+        invalid.add(config(outbound(address = "::ffff:10.0.85.53")))
         invalid.add(config(outbound()).also {
-            it.getJSONObject("routing").getJSONArray("rules").put(JSONObject().put("ip", JSONArray().put("198.18.0.2/32")).put("outboundTag", "direct"))
+            it.getJSONObject("routing").getJSONArray("rules").put(JSONObject().put("ip", JSONArray().put("10.0.85.53/32")).put("outboundTag", "direct"))
         })
         for (input in invalid) rejected {
             AndroidTunnelDnsPolicy.prepare(input.toString(), "proxy") { error("invalid candidate must not perform bootstrap") }
@@ -224,11 +269,11 @@ class AndroidTunnelDnsPolicyTest {
     }
 
     @Test fun exclusionsContainingVirtualDnsFailWhileOtherDirectExclusionsRemainAvailable() {
-        for (route in listOf("198.18.0.2", "198.18.0.2/32", "198.18.0.0/15", "0.0.0.0/0")) {
+        for (route in listOf("10.0.85.53", "10.0.85.53/32", "10.0.85.0/24", "0.0.0.0/0")) {
             assertFalse(AndroidTunnelDnsPolicy.allowsRouteExclusions(listOf(route)))
             rejected { AndroidTunnelDnsPolicy.prepare(config(outbound()).toString(), "proxy", excludedRoutes = listOf(route)) }
         }
-        assertTrue(AndroidTunnelDnsPolicy.allowsRouteExclusions(listOf("192.168.0.0/16", "198.18.0.1/32", "2001:db8::/32")))
+        assertTrue(AndroidTunnelDnsPolicy.allowsRouteExclusions(listOf("192.168.0.0/16", "10.0.85.52/32", "2001:db8::/32")))
     }
 
     @Test fun bootstrapFailureDoesNotModifyInputOrFallBackToOsDns() {
@@ -236,7 +281,7 @@ class AndroidTunnelDnsPolicyTest {
         val original = input.toString()
         rejected { AndroidTunnelDnsPolicy.prepare(original, "proxy") { emptyList() } }
         rejected { AndroidTunnelDnsPolicy.prepare(original, "proxy") { throw java.net.UnknownHostException("sensitive-endpoint") } }
-        rejected { AndroidTunnelDnsPolicy.prepare(original, "proxy") { listOf("198.18.0.2") } }
+        rejected { AndroidTunnelDnsPolicy.prepare(original, "proxy") { listOf("10.0.85.53") } }
         rejected { AndroidTunnelDnsPolicy.prepare(original, "proxy") { listOf("not-an-ip.test") } }
         assertEquals(original, input.toString())
         AndroidTunnelDnsPolicy.validate(original, "proxy")
@@ -740,12 +785,13 @@ class AndroidTunnelDnsPolicyTest {
         assertEquals(before, nested.toString())
     }
 
-    @Test fun environmentFakeDnsIsRejectedBeforeCoreForScalarAndObjectServers() {
-        for (resolved in listOf("fakedns", "FakeDNS", " \u00a0fakedns\u3000", "[ \u00a0fakedns\u3000]")) {
+    @Test fun environmentFakeDnsIsBoundBeforeActiveDetectionForScalarAndObjectServers() {
+        for (resolved in listOf("fakedns", "FakeDNS", "fakednſ", " \u00a0fakedns\u3000", "[ \u00a0fakedns\u3000]")) {
             for (server in listOf<Any>("env:ENGINE", JSONObject().put("AdDrEsS", "env:ENGINE"))) {
                 val input = config(outbound()).put("dns", JSONObject().put("servers", JSONArray().put(server)))
                 val before = input.toString()
-                rejected { AndroidTunnelDnsPolicy.prepare(before, "config", environment = { resolved }) { error("No physical lookup for FakeDNS") } }
+                val prepared = AndroidTunnelDnsPolicy.prepare(before, "config", environment = { resolved }) { error("No physical lookup for FakeDNS") }
+                assertTrue(AndroidTunnelDnsPolicy.fakeDnsActive(JSONObject(prepared.configJson)))
                 assertEquals(before, input.toString())
             }
         }
@@ -972,7 +1018,7 @@ class AndroidTunnelDnsPolicyTest {
         )
         variants.forEach { rejected { prepare(it) } }
         val capitalized = config(outbound()).also { it.put("Outbounds", it.remove("outbounds")) }
-        assertEquals(listOf("198.18.0.2"), prepare(capitalized).systemDnsServers)
+        assertEquals(listOf("10.0.85.53"), prepare(capitalized).systemDnsServers)
     }
 
     @Test fun malformedEndpointsNeverTriggerImplicitResolution() {

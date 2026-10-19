@@ -647,7 +647,7 @@ func TestNativeHTTPSDoHChild(t *testing.T) {
 			}
 		}
 	} else {
-		connection, _ := connect(t, spec.Port, 1, netip.MustParseAddrPort("198.18.0.2:53"), "")
+		connection, _ := connect(t, spec.Port, 1, netip.MustParseAddrPort("10.0.85.53:53"), "")
 		defer connection.Close()
 		_ = connection.SetDeadline(time.Now().Add(1500 * time.Millisecond))
 		question := new(dns.Msg)

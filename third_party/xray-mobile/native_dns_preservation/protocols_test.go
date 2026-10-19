@@ -77,6 +77,7 @@ func TestProtocolCorpusBuilds(t *testing.T) {
 	t.Run("Core-stats-wire", TestCLIStatsWire)
 	t.Run("Core-empty-inbound-tag", testNativeRoutingEmptyInboundTag)
 	t.Run("Core-android-preview-isolation", testAndroidRoutingPreviewIsolation)
+	t.Run("Core-fakedns-control-closure", TestNativeFakeDNSControlClosure)
 	for _, tc := range preparationCases(t) {
 		t.Run(tc.Name, func(t *testing.T) {
 			data, err := json.Marshal(tc.Config)
@@ -105,6 +106,7 @@ func TestProtocolCorpusBuilds(t *testing.T) {
 	testTransportNone(t, false)
 	testLogicalAddresses(t, false)
 	testLogicalDNSFixtureIO(t)
+	testFakeDNSPreparation(t, false)
 }
 
 // File-only native preparation and Core Build. No core.Instance is created,
@@ -180,6 +182,7 @@ func testNativeProtocolPreparation(t *testing.T) {
 	testMappedDNSAddresses(t, true)
 	testTransportNone(t, true)
 	testLogicalAddresses(t, true)
+	testFakeDNSPreparation(t, true)
 }
 
 func foldedRoot(object map[string]any, name string) (any, bool) {

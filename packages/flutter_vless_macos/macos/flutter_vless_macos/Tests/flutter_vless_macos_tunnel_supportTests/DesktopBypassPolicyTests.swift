@@ -14,7 +14,7 @@ final class DesktopBypassPolicyTests: XCTestCase {
         let bypass = try XCTUnwrap(rules.firstIndex { ($0["outboundTag"] as? String) == "flutter-vless-subnet-direct-" })
         XCTAssertGreaterThan(bypass, 0)
         XCTAssertFalse(rules.contains { ($0["ip"] as? [String])?.contains("::/0") == true })
-        XCTAssertTrue(rules[..<bypass].contains { ($0["ip"] as? [String])?.contains("198.18.0.2/32") == true })
+        XCTAssertTrue(rules[..<bypass].contains { ($0["ip"] as? [String])?.contains("10.0.85.53/32") == true })
         XCTAssertEqual(rules[bypass]["ip"] as? [String], ["0.0.0.0/0", "192.168.0.0/16"])
         XCTAssertEqual(rules.last?["domain"] as? [String], ["domain:ru"])
     }

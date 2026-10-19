@@ -82,7 +82,7 @@ class ProtectedSystemDnsTest {
         } finally { context.unregisterReceiver(receiver) }
         assertTrue("VPN capture did not start", activeVpn())
         val dns = manager.getLinkProperties(manager.activeNetwork)?.dnsServers?.map { it.hostAddress }
-        assertEquals(listOf("198.18.0.2"), dns)
+        assertEquals(listOf("10.0.85.53"), dns)
         fixtureEvents("ready") // a second real host-UID TUN request; host-clock lifecycle marker
     }
 
@@ -110,12 +110,12 @@ class ProtectedSystemDnsTest {
         val request = question(name)
         return if (tcp) Socket().use { socket ->
             socket.soTimeout = 3000
-            socket.connect(InetSocketAddress("198.18.0.2", 53), 3000)
+            socket.connect(InetSocketAddress("10.0.85.53", 53), 3000)
             DataOutputStream(socket.getOutputStream()).apply { writeShort(request.size); write(request); flush() }
             DataInputStream(socket.getInputStream()).let { input -> ByteArray(input.readUnsignedShort()).also { input.readFully(it) } }
         } else DatagramSocket().use { socket ->
             socket.soTimeout = 3000
-            socket.send(DatagramPacket(request, request.size, InetAddress.getByName("198.18.0.2"), 53))
+            socket.send(DatagramPacket(request, request.size, InetAddress.getByName("10.0.85.53"), 53))
             val response = DatagramPacket(ByteArray(4096), 4096)
             socket.receive(response)
             response.data.copyOf(response.length)
@@ -177,7 +177,7 @@ class ProtectedSystemDnsTest {
         start(protocol)
         val imported = name("imported", protocol)
         val importedAnswer = runCatching {
-            AuthenticatedSocksClient.connect(18390, null, "198.18.0.2", 53).use { socket ->
+            AuthenticatedSocksClient.connect(18390, null, "10.0.85.53", 53).use { socket ->
                 socket.soTimeout = 1500
                 val request = question(imported)
                 DataOutputStream(socket.getOutputStream()).apply { writeShort(request.size); write(request); flush() }

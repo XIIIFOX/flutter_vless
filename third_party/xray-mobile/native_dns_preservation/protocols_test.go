@@ -78,6 +78,7 @@ func TestProtocolCorpusBuilds(t *testing.T) {
 	t.Run("Core-empty-inbound-tag", testNativeRoutingEmptyInboundTag)
 	t.Run("Core-android-preview-isolation", testAndroidRoutingPreviewIsolation)
 	t.Run("Core-fakedns-control-closure", TestNativeFakeDNSControlClosure)
+	t.Run("Core-fakedns-endpoint-override", TestNativeFakeDNSEndpointOverride)
 	for _, tc := range preparationCases(t) {
 		t.Run(tc.Name, func(t *testing.T) {
 			data, err := json.Marshal(tc.Config)

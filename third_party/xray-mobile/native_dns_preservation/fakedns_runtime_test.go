@@ -19,8 +19,11 @@ import (
 	"time"
 
 	dns "github.com/miekg/dns"
+	"github.com/xtls/xray-core/common/buf"
 	xnet "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/proxy/socks"
 )
 
 func fakeDNSRuntimeDocument(proxyPort, resolverPort int) map[string]any {
@@ -60,6 +63,79 @@ func fakeDNSOpaque(generation int, udp bool) []byte {
 func fakeDNSDomainHeader(port uint16) []byte {
 	header := append([]byte{0, 0, 0, 3, byte(len("fake.invalid"))}, "fake.invalid"...)
 	return binary.BigEndian.AppendUint16(header, port)
+}
+
+func fakeDNSClientReply(fake netip.Addr, payload []byte) []byte {
+	// The outbound endpoint wrapper restores the original fake IP on replies;
+	// upstream still receives the independently asserted recovered domain.
+	header := append([]byte{0, 0, 0, 1}, fake.AsSlice()...)
+	header = binary.BigEndian.AppendUint16(header, 18083)
+	return append(header, payload...)
+}
+
+type fakeDNSEndpointBuffers struct{ buffers buf.MultiBuffer }
+
+func (b *fakeDNSEndpointBuffers) ReadMultiBuffer() (buf.MultiBuffer, error) {
+	return b.buffers, nil
+}
+
+func (b *fakeDNSEndpointBuffers) WriteMultiBuffer(buffers buf.MultiBuffer) error {
+	b.buffers = buffers
+	return nil
+}
+
+// Actual pinned endpoint wrappers and SOCKS encoder, with inert byte buffers.
+// This proves the client reply contract without a Core instance or any I/O.
+func TestNativeFakeDNSEndpointOverride(t *testing.T) {
+	fake := netip.MustParseAddr("198.19.0.23")
+	original, domain := xnet.ParseAddress(fake.String()), xnet.ParseAddress("fake.invalid")
+	unrelated := xnet.UDPDestination(xnet.ParseAddress("192.0.2.24"), 18084)
+	payload := fakeDNSOpaque(0, true)
+	packets := make(buf.MultiBuffer, 3)
+	for index := range packets {
+		packets[index] = buf.New()
+		if _, err := packets[index].Write(payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer buf.ReleaseMulti(packets)
+	target := xnet.UDPDestination(original, 18083)
+	other := unrelated
+	packets[0].UDP, packets[1].UDP = &target, &other
+	reader := &buf.EndpointOverrideReader{Reader: &fakeDNSEndpointBuffers{packets}, Dest: domain, OriginalDest: original}
+	forward, err := reader.ReadMultiBuffer()
+	if err != nil || forward[0].UDP.Address != domain || forward[0].UDP.Port != 18083 {
+		t.Fatal("actual UDP reader did not restore the domain and exact target port", err)
+	}
+	assertUntouched := func(buffers buf.MultiBuffer) {
+		t.Helper()
+		if *buffers[1].UDP != unrelated || buffers[2].UDP != nil {
+			t.Fatal("endpoint wrapper changed an unrelated or absent UDP destination")
+		}
+		for _, packet := range buffers {
+			if !bytes.Equal(packet.Bytes(), payload) {
+				t.Fatal("endpoint wrapper changed opaque payload bytes")
+			}
+		}
+	}
+	assertUntouched(forward)
+	output := new(fakeDNSEndpointBuffers)
+	writer := &buf.EndpointOverrideWriter{Writer: output, Dest: domain, OriginalDest: original}
+	if err := writer.WriteMultiBuffer(forward); err != nil {
+		t.Fatal(err)
+	}
+	if output.buffers[0].UDP.Address != original || output.buffers[0].UDP.Port != 18083 {
+		t.Fatal("actual UDP writer did not restore the original fake IPv4 and port")
+	}
+	assertUntouched(output.buffers)
+	packet, err := socks.EncodeUDPPacket(&protocol.RequestHeader{Address: output.buffers[0].UDP.Address, Port: output.buffers[0].UDP.Port}, output.buffers[0].Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer packet.Release()
+	if !bytes.Equal(packet.Bytes(), fakeDNSClientReply(fake, payload)) {
+		t.Fatal("fixture client reply expectation differs from pinned Core endpoint restoration and SOCKS encoding")
+	}
 }
 
 func fakeDNSControlReadClosed(n int, err error, goos string) bool {
@@ -361,9 +437,10 @@ func testNativeFakeDNS(t *testing.T) {
 			_ = udp.SetReadDeadline(time.Now().Add(5 * time.Second))
 			buffer := make([]byte, 1024)
 			n, peer, err := udp.ReadFromUDPAddrPort(buffer)
-			want := append(fakeDNSDomainHeader(18083), fakeDNSOpaque(generation, true)...)
+			want := fakeDNSClientReply(fake, fakeDNSOpaque(generation, true))
 			if err != nil || peer != relay || !bytes.Equal(buffer[:n], want) {
-				t.Fatal("opaque UDP bytes did not traverse fake IPv4 to recovered domain", err)
+				t.Fatalf("opaque UDP reply mismatch: got_header=%x want_header=%x got_bytes=%d want_bytes=%d peer_matches=%t read_err=%v",
+					buffer[:min(n, 10)], want[:min(len(want), 10)], n, len(want), peer == relay, err)
 			}
 		})
 		if t.Failed() {

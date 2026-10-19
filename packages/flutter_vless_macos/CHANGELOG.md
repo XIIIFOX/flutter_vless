@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Restrict XHTTP bootstrap chain admission to the upload and its active immediate download. Preserve unused grandchild socket settings while retaining missing-chain and cycle checks.
+
 * Bind relative Realm/XDNS TLS certificate and key files to the explicit certificate assets directory, retaining effective XHTTP download and opaque-data semantics.
 
 * Distinguish endpoint DNS exhaustion from rejected configuration preparation before VPN route installation, keeping diagnostics free of profile data.

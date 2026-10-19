@@ -1166,7 +1166,7 @@ inline bool BindEndpointAddresses(Json& config) {
   return true;
 }
 
-inline bool EffectiveBootstrapChains(Json stream, std::vector<std::string>& chains) {
+inline bool EffectiveBootstrapChains(Json stream, std::vector<std::string>& chains, bool independent_download = false) {
   if (stream.is_null()) return true;
   if (!Fields(stream, {"sockopt", "network", "method", "xhttpSettings", "splithttpSettings"})) return false;
   bool penetrate = false;
@@ -1182,6 +1182,9 @@ inline bool EffectiveBootstrapChains(Json stream, std::vector<std::string>& chai
       if (!options["dialerProxy"].get<std::string>().empty()) chains.push_back(options["dialerProxy"].get<std::string>());
     }
   }
+  // getHTTPClient uses this immediate client's socket policy directly; it
+  // never invokes its Dial again to activate another nested download.
+  if (independent_download) return true;
   const auto network = EffectiveStreamNetwork(stream);
   const auto* key = stream.contains("xhttpSettings") && !stream["xhttpSettings"].is_null() ? "xhttpSettings" : "splithttpSettings";
   if ((network == "xhttp" || network == "splithttp") && stream.contains(key) && !stream[key].is_null()) {
@@ -1194,7 +1197,7 @@ inline bool EffectiveBootstrapChains(Json stream, std::vector<std::string>& chai
     // Core replaces this immediate child's entire socket policy with the
     // parent object. A dormant child chain must not become a dependency.
     if (effective.contains("downloadSettings") && !effective["downloadSettings"].is_null() && !penetrate)
-      return EffectiveBootstrapChains(effective["downloadSettings"], chains);
+      return EffectiveBootstrapChains(effective["downloadSettings"], chains, true);
   }
   return true;
 }

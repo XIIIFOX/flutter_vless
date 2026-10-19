@@ -338,11 +338,13 @@ public enum TunnelDNSPolicy {
         return true
     }
 
-    private static func streamChains(_ stream: [String: Any]) -> [String] {
+    private static func streamChains(_ stream: [String: Any], followDownload: Bool = true) -> [String] {
         var result: [String] = []
         if let tag = (stream["sockopt"] as? [String: Any])?["dialerProxy"] as? String, !tag.isEmpty { result.append(tag) }
-        if (stream["sockopt"] as? [String: Any])?["penetrate"] as? Bool != true,
-           let download = effectiveDownload(in: stream) { result += streamChains(download) }
+        // The immediate client's getHTTPClient uses its own socket settings;
+        // it does not invoke another XHTTP Dial for the child's nested download.
+        if followDownload, (stream["sockopt"] as? [String: Any])?["penetrate"] as? Bool != true,
+           let download = effectiveDownload(in: stream) { result += streamChains(download, followDownload: false) }
         return result
     }
 

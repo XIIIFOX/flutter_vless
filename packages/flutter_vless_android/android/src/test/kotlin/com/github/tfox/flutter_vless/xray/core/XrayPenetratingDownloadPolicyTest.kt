@@ -150,6 +150,7 @@ class XrayPenetratingDownloadPolicyTest {
         val child = download(source).put("address", "192.0.2.8")
         child.getJSONObject("sockopt").remove("dialerProxy")
         val nested = JSONObject().put("address", "192.0.2.9").put("port", 9443).put("network", "tcp")
+            .put("sockopt", JSONObject().put("dialerProxy", "missing-grandchild"))
         child.getJSONObject("xhttpSettings").put("downloadSettings", nested)
         val nestedBefore = nested.toString(); val resolved = mutableListOf<String>()
         val prepared = prepare(source, resolved)
@@ -159,5 +160,12 @@ class XrayPenetratingDownloadPolicyTest {
         val actualChild = download(JSONObject(prepared.configJson))
         assertEquals("ForceIP", actualChild.getJSONObject("sockopt").getString("domainStrategy"))
         assertEquals(nestedBefore, actualChild.getJSONObject("xhttpSettings").getJSONObject("downloadSettings").toString())
+        val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = prepared.configJson)
+        val before = profile.V2RAY_FULL_JSON_CONFIG
+        val runtime = XrayCoreManager.buildRuntimeConfigJson(profile, File("."),
+            LocalProxyCredentials("chain-user", "chain-secret"), prepared,
+            tcpAvailable = { true }, environment = { error("No listener environment lookup expected") })
+        assertEquals(nestedBefore, download(runtime).getJSONObject("xhttpSettings").getJSONObject("downloadSettings").toString())
+        assertEquals(before, profile.V2RAY_FULL_JSON_CONFIG)
     }
 }

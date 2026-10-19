@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Restrict XHTTP bootstrap chain admission to the upload and its active immediate download. Preserve unused grandchild socket settings while retaining missing-chain and cycle checks.
+
 * Bind relative Realm/XDNS TLS certificate and key files to the explicit certificate assets directory without traversing unrelated mask data.
 
 * Match Core Unicode environment aliases for port allocation and addresses. Read the Windows process environment through UTF-16 APIs with UTF-8 conversion, retaining present-empty values and caller last-error state.

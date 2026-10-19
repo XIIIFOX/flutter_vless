@@ -302,7 +302,8 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 				"xhttpSettings": map[string]any{"path": "/download", "host": "download.invalid", "headers": xhttpHeaderData()}}
 			if mode.independent {
 				download["sockopt"] = map[string]any{"tcpKeepAliveIdle": 7}
-				download["xhttpSettings"].(map[string]any)["downloadSettings"] = map[string]any{"address": "127.0.0.1", "port": 9, "network": "tcp"}
+				download["xhttpSettings"].(map[string]any)["downloadSettings"] = map[string]any{"address": "127.0.0.1", "port": 9, "network": "tcp",
+					"sockopt": map[string]any{"dialerProxy": "missing-grandchild"}}
 			}
 			outbounds := []any{map[string]any{"tag": "proxy", "protocol": "vless", "settings": map[string]any{"address": "endpoint.invalid", "port": uploadPort, "id": identity, "encryption": "none"},
 				"streamSettings": map[string]any{"network": "xhttp", "sockopt": options, "xhttpSettings": map[string]any{

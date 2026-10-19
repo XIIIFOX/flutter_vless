@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Add preparation regressions for preserved, unused XHTTP grandchild socket chains.
+
 * Bind relative Realm/XDNS TLS certificate and key files to the explicit certificate assets directory without traversing unrelated mask data.
 
 * Bind queued physical-network callbacks to their VPN session generation, preventing an earlier session's event from restarting its replacement. Cover availability, loss, current recovery and stopped-session behavior through the registered service callback.

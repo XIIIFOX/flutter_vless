@@ -186,6 +186,36 @@ void CertificatePathCases() {
   text = cases[0]["config"].dump();
   Check(!BindCertificatePaths(text, fs::path("relative")), "relative certificate root accepted");
 }
+void EffectiveDownloadChainCases() {
+  const auto source = Parse(R"({"dns":{"servers":["9.9.9.9"]},"outbounds":[{"tag":"proxy","protocol":"socks","settings":{"servers":[{"address":"192.0.2.7","port":19090}]},"streamSettings":{"network":"xhttp","sockopt":{"penetrate":false},"xhttpSettings":{"path":"/upload","downloadSettings":{"address":"192.0.2.8","port":8443,"network":"xhttp","xhttpSettings":{"path":"/download","downloadSettings":{"address":"192.0.2.9","port":9443,"network":"tcp","sockopt":{"dialerProxy":"missing-grandchild"}}}}}}},{"tag":"direct","protocol":"freedom"}]})");
+  unsigned resolutions = 0;
+  const auto prepare = [&](const Json& config) {
+    return PrepareProtectedVpn(config.dump(), "session-user", "session-password", "Ethernet",
+        [&](const std::string&) { ++resolutions; return std::string(); });
+  };
+  auto literal = source;
+  auto& literal_child = literal["outbounds"][0]["streamSettings"]["xhttpSettings"]["downloadSettings"];
+  literal_child["xhttpSettings"]["downloadSettings"]["sockopt"].erase("dialerProxy");
+  Check(prepare(literal).has_value(), "numeric immediate download control rejected");
+  auto active_missing = literal;
+  active_missing["outbounds"][0]["streamSettings"]["xhttpSettings"]["downloadSettings"]["sockopt"]["dialerProxy"] = "missing-child";
+  Check(!prepare(active_missing), "active immediate download missing chain was admitted");
+  auto inherited = active_missing;
+  inherited["outbounds"][0]["streamSettings"]["sockopt"]["penetrate"] = true;
+  Check(prepare(inherited).has_value(), "parent socket inheritance activated dormant child chain");
+  auto cycle = literal;
+  cycle["outbounds"][0]["streamSettings"]["sockopt"]["dialerProxy"] = "proxy";
+  Check(!prepare(cycle), "active outbound chain cycle was admitted");
+  const auto original = source.dump();
+  const auto prepared = prepare(source);
+  Check(resolutions == 0, "numeric or unused download invoked endpoint DNS");
+  Check(prepared.has_value(), "unused grandchild missing chain rejected valid immediate download");
+  const auto& nested = source["outbounds"][0]["streamSettings"]["xhttpSettings"]["downloadSettings"]["xhttpSettings"]["downloadSettings"];
+  const auto effective = Parse(*prepared);
+  Check(effective["outbounds"][0]["streamSettings"]["xhttpSettings"]["downloadSettings"]["xhttpSettings"]["downloadSettings"] == nested,
+      "unused grandchild chain or socket settings were changed");
+  Check(source.dump() == original, "chain preparation changed caller source");
+}
 void CallerServicePreservationCases() {
   std::ifstream input("tool/fixtures/compatibility/full-config.json");
   Check(input.good(), "shared full-config corpus is required");
@@ -391,6 +421,10 @@ int main(int argc, char** argv) {
     try { CertificatePathCases(); return 0; }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
   }
+  if (argc == 2 && std::string(argv[1]) == "--xhttp-chains") {
+    try { EffectiveDownloadChainCases(); return 0; }
+    catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+  }
   // File-only exporter: no process, listener, resolver or platform VPN call.
   if (argc == 5 && std::string(argv[1]) == "--bind-certificate-fixture") {
     std::ifstream input(argv[2], std::ios::binary);
@@ -413,6 +447,7 @@ int main(int argc, char** argv) {
   AssetLocationCases();
   PortEnvironmentCases();
   CertificatePathCases();
+  EffectiveDownloadChainCases();
   std::ifstream api_input("tool/fixtures/compatibility/api-listeners.json");
   Check(api_input.good(), "shared API listener corpus is required");
   Json api_cases; api_input >> api_cases;

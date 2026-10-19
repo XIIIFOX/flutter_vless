@@ -1173,7 +1173,8 @@ final class TunnelDNSPolicyTests: XCTestCase {
     }
 
     func testImmediateXHTTPClientDoesNotDialItsOwnDownload() throws {
-        let dormant: [String: Any] = ["address": "127.0.0.1", "port": 9443, "network": "tcp"]
+        let dormant: [String: Any] = ["address": "127.0.0.1", "port": 9443, "network": "tcp",
+            "sockopt": ["dialerProxy": "missing-grandchild"]]
         let child: [String: Any] = ["address": "download.example", "port": 8443, "network": "xhttp",
             "sockopt": ["tcpKeepAliveIdle": 7], "xhttpSettings": ["downloadSettings": dormant]]
         var config: [String: Any] = ["dns": ["servers": ["9.9.9.9"]], "outbounds": [["tag": "proxy", "protocol": "http",
@@ -1186,6 +1187,64 @@ final class TunnelDNSPolicyTests: XCTestCase {
         let actualChild = try XCTUnwrap((stream["xhttpSettings"] as? [String: Any])?["downloadSettings"] as? [String: Any])
         XCTAssertEqual((actualChild["xhttpSettings"] as? [String: Any])?["downloadSettings"] as? NSDictionary, dormant as NSDictionary)
         XCTAssertEqual((actualChild["sockopt"] as? [String: Any])?["tcpKeepAliveIdle"] as? Int, 7)
+    }
+
+    func testBootstrapChainsUseOnlyEffectiveImmediateDownload() throws {
+        let dormant: [String: Any] = ["address": "192.0.2.9", "port": 9443, "network": "tcp",
+            "sockopt": ["dialerProxy": "missing-grandchild"]]
+        let child: [String: Any] = ["address": "192.0.2.8", "port": 8443, "network": "xhttp",
+            "xhttpSettings": ["downloadSettings": dormant]]
+        let inactive: [String: Any] = ["address": "192.0.2.9", "port": 9443, "network": "xhttp",
+            "sockopt": ["dialerProxy": "missing-inactive-child"]]
+        let streams: [[String: Any]] = [
+            ["network": "xhttp", "xhttpSettings": ["downloadSettings": child]],
+            ["network": "splithttp", "splithttpSettings": ["downloadSettings": child]],
+            ["network": "tcp", "method": "xhttp", "xhttpSettings": NSNull(), "splithttpSettings": ["downloadSettings": child]],
+            ["network": "xhttp", "xhttpSettings": ["downloadSettings": inactive, "extra": ["downloadSettings": child]]],
+            ["network": "xhttp", "xhttpSettings": ["extra": NSNull(), "downloadSettings": inactive]],
+            ["network": "xhttp", "xhttpSettings": [:], "splithttpSettings": ["downloadSettings": inactive]]
+        ]
+        for stream in streams {
+            let source: [String: Any] = ["dns": ["servers": ["9.9.9.9"]], "outbounds": [["tag": "proxy", "protocol": "http",
+                "settings": ["address": "192.0.2.7", "port": 443], "streamSettings": stream]]]
+            let frozen = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: frozen, credentials: Self.credentials,
+                resolveIPv4: { _ in XCTFail("All active destinations are numeric"); return nil }))
+            let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+            let actual = try XCTUnwrap(((output["outbounds"] as? [[String: Any]])?.first)?["streamSettings"] as? [String: Any])
+            for key in ["xhttpSettings", "splithttpSettings"] {
+                // Only active immediate socket policy may change, never its nested settings.
+                if let settings = actual[key] as? [String: Any], let original = stream[key] as? [String: Any] {
+                    for (output, input) in [(settings, original),
+                                           (settings["extra"] as? [String: Any] ?? [:], original["extra"] as? [String: Any] ?? [:])] {
+                        if let download = output["downloadSettings"] as? [String: Any], let expected = input["downloadSettings"] as? [String: Any] {
+                            XCTAssertEqual(download["xhttpSettings"] as? NSDictionary, expected["xhttpSettings"] as? NSDictionary)
+                        }
+                    }
+                }
+            }
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), frozen)
+        }
+    }
+
+    func testBootstrapChainsStillValidateImmediateSocketOwner() throws {
+        let child: [String: Any] = ["address": "192.0.2.8", "port": 8443, "network": "xhttp",
+            "sockopt": ["dialerProxy": "missing-child"], "xhttpSettings": [:]]
+        for penetrate in [false, true] {
+            var config: [String: Any] = ["dns": ["servers": ["9.9.9.9"]], "outbounds": [["tag": "proxy", "protocol": "http",
+                "settings": ["address": "192.0.2.7", "port": 443], "streamSettings": ["network": "xhttp",
+                    "sockopt": ["penetrate": penetrate], "xhttpSettings": ["downloadSettings": child]]]]]
+            let before = config as NSDictionary
+            let prepared = TunnelDNSPolicy.apply(to: &config, managedInboundTag: "tun", resolveIPv4: { _ in XCTFail("Invalid chains and numeric endpoints must not resolve"); return nil })
+            if penetrate { XCTAssertNotNil(prepared) }
+            else { XCTAssertNil(prepared); XCTAssertEqual(config as NSDictionary, before) }
+        }
+        var cyclic = child; cyclic["sockopt"] = ["dialerProxy": "proxy"]
+        var config: [String: Any] = ["outbounds": [["tag": "proxy", "protocol": "http", "settings": ["address": "192.0.2.7", "port": 443],
+            "streamSettings": ["network": "xhttp", "xhttpSettings": ["downloadSettings": cyclic]]]]]
+        let before = config as NSDictionary
+        XCTAssertNil(TunnelDNSPolicy.apply(to: &config, managedInboundTag: "tun", resolveIPv4: { _ in XCTFail("Active cycle must reject before lookup"); return nil }))
+        XCTAssertEqual(config as NSDictionary, before)
     }
 
     func testNativeDNSFixtureExport() throws {

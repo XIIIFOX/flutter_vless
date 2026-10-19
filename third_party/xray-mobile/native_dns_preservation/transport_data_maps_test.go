@@ -96,7 +96,8 @@ func testXHTTPInactiveGrandchild(t *testing.T, native bool) {
 		child := stream["xhttpSettings"].(map[string]any)["downloadSettings"].(map[string]any)
 		childSettings := child["xhttpSettings"].(map[string]any)
 		childSettings["mode"] = "packet-up"
-		dormant := map[string]any{"address": "127.0.0.1", "port": float64(9443), "network": "tcp"}
+		dormant := map[string]any{"address": "127.0.0.1", "port": float64(9443), "network": "tcp",
+			"sockopt": map[string]any{"dialerProxy": "missing-grandchild"}}
 		childSettings["downloadSettings"] = dormant
 		source, _ := json.Marshal(tc.Config)
 		data := source
@@ -130,7 +131,8 @@ func testXHTTPInactiveGrandchild(t *testing.T, native bool) {
 		}
 		grandchild := download.ProtocolSettings.(*splithttp.Config).DownloadSettings
 		if grandchild == nil || grandchild.ProtocolName != "tcp" || grandchild.Port != 9443 ||
-			grandchild.Address.AsAddress().String() != "127.0.0.1" {
+			grandchild.Address.AsAddress().String() != "127.0.0.1" || grandchild.SocketSettings == nil ||
+			grandchild.SocketSettings.DialerProxy != "missing-grandchild" {
 			t.Fatal("Core did not retain the inert TCP grandchild configuration")
 		}
 		retained, _ := json.Marshal(tc.Config)

@@ -534,6 +534,15 @@ download in one parent context containing exact upload and download host/port
 pins followed by unconditional denial. A caller parent chain carries both
 logical destinations instead; only that carrier's physical endpoint is pinned.
 The child JSON remains intact and its overwritten socket chain is inactive.
+Socket dependency admission also stops at the active immediate download: Core
+creates that HTTP client directly and does not recursively dial its nested
+download settings. Apple/Windows preserve an unused grandchild's `dialerProxy`
+without requiring its tag to exist. Active upload/download dependencies and
+cycles still receive their existing checks; Android already stops at this
+boundary. This runtime dependency boundary is separate from Core's recursive
+configuration Build, which still reads typed TLS certificate references in
+nested streams. The controlled independent-download XHTTP case retains the
+unused missing-chain settings while carrying its ordinary HTTP payload.
 Active download TLS/ECH admission still applies. Dynamic uploads without a
 finite endpoint set and non-XHTTP downloads retain the existing refusal.
 Missing/null download socket settings on a nonpenetrating parent remain

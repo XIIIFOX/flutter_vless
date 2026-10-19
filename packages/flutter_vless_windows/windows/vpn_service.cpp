@@ -36,14 +36,6 @@ std::optional<std::string> Underlay(UINT64* identity = nullptr) {
   FreeMibTable(routes);
   return result;
 }
-void Rebind(flutter_vless::xray_config::Json& node, const std::string& interface_name) {
-  if (!node.is_object()) return;
-  if (node.contains("sockopt") && node["sockopt"].is_object()) node["sockopt"]["interface"] = interface_name;
-  for (auto it = node.begin(); it != node.end(); ++it) {
-    if (it.key() == "streamSettings" || it.key() == "xhttpSettings" || it.key() == "splithttpSettings"
-        || it.key() == "extra" || it.key() == "downloadSettings") Rebind(it.value(), interface_name);
-  }
-}
 std::string Bootstrap(const std::string& name) {
   WSADATA data{}; if (WSAStartup(MAKEWORD(2,2), &data)) return {};
   addrinfo hints{}; hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
@@ -108,10 +100,6 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     if (!protection_.Active()) protection_.Release();
     return false;
   }
-  if (!native::CheckConfig(*prepared, *xray, native::ConfigCheckStorage::administrators, assets)) {
-    Event("Xray configuration check rejected generated VPN document; active session preserved");
-    return false;
-  }
   const auto owned_api_port = xray_config::OwnedApiPort(config, *prepared).value_or(0);
   auto runtime = std::make_unique<native::ProtectedRuntime>();
   if (!runtime->Create(*xray, !assets.has_value())) {
@@ -119,17 +107,28 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     if (!protection_.Active()) protection_.Release();
     return false;
   }
+  const auto managed_port = xray_config::Port(xray_config::Parse(*prepared)["inbounds"][0]);
+  auto candidate = managed_port ? PrepareWorkerCandidate(*prepared, *managed_port, *runtime, assets) : nullptr;
+  if (!candidate) {
+    Event("Xray configuration check rejected final VPN document; active session preserved");
+    return false;
+  }
   if (requested_.load()) StopSession(false);
   bootstrap_cache_ = std::move(cache);
   private_runtime_ = std::move(runtime);
+  pending_candidate_ = std::move(candidate);
   xray_executable_path_ = private_runtime_->Executable(); tun2socks_executable_path_ = *tun;
   options_ = options;
   current_config_ = *prepared; username_ = user; password_ = password;
   asset_directory_ = std::move(assets);
-  socks_port_ = *xray_config::Port(xray_config::Parse(current_config_)["inbounds"][0]);
+  socks_port_ = *managed_port;
   api_port_ = owned_api_port;
   // WFP must exist before native workers, resolver configuration or capture.
-  if (!protection_.Install(xray_executable_path_)) { Event(("Could not install mandatory Windows traffic protection, code=" + std::to_string(protection_.Error())).c_str()); return false; }
+  if (!protection_.Install(xray_executable_path_)) {
+    Event(("Could not install mandatory Windows traffic protection, code=" + std::to_string(protection_.Error())).c_str());
+    pending_candidate_.reset(); private_runtime_.reset();
+    return false;
+  }
   Event("Mandatory Windows traffic protection installed");
   requested_.store(true); ready_.store(false);
   { std::lock_guard<std::mutex> lock(state_mutex_); first_attempt_finished_ = false; }
@@ -176,7 +175,7 @@ void VpnService::RunVpn() {
         break;
       }
       if (!xray_process_->IsRunning() || !tun2socks_process_->IsRunning()
-          || !packet_probe_ || !packet_probe_->Check()) break;
+          || !worker_candidate_ || !worker_candidate_->PacketProbe().Check()) break;
       if (++ticks % 2 == 0) UpdateTrafficStats();
       std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -193,21 +192,41 @@ void VpnService::RunVpn() {
     }
   }
 }
+std::unique_ptr<VpnService::WorkerCandidate> VpnService::PrepareWorkerCandidate(
+    const std::string& base, uint16_t managed_port, flutter_vless::native::ProtectedRuntime& runtime,
+    const flutter_vless::asset_location::Root& assets) {
+  UINT64 identity = 0;
+  const auto underlay = Underlay(&identity);
+  if (!underlay) return nullptr;
+  auto candidate = WorkerCandidate::Prepare(base, *underlay, identity, managed_port,
+      [] { return std::make_unique<flutter_vless::PacketPathProbe>(); },
+      [&](const std::string& bytes, fs::path& path) {
+        return flutter_vless::native::CheckPreparedConfig(bytes, runtime, path, assets);
+      }, flutter_vless::native::RemovePrivateConfig);
+  // A slow check must not admit a snapshot whose adapter already changed.
+  UINT64 current_identity = 0;
+  const auto current = Underlay(&current_identity);
+  if (!candidate || !current || *current != candidate->Underlay()
+      || current_identity != candidate->Identity()) return nullptr;
+  return candidate;
+}
 bool VpnService::StartWorkers() {
   using namespace flutter_vless;
   auto fail = [](const char* stage) { Event(stage); return false; };
   // A previous adapter can outlive its child. Keep cleanup ownership and deny
   // a replacement until its exact address is retired or verified absent.
   if (!RetireIPv6Address()) return fail("Previous owned Wintun IPv6 address cleanup remains pending");
-  auto underlay = Underlay(&underlay_luid_);
-  if (!underlay) return fail("No usable underlay for native recovery");
-  underlay_name_ = *underlay;
-  auto config = xray_config::Parse(current_config_);
-  for (auto& outbound : config["outbounds"]) Rebind(outbound, *underlay);
-  packet_probe_ = std::make_unique<PacketPathProbe>();
-  if (!packet_probe_->Start() || !packet_probe_->Configure(config, socks_port_)) return fail("Cannot prepare the local packet-path probe");
-  if (!private_runtime_ || !private_runtime_->WriteConfig(config.dump(), temp_config_path_)) return fail("Cannot write the private Xray configuration");
-  xray_process_ = native::Launch(xray_executable_path_, {L"run", L"-config", temp_config_path_.wstring()}, false, asset_directory_);
+  if (!private_runtime_) return fail("Private VPN runtime is unavailable");
+  worker_candidate_ = pending_candidate_ ? std::move(pending_candidate_)
+      : PrepareWorkerCandidate(current_config_, socks_port_, *private_runtime_, asset_directory_);
+  if (!worker_candidate_) return fail("Final VPN recovery configuration check failed");
+  UINT64 current_identity = 0;
+  const auto current_underlay = Underlay(&current_identity);
+  if (!current_underlay || *current_underlay != worker_candidate_->Underlay()
+      || current_identity != worker_candidate_->Identity()) return fail("Checked VPN underlay changed before launch");
+  underlay_name_ = worker_candidate_->Underlay();
+  underlay_luid_ = worker_candidate_->Identity();
+  xray_process_ = native::Launch(xray_executable_path_, {L"run", L"-config", worker_candidate_->Path().wstring()}, false, asset_directory_);
   if (!xray_process_) return fail("Cannot launch the protected Xray process");
   bool listening = false;
   for (int i = 0; i < 60 && requested_.load() && xray_process_->IsRunning(); ++i) {
@@ -302,10 +321,10 @@ bool VpnService::StartWorkers() {
   }
   if (!protection_.Install(xray_executable_path_, &luid)) { Event(("Cannot authorize the Wintun interface, code=" + std::to_string(protection_.Error())).c_str()); return false; }
   Event("Wintun capture and virtual DNS ready; checking packet forwarding");
-  native::RemovePrivateConfig(temp_config_path_);
+  worker_candidate_->RemoveFile();
   native::RemovePrivateConfig(tun_config_path_);
   for (int i = 0; i < 10 && requested_.load() && xray_process_->IsRunning() && tun2socks_process_->IsRunning(); ++i) {
-    if (packet_probe_->Check()) return true;
+    if (worker_candidate_->PacketProbe().Check()) return true;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
   return fail("Private packet-path challenge did not complete");
@@ -317,8 +336,8 @@ void VpnService::StopWorkers() {
   const bool ipv6_retired = RetireIPv6Address();
   tun2socks_process_.reset(); xray_process_.reset();
   if (!ipv6_retired) RetireIPv6Address(); // adapter teardown can complete a pending deletion
-  packet_probe_.reset();
-  flutter_vless::native::RemovePrivateConfig(temp_config_path_);
+  worker_candidate_.reset();
+  pending_candidate_.reset();
   flutter_vless::native::RemovePrivateConfig(tun_config_path_);
 }
 bool VpnService::RetireIPv6Address() {

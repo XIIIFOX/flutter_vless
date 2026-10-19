@@ -30,7 +30,9 @@ helper_start=s.index('    fileprivate static func buildProxyOnlyConfigData')
 helper_end=s.index('\n    }\n',helper_start)+6
 delay_start=s.index('    private static func findDelayEndpoint')
 delay_end=s.index('\n    }\n',delay_start)+6
-helper='enum ProxyOnlyRunner {\n'+s[delay_start:delay_end]+'\n'+s[helper_start:helper_end]+'\n}\n'
+prepared_start=s.index('    struct Prepared {',s.index('private final class ProxyOnlyRunner {'))
+prepared_end=s.index('    // Direct callers share the host admission order:',prepared_start)
+helper='enum ProxyOnlyRunner {\n'+s[prepared_start:prepared_end]+'\n'+s[delay_start:delay_end]+'\n'+s[helper_start:helper_end]+'\n}\n'
 a=s.index('        let proxyOnly = arguments["proxy_only"]')
 b=s.index('        let operation = commands.submit',a)
 (out/'NativeStart.swift').write_text('import Foundation\n'+helper+'struct FlutterError { let code: String; let message: String; let details: Any? }\nfinal class NativeStartEntryProbe {\n var reachedQueue = false\n func result(_ error: FlutterError) {}\n func start(arguments: [String: Any]) {\n let configData = try! JSONSerialization.data(withJSONObject: ["inbounds": [["protocol": "socks", "listen": "127.0.0.1", "port": 10808]]])\n'+s[a:b]+'        reachedQueue = true\n    }\n}\n')

@@ -200,6 +200,7 @@ probe='''private final class StartProbe {
  let controlGroup: String? = nil
  func start(proxyOnly: Bool) -> Task<Void, Error> {
  let effectiveConfigData = Data("new".utf8)
+ let preparedProxyConfig: Proxy.Prepared? = proxyOnly ? Proxy.Prepared(data: Data("prepared-new".utf8)) : nil
  let geoAssetsDirectory: String? = nil
  let certificateAssetsDirectory: String? = "/fixture/new-certificate-assets"
  let bypassSubnets: [String]? = []
@@ -210,7 +211,24 @@ probe='''private final class StartProbe {
 }
 '''
 fixture=(root/'tool/fixtures/apple_preflight_transaction.swift').read_text()
-(out/'transaction.swift').write_text(fixture.replace('// PREFLIGHT_TRANSACTION_SOURCE is replaced by the production operation body.',probe))
+for index, path in enumerate(sources):
+ source=path.read_text()
+ a=source.index('private final class ProxyOnlyRunner {')
+ b=source.index('\n    func stop()',a)
+ runner=source[a:b].replace('private final class ProxyOnlyRunner {', 'private final class ActualProxyRunner {')
+ runner+='''
+    func fixtureSetRunning() { isRunning = true }
+    func stop() { events.append("actual-stop"); isRunning = false; XRayStop() }
+    fileprivate static func buildProxyOnlyConfigData(configData: Data) throws -> Data {
+        prepareCount += 1
+        return Data("prepared-new".utf8)
+    }
+    private static func findDelayEndpoint(_ data: Data) throws -> (protocolName: String, port: Int, credentials: LocalProxyCredentials?)? { nil }
+}
+'''
+ (out/f'transaction-{index}.swift').write_text(fixture.replace('// PREFLIGHT_TRANSACTION_SOURCE is replaced by the production operation body.',probe).replace('// PROXY_RUNNER_START_SOURCE is replaced by the production runner methods.',runner))
 PY
-xcrun swiftc -O -parse-as-library "$IOS" "$ROOT/ios/flutter_vless/Sources/flutter_vless/NativeOperationQueue.swift" "$OUT/transaction.swift" -o "$OUT/transaction"
-"$OUT/transaction"
+for PLATFORM in 0 1; do
+    xcrun swiftc -O -parse-as-library "$IOS" "$ROOT/ios/flutter_vless/Sources/flutter_vless/NativeOperationQueue.swift" "$OUT/transaction-$PLATFORM.swift" -o "$OUT/transaction-$PLATFORM"
+    "$OUT/transaction-$PLATFORM"
+done

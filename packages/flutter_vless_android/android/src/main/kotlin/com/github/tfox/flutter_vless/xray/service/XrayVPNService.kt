@@ -44,6 +44,7 @@ class XrayVPNService : VpnService() {
     private var config: XrayConfig? = null
     private var sourceConfig: XrayConfig? = null
     private var prepared: JSONObject? = null
+    private var pendingRuntime: Pair<Long, SessionRuntimeCandidate<SessionReadinessProbe>>? = null
     private var dnsServers = listOf(AndroidTunnelDnsPolicy.VIRTUAL_SERVER)
     private var credentials: LocalProxyCredentials? = null
     private var tunConfigFile: File? = null
@@ -214,7 +215,7 @@ class XrayVPNService : VpnService() {
         val candidate = incoming.copy(BLOCKED_APPS = ArrayList(incoming.BLOCKED_APPS), BYPASS_SUBNETS = ArrayList(incoming.BYPASS_SUBNETS))
         val secret = LocalProxyCredentials.generate()
         var candidateDnsServers = dnsServers
-        val json = try {
+        val (json, finalCandidate, candidateCredentials) = try {
             XrayCoreManager.validateConfiguration(candidate)
             val dns = if (candidate.PROXY_ONLY) null else AndroidTunnelDnsPolicy.prepare(candidate.V2RAY_FULL_JSON_CONFIG, candidate.ANDROID_DNS_POLICY,
                 candidate.ANDROID_DNS_PROXY_OUTBOUND_TAG, candidate.BYPASS_SUBNETS) {
@@ -225,54 +226,84 @@ class XrayVPNService : VpnService() {
                 candidateDnsServers = dns.systemDnsServers
             }
             val runtime = XrayCoreManager.buildRuntimeConfigJson(candidate, noBackupFilesDir, secret, dns)
-            require(XrayCoreManager.validateNative(this, runtime, candidate.GEO_ASSETS_DIRECTORY)) { "Native configuration rejected" }
-            if (!candidate.PROXY_ONLY) SessionReadinessProbe.selectHost(runtime)
-            runtime
+            val localCredentials = if (candidate.PROXY_ONLY)
+                LocalProxyAccessPolicy.credentialsForProxyOnly(runtime, candidate.LOCAL_SOCKS5_PORT) else secret
+            // The candidate probe/rule belong to this request. Final native
+            // preflight happens before profiles, generations or active workers change.
+            Triple(runtime, finalizeRuntime(candidate, runtime), localCredentials)
         } catch (_: Exception) {
             event(Event.CONFIG_REJECTED)
             return false
         }
-        val candidateCredentials = try {
-            if (candidate.PROXY_ONLY) LocalProxyAccessPolicy.credentialsForProxyOnly(json, candidate.LOCAL_SOCKS5_PORT) else secret
-        } catch (_: Exception) { event(Event.CONFIG_REJECTED); return false }
-        if (request != requests.get()) return false
-        // This transaction precedes every mutation of the active workers and their profile.
-        try { if (explicit) { if (candidate.PROXY_ONLY) profiles.disarm() else profiles.save(incoming) } }
-        catch (_: Exception) { event(Event.PROFILE_SAVE_FAILED); return false }
-        // Mode changes intentionally deactivate VPN protection; VPN-to-VPN replacements retain it.
-        if (candidate.PROXY_ONLY && tun != null) { deactivateSession() }
-        val owner = recovery.activate()
-        recovery.options = options.reconnect
-        sessionOptions = options
-        if (!stopWorkers()) { event(Event.WORKER_START_FAILED); recover(Event.WORKER_START_FAILED); return false }
-        SessionRuntimeFiles.removeAbandoned(noBackupFilesDir)
-        diagnosticsGeneration = XrayDiagnosticsStore.reset(filesDir)
-        // Delete only known legacy config names after the preceding native writers have exited.
-        listOf("config.json", "temp_delay_config.json").forEach { File(filesDir, it).delete() }
-        sourceConfig = incoming.copy()
-        config = candidate; credentials = candidateCredentials
-        AppConfigs.V2RAY_CONFIG = candidate
-        XrayDiagnosticsStore.configure(filesDir,NativeOptionsStore(this).read().diagnostics)
-        if (explicit) {
-            runCatching {
-                val retained = NativeQuickAccess.profile(this)
-                if (NativeOptionsStore(this).read().quickAccess.enabled && !candidate.PROXY_ONLY) retained.save(incoming)
-                else retained.disarm()
-            }.onFailure { NativeQuickAccess.profile(this).disarm() }
-            NativeQuickAccess.refresh(this)
-        }
-        prepared = json; dnsServers = candidateDnsServers
-        event(Event.SESSION_START)
-        worker.execute { restartWorkers(owner) }
-        return true
+        return finalCandidate.admit(isCurrent = { request == requests.get() }, persist = {
+            try { if (explicit) { if (candidate.PROXY_ONLY) profiles.disarm() else profiles.save(incoming) } }
+            catch (error: Exception) { event(Event.PROFILE_SAVE_FAILED); throw error }
+        }, commit = { accepted ->
+            // Mode changes intentionally deactivate VPN protection; VPN-to-VPN replacements retain it.
+            if (candidate.PROXY_ONLY && tun != null) deactivateSession()
+            val owner = recovery.activate()
+            recovery.options = options.reconnect
+            sessionOptions = options
+            if (!stopWorkers()) {
+                closePendingRuntime()
+                event(Event.WORKER_START_FAILED); recover(Event.WORKER_START_FAILED)
+                false
+            } else {
+                closePendingRuntime()
+                SessionRuntimeFiles.removeAbandoned(noBackupFilesDir)
+                diagnosticsGeneration = XrayDiagnosticsStore.reset(filesDir)
+                listOf("config.json", "temp_delay_config.json").forEach { File(filesDir, it).delete() }
+                sourceConfig = incoming.copy()
+                config = candidate; credentials = candidateCredentials
+                AppConfigs.V2RAY_CONFIG = candidate
+                XrayDiagnosticsStore.configure(filesDir,NativeOptionsStore(this).read().diagnostics)
+                if (explicit) {
+                    runCatching {
+                        val retained = NativeQuickAccess.profile(this)
+                        if (NativeOptionsStore(this).read().quickAccess.enabled && !candidate.PROXY_ONLY) retained.save(incoming)
+                        else retained.disarm()
+                    }.onFailure { NativeQuickAccess.profile(this).disarm() }
+                    NativeQuickAccess.refresh(this)
+                }
+                prepared = json; dnsServers = candidateDnsServers
+                // Keep this separate from active readinessProbe: the queued first
+                // restart still drains old workers before adopting the new probe.
+                pendingRuntime = owner to accepted
+                event(Event.SESSION_START)
+                worker.execute { restartWorkers(owner) }
+                true
+            }
+        })
+    }
+
+    private fun finalizeRuntime(current: XrayConfig, base: JSONObject) = SessionRuntimeCandidate.prepare(
+        base, createProbe = {
+            if (current.PROXY_ONLY) null else createReadinessProbe(base)
+        }, configure = { probe, json -> probe.configure(json, current.LOCAL_SOCKS5_PORT) },
+        validate = { final -> XrayCoreManager.validateNative(this, final, current.GEO_ASSETS_DIRECTORY) })
+
+    /** Test seam supplies an inert probe; normal startup still uses the existing owned listener. */
+    internal fun createReadinessProbe(base: JSONObject) = SessionReadinessProbe(SessionReadinessProbe.selectHost(base))
+
+    private fun closePendingRuntime() {
+        pendingRuntime?.second?.close()
+        pendingRuntime = null
+    }
+
+    private fun takePendingRuntime(owner: Long): SessionRuntimeCandidate<SessionReadinessProbe>? {
+        val pending = pendingRuntime ?: return null
+        if (pending.first != owner) { closePendingRuntime(); return null }
+        pendingRuntime = null
+        return pending.second
     }
 
     private fun restartWorkers(owner: Long) {
         if (!recovery.owns(owner)) return
         XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_CONNECTING)
         showForeground(if (tun != null) "Recovering; VPN traffic remains captured" else "Connecting")
-        if (!stopWorkers()) { recover(Event.WORKER_START_FAILED); return }
+        if (!stopWorkers()) { closePendingRuntime(); recover(Event.WORKER_START_FAILED); return }
         val current = config ?: return
+        var candidate: SessionRuntimeCandidate<SessionReadinessProbe>? = null
         try {
             if (current.ANDROID_DNS_POLICY == "proxy" && recovery.failures > 0) {
                 val source = requireNotNull(sourceConfig)
@@ -284,13 +315,16 @@ class XrayVPNService : VpnService() {
                 prepared = XrayCoreManager.buildRuntimeConfigJson(current, noBackupFilesDir, credentials, dns)
                 dnsServers = dns.systemDnsServers
             }
+            candidate = takePendingRuntime(owner) ?: finalizeRuntime(current, requireNotNull(prepared))
+            // A STOP/new generation during slow native Check cannot adopt this probe or start Core.
+            if (!recovery.owns(owner)) return
             protector = if (current.PROXY_ONLY) null else XraySocketProtector(this).also {
                 it.allowPhysicalDnsForEndpointNames(if (current.ANDROID_DNS_POLICY == "proxy") emptySet() else null)
             }
-            val runtime = if (current.PROXY_ONLY) requireNotNull(prepared) else {
-                SessionReadinessProbe(SessionReadinessProbe.selectHost(requireNotNull(prepared)))
-                    .also { readinessProbe = it }.configure(requireNotNull(prepared), current.LOCAL_SOCKS5_PORT)
-            }
+            if (!recovery.owns(owner)) { stopWorkers(); return }
+            val runtime = candidate.configuration
+            readinessProbe = candidate.takeProbe()
+            candidate.close(); candidate = null
             val started = XrayCoreManager.startCore(this, current, runtime, protector, owner) { generation, code ->
                 worker.execute { if (recovery.owns(generation)) { event(Event.WORKER_EXIT, code.toLong()); recover(Event.WORKER_EXIT) } }
             }
@@ -320,6 +354,7 @@ class XrayVPNService : VpnService() {
             showForeground("Connected")
             tick(owner, 0)
         } catch (_: Exception) { if (recovery.owns(owner)) recover(if (tun == null) Event.TUN_FAILED else Event.WORKER_START_FAILED) }
+        finally { candidate?.close() }
     }
 
     private fun setupVpn(current: XrayConfig) {
@@ -448,12 +483,15 @@ class XrayVPNService : VpnService() {
 
     private fun deactivateSession() {
         recovery.disarm()
-        stopWorkers()
-        runCatching { tun?.close() }; tun = null
-        config = null; sourceConfig = null; prepared = null; credentials = null
-        event(Event.SESSION_STOP)
-        XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED)
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        try { closePendingRuntime() }
+        finally {
+            stopWorkers()
+            runCatching { tun?.close() }; tun = null
+            config = null; sourceConfig = null; prepared = null; credentials = null
+            event(Event.SESSION_STOP)
+            XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        }
     }
 
     override fun onRevoke() {

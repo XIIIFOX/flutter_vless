@@ -242,29 +242,21 @@ object XrayCoreManager {
     }
 
     /** Validate the actual native parser before replacing a working session. No raw output escapes. */
-    internal fun validateNative(context: Context, json: JSONObject, geoAssetsDirectory: String? = null): Boolean {
-        val file = File(context.noBackupFilesDir, "validate-${UUID.randomUUID()}.json")
-        return try {
-            file.writeText(json.toString())
+    internal fun validateNative(context: Context, configuration: NativeRuntimeConfig, geoAssetsDirectory: String? = null): Boolean =
+        configuration.preflight(context.noBackupFilesDir, launch = { file ->
             val builder = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
                 "run", "-test", "-config", file.absolutePath).redirectErrorStream(true)
             Utilities.configureXrayAssets(context, builder.environment(), geoAssetsDirectory)
-            val process = builder.start()
-            val reader = drain(process)
-            val done = process.waitFor(10, TimeUnit.SECONDS)
-            if (!done) process.destroyForcibly()
-            reader.join(1000)
-            done && process.exitValue() == 0
-        } catch (_: Exception) { false } finally { file.delete() }
-    }
+            builder.start()
+        })
 
-    internal fun startCore(context: Service, config: XrayConfig, json: JSONObject,
+    internal fun startCore(context: Service, config: XrayConfig, configuration: NativeRuntimeConfig,
         protector: XraySocketProtector?, ownerGeneration: Long, onExit: (Long, Int) -> Unit): Boolean {
         if (!stopWorkers()) return false
         return try {
             val file = File(context.noBackupFilesDir, "xray-${UUID.randomUUID()}.json")
             runtimeFile = file
-            file.writeText(json.toString())
+            configuration.writeTo(file)
             val builder = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
                 "run", "-config", file.absolutePath).directory(context.noBackupFilesDir).redirectErrorStream(true)
             Utilities.configureXrayAssets(context, builder.environment(), config.GEO_ASSETS_DIRECTORY)

@@ -236,6 +236,17 @@ bool CheckConfig(const std::string& config, const fs::path& executable, ConfigCh
   DWORD code = 1;
   return GetExitCodeProcess(handle, &code) && code == 0;
 } catch (...) { return false; }
+bool CheckPreparedConfig(const std::string& config, ProtectedRuntime& runtime,
+    fs::path& path, const asset_location::Root& assets) try {
+  if (!path.empty() || !asset_location::Valid(assets) || !xray_config::Parse(config).is_object()) return false;
+  if (!runtime.WriteConfig(config, path)) return false;
+  auto process = Launch(runtime.Executable(), {L"run", L"-test", L"-config", path.wstring()}, false, assets);
+  if (!process) return false;
+  const HANDLE handle = reinterpret_cast<HANDLE>(process->hProcess);
+  if (WaitForSingleObject(handle, 10000) != WAIT_OBJECT_0) return false;
+  DWORD code = 1;
+  return GetExitCodeProcess(handle, &code) && code == 0;
+} catch (...) { return false; }
 bool SocksReady(uint16_t port, const std::string& user, const std::string& password) {
   WSADATA data{};
   if (WSAStartup(MAKEWORD(2,2), &data)) return false;

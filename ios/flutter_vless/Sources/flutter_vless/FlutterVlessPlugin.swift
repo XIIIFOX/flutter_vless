@@ -146,9 +146,32 @@ private final class ProxyOnlyRunner {
     private(set) var connectedDate: Date?
     private var delayEndpoint: (protocolName: String, port: Int, credentials: LocalProxyCredentials?)?
 
+    struct Prepared {
+        let data: Data
+        fileprivate let endpoint: (protocolName: String, port: Int, credentials: LocalProxyCredentials?)?
+    }
+
+    fileprivate static func prepare(configData: Data) throws -> Prepared {
+        let data = try buildProxyOnlyConfigData(configData: configData)
+        return Prepared(data: data, endpoint: try findDelayEndpoint(data))
+    }
+
+    // Direct callers share the host admission order: finalize and check before
+    // releasing any current app-process runtime. Legacy runtimes retain their
+    // existing behavior when the optional preflight ABI is unavailable.
     func start(configData: Data, geoAssetsDirectory: String?) throws {
-        let preparedConfig = try Self.buildProxyOnlyConfigData(configData: configData)
-        let endpoint = try Self.findDelayEndpoint(preparedConfig)
+        guard !isRunning else { throw CorePreflightError.activeProxySession }
+        let prepared = try Self.prepare(configData: configData)
+        if FLVlessHasCorePreflight() {
+            try configureXrayAssetLocation(geoAssetsDirectory)
+            try CorePreflightPolicy.validate(prepared.data, check: FLVlessCheckCorePrivate)
+        }
+        try start(prepared: prepared, geoAssetsDirectory: geoAssetsDirectory)
+    }
+
+    func start(prepared: Prepared, geoAssetsDirectory: String?) throws {
+        let preparedConfig = prepared.data
+        let endpoint = prepared.endpoint
         if isRunning {
             stop()
         }
@@ -609,14 +632,16 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return
         }
         let effectiveConfigData: Data
+        let preparedProxyConfig: ProxyOnlyRunner.Prepared?
         do {
             let certificateBound = try XrayCertificatePaths.bind(configData: configData, directory: certificateAssetsDirectory)
             let listenerBound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: certificateBound)
             effectiveConfigData = try XrayAddressEnvironment.bind(configData: listenerBound)
             if proxyOnly {
-                _ = try ProxyOnlyRunner.buildProxyOnlyConfigData(configData: effectiveConfigData)
+                preparedProxyConfig = try ProxyOnlyRunner.prepare(configData: effectiveConfigData)
             } else {
                 try LocalProxyAccessPolicy.validateVPN(configData: effectiveConfigData)
+                preparedProxyConfig = nil
             }
         } catch is XrayCertificatePaths.Failure {
             result(FlutterError(code: "CERTIFICATE_ASSETS_ERROR", message: "Unable to prepare certificate file paths.", details: nil)); return
@@ -638,15 +663,15 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             }
             if FLVlessHasCorePreflight() {
                 try configureXrayAssetLocation(geoAssetsDirectory)
-                try CorePreflightPolicy.validate(effectiveConfigData, check: FLVlessCheckCorePrivate)
+                try CorePreflightPolicy.validate(preparedProxyConfig?.data ?? effectiveConfigData, check: FLVlessCheckCorePrivate)
             } else {
                 pluginLog.warning("Core preflight unavailable in legacy runtime")
             }
-            if proxyOnly {
+            if let preparedProxyConfig {
                 // Switching modes is an explicit request to release the system VPN.
                 try await self.packetTunnelManager?.stop(waitForDisconnect: true)
                 if let group = self.controlGroup { VlessSystemControl.clear(group: group) }
-                try self.proxyOnlyRunner.start(configData: effectiveConfigData, geoAssetsDirectory: geoAssetsDirectory)
+                try self.proxyOnlyRunner.start(prepared: preparedProxyConfig, geoAssetsDirectory: geoAssetsDirectory)
             } else {
                 guard let manager = self.packetTunnelManager else {
                     throw NSError(domain: "VPN", code: 1, userInfo: nil)

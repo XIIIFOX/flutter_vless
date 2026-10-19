@@ -833,13 +833,28 @@ actual traffic through an existing session after valid and invalid checks.
 Published runtime artifacts/checksums remain unchanged: legacy Apple binaries
 explicitly report preflight unavailable and retain their previous startup path.
 This feature requires the build-only preview until its runtime artifacts are
-approved for release. Windows runs its bundled Core `run -test` against private,
-privacy-normalized temporary documents before session replacement and against
-the generated adapter config. VPN preflight uses the same administrator-owned
-runtime directory as forwarding, denying filtered same-user access to its
-configuration and Core image; proxy-only preflight uses current-user storage.
-Both success and rejection must remove the temporary runtime. Android already
-checks its final candidate with its bundled Core before the service transaction. Safe effective-config diffs,
+approved for release. Windows runs its bundled Core `run -test` against private
+documents before session replacement; proxy-only checks normalize the source
+and use current-user storage. VPN preparation now applies the underlay binding
+and packet-path probe before checking. It retains the checked file and the same
+administrator-owned executable for launch, without another serialization or
+runtime copy. Failed candidates release only their own probe/file/runtime;
+successful candidates retain the probe through worker shutdown. Recovery
+prepares and checks a fresh candidate, and a changed underlay refuses admission.
+
+Android likewise configures its candidate-owned readiness probe before native
+preflight, profile persistence or active-worker replacement. The native check
+and launch write the same immutable final bytes; the first startup adopts that
+probe instead of generating another rule after checking. Recovery regenerates
+and checks the final document before launching new workers. Apple VPN providers
+already Check and Start the same final preparation data before route installation.
+Both Apple proxy-only hosts now prepare once, Check that final data before
+stopping a system VPN, and pass the prepared data unchanged to the runner.
+Direct runner calls also reject an active singleton before changing its assets.
+The new admission and cleanup controls use inert native boundaries locally;
+remote runtime qualification of this finalization change remains pending.
+
+Safe effective-config diffs,
 complete asset diagnostics, bind-race handling and rollback from later runtime
 failures are still pending; item 7 is not complete.
 

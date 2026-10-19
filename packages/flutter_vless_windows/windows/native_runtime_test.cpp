@@ -7,6 +7,7 @@
 #include <cassert>
 #include <iostream>
 #include <fstream>
+#include <iterator>
 #include <set>
 #include <chrono>
 
@@ -224,6 +225,31 @@ int main(int argc, char** argv) {
       assert(!CheckConfig("{\"outbounds\":[{\"protocol\":\"private-preflight-canary\"}]}", *trusted, administrator));
       assert(protected_directories() == directories_before);
       std::cout << "PASS administrator-only Core preflight and private directory cleanup\n";
+      {
+        ProtectedRuntime owned;
+        assert(owned.Create(*trusted));
+        const auto image = owned.Executable();
+        const auto owned_directories = protected_directories();
+        const std::string final_bytes = " \n\t" + configuration + "\r\n ";
+        fs::path final_path;
+        assert(CheckPreparedConfig(final_bytes, owned, final_path));
+        assert(owned.Executable() == image && final_path.parent_path() == owned.Directory());
+        std::ifstream final_input(final_path, std::ios::binary);
+        const std::string retained((std::istreambuf_iterator<char>(final_input)), std::istreambuf_iterator<char>());
+        final_input.close();
+        assert(retained == final_bytes && protected_directories() == owned_directories);
+        assert(!CheckPreparedConfig(configuration, owned, final_path)); // Never replace an already-owned check file.
+        RemovePrivateConfig(final_path); assert(final_path.empty());
+        fs::path rejected_path;
+        assert(!CheckPreparedConfig("{\"outbounds\":[{\"protocol\":\"private-preflight-canary\"}]}", owned, rejected_path));
+        assert(!rejected_path.empty() && fs::is_regular_file(rejected_path));
+        const auto rejected_file = rejected_path;
+        RemovePrivateConfig(rejected_path);
+        assert(rejected_path.empty() && !fs::exists(rejected_file));
+        assert(owned.Executable() == image && protected_directories() == owned_directories);
+        std::cout << "WINDOWS_FINAL_CONFIG_PREFLIGHT_PASS=2\n";
+      }
+      assert(protected_directories() == directories_before);
     }
     const auto missing = trusted->parent_path() / L"missing-preflight-runtime.exe";
     assert(!fs::exists(missing) && !CheckConfig(configuration, missing, owner));

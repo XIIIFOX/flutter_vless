@@ -59,6 +59,7 @@ jobs:
           if ($log -notmatch 'deny filtered same-user') { throw 'Filtered-token boundary was not tested' }
           if ($log -notmatch 'PASS pinned Core preflight') { throw 'Pinned Core preflight was not tested' }
           if ($log -notmatch 'PASS administrator-only Core preflight') { throw 'Administrator-only Core preflight was not tested' }
+          if ($log -notmatch 'WINDOWS_FINAL_CONFIG_PREFLIGHT_PASS=2') { throw 'Exact final VPN configuration preflight was not tested' }
       - name: Verify gateway selection through Windows APIs
         shell: pwsh
         run: |

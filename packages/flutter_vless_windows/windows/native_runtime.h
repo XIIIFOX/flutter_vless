@@ -28,6 +28,12 @@ void RemovePrivateConfig(fs::path& path);
 enum class ConfigCheckStorage { currentUser, administrators };
 bool CheckConfig(const std::string& config, const fs::path& executable,
     ConfigCheckStorage storage, const asset_location::Root& assets = std::nullopt);
+// Final VPN check: no normalization, reserialization or executable copy.
+// The caller owns the returned private file on both success and failure and
+// launches this same file with this same protected executable after success.
+class ProtectedRuntime;
+bool CheckPreparedConfig(const std::string& config, ProtectedRuntime& runtime,
+    fs::path& path, const asset_location::Root& assets = std::nullopt);
 bool SocksReady(uint16_t port, const std::string& user = {}, const std::string& password = {});
 }  // namespace flutter_vless::native
 #endif

@@ -16,6 +16,7 @@
 #include "native_options.h"
 #include "protected_runtime.h"
 #include "packet_path_probe.h"
+#include "vpn_worker_candidate.h"
 #include "proxy_service.h" // For ProcessHandle and helper functions
 
 namespace fs = std::filesystem;
@@ -87,6 +88,10 @@ class VpnService {
  private:
   void RunVpn();
   bool StartWorkers();
+  using WorkerCandidate = flutter_vless::native::VpnWorkerCandidate<flutter_vless::PacketPathProbe>;
+  std::unique_ptr<WorkerCandidate> PrepareWorkerCandidate(const std::string& base,
+      uint16_t managed_port, flutter_vless::native::ProtectedRuntime& runtime,
+      const flutter_vless::asset_location::Root& assets);
   void StopWorkers();
   bool RetireIPv6Address();
   void StopSession(bool release_protection);
@@ -101,7 +106,6 @@ class VpnService {
   std::unique_ptr<ProcessHandle> tun2socks_process_;
   fs::path xray_executable_path_;
   fs::path tun2socks_executable_path_;
-  fs::path temp_config_path_;
   fs::path tun_config_path_;
   std::string current_config_;
   flutter_vless::asset_location::Root asset_directory_;
@@ -117,7 +121,8 @@ class VpnService {
   uint16_t api_port_ = 0;
   flutter_vless::TrafficProtection protection_;
   std::unique_ptr<flutter_vless::native::ProtectedRuntime> private_runtime_;
-  std::unique_ptr<flutter_vless::PacketPathProbe> packet_probe_;
+  std::unique_ptr<WorkerCandidate> pending_candidate_;
+  std::unique_ptr<WorkerCandidate> worker_candidate_;
   std::vector<MIB_IPFORWARD_ROW2> capture_routes_;
   std::optional<MIB_UNICASTIPADDRESS_ROW> ipv6_address_;
   std::mutex stats_mutex_;

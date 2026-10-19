@@ -17,6 +17,10 @@ cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX %S%\owned_address_test.cpp
 if errorlevel 1 exit /b 1
 build\windows-runtime\owned_address_test.exe
 if errorlevel 1 exit /b 1
+cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX %S%\vpn_worker_candidate_test.cpp /Fe:build\windows-runtime\vpn_worker_candidate_test.exe /Fo:build\windows-runtime\vpn_worker_candidate_test.obj
+if errorlevel 1 exit /b 1
+build\windows-runtime\vpn_worker_candidate_test.exe
+if errorlevel 1 exit /b 1
 cl /nologo /std:c++17 /EHsc /utf-8 /DNOMINMAX /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN %S%\system_tray_test.cpp %S%\native_runtime.cpp %S%\protected_runtime.cpp %S%\proxy_service.cpp %S%\diagnostics_log.cpp /Fe:build\windows-runtime\system_tray_test.exe /Fo:build\windows-runtime\ /link user32.lib ws2_32.lib wininet.lib shlwapi.lib version.lib ole32.lib shell32.lib uuid.lib iphlpapi.lib advapi32.lib bcrypt.lib
 if errorlevel 1 exit /b 1
 build\windows-runtime\system_tray_test.exe

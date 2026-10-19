@@ -6,6 +6,11 @@ final class LocalProbeOrigin: @unchecked Sendable {
     private let lock = NSLock()
     private var requests = 0
     private var leakedHeader = false
+    private var stopped = false
+    private var listenerClosed = false
+    private var accepted = 0
+    private var clients = Set<Int32>()
+    private let workers = DispatchGroup()
     init(port: Int) {
         fd = socket(AF_INET, SOCK_STREAM, 0)
         precondition(fd >= 0)
@@ -22,20 +27,45 @@ final class LocalProbeOrigin: @unchecked Sendable {
             }
         } == 0)
         precondition(listen(fd, 16) == 0)
+        workers.enter()
         DispatchQueue.global().async { [self] in
+            defer { workers.leave() }
             while true {
+                lock.lock(); let active = !stopped; lock.unlock()
+                guard active else { break }
                 let client = accept(fd, nil, nil)
                 if client < 0 { break }
-                DispatchQueue.global().async { [self] in serve(client) }
+                lock.lock(); accepted += 1
+                guard !stopped else { close(client); lock.unlock(); break }
+                clients.insert(client); workers.enter(); lock.unlock()
+                DispatchQueue.global().async { [self] in
+                    defer {
+                        lock.lock(); clients.remove(client); close(client); lock.unlock()
+                        workers.leave()
+                    }
+                    serve(client)
+                }
             }
         }
     }
-    func stop() { shutdown(fd, SHUT_RDWR); close(fd) }
+    func stop() {
+        lock.lock()
+        if !stopped {
+            stopped = true
+            shutdown(fd, SHUT_RDWR)
+            for client in clients { shutdown(client, SHUT_RDWR) }
+        }
+        lock.unlock()
+        precondition(workers.wait(timeout: .now() + 6) == .success, "Owned HTTP fixture did not drain")
+        lock.lock()
+        if !listenerClosed { close(fd); listenerClosed = true }
+        lock.unlock()
+    }
+    func connections() -> Int { lock.lock(); defer { lock.unlock() }; return accepted }
     func state() -> (Int, Bool) {
         lock.lock(); defer { lock.unlock() }; return (requests, leakedHeader)
     }
     private func serve(_ client: Int32) {
-        defer { close(client) }
         var duration = timeval(tv_sec: 5, tv_usec: 0)
         var noSignal: Int32 = 1
         setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &duration, socklen_t(MemoryLayout<timeval>.size))
@@ -338,15 +368,18 @@ func runAssetRuntimeChecks() throws {
 
 func runDirectOnlyRuntimeChecks() throws {
     let encoded = "__DIRECT_ONLY_FIXTURE_JSON_BASE64__"
-    let cases = try JSONSerialization.jsonObject(with: Data(base64Encoded: encoded)!) as! [[String: Any]]
-    precondition(cases.count == 2)
+    let originals = try JSONSerialization.jsonObject(with: Data(base64Encoded: encoded)!) as! [[String: Any]]
+    precondition(originals.count == 2)
+    let selectorEncoded = "__SELECTOR_TRAFFIC_FIXTURE_JSON_BASE64__"
+    let selector = try JSONSerialization.jsonObject(with: Data(base64Encoded: selectorEncoded)!) as! [String: Any]
+    let cases = originals.map { $0["config"] as! [String: Any] } + [selector]
     let origin = LocalProbeOrigin(port: 18096)
     let trap = DNSDirectFallbackTrap(port: 18104)
     defer { XRayStop(); origin.stop(); trap.stop() }
     let credentials = try LocalProxyCredentials.generate()
     let expected = Array("HTTP/1.1 204 ".utf8)
     for (index, item) in cases.enumerated() {
-        var raw = item["config"] as! [String: Any]
+        var raw = item
         // Keep both allowed and blocked targets on the controlled origin. A
         // lost caller block must yield actual204bytes and fail this fixture.
         var dns = raw["dns"] as! [String: Any]
@@ -367,6 +400,8 @@ func runDirectOnlyRuntimeChecks() throws {
         let effective = try JSONSerialization.jsonObject(with: prepared.data) as! [String: Any]
         precondition(effective["dns"] as! NSDictionary == dns as NSDictionary)
         precondition(effective["api"] as! NSDictionary == raw["api"] as! NSDictionary)
+        let callerSelectors = (raw["routing"] as? [String: Any])?["balancers"] as? NSArray
+        precondition(((effective["routing"] as? [String: Any])?["balancers"] as? NSArray) == callerSelectors)
         let outbounds = effective["outbounds"] as! [[String: Any]]
         precondition(outbounds.prefix(sourceOutbounds.count).map { $0["protocol"] as! String } == sourceOutbounds.map { $0["protocol"] as! String })
         precondition(outbounds.prefix(sourceOutbounds.count).map { $0["tag"] as! String } == sourceOutbounds.map { $0["tag"] as! String })
@@ -381,11 +416,14 @@ func runDirectOnlyRuntimeChecks() throws {
             precondition(frame.count == 9 && frame[3] == 4 && frame.suffix(4).allSatisfy { $0 == 0 })
         }
         checkAPI()
-        let fd = try LocalSOCKS5Client.openConnection(proxyPort: port, credentials: credentials, host: "direct-only.invalid", port: 18096)
-        precondition(LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("GET /direct-only HTTP/1.1\r\nHost: direct-only.invalid\r\nConnection: close\r\n\r\n".utf8)))
-        let response = LocalSOCKS5Client.receiveExactly(fd: fd, count: expected.count) ?? []
-        close(fd); precondition(response == expected)
-        precondition(origin.state().0 == index + 1)
+        func checkHTTP() throws {
+            let fd = try LocalSOCKS5Client.openConnection(proxyPort: port, credentials: credentials, host: "direct-only.invalid", port: 18096)
+            defer { close(fd) }
+            precondition(LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("GET /direct-only HTTP/1.1\r\nHost: direct-only.invalid\r\nConnection: close\r\n\r\n".utf8)))
+            precondition(LocalSOCKS5Client.receiveExactly(fd: fd, count: expected.count) == expected)
+        }
+        try checkHTTP()
+        precondition(origin.state().0 == index * 2 + 1)
         do {
             let blocked = openLoopback(port); defer { close(blocked) }
             precondition(LocalSOCKS5Client.authenticate(fd: blocked, credentials: credentials))
@@ -415,7 +453,8 @@ func runDirectOnlyRuntimeChecks() throws {
                 }
             }
         }
-        precondition(origin.state().0 == index + 1, "Caller block/default order was bypassed")
+        try checkHTTP()
+        precondition(origin.state().0 == (index + 1) * 2, "Caller block/default order was bypassed")
         for udp in [false, true] {
             let id = UInt16(0x5800 + index * 2 + (udp ? 1 : 0))
             let answer = try queryVirtualDNS(proxyPort: port, credentials: credentials, udp: udp, id: id)
@@ -426,5 +465,6 @@ func runDirectOnlyRuntimeChecks() throws {
         checkAPI(); XRayStop()
         print("DIRECT_ONLY_RUNTIME_PASS=\(index)")
     }
-    precondition(origin.state().0 == 2 && !origin.state().1)
+    origin.stop()
+    precondition(origin.state().0 == 6 && origin.connections() == 6 && !origin.state().1)
 }

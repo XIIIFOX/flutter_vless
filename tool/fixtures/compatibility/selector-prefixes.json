@@ -1,0 +1,475 @@
+[
+  {
+    "name": "balancer_prefix_and_caller_services",
+    "config": {
+      "routing": {
+        "balancers": [
+          {
+            "tag": "auto",
+            "selector": [
+              "flutter-vless"
+            ]
+          }
+        ]
+      },
+      "api": {
+        "tag": "flutter-vless-api"
+      },
+      "metrics": {
+        "tag": "flutter-vless-metrics"
+      },
+      "outbounds": [
+        {
+          "tag": "flutter-vless-caller"
+        },
+        {
+          "tag": "flutter-vless-api"
+        },
+        {
+          "tag": "flutter-vless-metrics"
+        }
+      ]
+    },
+    "requests": [
+      "flutter-vless-system-dns",
+      "unrelated"
+    ],
+    "expected": [
+      "_flutter-vless-system-dns",
+      "unrelated"
+    ],
+    "prefixes": [
+      "flutter-vless"
+    ],
+    "originalTags": [
+      "flutter-vless-caller",
+      "flutter-vless-api",
+      "flutter-vless-metrics"
+    ],
+    "fullIsolation": true
+  },
+  {
+    "name": "balancer_string_list_no_trim",
+    "config": {
+      "routing": {
+        "balancers": [
+          {
+            "tag": "auto",
+            "selector": "flutter-vless, API"
+          }
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "flutter-vless-caller"
+        }
+      ]
+    },
+    "requests": [
+      "flutter-vless-probe",
+      "API",
+      " API"
+    ],
+    "expected": [
+      "_flutter-vless-probe",
+      "API",
+      "_ API"
+    ],
+    "prefixes": [
+      "flutter-vless",
+      " API"
+    ],
+    "originalTags": [
+      "flutter-vless-caller"
+    ],
+    "fullIsolation": true
+  },
+  {
+    "name": "observatory_values_remain_case_sensitive",
+    "config": {
+      "observatory": {
+        "subjectSelector": [
+          "flutter-vless",
+          "private"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "flutter-vless-caller"
+        }
+      ]
+    },
+    "requests": [
+      "flutter-vless-probe",
+      "private",
+      "Private"
+    ],
+    "expected": [
+      "_flutter-vless-probe",
+      "_private",
+      "Private"
+    ],
+    "prefixes": [
+      "flutter-vless",
+      "private"
+    ],
+    "originalTags": [
+      "flutter-vless-caller"
+    ],
+    "fullIsolation": true
+  },
+  {
+    "name": "folded_schema_paths",
+    "config": {
+      "Routing": {
+        "Balancerſ": [
+          {
+            "Selector": [
+              "flutter-vless"
+            ]
+          }
+        ]
+      },
+      "BurſtObſervatory": {
+        "SubjectSelector": [
+          "private"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "flutter-vless-caller"
+        }
+      ]
+    },
+    "requests": [
+      "flutter-vless-dns",
+      "private"
+    ],
+    "expected": [
+      "_flutter-vless-dns",
+      "_private"
+    ],
+    "prefixes": [
+      "flutter-vless",
+      "private"
+    ],
+    "originalTags": [
+      "flutter-vless-caller"
+    ],
+    "fullIsolation": true
+  },
+  {
+    "name": "ignore_user_map_lookalikes",
+    "config": {
+      "testMetadata": {
+        "routing": {
+          "balancers": [
+            {
+              "selector": [
+                "flutter-vless"
+              ]
+            }
+          ]
+        },
+        "subjectSelector": [
+          "private"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "flutter-vless-caller"
+        }
+      ]
+    },
+    "requests": [
+      "flutter-vless-dns",
+      "private"
+    ],
+    "expected": [
+      "flutter-vless-dns",
+      "private"
+    ],
+    "prefixes": [],
+    "originalTags": [
+      "flutter-vless-caller"
+    ],
+    "fullIsolation": true
+  },
+  {
+    "name": "null_and_wildcard_remain_explicit_boundary",
+    "config": {
+      "routing": {
+        "balancers": [
+          {
+            "tag": "auto",
+            "selector": [
+              null,
+              "",
+              "flutter-vless"
+            ]
+          }
+        ]
+      },
+      "observatory": {
+        "subjectSelector": null
+      },
+      "burstObservatory": {
+        "subjectSelector": []
+      },
+      "outbounds": [
+        {
+          "tag": "flutter-vless-caller"
+        }
+      ]
+    },
+    "requests": [
+      "flutter-vless-dns",
+      "ordinary"
+    ],
+    "expected": [
+      "_flutter-vless-dns",
+      "ordinary"
+    ],
+    "prefixes": [
+      "flutter-vless"
+    ],
+    "originalTags": [
+      "flutter-vless-caller"
+    ],
+    "fullIsolation": false
+  },
+  {
+    "name": "covered_suffix_escapes_once",
+    "config": {
+      "routing": {
+        "balancers": [
+          {
+            "tag": "auto",
+            "selector": [
+              "private-"
+            ]
+          }
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "private"
+        },
+        {
+          "tag": "_private"
+        }
+      ]
+    },
+    "requests": [
+      "private",
+      "private"
+    ],
+    "expected": [
+      "_private-1",
+      "_private-2"
+    ],
+    "prefixes": [
+      "private-"
+    ],
+    "originalTags": [
+      "private",
+      "_private"
+    ],
+    "fullIsolation": true
+  },
+  {
+    "name": "friendly_pool_exhaustion_uses_unicode",
+    "config": {
+      "routing": {
+        "balancers": [
+          {
+            "tag": "auto",
+            "selector": [
+              "_",
+              "0",
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "8",
+              "9",
+              "A",
+              "B",
+              "C",
+              "D",
+              "E",
+              "F",
+              "G",
+              "H",
+              "I",
+              "J",
+              "K",
+              "L",
+              "M",
+              "N",
+              "O",
+              "P",
+              "Q",
+              "R",
+              "S",
+              "T",
+              "U",
+              "V",
+              "W",
+              "X",
+              "Y",
+              "Z",
+              "a",
+              "b",
+              "c",
+              "d",
+              "e",
+              "f",
+              "g",
+              "h",
+              "i",
+              "j",
+              "k",
+              "l",
+              "m",
+              "n",
+              "o",
+              "p",
+              "q",
+              "r",
+              "s",
+              "t",
+              "u",
+              "v",
+              "w",
+              "x",
+              "y",
+              "z",
+              "-",
+              "",
+              ""
+            ]
+          }
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "flutter-vless-caller"
+        }
+      ]
+    },
+    "requests": [
+      "flutter-vless-dns"
+    ],
+    "expected": [
+      "flutter-vless-dns"
+    ],
+    "prefixes": [
+      "_",
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+      "F",
+      "G",
+      "H",
+      "I",
+      "J",
+      "K",
+      "L",
+      "M",
+      "N",
+      "O",
+      "P",
+      "Q",
+      "R",
+      "S",
+      "T",
+      "U",
+      "V",
+      "W",
+      "X",
+      "Y",
+      "Z",
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f",
+      "g",
+      "h",
+      "i",
+      "j",
+      "k",
+      "l",
+      "m",
+      "n",
+      "o",
+      "p",
+      "q",
+      "r",
+      "s",
+      "t",
+      "u",
+      "v",
+      "w",
+      "x",
+      "y",
+      "z",
+      "-",
+      "",
+      ""
+    ],
+    "originalTags": [
+      "flutter-vless-caller"
+    ],
+    "fullIsolation": true
+  },
+  {
+    "name": "unicode_prefixes_are_utf8_not_canonical",
+    "config": {
+      "observatory": {
+        "subjectSelector": [
+          "é"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "flutter-vless-caller"
+        }
+      ]
+    },
+    "requests": [
+      "é-private",
+      "é-private",
+      "É-private"
+    ],
+    "expected": [
+      "_é-private",
+      "é-private",
+      "É-private"
+    ],
+    "prefixes": [
+      "é"
+    ],
+    "originalTags": [
+      "flutter-vless-caller"
+    ],
+    "fullIsolation": true
+  }
+]

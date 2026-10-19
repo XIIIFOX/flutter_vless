@@ -9,6 +9,20 @@ import flutter_vless_tunnel_support
 // File-only acceptance adapter for the production JSON preparer. No Core,
 // resolver, socket, NetworkExtension, or route API is started here.
 let arguments = CommandLine.arguments
+if arguments.count == 4 && arguments[1] == "--allocate-service-tags-fixture" {
+    do {
+        let data = try Data(contentsOf: URL(fileURLWithPath: arguments[2]))
+        guard let input = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let config = input["config"], let requests = input["requests"] as? [String] else { exit(3) }
+        var allocator = XrayServiceTags(configuration: config)
+        let tags = requests.map { allocator.next($0) }
+        try JSONSerialization.data(withJSONObject: tags).write(to: URL(fileURLWithPath: arguments[3]), options: .atomic)
+        exit(0)
+    } catch {
+        fputs("native tag fixture file operation failed\n", stderr)
+        exit(4)
+    }
+}
 guard arguments.count == 7, arguments[1] == "--prepare-dns-fixture" else {
     fputs("native DNS fixture arguments rejected\n", stderr)
     exit(2)

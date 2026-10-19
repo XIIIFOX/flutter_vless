@@ -8,6 +8,45 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class XrayServiceTagsTest {
+    @Test fun exhaustedBmpPrivateUseContinuesAtSupplementaryPrivateUse() {
+        val prefixes = JSONArray()
+        "_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-".forEach { prefixes.put(it.toString()) }
+        for (scalar in 0xE000..0xF8FF) prefixes.put(String(Character.toChars(scalar)))
+        val source = JSONObject().put("observatory", JSONObject().put("subjectSelector", prefixes))
+        val before = source.toString()
+        val tags = XrayServiceTags(source)
+        assertEquals(String(Character.toChars(0xF0000)) + "flutter-vless-path", tags.next("flutter-vless-path"))
+        assertFalse(tags.hasUniversalSelectorBoundary)
+        assertEquals(before, source.toString())
+    }
+
+    @Test fun sharedNonemptySelectorPrefixesExcludePrivateTagsWithoutChangingSelectors() {
+        val cases = JSONArray(requireNotNull(javaClass.getResource("/selector-prefixes.json")).readText())
+        assertEquals(9, cases.length())
+        for (index in 0 until cases.length()) {
+            val item = cases.getJSONObject(index); val label = item.getString("name")
+            val config = item.getJSONObject("config"); val before = config.toString()
+            val tags = XrayServiceTags(config)
+            val requests = item.getJSONArray("requests"); val expected = item.getJSONArray("expected")
+            val prefixes = item.getJSONArray("prefixes").let { values ->
+                (0 until values.length()).map(values::getString)
+            }
+            val original = item.getJSONArray("originalTags").let { values ->
+                (0 until values.length()).map(values::getString)
+            }
+            val generated = (0 until requests.length()).map { request ->
+                tags.next(requests.getString(request)).also { actual ->
+                    assertEquals(label, expected.getString(request), actual)
+                    assertFalse("$label/private tag matched a known nonempty selector", prefixes.any { actual.startsWith(it) })
+                }
+            }
+            fun selected(values: List<String>) = values.filter { tag -> prefixes.any { tag.startsWith(it) } }.sorted()
+            assertEquals("$label/caller candidates changed", selected(original), selected(original + generated))
+            assertEquals("$label/wildcard boundary was hidden", !item.getBoolean("fullIsolation"), tags.hasUniversalSelectorBoundary)
+            assertEquals("$label/source selectors changed", before, config.toString())
+        }
+    }
+
     @Test fun sharedDefinitionAndReferenceCorpusWithoutMutatingInput() {
         val cases = JSONArray(requireNotNull(javaClass.getResource("/tags.json")).readText())
         for (i in 0 until cases.length()) {

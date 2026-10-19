@@ -247,6 +247,20 @@ void ProtocolCompatibilityCases(const std::string& only = "") {
   } else for (const auto& item : cases) item.second();
 }
 int main(int argc, char** argv) try {
+  if (argc == 4 && std::string(argv[1]) == "--allocate-service-tags-fixture") {
+    std::ifstream file(argv[2], std::ios::binary);
+    if (!file.good()) return 2;
+    const auto input = Parse(std::string{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()});
+    if (!input.is_object() || !input.contains("config") || !input.contains("requests") || !input["requests"].is_array()) return 3;
+    ServiceTags allocator(input["config"]);
+    auto tags = Json::array();
+    for (const auto& request : input["requests"]) {
+      if (!request.is_string()) return 3;
+      tags.push_back(allocator.Next(request.get<std::string>()));
+    }
+    std::ofstream output(argv[3], std::ios::binary); output << tags.dump();
+    return output.good() ? 0 : 4;
+  }
   if (argc == 3 && std::string(argv[1]) == "--direct-only-case") { DirectOnlyCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--ipv6-case") { IPv6PayloadCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--protocol-case") { ProtocolCompatibilityCases(argv[2]); return 0; }

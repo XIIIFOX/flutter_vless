@@ -437,6 +437,35 @@ Controlled origins and final drained counts make a timeout alone insufficient
 blocking evidence. Physical device and full system-VPN qualifications remain
 separate from these scoped gates.
 
+### Nonempty selector prefix isolation
+
+Android, iOS, macOS and Windows now allocate private service tags outside known
+nonempty `routing.balancers[].selector`, `observatory.subjectSelector` and
+`burstObservatory.subjectSelector` prefixes. Field matching follows Core's
+schema aliases; tag prefixes remain case-sensitive UTF-8 values. Caller
+selectors, source outbound order and settings are not rewritten. Existing
+preferred private names remain when safe; a covered name or collision suffix
+uses a deterministic unused leading scalar.
+
+The [nine allocation cases](../tool/fixtures/compatibility/selector-prefixes.json)
+reproduce the previous selection pollution and pass after the change. They
+cover comma-list parsing, folded schema keys, unrelated user maps, suffix
+collisions and Unicode. A file-only check exercises the pinned Core's actual
+outbound manager with inert handlers: private handlers remain explicitly
+addressable, selection is unchanged and later public additions still invalidate
+the selection cache. It creates no Core instance or network workers.
+
+The [controlled traffic profile](../tool/fixtures/compatibility/selector-traffic.json)
+selects a caller direct handler through a `flutter-vless` round-robin prefix.
+Core, Android, Apple and Windows runtime fixtures require actual HTTP and DNS
+bytes, caller domain blocking and bounded cleanup for that profile. Their new
+runtime acceptance is pending; preparation/build and platform pure checks pass.
+An empty selector (`[""]`, including a null array element decoded as an empty
+string) matches every tag. Naming cannot isolate it. Universal prefix coverage
+also remains open; complete support needs construction-owned handler provenance
+inside Core, including the Windows packaged runtime. Selectors are never frozen
+to a static list, and valid profiles are not rejected for this limitation.
+
 Port grammar progress (2026-10-18): the Dart, Kotlin, Swift and C++ paths now
 share a 20-case corpus checked against the pinned Core decoder/build path.
 It covers lists/ranges, numeric zero, native `env:` lookup and its normalized
@@ -491,9 +520,10 @@ startup and worker recovery, rejecting missing or mismatched preparation.
 Android's isolated native authorization fixture transfers actual HTTP bytes
 with a deliberately conflicting imported rule. The complete local Android
 emulator suite passes all 27 tests, including the imported DNS blocking case,
-worker recovery, handover and physical DNS capture (`.5UHS7XV2`). Prefix
-selectors in balancers/observatory, API passthrough and the source-inbound
-routing context remain separate work.
+worker recovery, handover and physical DNS capture (`.5UHS7XV2`). The nonempty
+prefix increment above extends exact-name reservation; wildcard isolation and
+the source-inbound routing context remain open. API passthrough acceptance is
+recorded separately above.
 
 Numeric `api.listen` and `metrics.listen` ports now participate in adapter
 allocation on all native platforms, with shared 21-case API and 36-case service
@@ -696,8 +726,8 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private address queries. Caller AAAA passes Core/Android/Windows runtime acceptance; encrypted DoH trust/name controls pass ordinary Core on all three desktop systems. Direct-only traffic passes shared Core, Android TUN, native Apple and Windows TUN gates at ba25f85. Localhost adaptation, additional DNS paths and full FakeDNS semantics remain open. |
 | 2. IPv6 | Partial; physical iOS packet gate pending | IPv6 TCP/UDP with preserved AAAA policy passes ordinary Core on all three desktop systems, actual Android TUN and Windows 2022/2025 TUN/recovery/physical-interface controls. Actual shipped macOS HEV packet controls pass remotely; iOS simulator HEV is a verified link-only stub and physical iOS remains pending. Full macOS system-VPN acceptance, IPv6-only endpoints, NAT64, cross-family handover and broader physical bypass qualification remain open. |
 | 3. Protocol/transport matrix | Partial | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP and null legacy-endpoint preparation fixes pass an eight-case pinned Core build corpus with native preparation. Imported loopback/DNS traffic passes ordinary Core acceptance on all three desktop systems at dacfd59; new protocol handshakes, XHTTP penetrate and the full matrix remain open. |
-| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Source-inbound context, explicit VPN default selection, prefix-selector isolation and exact adapter counters remain open. |
-| 5. Ports/addresses | Partial | Shared 20-case port, 12-case service-tag, 21-case numeric API and 36-case service-listener fixtures cover allocation. Real Android/iPhone list/range/env/Unix and tag-collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. OS port checks, service-name resolution, prefix-selector isolation, bind retries and broader proxy-only parity remain open. |
+| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes have shared preparation/component coverage; new runtime acceptance is pending. Source-inbound context, explicit VPN default selection, wildcard isolation and exact adapter counters remain open. |
+| 5. Ports/addresses | Partial | Shared 20-case port, 12-case exact service-tag, nine-case selector-prefix, 21-case numeric API and 36-case service-listener fixtures cover allocation. Real Android/iPhone list/range/env/Unix and tag-collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. OS port checks, service-name resolution, wildcard isolation, bind retries and broader proxy-only parity remain open. |
 | 6. Assets/import syntax | Partial; data-root increment qualified | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit roots propagate across native backends; custom GeoSite traffic passes Android TUN, both Apple preview runtimes and Windows 2022/2025. Relative certificate portability, managed asset import/lifetime and explicit multi-document merging remain open. |
 | 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |
 | 8. Runtime corpus | Partial | Shared port/syntax fixtures and platform/device HTTP, DNS, routing and recovery checks exist. The complete ECH/DoH/QUIC/protocol corpus and remaining physical options acceptance are not complete. |

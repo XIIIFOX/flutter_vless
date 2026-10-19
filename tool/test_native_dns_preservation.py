@@ -52,6 +52,8 @@ def source_snapshot():
     paths.append(ROOT / 'tool/fixtures/compatibility/protocols.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/full-config.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/direct-only.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/selector-prefixes.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/selector-traffic.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/listen-addresses.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/asset-files.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/ipv6-payload.json')
@@ -172,9 +174,9 @@ def main():
         binary = EVIDENCE / ('acceptance.test.exe' if os.name == 'nt' else 'acceptance.test')
         checked('acceptance-compile', [arguments.go, 'test', '-c', '-o', str(binary), './native_dns_preservation'], 300, MOBILE)
         report['acceptance_sha256'] = digest(binary)
-        # These exact tests only decode/build and invoke file-only preparers.
-        # They create no Core instance, listener, resolver or runtime engine.
-        pure_tests = [PROTOCOL_TEST, 'TestProtocolCorpusBuilds', MATERIAL_TEST]
+        # Decode/build, file-only preparers and an in-memory selector manager
+        # with inert handlers: no Core instance, listener, resolver or engine.
+        pure_tests = [PROTOCOL_TEST, 'TestProtocolCorpusBuilds', MATERIAL_TEST, 'TestNativeSelectorPrefixAllocation']
         checked('protocol-preparation-pure', [str(binary), '-test.run', '^(' + '|'.join(pure_tests) + ')$',
                 '-test.v', '-test.timeout=60s'], 75, MOBILE, runtime_environment)
         output = (EVIDENCE / 'protocol-preparation-pure.log').read_text(encoding='utf-8')

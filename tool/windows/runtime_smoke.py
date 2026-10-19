@@ -293,13 +293,18 @@ class DirectDns(socketserver.BaseRequestHandler):
 
 
 def direct_only_config(index, address, dns_port):
-    corpus = json.loads((Path(__file__).resolve().parents[2] / "tool/fixtures/compatibility/direct-only.json").read_text(encoding="utf-8"))
-    assert index in (0, 1) and len(corpus) == 2 and 1 <= dns_port <= 65535
+    fixtures = Path(__file__).resolve().parents[2] / "tool/fixtures/compatibility"
+    assert index in (0, 1, 2) and 1 <= dns_port <= 65535
+    if index == 2:
+        profile = json.loads((fixtures / "selector-traffic.json").read_text(encoding="utf-8"))
+    else:
+        corpus = json.loads((fixtures / "direct-only.json").read_text(encoding="utf-8"))
+        assert len(corpus) == 2
+        profile = corpus[index]["config"]
     socket.inet_aton(address)  # The controlled fixture endpoint is numeric, never an OS lookup.
-    profile = corpus[index]["config"]
     profile["dns"]["hosts"]["direct-only.invalid"] = address
     profile["dns"]["servers"] = [f"tcp://{address}:{dns_port}"]
-    direct = next(outbound for outbound in profile["outbounds"] if outbound["tag"] == "direct")
+    direct = next(outbound for outbound in profile["outbounds"] if outbound["protocol"] in ("freedom", "direct"))
     direct["settings"]["redirect"] = address + ":0"  # Preserve HTTP and resolver ports.
     assert all(outbound["protocol"] in ("freedom", "direct", "blackhole", "block") for outbound in profile["outbounds"])
     return profile
@@ -667,8 +672,8 @@ def adapter_datagram(directory, subnet, ipv6, denied):
 
 def direct_only_gate(probe, directory, address, dns, origin, results):
     origin.direct_only_observed, origin.direct_only_lock = [], threading.Lock()
-    for index in (0, 1):
-        label = "vpn-direct-only-" + ("freedom-default" if index == 0 else "block-default")
+    for index, shape in enumerate(("freedom-default", "block-default", "selector-round-robin")):
+        label = "vpn-direct-only-" + shape
         profile, stop, state, guard_stop = [directory / (label + suffix) for suffix in (".json", ".stop", ".state.json", ".guard-stop")]
         for stale in (stop, state, guard_stop):
             stale.unlink(missing_ok=True)
@@ -1074,7 +1079,7 @@ def main():
             server.server_close()
         if servers and hasattr(servers[0], "direct_only_lock"):
             with servers[0].direct_only_lock:
-                clean = servers[0].direct_only_observed.count("direct-only.invalid") == 4 \
+                clean = servers[0].direct_only_observed.count("direct-only.invalid") == 6 \
                     and "blocked.invalid" not in servers[0].direct_only_observed
             results.append(dict(check="direct-only origin counts after owned callbacks drain", passed=clean))
         if ipv6_payload is not None:

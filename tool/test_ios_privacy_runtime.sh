@@ -19,6 +19,7 @@ asset=source[source.index('private func configureXrayAssetLocation'):source.inde
 harness=(root/'tool/fixtures/ios_local_auth_probe.swift').read_text()+'\n'+(root/'tool/fixtures/ios_dns_runtime_probe.swift').read_text()+'\n'+(root/'tool/fixtures/ios_privacy_probe.swift').read_text()
 harness=harness.replace('__ASSET_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/asset-files.json').read_bytes()).decode('ascii'))
 harness=harness.replace('__DIRECT_ONLY_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/direct-only.json').read_bytes()).decode('ascii'))
+harness=harness.replace('__SELECTOR_TRAFFIC_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/selector-traffic.json').read_bytes()).decode('ascii'))
 (out/'main.swift').write_text(head+asset+'\nimport flutter_vless_tunnel_support\n'+harness)
 with (out/'Probe.app/Info.plist').open('wb') as file:
  plistlib.dump({'CFBundleIdentifier':'dev.tfox.security-runtime-probe','CFBundleExecutable':'Probe','CFBundleName':'Privacy Probe','CFBundlePackageType':'APPL','CFBundleVersion':'1','CFBundleShortVersionString':'1.0','MinimumOSVersion':'15.0','LSRequiresIPhoneOS':True,'UIDeviceFamily':[1,2],'NSAppTransportSecurity':{'NSAllowsArbitraryLoads':True}},file)
@@ -61,7 +62,7 @@ assert 'LOCAL_ACCESS_PROBE_DONE' in text
 assert 'BUILD_RESULT=false; ERROR=Xray startup failed: build configuration' in text
 assert 'RUNNER_SNAPSHOT_AND_DELAY_PASS' in text
 assert 'ASSET_CUSTOM_ROOT_RUNTIME_PASS' in text
-assert 'DIRECT_ONLY_RUNTIME_PASS=0' in text and 'DIRECT_ONLY_RUNTIME_PASS=1' in text
+assert 'DIRECT_ONLY_RUNTIME_PASS=0' in text and 'DIRECT_ONLY_RUNTIME_PASS=1' in text and 'DIRECT_ONLY_RUNTIME_PASS=2' in text
 assert 'AUTH_RUNTIME_PASS=0' in text and 'AUTH_RUNTIME_PASS=1' in text
 assert 'SERVICE_TAG_RUNTIME_PASS=0' in text and 'SERVICE_TAG_RUNTIME_PASS=1' in text
 assert 'API_PORT_RESERVATION_PASS=0' in text and 'API_PORT_RESERVATION_PASS=1' in text

@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Allocate private service tags outside known nonempty balancer/observatory prefixes without rewriting selectors. Cover shared allocation cases and a round-robin TUN traffic regression; retain the empty-wildcard boundary explicitly.
 * Follow Core's legacy `servers`/`vnext` fallback when a flat address is null, retaining strict malformed-value rejection and the original settings. Cover Shadowsocks 2022 in the shared preparation corpus.
 * Cover the shared direct-only profiles in preparation and TUN runtime regressions: source default order, HTTP, domain blocking and caller TCP DNS through virtual UDP/TCP DNS.
 * Await the same Core process's local listener within a shared five-second startup/authentication/packet deadline. Retry only a pre-handshake native ECONNREFUSED; keep periodic checks, strict recovery and credential/permission failures immediate. Record bounded numeric stage/errno diagnostics.

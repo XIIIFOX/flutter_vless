@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Keep private service tags outside known nonempty balancer/observatory prefixes, preserving caller selectors and later outbound additions. Add shared allocation and native traffic regression fixtures; empty wildcard selection still needs Core integration.
 * Accept direct-only profiles with explicit caller DNS without inventing a proxy endpoint or changing the caller's default outbound. Retain refusal for an implicit native DNS detour without a qualified proxy; add shared preparation and runtime regression gates.
 * Retain IPv6 tunnel capture and caller IPv6 routing instead of inserting a blanket block. Delegate A/AAAA to preserved caller DNS and add shipped-HEV IPv6 TCP/UDP packet fixtures; IPv6-only bootstrap and NAT64 remain unqualified.
 * Permit explicit custom-only or asset-free data directories without unrelated standard GeoDAT files. Keep certificate lookup separate and validate referenced files through Core; add shared custom GeoSite runtime coverage for both Apple platforms.

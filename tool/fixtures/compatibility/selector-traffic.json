@@ -1,0 +1,59 @@
+{
+  "log": {
+    "loglevel": "none"
+  },
+  "dns": {
+    "tag": "caller-direct-dns",
+    "queryStrategy": "UseIPv4",
+    "hosts": {
+      "direct-only.invalid": "127.0.0.1",
+      "blocked.invalid": "192.0.2.80"
+    },
+    "servers": [
+      "tcp://9.9.9.9"
+    ]
+  },
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "flutter-vless-caller-direct",
+      "settings": {
+        "domainStrategy": "AsIs"
+      }
+    },
+    {
+      "protocol": "blackhole",
+      "tag": "blocked"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "domain": [
+          "full:blocked.invalid"
+        ],
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "full:direct-only.invalid"
+        ],
+        "balancerTag": "caller-balance"
+      }
+    ],
+    "balancers": [
+      {
+        "tag": "caller-balance",
+        "selector": [
+          "flutter-vless"
+        ],
+        "strategy": {
+          "type": "roundRobin"
+        }
+      }
+    ]
+  }
+}

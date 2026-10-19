@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Keep private service tags outside known nonempty balancer/observatory prefixes without freezing caller selectors. Add shared allocation and round-robin TUN regression fixtures; empty wildcard selection remains open.
 * Follow Core's legacy server fallback for a null flat address without changing caller settings. Add the Shadowsocks 2022 case to shared native preparation/Core-build coverage.
 * Accept direct-only VPN profiles with explicit caller DNS while preserving source outbound order and existing WFP protection. Add controlled HTTP, domain-block, tagged TCP DNS and Stop-cleanup regressions; implicit native DNS still requires a qualified proxy detour.
 * Add owned IPv6 tunnel addressing/routes and permit IPv6 only on that exact tunnel interface. Keep physical IPv6 blocked, preserve caller IPv6 routes and DNS query strategy, and add TCP/UDP recovery and address-cleanup regressions.

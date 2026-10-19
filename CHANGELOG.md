@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Keep private service tags outside known nonempty balancer/observatory selector prefixes on every native platform. Preserve caller selectors and dynamic outbound additions; add shared allocation and traffic regressions. Empty wildcard selectors remain an open Core integration requirement.
 * Match Core's legacy server fallback when a flat outbound address is explicitly null on Android and Windows. Add a shared Shadowsocks 2022 preparation/build regression and preserve caller encryption settings.
 * Admit direct-only Apple/Windows VPN profiles with explicit caller DNS. Preserve the first outbound, caller domain/DNS routes and existing physical dialing policy; add shared preparation and platform HTTP/DNS/blocking regressions.
 * Bound Android startup authentication and packet readiness to one owned-process deadline. Wait only for native connection-refused before the handshake; retain immediate failure for permissions, credentials and protocol errors. Add encrypted DoH trust/name acceptance fixtures and separate HEV simulator linking from physical iOS packet qualification.

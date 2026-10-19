@@ -155,15 +155,98 @@ inline std::optional<uint16_t> SocksPort(const std::string& text) {
 // previously dangling user rule, chain, API, DNS or reverse tag target a service.
 class ServiceTags {
  public:
-  explicit ServiceTags(const Json& config) { Collect(config); }
+  explicit ServiceTags(const Json& config) { Collect(config); CollectSelectors(config); }
   std::string Next(const std::string& preferred) {
-    auto candidate = preferred;
-    for (unsigned suffix = 1; used_.count(candidate); ++suffix) candidate = preferred + "-" + std::to_string(suffix);
+    auto candidate = Unique(preferred);
+    // A suffix can itself enter a selector ("private" -> "private-1").
+    // Escape the original stem once; a safe first scalar also covers suffixes.
+    if (Covered(candidate)) if (const auto scalar = EscapeScalar()) candidate = Unique(*scalar + preferred);
     used_.insert(candidate);
     return candidate;
   }
  private:
   std::set<std::string> used_;
+  std::set<std::string> prefixes_, first_scalars_;
+  bool escape_scanned_ = false;
+  std::optional<std::string> escape_scalar_;
+  std::string Unique(const std::string& stem) const {
+    auto candidate = stem;
+    for (size_t suffix = 1; used_.count(candidate); ++suffix) candidate = stem + "-" + std::to_string(suffix);
+    return candidate;
+  }
+  bool Covered(const std::string& tag) const {
+    for (const auto& prefix : prefixes_) if (tag.compare(0, prefix.size(), prefix) == 0) return true;
+    return false;
+  }
+  static std::string Scalar(uint32_t value) {
+    std::string text;
+    if (value <= 0x7f) text += static_cast<char>(value);
+    else if (value <= 0x7ff) {
+      text += static_cast<char>(0xc0 | (value >> 6)); text += static_cast<char>(0x80 | (value & 0x3f));
+    } else if (value <= 0xffff) {
+      text += static_cast<char>(0xe0 | (value >> 12)); text += static_cast<char>(0x80 | ((value >> 6) & 0x3f));
+      text += static_cast<char>(0x80 | (value & 0x3f));
+    } else {
+      text += static_cast<char>(0xf0 | (value >> 18)); text += static_cast<char>(0x80 | ((value >> 12) & 0x3f));
+      text += static_cast<char>(0x80 | ((value >> 6) & 0x3f)); text += static_cast<char>(0x80 | (value & 0x3f));
+    }
+    return text;
+  }
+  std::optional<std::string> EscapeScalar() {
+    if (escape_scanned_) return escape_scalar_;
+    escape_scanned_ = true;
+    auto choose = [&](uint32_t value) {
+      auto scalar = Scalar(value);
+      if (first_scalars_.count(scalar)) return false;
+      escape_scalar_ = std::move(scalar); return true;
+    };
+    for (const unsigned char value : std::string("_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-"))
+      if (choose(value)) return escape_scalar_;
+    for (const auto& range : {std::pair<uint32_t, uint32_t>{0xe000, 0xf8ff}, {0xf0000, 0xffffd}, {0x100000, 0x10fffd}})
+      for (auto value = range.first; value <= range.second; ++value) if (choose(value)) return escape_scalar_;
+    for (uint32_t value = 0; value <= 0x10ffff; ++value)
+      if ((value < 0xd800 || value > 0xdfff) && choose(value)) return escape_scalar_;
+    // Empty selectors and collective universal coverage require Core handler
+    // provenance. Keep the old exact allocator; never reject a valid profile.
+    return std::nullopt;
+  }
+  void AddPrefix(const std::string& prefix) {
+    if (prefix.empty()) return; // Universal selection remains an explicit open boundary.
+    prefixes_.insert(prefix);
+    // Parsed JSON contains valid UTF-8; compare encoded scalars/bytes as Go does.
+    const auto first = static_cast<unsigned char>(prefix[0]);
+    const size_t width = first < 0x80 ? 1 : first < 0xe0 ? 2 : first < 0xf0 ? 3 : 4;
+    first_scalars_.insert(prefix.substr(0, width));
+  }
+  void AddSelectors(const Json& value, bool string_list) {
+    if (value.is_array()) {
+      for (const auto& item : value) if (item.is_string()) AddPrefix(item.get<std::string>());
+    } else if (string_list && value.is_string()) {
+      const auto text = value.get<std::string>();
+      size_t start = 0;
+      for (;;) {
+        const auto comma = text.find(',', start);
+        AddPrefix(text.substr(start, comma == std::string::npos ? comma : comma - start));
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+      }
+    }
+  }
+  static void Field(const Json& object, const char* name, const std::function<void(const Json&)>& visit) {
+    if (!object.is_object()) return;
+    for (auto it = object.begin(); it != object.end(); ++it) if (Fold(it.key()) == name) visit(*it);
+  }
+  void CollectSelectors(const Json& config) {
+    Field(config, "routing", [&](const Json& routing) {
+      Field(routing, "balancers", [&](const Json& balancers) {
+        if (balancers.is_array()) for (const auto& balancer : balancers)
+          Field(balancer, "selector", [&](const Json& value) { AddSelectors(value, true); });
+      });
+    });
+    for (const auto* name : {"observatory", "burstobservatory"}) Field(config, name, [&](const Json& observer) {
+      Field(observer, "subjectselector", [&](const Json& value) { AddSelectors(value, false); });
+    });
+  }
   void Collect(const Json& value) {
     if (value.is_object()) for (auto it = value.begin(); it != value.end(); ++it) {
       const auto field = Fold(it.key());

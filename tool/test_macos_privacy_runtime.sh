@@ -27,6 +27,7 @@ harness=harness.replace('    let markers = [', '    do { try await runMacCounter
 harness=harness[:harness.index('class ModeDelegate:')]+ '\nTask { await runModes() }; dispatchMain()\n'
 harness=harness.replace('__ASSET_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/asset-files.json').read_bytes()).decode('ascii'))
 harness=harness.replace('__DIRECT_ONLY_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/direct-only.json').read_bytes()).decode('ascii'))
+harness=harness.replace('__SELECTOR_TRAFFIC_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/selector-traffic.json').read_bytes()).decode('ascii'))
 (out/'main.swift').write_text(head+asset+'\nimport flutter_vless_macos_tunnel_support\n'+harness)
 PY
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
@@ -53,7 +54,7 @@ text=Path(sys.argv[1]).read_text()
 assert "RUNTIME=26.10.17" in text, "Unexpected embedded Xray version"
 assert 'MACOS_COUNTERS_AND_API_PASSTHROUGH_PASS' in text
 assert 'ASSET_CUSTOM_ROOT_RUNTIME_PASS' in text
-assert 'DIRECT_ONLY_RUNTIME_PASS=0' in text and 'DIRECT_ONLY_RUNTIME_PASS=1' in text
+assert 'DIRECT_ONLY_RUNTIME_PASS=0' in text and 'DIRECT_ONLY_RUNTIME_PASS=1' in text and 'DIRECT_ONLY_RUNTIME_PASS=2' in text
 assert 'SERVICE_TAG_RUNTIME_PASS=0' in text and 'SERVICE_TAG_RUNTIME_PASS=1' in text
 assert 'API_PORT_RESERVATION_PASS=0' in text and 'API_PORT_RESERVATION_PASS=1' in text
 assert 'METRICS_PORT_RESERVATION_PASS=0' in text and 'METRICS_PORT_RESERVATION_PASS=1' in text

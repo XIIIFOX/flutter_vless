@@ -35,6 +35,18 @@ class RuntimeFixtureTest(unittest.TestCase):
             self.assertEqual("192.0.2.10:0", direct["settings"]["redirect"])
         self.assertEqual(original, corpus_path.read_bytes())
 
+    def test_selector_profile_preserves_round_robin_prefix_and_finds_direct_by_role(self):
+        path = Path(runtime.__file__).resolve().parents[2] / "tool/fixtures/compatibility/selector-traffic.json"
+        encoded = path.read_bytes(); source = json.loads(encoded)
+        actual = runtime.direct_only_config(2, "192.0.2.10", 15353)
+        self.assertEqual(source["routing"], actual["routing"])
+        self.assertEqual("flutter-vless-caller-direct", actual["outbounds"][0]["tag"])
+        self.assertEqual("192.0.2.10:0", actual["outbounds"][0]["settings"]["redirect"])
+        self.assertEqual(source["outbounds"][1], actual["outbounds"][1])
+        self.assertEqual(["flutter-vless"], actual["routing"]["balancers"][0]["selector"])
+        self.assertEqual(["tcp://192.0.2.10:15353"], actual["dns"]["servers"])
+        self.assertEqual(encoded, path.read_bytes())
+
     def test_direct_tcp_dns_fixture_observes_and_frames_exact_question(self):
         query = question("remote.invalid")
         stream = bytearray(len(query).to_bytes(2, "big") + query)
@@ -113,8 +125,10 @@ class RuntimeFixtureTest(unittest.TestCase):
                         rows = []
                         runtime.direct_only_gate(directory / "runtime_probe.exe", directory, "192.0.2.10",
                                                  SimpleNamespace(server_address=("192.0.2.10", 15353)), origin, rows)
-                        self.assertEqual(4, len(rows)); self.assertTrue(all(row["passed"] for row in rows))
-                    self.assertEqual(2 if delivered else 4, len(children))
+                        self.assertEqual(6, len(rows)); self.assertTrue(all(row["passed"] for row in rows))
+                        self.assertEqual({"vpn-direct-only-freedom-default", "vpn-direct-only-block-default", "vpn-direct-only-selector-round-robin"}, {row["mode"] for row in rows})
+                        self.assertEqual(6, origin.direct_only_observed.count("direct-only.invalid"))
+                    self.assertEqual(2 if delivered else 6, len(children))
                     for child in children: child.wait.assert_called(); child.kill.assert_not_called()
                     self.assertTrue(any(call.args[1] == "release-protection" for call in native.call_args_list))
 

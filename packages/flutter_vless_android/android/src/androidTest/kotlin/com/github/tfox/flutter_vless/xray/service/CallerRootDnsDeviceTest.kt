@@ -54,7 +54,7 @@ class CallerRootDnsDeviceTest {
     private fun activeVpn() = manager.getNetworkCapabilities(manager.activeNetwork)
         ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
 
-    private fun start(source: JSONObject, geoAssetsDirectory: String? = null) {
+    private fun start(source: JSONObject, geoAssetsDirectory: String? = null): JSONObject {
         assertNull("Test APK requires VPN consent", VpnService.prepare(context))
         val connecting = AtomicBoolean(false)
         val connected = CountDownLatch(1)
@@ -90,6 +90,7 @@ class CallerRootDnsDeviceTest {
             assertTrue("Caller $name root disappeared", runtime.has(name))
             assertEquals("Caller $name subtree changed", source.get(name).toString(), runtime.get(name).toString())
         }
+        return runtime
     }
 
     @After fun stop() {
@@ -288,6 +289,9 @@ class CallerRootDnsDeviceTest {
         val corpus = InstrumentationRegistry.getInstrumentation().context.assets.open("direct-only.json")
             .bufferedReader().use { JSONArray(it.readText()) }
         assertEquals("Shared direct-only corpus changed", 2, corpus.length())
+        val selectorProfile = InstrumentationRegistry.getInstrumentation().context.assets.open("selector-traffic.json")
+            .bufferedReader().use { JSONObject(it.readText()) }
+        corpus.put(JSONObject().put("name", "known-nonempty-selector").put("config", selectorProfile))
         for (index in 0 until corpus.length()) {
             val original = corpus.getJSONObject(index).getJSONObject("config"); val originalBytes = original.toString()
             DnsFixture().use { fixture ->
@@ -303,12 +307,30 @@ class CallerRootDnsDeviceTest {
                 val before = source.toString()
                 http() // The fixture is reachable before applying either policy.
                 try {
-                    start(source)
+                    val runtime = start(source)
+                    val originalOutbounds = source.getJSONArray("outbounds")
+                    val runtimeOutbounds = runtime.getJSONArray("outbounds")
+                    for (outbound in 0 until originalOutbounds.length())
+                        assertEquals("Caller outbound order or contents changed", originalOutbounds.get(outbound).toString(),
+                            runtimeOutbounds.get(outbound).toString())
+                    val balancers = source.getJSONObject("routing").optJSONArray("balancers")
+                    if (balancers != null) {
+                        assertEquals("Caller selectors changed", balancers.toString(),
+                            runtime.getJSONObject("routing").getJSONArray("balancers").toString())
+                        val prefix = balancers.getJSONObject(0).getJSONArray("selector").getString(0)
+                        for (outbound in originalOutbounds.length() until runtimeOutbounds.length())
+                            assertFalse("Private outbound entered caller selection", runtimeOutbounds.getJSONObject(outbound)
+                                .getString("tag").startsWith(prefix))
+                        assertFalse("Private API entered caller selection", runtime.getJSONObject("api").getString("tag").startsWith(prefix))
+                    }
                     val udp = name("direct-only-udp-$index"); val tcp = name("direct-only-tcp-$index")
                     assertA(query(udp, false)); assertA(query(tcp, true))
                     assertTrue(InetAddress.getAllByName("direct-only.invalid").any { it.hostAddress == "10.0.2.2" })
                     assertTrue(InetAddress.getAllByName("blocked.invalid").any { it.hostAddress == "10.0.2.2" })
-                    http("direct-only.invalid")
+                    // All four transactions must succeed. This is enough to
+                    // expose the old round-robin cycle through DNS/API/probe
+                    // handlers; a failed request is never retried.
+                    repeat(if (balancers == null) 1 else 4) { http("direct-only.invalid") }
                     var deniedBytes = 0
                     var deniedClosed = false
                     try {

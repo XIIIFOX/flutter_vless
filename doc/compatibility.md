@@ -151,6 +151,12 @@ provide a cellular Network. Strict capture and its verifier remain available in
 the default standalone harness. Development-only Core/forwarder composition
 also remains an explicit harness option, outside this minimum delivery's gate.
 
+The controlled Android HTTP fixture records bounded connection/relay stages,
+error classes and byte counts. Its device test records the HTTP status and
+header/body lengths before parsing the event array. These diagnostics retain
+the original I/O and parse failures without retries or raw response logging;
+they help investigate an empty response without treating it as a DNS success.
+
 On Android the default `config` policy preserves the caller root DNS, including
 missing/localhost resolution through the existing protected physical-Network
 resolver. The explicit `proxy` policy intentionally selects proxied system DNS.

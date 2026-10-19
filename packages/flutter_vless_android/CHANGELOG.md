@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Add bounded HTTP fixture connection/relay stages and response-length diagnostics for protected DNS acceptance. Preserve failures without retries or response changes; cover failure paths with fake sockets.
 * Extend the shared protocol corpus with penetrating XHTTP download settings. Verify parent/child socket options remain independent in JSON until Core applies its runtime inheritance, preserving caller DNS in config mode.
 * Cover missing, null and empty localhost DNS server tags in the shared preparation corpus, retaining the caller's DNS and default protected resolution path.
 * Cover named DoH with exact `full:` hosts in the shared full-profile corpus, preserving caller hosts, URLs, tags and query strategy through native DNS preparation.

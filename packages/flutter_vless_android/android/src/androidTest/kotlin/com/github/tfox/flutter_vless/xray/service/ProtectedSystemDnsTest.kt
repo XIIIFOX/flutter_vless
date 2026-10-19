@@ -142,10 +142,35 @@ class ProtectedSystemDnsTest {
 
     private fun fixtureEvents(phase: String? = null): JSONArray = Socket().use { socket ->
         socket.soTimeout = 3000
-        socket.connect(InetSocketAddress("10.0.2.2", 18283), 3000)
-        val path = phase?.let { "/?phase=$it&run=$run" } ?: "/"
-        socket.getOutputStream().write("GET $path HTTP/1.1\r\nHost: fixture.test\r\nConnection: close\r\n\r\n".toByteArray())
-        JSONArray(socket.getInputStream().bufferedReader().readText().substringAfter("\r\n\r\n"))
+        var stage = "connect"
+        var status = -1
+        var headerUtf8Bytes = -1
+        var bodyUtf8Bytes = -1
+        var separatorPresent = false
+        fun diagnostic(result: String) = "DNS_AUDIT_HTTP phase=${phase ?: "events"} stage=$result status=$status " +
+            "headerUtf8Bytes=$headerUtf8Bytes bodyUtf8Bytes=$bodyUtf8Bytes separatorPresent=$separatorPresent"
+        try {
+            socket.connect(InetSocketAddress("10.0.2.2", 18283), 3000)
+            stage = "write"
+            val path = phase?.let { "/?phase=$it&run=$run" } ?: "/"
+            socket.getOutputStream().write("GET $path HTTP/1.1\r\nHost: fixture.test\r\nConnection: close\r\n\r\n".toByteArray())
+            stage = "read"
+            val response = socket.getInputStream().bufferedReader().readText()
+            val separator = response.indexOf("\r\n\r\n")
+            separatorPresent = separator >= 0
+            status = response.substringBefore("\r\n").split(' ').getOrNull(1)?.toIntOrNull() ?: -1
+            if (separatorPresent) headerUtf8Bytes = response.substring(0, separator + 4).toByteArray(Charsets.UTF_8).size
+            val body = response.substringAfter("\r\n\r\n")
+            bodyUtf8Bytes = body.toByteArray(Charsets.UTF_8).size
+            println(diagnostic("received"))
+            stage = "json"
+            JSONArray(body)
+        } catch (error: Exception) {
+            val detail = diagnostic(stage + "_failed")
+            println(detail)
+            error.addSuppressed(IllegalStateException(detail))
+            throw error
+        }
     }
 
     private fun exercise(protocol: String) {

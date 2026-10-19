@@ -24,6 +24,8 @@ VLESS_ID = uuid.UUID("2bddfbd9-7d82-4698-9d39-1b8136b856de").bytes
 EVENTS = []
 LOCK = threading.Lock()
 EVENT_FILE = None
+HTTP_STAGE_COUNT = 0
+HTTP_STAGE_LIMIT = 256
 
 
 def event(**value):
@@ -35,6 +37,27 @@ def event(**value):
         if EVENT_FILE:
             with open(EVENT_FILE, "a", encoding="utf-8") as output:
                 output.write(line + "\n")
+
+
+def http_stage(transport, stage, **details):
+    """Bounded, content-free observations; never changes a relay outcome."""
+    global HTTP_STAGE_COUNT
+    if transport != "http":
+        return
+    with LOCK:
+        if HTTP_STAGE_COUNT >= HTTP_STAGE_LIMIT:
+            return
+        HTTP_STAGE_COUNT += 1
+    try:
+        event(event="proxy-stage", transport="http", stage=stage, **details)
+    except OSError:
+        pass  # A diagnostic output failure must not replace the original I/O failure.
+
+
+def http_error(transport, stage, error, **details):
+    http_stage(transport, stage, error_class=type(error).__name__,
+               errno=error.errno if isinstance(error, OSError) and isinstance(error.errno, int) else 0,
+               **details)
 
 
 def exact(sock, count):
@@ -176,27 +199,49 @@ def tunnel(sock, destination, port, transport):
             if answer is None:
                 return
             sock.sendall(len(answer).to_bytes(2, "big") + answer)
+    destination_class = "status" if destination == "10.0.2.2" and port == 18283 else "other"
     # Only the fixture's status port is special-cased; readiness travels through host VPN.
     if destination == "10.0.2.2" and port == 18283:
         destination = "127.0.0.1"
-    with socket.create_connection((destination, port), 10) as upstream:
-        while True:
-            readable, _, _ = select.select([sock, upstream], [], [], 20)
-            if not readable:
-                return
-            for source in readable:
-                chunk = source.recv(16384)
-                if not chunk:
+    phase = "connect"
+    client_bytes = upstream_bytes = 0
+    http_stage(transport, "connect-attempt", destination_class=destination_class)
+    try:
+        with socket.create_connection((destination, port), 10) as upstream:
+            phase = "relay"
+            http_stage(transport, "connect-success", destination_class=destination_class)
+            while True:
+                readable, _, _ = select.select([sock, upstream], [], [], 20)
+                if not readable:
+                    http_stage(transport, "relay-idle", destination_class=destination_class,
+                               client_bytes=client_bytes, upstream_bytes=upstream_bytes)
                     return
-                (upstream if source is sock else sock).sendall(chunk)
+                for source in readable:
+                    chunk = source.recv(16384)
+                    if not chunk:
+                        http_stage(transport, "relay-eof", destination_class=destination_class,
+                                   side="client" if source is sock else "upstream",
+                                   client_bytes=client_bytes, upstream_bytes=upstream_bytes)
+                        return
+                    (upstream if source is sock else sock).sendall(chunk)
+                    if source is sock:
+                        client_bytes += len(chunk)
+                    else:
+                        upstream_bytes += len(chunk)
+    except (EOFError, OSError, ValueError, IndexError) as error:
+        http_error(transport, phase + "-error", error, destination_class=destination_class,
+                   client_bytes=client_bytes, upstream_bytes=upstream_bytes)
+        raise
 
 
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
         sock = self.request
         sock.settimeout(30)
+        transport = self.server.transport
+        entered_tunnel = False
+        http_stage(transport, "accepted")
         try:
-            transport = self.server.transport
             if transport == "http":
                 headers = b""
                 while not headers.endswith(b"\r\n\r\n") and len(headers) < 16384:
@@ -229,8 +274,11 @@ class Handler(socketserver.BaseRequestHandler):
                 port = int.from_bytes(exact(sock, 2), "big")
                 destination = address(sock, exact(sock, 1)[0], (1, 2, 3))
                 sock.sendall(b"\0\0")
+            entered_tunnel = True
             tunnel(sock, destination, port, transport)
-        except (EOFError, OSError, ValueError, IndexError):
+        except (EOFError, OSError, ValueError, IndexError) as error:
+            if not entered_tunnel:
+                http_error(transport, "handshake-error", error)
             pass
 
 

@@ -149,6 +149,7 @@ jobs:
         run: |
           python3 tool/test_verify_android_dns_capture.py
           python3 tool/test_android_dns_fixture.py
+          python3 tool/test_android_dns_fixture_diagnostics.py
           python3 tool/test_android_native_dns_fixture.py
           python3 tool/test_verify_android_dns_preview.py
           python3 tool/test_verify_android_tun_preview.py

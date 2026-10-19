@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Record bounded, content-free HTTP fixture stages and response lengths in Android CI when protected system DNS tests fail. Retain the original error and request behavior; add pure failure-path controls.
 * Prepare XHTTP upload/download with parent `sockopt.penetrate` on Apple and Windows. Share one closed endpoint pin scope or retain the caller's parent chain, preserve inactive child socket settings, and add shared preparation and controlled payload regressions.
 * Match Core's missing, null and empty localhost DNS server tags on Apple and Windows. Retain other caller DNS fields and reject malformed non-null tags before preparation; add shared cross-platform regressions.
 * Accept exact `full:` DNS hosts mappings for named resolvers on Windows. Match Core's prefix and domain case rules on both Apple platforms and Windows, preserve caller DNS, and add shared preparation and HTTPS DoH regressions.

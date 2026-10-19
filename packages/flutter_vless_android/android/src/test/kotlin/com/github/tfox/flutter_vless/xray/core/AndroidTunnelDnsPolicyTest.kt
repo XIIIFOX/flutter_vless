@@ -438,6 +438,96 @@ class AndroidTunnelDnsPolicyTest {
         }
     }
 
+    @Test fun nullSocketAddressPortStrategyRetainsCoreDefault() =
+        checkSocketAddressPortStrategyCorpus(setOf("null"), includeRefusals = false)
+
+    @Test fun emptySocketAddressPortStrategyRetainsCoreDefault() =
+        checkSocketAddressPortStrategyCorpus(setOf("empty"), includeRefusals = false)
+
+    @Test fun sharedSocketAddressPortNoneFormsAndRefusalsKeepRawCallerPolicy() =
+        checkSocketAddressPortStrategyCorpus(null, includeRefusals = true)
+
+    private fun checkSocketAddressPortStrategyCorpus(only: Set<String>?, includeRefusals: Boolean) {
+        val corpus = JSONObject(requireNotNull(javaClass.getResource("/transport-none.json")).readText())
+        val profiles = corpus.getJSONArray("profiles"); val equivalents = corpus.getJSONArray("equivalentValues")
+        val refusals = corpus.getJSONArray("refusalValues")
+        assertEquals(2, profiles.length()); assertEquals(5, equivalents.length()); assertEquals(3, refusals.length())
+        fun at(root: JSONObject, path: JSONArray): JSONObject {
+            var current: Any = root
+            for (index in 0 until path.length())
+                current = if (current is JSONArray) current.get(path.getString(index).toInt()) else (current as JSONObject).get(path.getString(index))
+            return current as JSONObject
+        }
+        fun retained(label: String, expected: Any?, actual: Any?) {
+            when (expected) {
+                is JSONObject -> expected.keys().forEach { key ->
+                    val output = actual as JSONObject
+                    // This existing adapter policy is separate from the raw
+                    // address/port strategy spelling under test.
+                    if (key != "domainStrategy" || output.opt(key) != "ForceIP") retained(label, expected.get(key), output.get(key))
+                }
+                is JSONArray -> {
+                    assertEquals(label, expected.length(), (actual as JSONArray).length())
+                    for (index in 0 until expected.length()) retained(label, expected.get(index), actual.get(index))
+                }
+                else -> assertEquals(label, expected, actual)
+            }
+        }
+        for (profileIndex in 0 until profiles.length()) {
+            val profile = profiles.getJSONObject(profileIndex); val paths = profile.getJSONArray("sockoptPaths")
+            for (group in if (includeRefusals) listOf("equivalentValues", "refusalValues") else listOf("equivalentValues")) {
+                val variants = corpus.getJSONArray(group)
+                for (variantIndex in 0 until variants.length()) {
+                    val variant = variants.getJSONObject(variantIndex)
+                    if (only != null && variant.getString("name") !in only) continue
+                    val label = profile.getString("name") + "/" + variant.getString("name")
+                    val input = JSONObject(profile.getJSONObject("config").toString())
+                    val pathCount = if (variant.optString("applyTo") == "primary") 1 else paths.length()
+                    for (pathIndex in 0 until pathCount) {
+                        val options = at(input, paths.getJSONArray(pathIndex))
+                        if (variant.getBoolean("present")) options.put("addressPortStrategy", variant.get("value"))
+                        else options.remove("addressPortStrategy")
+                    }
+                    val before = input.toString(); val resolved = mutableListOf<String>()
+                    val action = {
+                        AndroidTunnelDnsPolicy.prepare(before, "proxy", environment = { error("Literal source has no environment references") }) { name ->
+                            resolved.add(name); assertEquals("endpoint.invalid", name); listOf("192.0.2.17")
+                        }
+                    }
+                    if (group == "refusalValues") {
+                        rejected { action() }
+                        assertTrue("$label queried DNS before rejecting an unsupported strategy", resolved.isEmpty())
+                    } else {
+                        val prepared = action(); val actual = JSONObject(prepared.configJson)
+                        assertEquals(label, listOf("endpoint.invalid"), resolved)
+                        assertEquals(label, setOf("endpoint.invalid"), prepared.bootstrapHostnames)
+                        for (pathIndex in 0 until paths.length()) {
+                            val sourceOptions = at(input, paths.getJSONArray(pathIndex)); val actualOptions = at(actual, paths.getJSONArray(pathIndex))
+                            assertEquals(label, sourceOptions.has("addressPortStrategy"), actualOptions.has("addressPortStrategy"))
+                            if (sourceOptions.has("addressPortStrategy"))
+                                assertEquals(label, sourceOptions.get("addressPortStrategy"), actualOptions.get("addressPortStrategy"))
+                        }
+                        for (outbound in 0 until input.getJSONArray("outbounds").length())
+                            retained(label, input.getJSONArray("outbounds").get(outbound), actual.getJSONArray("outbounds").get(outbound))
+                        assertEquals(label, input.getJSONObject("custom").toString(), actual.getJSONObject("custom").toString())
+                        assertEquals(label, input.getString("remarks"), actual.getString("remarks"))
+                    }
+                    // Config mode deliberately retains the caller policy for
+                    // Core preflight, including invalid values, without pins.
+                    val caller = AndroidTunnelDnsPolicy.prepare(before, "config", environment = { error("No caller environment references") }) {
+                        error("Config mode must not bootstrap transport endpoints")
+                    }
+                    val output = JSONObject(caller.configJson)
+                    assertEquals(label, input.getJSONObject("dns").toString(), output.getJSONObject("dns").toString())
+                    for (outbound in 0 until input.getJSONArray("outbounds").length())
+                        assertEquals(label, input.getJSONArray("outbounds").get(outbound).toString(), output.getJSONArray("outbounds").get(outbound).toString())
+                    assertTrue(label, caller.bootstrapHostnames.isEmpty()); assertTrue(label, caller.bootstrapAddresses.isEmpty())
+                    assertEquals(label, before, input.toString())
+                }
+            }
+        }
+    }
+
     @Test fun sharedMappedIpv4DnsAndRealIpv6RemainCallerCorePolicy() {
         val corpus = JSONObject(requireNotNull(javaClass.getResource("/dns-mapped-addresses.json")).readText())
         assertEquals(3, corpus.getJSONArray("positiveCases").length())

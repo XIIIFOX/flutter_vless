@@ -93,7 +93,7 @@ public enum TunnelDNSPolicy {
                 settings.removeValue(forKey: "targetStrategy")
                 outbounds[index]["settings"] = settings
                 var sockopt = stream["sockopt"] as? [String: Any] ?? [:]
-                guard (sockopt["addressPortStrategy"] as? String ?? "none").lowercased() == "none" else { return nil }
+                guard inactiveAddressPortStrategy(sockopt["addressPortStrategy"]) else { return nil }
                 // A direct named DoH target with an exact caller hosts entry
                 // must consult Core, never the OS resolver inside the tunnel.
                 sockopt["domainStrategy"] = (sockopt["dialerProxy"] as? String ?? "").isEmpty ? "ForceIPv4" : "AsIs"
@@ -243,7 +243,7 @@ public enum TunnelDNSPolicy {
         guard stream["sockopt"] == nil || stream["sockopt"] is NSNull || stream["sockopt"] is [String: Any] else { return false }
         var sockopt = stream["sockopt"] as? [String: Any] ?? [:]
         guard sockopt["dialerProxy"] == nil || sockopt["dialerProxy"] is NSNull || sockopt["dialerProxy"] is String else { return false }
-        guard (sockopt["addressPortStrategy"] as? String ?? "none").lowercased() == "none" else { return false }
+        guard inactiveAddressPortStrategy(sockopt["addressPortStrategy"]) else { return false }
         if let tls = stream["tlsSettings"] as? [String: Any],
            tls.keys.contains(where: { XrayJSONField.matches($0, "echConfigList") && (tls[$0] as? String ?? "").contains("://") }) { return false }
         let network = effectiveTransport(in: stream)
@@ -347,6 +347,11 @@ public enum TunnelDNSPolicy {
         resolved[hostKey(host)] = ip
         addresses.insert(ip)
         return ip
+    }
+    private static func inactiveAddressPortStrategy(_ value: Any?) -> Bool {
+        guard let value, !(value is NSNull) else { return true }
+        guard let strategy = value as? String else { return false }
+        return strategy.isEmpty || strategy.lowercased() == "none"
     }
     private static func systemStrategy(_ value: Any?) -> Bool {
         let folded = (value as? String ?? "").lowercased().replacingOccurrences(of: "_", with: "").replacingOccurrences(of: "-", with: "")

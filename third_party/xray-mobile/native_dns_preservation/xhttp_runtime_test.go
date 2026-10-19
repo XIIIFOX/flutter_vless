@@ -275,9 +275,10 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 	allPassed := true
 	for _, chained := range []bool{false, true} {
 		passed := t.Run(fmt.Sprintf("caller_chain_%t", chained), func(t *testing.T) {
-			options := map[string]any{"penetrate": true, "tcpKeepAliveIdle": 30}
+			options := map[string]any{"penetrate": true, "tcpKeepAliveIdle": 30, "addressPortStrategy": ""}
 			if chained {
 				options["dialerProxy"] = "carrier"
+				options["addressPortStrategy"] = "NoNe"
 			}
 			download := map[string]any{"address": "endpoint.invalid", "port": downloadPort, "network": "xhttp",
 				"sockopt":       map[string]any{"dialerProxy": "dormant-download-handler", "tcpKeepAliveIdle": 7},
@@ -324,6 +325,9 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 				t.Fatal(err)
 			}
 			stream := effective["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)
+			if stream["sockopt"].(map[string]any)["addressPortStrategy"] != options["addressPortStrategy"] {
+				t.Fatal("XHTTP preparation rewrote the caller's None strategy spelling")
+			}
 			actualDownload := stream["xhttpSettings"].(map[string]any)["extra"].(map[string]any)["downloadSettings"]
 			got, _ := json.Marshal(actualDownload)
 			if !bytes.Equal(wantDownload, got) {
@@ -369,6 +373,7 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 					len(events), events[:min(len(events), 48)], failures[:min(len(failures), 8)], output)
 			}
 			t.Logf("XHTTP_PENETRATE_PAYLOAD_PASS chained=%t bytes=%d", chained, len(payload))
+			t.Logf("TRANSPORT_NONE_XHTTP_PAYLOAD_PASS chained=%t", chained)
 			if chained {
 				t.Log("XHTTP_ENVIRONMENT_FROZEN_PASS")
 			}

@@ -49,6 +49,75 @@ Json& DnsAddressPath(Json& value, const Json& path) {
   }
   return *current;
 }
+void TransportNoneCases(const std::string& only = "") {
+  std::ifstream input("tool/fixtures/compatibility/transport-none.json");
+  Require(input.good(), "shared disabled transport strategy corpus required");
+  Json corpus; input >> corpus;
+  Require(corpus["profiles"].size() == 2 && corpus["equivalentValues"].size() == 5 && corpus["refusalValues"].size() == 3,
+      "shared disabled transport strategy corpus changed");
+  auto prepare = [](const Json& source, unsigned& calls) {
+    return PrepareProtectedVpn(source.dump(), "session-user", "session-password", "Ethernet", [&](const std::string& host) {
+      ++calls; return host == "endpoint.invalid" ? "192.0.2.5" : "";
+    });
+  };
+  // Compare the complete prepared policy while allowing only this option's raw
+  // spelling to differ, including copies on the private physical pin leaves.
+  auto without_strategy = [](Json value) {
+    std::function<void(Json&)> strip = [&](Json& stream) {
+      if (stream.contains("sockopt") && stream["sockopt"].is_object()) stream["sockopt"].erase("addressPortStrategy");
+      const auto network = EffectiveStreamNetwork(stream);
+      if (network != "xhttp" && network != "splithttp") return;
+      const auto* key = stream.contains("xhttpSettings") && !stream["xhttpSettings"].is_null() ? "xhttpSettings" : "splithttpSettings";
+      if (!stream.contains(key) || !stream[key].is_object()) return;
+      auto* settings = &stream[key];
+      if (settings->contains("extra")) {
+        if (!(*settings)["extra"].is_object()) return;
+        settings = &(*settings)["extra"];
+      }
+      if (settings->contains("downloadSettings") && (*settings)["downloadSettings"].is_object()) strip((*settings)["downloadSettings"]);
+    };
+    for (auto& outbound : value["outbounds"])
+      if (outbound.contains("streamSettings") && outbound["streamSettings"].is_object()) strip(outbound["streamSettings"]);
+    return value;
+  };
+  bool selected = only.empty();
+  for (const auto& profile : corpus["profiles"]) {
+    auto baseline = profile["config"];
+    for (const auto& path : profile["sockoptPaths"]) DnsAddressPath(baseline, path).erase("addressPortStrategy");
+    unsigned baseline_calls = 0; const auto expected = prepare(baseline, baseline_calls);
+    Require(expected.has_value() && baseline_calls == 1, "missing transport strategy baseline rejected or resolved a dormant endpoint");
+    for (const auto* group : {"equivalentValues", "refusalValues"}) for (const auto& variant : corpus[group]) {
+      const auto name = profile["name"].get<std::string>() + "/" + variant["name"].get<std::string>();
+      if (!only.empty() && only != name) continue;
+      selected = true;
+      auto source = baseline;
+      const bool primary_only = variant.value("applyTo", std::string()) == "primary";
+      size_t index = 0;
+      for (const auto& path : profile["sockoptPaths"]) {
+        auto& options = DnsAddressPath(source, path);
+        if ((!primary_only || index == 0) && variant["present"].get<bool>()) options["addressPortStrategy"] = variant["value"];
+        else options.erase("addressPortStrategy");
+        ++index;
+      }
+      const auto original = source.dump(); unsigned calls = 0;
+      const auto result = prepare(source, calls);
+      if (std::string(group) == "refusalValues") Require(!result, "active/invalid transport strategy was admitted");
+      else {
+        Require(result.has_value(), "Core-equivalent disabled transport strategy rejected");
+        auto candidate = Parse(*result);
+        Require(without_strategy(candidate) == without_strategy(Parse(*expected)) && calls == baseline_calls,
+            "disabled transport strategy changed protected pins, metadata, or bootstrap lookup");
+        for (const auto& path : profile["sockoptPaths"]) {
+          const auto& options = DnsAddressPath(candidate, path);
+          Require(options.contains("addressPortStrategy") == variant["present"].get<bool>(), "raw strategy presence changed");
+          if (variant["present"].get<bool>()) Require(options["addressPortStrategy"] == variant["value"], "raw strategy value changed");
+        }
+      }
+      Require(source.dump() == original, "transport strategy preparation mutated caller source");
+    }
+  }
+  Require(selected, "unknown disabled transport strategy case");
+}
 void MappedDnsCases(const std::string& only = "") {
   std::ifstream input("tool/fixtures/compatibility/dns-mapped-addresses.json");
   Require(input.good(), "shared mapped DNS Address corpus required");
@@ -980,6 +1049,7 @@ int main(int argc, char** argv) try {
   if (argc == 3 && std::string(argv[1]) == "--direct-only-case") { DirectOnlyCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--ipv6-case") { IPv6PayloadCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--protocol-case") { ProtocolCompatibilityCases(argv[2]); return 0; }
+  if (argc == 3 && std::string(argv[1]) == "--transport-none-case") { TransportNoneCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--mapped-dns-case") { MappedDnsCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--logical-address-case") { LogicalAddressCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--dns-address-case") { DnsAddressCases(argv[2]); return 0; }
@@ -1004,6 +1074,7 @@ int main(int argc, char** argv) try {
   DnsAddressCases();
   LogicalAddressCases();
   MappedDnsCases();
+  TransportNoneCases();
   const auto source = Parse(R"({
     "log":{"access":"private-canary.log","error":"secret.log","loglevel":"debug","dnsLog":true},
     "inbounds":[{"protocol":"socks","listen":"127.0.0.1","port":18580,"tag":"socks-in","settings":{"auth":"noauth"},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":false}}],

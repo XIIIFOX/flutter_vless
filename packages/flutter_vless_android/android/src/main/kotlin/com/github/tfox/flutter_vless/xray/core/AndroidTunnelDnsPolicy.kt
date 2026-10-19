@@ -313,7 +313,8 @@ internal object AndroidTunnelDnsPolicy {
         // makes it inherit the parent at dial time.
         val sockopt = if (stream.isNull("sockopt")) JSONObject() else objectValue(stream, "sockopt") ?: JSONObject()
         canonicalize(sockopt, "domainStrategy", "addressPortStrategy", "dialerProxy")
-        require((optionalString(sockopt, "addressPortStrategy") ?: "none").equals("none", true)) {
+        val addressPortStrategy = if (sockopt.isNull("addressPortStrategy")) null else optionalString(sockopt, "addressPortStrategy")
+        require(addressPortStrategy.isNullOrEmpty() || addressPortStrategy.equals("none", true)) {
             "SRV/TXT endpoint overrides cannot use the protected system DNS policy"
         }
         sockopt.put("domainStrategy", "ForceIP")

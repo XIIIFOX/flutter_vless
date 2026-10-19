@@ -810,7 +810,11 @@ inline bool BootstrapStream(Json& stream, const std::vector<BootstrapEndpoint>& 
   if (!Fields(stream, {"address", "port", "sockopt", "xhttpSettings", "splithttpSettings", "network", "method"}) || !Object(stream, "sockopt")) return false;
   auto& options = stream["sockopt"];
   if (!Fields(options, {"interface", "domainStrategy", "addressPortStrategy", "dialerProxy", "penetrate"})) return false;
-  if (options.contains("addressPortStrategy") && options["addressPortStrategy"] != "none") return false;
+  if (options.contains("addressPortStrategy") && !options["addressPortStrategy"].is_null()) {
+    if (!options["addressPortStrategy"].is_string()) return false;
+    const auto strategy = Fold(options["addressPortStrategy"].get<std::string>());
+    if (!strategy.empty() && strategy != "none") return false;
+  }
   if (options.contains("penetrate") && !options["penetrate"].is_null() && !options["penetrate"].is_boolean()) return false;
   const bool penetrate = options.contains("penetrate") && options["penetrate"].is_boolean() && options["penetrate"].get<bool>();
   options["domainStrategy"] = "ForceIPv4";

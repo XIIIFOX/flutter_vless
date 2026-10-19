@@ -194,8 +194,11 @@ addresses or NAT64 prefixes through this IPv4 policy. Three shared positive
 cases compare compiled DNS against dotted IPv4 controls; two genuine IPv6
 controls retain the desktop admission boundary. Android retains caller DNS for
 both families. Controlled DoH uses a mapped static host with the same TLS,
-wire-answer, environment-handoff and zero-OS-resolver checks; new-head runtime
-acceptance of this spelling is pending CI.
+wire-answer, environment-handoff and zero-OS-resolver checks. All three ordinary
+Core jobs at [3ab20f2](https://github.com/XIIIFOX/flutter_vless/actions/runs/39205340041)
+pass that mapped-host traffic check and the existing DNS/routing/IPv6 controls.
+This is controlled Core qualification; physical iOS and full system VPN
+acceptance remain separate.
 
 [CI on 6c19e2d](https://github.com/XIIIFOX/flutter_vless/actions/runs/39172041164)
 qualifies the production C++ preparer on Linux/macOS/Windows and the Apple preparer on
@@ -633,9 +636,12 @@ four expected payloads but fails when the test DNS origin reads another frame
 after its completed exchange. The fixture now serves exactly one framed query
 per connection, retaining strict answers, request counts and post-drain errors;
 new memory-only controls cover complete, malformed and truncated frames.
-Acceptance of that correction remains pending. A separate Windows 2022 TUN run
-also fails a required positive HTTP request after a blocked request; its cause
-is open, with bounded stage/process/origin diagnostics added without retries.
+The corrected fixture passes all three ordinary Core jobs at 3ab20f2. A separate
+Windows 2022 TUN run previously failed a required positive HTTP request after a
+blocked request. Both Windows 2022/2025 suites now pass all 410 rows at
+[3ab20f2](https://github.com/XIIIFOX/flutter_vless/actions/runs/39205346209),
+with exact post-drain origin counts and no retries. The earlier failure's cause
+remains unproven; bounded stage/process/origin diagnostics remain in the gate.
 Other typed Address roles and XDRIVE fronting/lifecycle remain open;
 there is no claim of universal environment expansion or a complete transport
 matrix.
@@ -646,7 +652,20 @@ caused by referencing a helper unavailable in the app's module. The regression
 links the actual app call against privacy alone and runs ten shared cases plus
 a rejected recursive reference for each Apple namespace. Both unsigned example
 builds pass locally without launching an app, Core or VPN; network acceptance
-remains a separate gate.
+remains a separate gate. The 3ab20f2 Apple CI job also passes both containing app
+builds, standalone SwiftPM, actual iOS preview and macOS component runtime gates.
+The iOS HEV simulator/device path is compile/link qualification only.
+
+Transport default-strategy progress: the native adapters now admit Core's
+equivalent missing, null, empty and case-insensitive `none` forms of
+`sockopt.addressPortStrategy`, retaining the exact caller spelling. Shared
+WebSocket and XHTTP cases cover upload, active independent download and direct
+socket contexts, including TLS/Host/path and keepalive retention. Active SRV/TXT
+overrides still need their own protected bootstrap design; malformed non-null
+values do not silently become defaults. The valid active SRV control targets
+the primary remote socket only: pinned Core itself forbids that override on
+freedom. File-only preparation/build checks and new-head payload acceptance are
+recorded separately.
 
 Core preflight is now wired into both Apple app entry points and into the final
 provider configuration before route installation. The additive Go bridge decodes

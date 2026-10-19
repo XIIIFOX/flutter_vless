@@ -642,6 +642,79 @@ final class TunnelDNSPolicyTests: XCTestCase {
         XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), input)
     }
 
+    func testInactiveAddressPortStrategyVariantsPreserveCallerSocketPolicy() throws {
+        func update(_ object: Any, path: ArraySlice<String>, variant: [String: Any]) -> Any {
+            guard let head = path.first else {
+                var socket = object as! [String: Any]
+                if variant["present"] as? Bool == true { socket["addressPortStrategy"] = variant["value"]! }
+                else { socket.removeValue(forKey: "addressPortStrategy") }
+                return socket
+            }
+            if var map = object as? [String: Any] {
+                map[head] = update(map[head]!, path: path.dropFirst(), variant: variant); return map
+            }
+            var list = object as! [Any]; let index = Int(head)!
+            list[index] = update(list[index], path: path.dropFirst(), variant: variant); return list
+        }
+        func at(_ object: Any, path: ArraySlice<String>) -> Any {
+            guard let head = path.first else { return object }
+            if let map = object as? [String: Any] { return at(map[head]!, path: path.dropFirst()) }
+            return at((object as! [Any])[Int(head)!], path: path.dropFirst())
+        }
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/transport-none.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/transport-none.json"))) as? [String: Any])
+        let profiles = try XCTUnwrap(corpus["profiles"] as? [[String: Any]])
+        let equivalent = try XCTUnwrap(corpus["equivalentValues"] as? [[String: Any]])
+        let refused = try XCTUnwrap(corpus["refusalValues"] as? [[String: Any]])
+        XCTAssertEqual(profiles.count, 2); XCTAssertEqual(equivalent.count, 5); XCTAssertEqual(refused.count, 3)
+        for profile in profiles {
+            let source = try XCTUnwrap(profile["config"] as? [String: Any])
+            let paths = try XCTUnwrap(profile["sockoptPaths"] as? [[String]])
+            for variant in equivalent {
+                var candidate: Any = source
+                for path in paths { candidate = update(candidate, path: ArraySlice(path), variant: variant) }
+                let input = try JSONSerialization.data(withJSONObject: candidate, options: [.sortedKeys])
+                let prepared = TunnelXrayConfigPreparer.prepare(jsonData: input, credentials: Self.credentials, resolveIPv4: { host in
+                    XCTAssertEqual(host, "endpoint.invalid", "Inactive transport fields must not bootstrap"); return "192.0.2.17"
+                })
+                XCTAssertNotNil(prepared, "Core's inactive socket strategy rejected: \(profile["name"] ?? "")/\(variant["name"] ?? "")")
+                if let prepared {
+                    let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+                    for path in paths {
+                        let socket = try XCTUnwrap(at(output, path: ArraySlice(path)) as? [String: Any])
+                        let original = try XCTUnwrap(at(candidate, path: ArraySlice(path)) as? [String: Any])
+                        XCTAssertEqual(socket["addressPortStrategy"] as? NSObject, original["addressPortStrategy"] as? NSObject)
+                        XCTAssertEqual(socket.keys.contains("addressPortStrategy"), variant["present"] as? Bool)
+                        XCTAssertEqual(socket["tcpKeepAliveIdle"] as? Int, original["tcpKeepAliveIdle"] as? Int)
+                    }
+                    XCTAssertEqual(output["dns"] as? NSDictionary, source["dns"] as? NSDictionary)
+                    XCTAssertEqual(output["custom"] as? NSDictionary, source["custom"] as? NSDictionary)
+                    XCTAssertEqual(output["remarks"] as? String, source["remarks"] as? String)
+                    XCTAssertEqual(prepared.bootstrapAddresses, ["192.0.2.17"])
+                }
+                XCTAssertEqual(try JSONSerialization.data(withJSONObject: candidate, options: [.sortedKeys]), input)
+            }
+            for variant in refused {
+                // Isolate each socket, including freedom and the independent
+                // download. The valid shared SRV control targets the primary
+                // proxy only; earlier endpoints may resolve before a refusal.
+                let refusalPaths = variant["applyTo"] as? String == "primary" ? Array(paths.prefix(1)) : paths
+                for path in refusalPaths {
+                    let candidate = try XCTUnwrap(update(source, path: ArraySlice(path), variant: variant) as? [String: Any])
+                    var transaction = candidate
+                    XCTAssertNil(TunnelDNSPolicy.apply(to: &transaction, managedInboundTag: "none-test", resolveIPv4: { host in
+                        XCTAssertEqual(host, "endpoint.invalid"); return "192.0.2.17"
+                    }), "Active or invalid socket strategy admitted: \(variant["name"] ?? "")")
+                    XCTAssertEqual(transaction as NSDictionary, candidate as NSDictionary)
+                }
+            }
+        }
+    }
+
     func testMappedIPv4DNSKeepsCallerJSONAndMatchesLiteralControl() throws {
         func replace(_ object: Any, path: ArraySlice<String>, value: String) -> Any {
             guard let head = path.first else { return value }

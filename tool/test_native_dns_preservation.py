@@ -59,6 +59,7 @@ def source_snapshot():
     paths.append(ROOT / 'tool/fixtures/compatibility/endpoint-addresses.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/dns-addresses.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/dns-mapped-addresses.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/transport-none.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/logical-addresses.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/asset-files.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/ipv6-payload.json')

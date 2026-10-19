@@ -19,8 +19,10 @@ for platform, relative, module in [
     assert len(matches) == 1, 'expected exactly one production app Address binding expression'
     (out / platform / 'AppBinding.swift').write_text(
         'import Foundation\nimport ' + module + '\n'
-        'func actualAppBinding(_ listenerBound: Data, environment: XrayEnvironmentSnapshot) throws -> Data {\n'
-        '    return try ' + matches[0] + '\n}\n')
+        'func actualAppBinding(_ listenerBound: Data, environment: XrayEnvironmentSnapshot) throws -> (data: Data, changes: Set<NativePreparationReport.Change>) {\n'
+        '    var changes = Set<NativePreparationReport.Change>()\n'
+        '    let data = try ' + matches[0] + '\n'
+        '    return (data, changes)\n}\n')
 PY
 status=0
 for platform in ios macos; do

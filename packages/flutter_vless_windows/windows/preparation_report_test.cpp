@@ -11,7 +11,7 @@ const std::string source = R"({"inbounds":[],"outbounds":[{"tag":"caller-secret"
 preparation::Report Prepare(const std::string& bytes) {
   preparation::Report report;
   const auto final = xray_config::PrepareProtectedVpn(bytes, "secret-user", "secret-password", "secret-interface",
-      [](const std::string&) { throw std::runtime_error("Numeric fixture must not resolve"); return std::string(); },
+      [](const std::string&) -> std::string { throw std::runtime_error("Numeric fixture must not resolve"); },
       nullptr, [](uint16_t) { return true; }, &report);
   Require(final.has_value(), "actual protected preparation failed");
   return report;

@@ -35,10 +35,11 @@ prepared_end=s.index('    // Direct callers share the host admission order:',pre
 helper='enum ProxyOnlyRunner {\n'+s[prepared_start:prepared_end]+'\n'+s[delay_start:delay_end]+'\n'+s[helper_start:helper_end]+'\n}\n'
 a=s.index('        let proxyOnly = arguments["proxy_only"]')
 b=s.index('        let operation = commands.submit',a)
-(out/'NativeStart.swift').write_text('import Foundation\n'+helper+'struct FlutterError { let code: String; let message: String; let details: Any? }\nfinal class NativeStartEntryProbe {\n var reachedQueue = false\n var lastErrorCode: String?\n func result(_ error: FlutterError) { lastErrorCode = error.code }\n func start(arguments: [String: Any]) {\n let tcpPortAvailable: (Int) -> Bool = { _ in true }\n let configData = try! JSONSerialization.data(withJSONObject: ["inbounds": [["protocol": "socks", "listen": "127.0.0.1", "port": 10808]]])\n'+s[a:b]+'        reachedQueue = true\n    }\n}\n')
+(out/'NativeStart.swift').write_text('import Foundation\n'+helper+'struct FlutterError { let code: String; let message: String; let details: Any? }\nfinal class NativeStartEntryProbe {\n var reachedQueue = false\n var lastErrorCode: String?\n func result(_ error: FlutterError) { lastErrorCode = error.code }\n func start(arguments: [String: Any]) {\n let tcpPortAvailable: (Int) -> Bool = { _ in true }\n let captureEnvironment = { XrayEnvironmentSnapshot(rawEntries: []) }\n let configData = try! JSONSerialization.data(withJSONObject: ["inbounds": [["protocol": "socks", "listen": "127.0.0.1", "port": 10808]]])\n'+s[a:b]+'        reachedQueue = true\n    }\n}\n')
 PYTHON
 xcrun swiftc -O -parse-as-library \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/VlessNativeOptions.swift" \
+  "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/CorePreflightPolicy.swift" \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/NativeRoutingSpec.swift" \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/TunnelSecretStore.swift" \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/LocalProxyAccessPolicy.swift" \

@@ -56,16 +56,21 @@ struct AppAddressBindingProbe {
                         expected = replace(expected, path: ArraySlice(path.split(separator: ".").map(String.init)), value: value)
                     }
                 }
-                let frozen = try actualAppBinding(source, environment: snapshot)
+                let bound = try actualAppBinding(source, environment: snapshot)
+                precondition(bound.changes == [.addressEnvironmentBound])
+                let frozen = bound.data
                 let frozenObject = try JSONSerialization.jsonObject(with: frozen) as! NSDictionary
                 precondition(frozenObject == (expected as! NSDictionary))
                 let repeated = try actualAppBinding(frozen, environment: XrayEnvironmentSnapshot(rawEntries: []))
                 let retained = try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys])
-                precondition(repeated == frozen)
+                precondition(repeated.data == frozen && repeated.changes.isEmpty)
                 precondition(retained == source)
                 passed += 1
             }
         }
+        let opaque = Data(#"{"custom":{"address":"env:OPAQUE_ONLY"},"outbounds":[{"protocol":"dns","settings":{"address":"192.0.2.7"}}]}"#.utf8)
+        let unchanged = try actualAppBinding(opaque, environment: XrayEnvironmentSnapshot(rawEntries: []))
+        precondition(unchanged.data == opaque && unchanged.changes.isEmpty)
         let nested = Data(#"{"outbounds":[{"protocol":"dns","settings":{"address":"env:FLUTTER_VLESS_ADDRESS_BOUNDARY_NESTED"}}]}"#.utf8)
         let nestedEnvironment = XrayEnvironmentSnapshot(environment: ["FLUTTER_VLESS_ADDRESS_BOUNDARY_NESTED": "env:SECOND"])
         do {
@@ -73,5 +78,6 @@ struct AppAddressBindingProbe {
             preconditionFailure("Nested effective Address references must be rejected")
         } catch {}
         print("ADDRESS_BINDING_MODULE_PASS=\(CommandLine.arguments[2]);CASES=\(passed);REJECTED=1")
+        print("ADDRESS_BINDING_REPORT_OBSERVATIONS_PASS=\(CommandLine.arguments[2]);CHANGED=\(passed);UNCHANGED=\(passed + 1);REJECTED=1")
     }
 }

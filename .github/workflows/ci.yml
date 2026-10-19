@@ -15,6 +15,7 @@ on:
           - core-dns-context
           - native-listeners
           - preparation-report
+          - apple-windows
       apple_runner:
         description: Apple runner for manual validation
         type: choice
@@ -399,7 +400,7 @@ jobs:
             build/macos_packet_bridge_probe/runtime.log
 
   ios:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'apple-runtime' || inputs.validation == 'preparation-report'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'apple-runtime' || inputs.validation == 'preparation-report' || inputs.validation == 'apple-windows'
     name: iOS Swift and Xcode build
     runs-on: ${{ inputs.apple_runner || 'macos-latest' }}
     timeout-minutes: 45
@@ -523,7 +524,7 @@ jobs:
             build/macos_packet_bridge_probe/runtime.log
 
   windows:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'native-listeners' || inputs.validation == 'preparation-report'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'native-listeners' || inputs.validation == 'preparation-report' || inputs.validation == 'apple-windows'
     name: Windows native plugin build
     runs-on: windows-latest
     steps:

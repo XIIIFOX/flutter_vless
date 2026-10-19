@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Apply `certificateAssetsDirectory` to Core-built Realm and XDNS TLS certificate/key files, including effective XHTTP download streams. Keep unrelated mask metadata and absolute/inline certificate settings unchanged across all four native platforms.
+
 * Use the existing bounded, cancellable Apple endpoint DNS bootstrap on iOS before installing VPN routes. Preserve caller DNS and distinguish endpoint resolution failures from rejected configuration preparation on both Apple platforms.
 
 * Ignore Android network events queued by an earlier VPN session before a replacement or Stop. Keep current-session recovery active and cover the registered availability/loss callbacks with native unit regressions.

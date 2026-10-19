@@ -23,11 +23,9 @@ public enum XrayCertificatePaths {
             guard matches.count <= 1 else { throw Failure.malformedConfiguration }
             return matches.first
         }
-        func stream(_ input: [String: Any]) throws -> [String: Any] {
+        func tls(_ input: [String: Any]) throws -> [String: Any] {
             var output = input
-            if let security = try key(output, "security"), (output[security] as? String)?.lowercased() == "tls",
-               let tlsKey = try key(output, "tlsSettings"), var tls = output[tlsKey] as? [String: Any],
-               let certificatesKey = try key(tls, "certificates"), var certificates = tls[certificatesKey] as? [Any] {
+            if let certificatesKey = try key(output, "certificates"), var certificates = output[certificatesKey] as? [Any] {
                 for index in certificates.indices {
                     guard var certificate = certificates[index] as? [String: Any] else { continue }
                     for name in ["certificateFile", "keyFile"] {
@@ -42,8 +40,45 @@ public enum XrayCertificatePaths {
                     }
                     certificates[index] = certificate
                 }
-                tls[certificatesKey] = certificates
-                output[tlsKey] = tls
+                output[certificatesKey] = certificates
+            }
+            return output
+        }
+        func tlsField(_ input: [String: Any], _ name: String) throws -> [String: Any] {
+            var output = input
+            if let tlsKey = try key(output, name), let settings = output[tlsKey] as? [String: Any] {
+                output[tlsKey] = try tls(settings)
+            }
+            return output
+        }
+        func stream(_ input: [String: Any]) throws -> [String: Any] {
+            var output = input
+            if let security = try key(output, "security"), (output[security] as? String)?.lowercased() == "tls" {
+                output = try tlsField(output, "tlsSettings")
+            }
+            // These UDP masks own actual TLSConfig fields. Other mask settings
+            // and metadata that merely resemble TLS remain caller data.
+            if let maskKey = try key(output, "finalmask"), var mask = output[maskKey] as? [String: Any],
+               let udpKey = try key(mask, "udp"), var entries = mask[udpKey] as? [Any] {
+                for index in entries.indices {
+                    guard var entry = entries[index] as? [String: Any],
+                          let typeKey = try key(entry, "type"), let type = entry[typeKey] as? String,
+                          ["realm", "xdns"].contains(type.lowercased()),
+                          let settingsKey = try key(entry, "settings"), var settings = entry[settingsKey] as? [String: Any] else { continue }
+                    if type.lowercased() == "realm" {
+                        settings = try tlsField(settings, "tlsConfig")
+                    } else if let resolversKey = try key(settings, "resolvers"), var resolvers = settings[resolversKey] as? [Any] {
+                        for resolverIndex in resolvers.indices {
+                            guard let resolver = resolvers[resolverIndex] as? [String: Any] else { continue }
+                            resolvers[resolverIndex] = try tlsField(resolver, "tlsConfig")
+                        }
+                        settings[resolversKey] = resolvers
+                    }
+                    entry[settingsKey] = settings
+                    entries[index] = entry
+                }
+                mask[udpKey] = entries
+                output[maskKey] = mask
             }
 
             // StreamConfig.Build builds the preferred XHTTP settings even if

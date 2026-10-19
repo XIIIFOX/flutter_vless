@@ -40,7 +40,7 @@ class XrayCertificateAssetsTest {
         val directory = Files.createTempDirectory("xray-certificates-corpus").toFile()
         try {
             val cases = JSONArray(requireNotNull(javaClass.getResource("/certificate-paths.json")).readText())
-            assertEquals(6, cases.length())
+            assertEquals(8, cases.length())
             for (index in 0 until cases.length()) for (proxyOnly in listOf(false, true)) {
                 val item = cases.getJSONObject(index); val label = item.getString("name") + "/" + proxyOnly
                 val input = item.getJSONObject("config"); val before = input.toString()
@@ -104,6 +104,43 @@ class XrayCertificateAssetsTest {
             // Inactive malformed TLS and the dormant alias are never inspected.
             val dormant = """{"outbounds":[{"protocol":"freedom","streamSettings":{"security":"none","tlsSettings":42,"xhttpSettings":{"extra":null},"splithttpSettings":42}}]}"""
             assertEquals(JSONObject(dormant).toString(), XrayCertificateAssets.prepare(dormant, directory.absolutePath).toString())
+        } finally { directory.deleteRecursively() }
+    }
+
+    @Test fun typedMaskTlsFilesHonorFoldedFieldsAndLeaveOtherMaskMetadataUntouched() {
+        val directory = Files.createTempDirectory("xray-mask-certificates").toFile()
+        try {
+            val cases = JSONArray(requireNotNull(javaClass.getResource("/certificate-paths.json")).readText())
+            val spellings = mapOf("finalmask" to "FINALMASK", "udp" to "UDP", "type" to "TYPE",
+                "settings" to "SETTINGſ", "tlsConfig" to "TLſConfig", "resolvers" to "REſOLVERS",
+                "certificates" to "CERTIFICATEſ", "certificateFile" to "CertificateFile", "keyFile" to "KeyFile")
+            fun folded(value: Any): Any = when (value) {
+                is JSONObject -> JSONObject().also { output -> value.keys().forEach { key ->
+                    output.put(spellings[key] ?: key, folded(value.get(key)))
+                } }
+                is JSONArray -> JSONArray().also { output -> for (index in 0 until value.length()) output.put(folded(value.get(index))) }
+                else -> value
+            }
+            for (index in 6..7) {
+                val item = cases.getJSONObject(index)
+                val source = JSONObject(item.getJSONObject("config").toString())
+                val stream = source.getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
+                val masks = stream.getJSONObject("finalmask")
+                masks.getJSONArray("udp").getJSONObject(0).put("type", if (index == 6) "ReAlM" else "XDNS")
+                val opaque = source.getJSONObject("custom")
+                masks.put("tcp", JSONArray().put(JSONObject().put("type", "header-custom").put("settings", opaque)))
+                masks.getJSONArray("udp").put(JSONObject().put("type", "noise").put("settings", opaque))
+                stream.put("security", "none").put("tlsSettings", opaque.get("tlsConfig"))
+                val input = folded(source) as JSONObject
+                val paths = JSONArray()
+                for (path in 0 until item.getJSONArray("bind").length())
+                    paths.put(item.getJSONArray("bind").getString(path).split('/').joinToString("/") { spellings[it] ?: it })
+                val before = input.toString()
+                assertEquals(item.getString("name"), replaceBoundPaths(input, paths, directory).toString(),
+                    XrayCertificateAssets.prepare(before, directory.absolutePath).toString())
+                assertEquals(before, input.toString())
+            }
+            assertEquals(0, directory.listFiles()!!.size)
         } finally { directory.deleteRecursively() }
     }
 

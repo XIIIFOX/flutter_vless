@@ -39,16 +39,34 @@ internal object XrayCertificateAssets {
             if (file.isNotEmpty() && !File(file).isAbsolute)
                 certificate.put(spelling, directory.resolve(file).normalize().absolutePath)
         }
+        fun tlsFiles(tls: JSONObject) {
+            val certificates = field(tls, "certificates") as? JSONArray ?: return
+            for (index in 0 until certificates.length()) {
+                val certificate = certificates.optJSONObject(index) ?: continue
+                bindFile(certificate, "certificatefile")
+                bindFile(certificate, "keyfile")
+            }
+        }
         fun stream(value: JSONObject) {
             // Inactive TLS dictionaries are not built by Core. In particular,
             // their file-like values must not become portable file references.
             if ((field(value, "security") as? String).equals("tls", ignoreCase = true)) {
-                val tls = objectField(value, "tlssettings")
-                val certificates = tls?.let { field(it, "certificates") } as? JSONArray
-                if (certificates != null) for (index in 0 until certificates.length()) {
-                    val certificate = certificates.optJSONObject(index) ?: continue
-                    bindFile(certificate, "certificatefile")
-                    bindFile(certificate, "keyfile")
+                objectField(value, "tlssettings")?.let(::tlsFiles)
+            }
+            // These UDP mask settings build their own TLSConfig independently
+            // of the stream security/network. Other mask metadata stays opaque.
+            val masks = objectField(value, "finalmask")?.let { field(it, "udp") } as? JSONArray
+            if (masks != null) for (index in 0 until masks.length()) {
+                val mask = masks.optJSONObject(index) ?: continue
+                when ((field(mask, "type") as? String)?.lowercase(Locale.ROOT)) {
+                    "realm" -> objectField(mask, "settings")?.let { objectField(it, "tlsconfig") }?.let(::tlsFiles)
+                    "xdns" -> {
+                        val resolvers = objectField(mask, "settings")?.let { field(it, "resolvers") } as? JSONArray ?: continue
+                        for (resolver in 0 until resolvers.length()) {
+                            val entry = resolvers.optJSONObject(resolver) ?: continue
+                            objectField(entry, "tlsconfig")?.let(::tlsFiles)
+                        }
+                    }
                 }
             }
             // StreamConfig.Build compiles the effective XHTTP settings even

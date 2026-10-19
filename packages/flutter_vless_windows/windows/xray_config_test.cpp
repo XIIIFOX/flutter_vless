@@ -70,7 +70,7 @@ void CertificatePathCases() {
   std::ifstream input("tool/fixtures/compatibility/certificate-paths.json");
   Check(input.good(), "shared certificate corpus required");
   Json cases; input >> cases;
-  Check(cases.size() == 6, "shared certificate cases changed");
+  Check(cases.size() == 8, "shared certificate cases changed");
   for (const auto& item : cases) {
     auto expected = item["config"];
     for (const auto& pointer : item["bind"]) {
@@ -97,6 +97,39 @@ void CertificatePathCases() {
     auto legacy = original;
     Check(BindCertificatePaths(legacy, std::nullopt) && legacy == original,
         "omitted certificate directory changed legacy behavior");
+  }
+  const std::map<std::string, std::string> spellings = {{"finalmask", u8"FINALMASK"}, {"udp", "UDP"},
+      {"type", "TYPE"}, {"settings", u8"SETTINGſ"}, {"tlsConfig", u8"TLſConfig"},
+      {"resolvers", u8"REſOLVERS"}, {"certificates", u8"CERTIFICATEſ"},
+      {"certificateFile", "CertificateFile"}, {"keyFile", u8"KeyFile"}};
+  std::function<Json(const Json&)> folded = [&](const Json& value) -> Json {
+    if (value.is_array()) { auto output = Json::array(); for (const auto& entry : value) output.push_back(folded(entry)); return output; }
+    if (!value.is_object()) return value;
+    auto output = Json::object();
+    for (auto entry = value.begin(); entry != value.end(); ++entry) {
+      const auto spelling = spellings.find(entry.key());
+      output[spelling == spellings.end() ? entry.key() : spelling->second] = folded(entry.value());
+    }
+    return output;
+  };
+  for (size_t index = 6; index < 8; ++index) {
+    auto profile = cases[index]["config"];
+    auto& stream = profile["outbounds"][0]["streamSettings"];
+    auto& masks = stream["finalmask"];
+    masks["udp"][0]["type"] = index == 6 ? "ReAlM" : "XDNS";
+    const auto opaque = profile["custom"];
+    masks["tcp"] = Json::array({{{"type", "header-custom"}, {"settings", opaque}}});
+    masks["udp"].push_back({{"type", "noise"}, {"settings", opaque}});
+    masks["udp"].push_back({{"type", u8"xdnſ"}, {"settings", {{"resolvers", Json::array({opaque})}}}});
+    stream["security"] = "none"; stream["tlsSettings"] = opaque["tlsConfig"];
+    auto expected = profile;
+    for (const auto& path : cases[index]["bind"]) {
+      auto& file = expected.at(Json::json_pointer(path.get<std::string>()));
+      file = (root / fs::u8path(file.get<std::string>())).lexically_normal().u8string();
+    }
+    auto candidate = folded(profile).dump();
+    Check(BindCertificatePaths(candidate, root) && Parse(candidate) == folded(expected),
+        "typed mask TLS folded fields were missed or other mask metadata changed");
   }
   auto absolute = Parse(R"({"outbounds":[{"protocol":"freedom","streamSettings":{"Security":"TLS","TLSSettings":{"Certificates":[{"CertificateFile":"relative.pem","KeyFile":"../key.pem"}]}}}]})");
   const auto absolute_file = (root / "existing" / ".." / "ca.pem").u8string();

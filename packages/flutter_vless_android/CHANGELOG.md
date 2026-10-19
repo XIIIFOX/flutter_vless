@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Bind relative Realm/XDNS TLS certificate and key files to the explicit certificate assets directory without traversing unrelated mask data.
+
 * Bind queued physical-network callbacks to their VPN session generation, preventing an earlier session's event from restarting its replacement. Cover availability, loss, current recovery and stopped-session behavior through the registered service callback.
 
 * Preserve unknown profile data instead of recursively editing every object. Scope stream/TLS cleanup and protected-feature checks to Core schema fields, retaining XHTTP precedence and real UDP XICMP/local-QUIC DNS refusals. Add shared preparation and controlled device regressions.

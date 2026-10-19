@@ -313,6 +313,35 @@ inline bool BindCertificatePaths(std::string& text, const asset_location::Root& 
     }
     return true;
   };
+  const auto tls_files = [&](Json& tls) {
+    Json* certificates = nullptr;
+    if (!field(tls, "certificates", certificates)) return false;
+    if (certificates && !certificates->is_null()) {
+      if (!certificates->is_array()) return false;
+      for (auto& certificate : *certificates) {
+        for (const auto* name : {"certificateFile", "keyFile"}) {
+          Json* path = nullptr;
+          if (!field(certificate, name, path)) return false;
+          if (!path || path->is_null()) continue;
+          if (!path->is_string()) return false;
+          const auto raw = path->get<std::string>();
+          if (raw.find('\0') != std::string::npos) return false;
+          if (raw.empty()) continue;
+          const auto file = std::filesystem::u8path(raw);
+          if (!file.is_absolute()) {
+            // Go Join appends nonabsolute file text before Clean. On
+            // Windows operator/ would replace the base for \file.pem
+            // or another drive-relative root name instead.
+            auto joined = *directory;
+            joined += std::filesystem::path::preferred_separator;
+            joined += file.native();
+            *path = joined.lexically_normal().u8string();
+          }
+        }
+      }
+    }
+    return true;
+  };
   std::function<bool(Json&)> stream;
   stream = [&](Json& value) {
     Json *security = nullptr, *tls = nullptr;
@@ -320,30 +349,40 @@ inline bool BindCertificatePaths(std::string& text, const asset_location::Root& 
     if (security && !security->is_null() && !security->is_string()) return false;
     if (security && security->is_string() && Fold(security->get<std::string>()) == "tls") {
       if (!field(value, "tlsSettings", tls)) return false;
-      if (tls && !tls->is_null()) {
-        Json* certificates = nullptr;
-        if (!field(*tls, "certificates", certificates)) return false;
-        if (certificates && !certificates->is_null()) {
-          if (!certificates->is_array()) return false;
-          for (auto& certificate : *certificates) {
-            for (const auto* name : {"certificateFile", "keyFile"}) {
-              Json* path = nullptr;
-              if (!field(certificate, name, path)) return false;
-              if (!path || path->is_null()) continue;
-              if (!path->is_string()) return false;
-              const auto raw = path->get<std::string>();
-              if (raw.find('\0') != std::string::npos) return false;
-              if (raw.empty()) continue;
-              const auto file = std::filesystem::u8path(raw);
-              if (!file.is_absolute()) {
-                // Go Join appends nonabsolute file text before Clean. On
-                // Windows operator/ would replace the base for \file.pem
-                // or another drive-relative root name instead.
-                auto joined = *directory;
-                joined += std::filesystem::path::preferred_separator;
-                joined += file.native();
-                *path = joined.lexically_normal().u8string();
-              }
+      if (tls && !tls->is_null() && !tls_files(*tls)) return false;
+    }
+    // Mask TLSConfig is built independently of the stream security/network.
+    // Visit only the two UDP schemas that own it, never arbitrary tlsConfig data.
+    Json *mask = nullptr, *udp = nullptr;
+    if (!field(value, "finalmask", mask)) return false;
+    if (mask && !mask->is_null()) {
+      if (!field(*mask, "udp", udp)) return false;
+      if (udp && !udp->is_null()) {
+        if (!udp->is_array()) return false;
+        for (auto& entry : *udp) {
+          Json *type = nullptr, *settings = nullptr;
+          if (!field(entry, "type", type)) return false;
+          if (!type || !type->is_string()) continue;
+          // Loader IDs are values, not Go-folded JSON field names. In
+          // particular an unknown "xdnſ" must not acquire the XDNS schema.
+          auto role = type->get<std::string>();
+          std::transform(role.begin(), role.end(), role.begin(), [](unsigned char value) {
+            return static_cast<char>(value >= 'A' && value <= 'Z' ? value + ('a' - 'A') : value);
+          });
+          if (role != "realm" && role != "xdns") continue;
+          if (!field(entry, "settings", settings)) return false;
+          if (!settings || settings->is_null()) continue;
+          if (role == "realm") {
+            if (!field(*settings, "tlsConfig", tls)) return false;
+            if (tls && !tls->is_null() && !tls_files(*tls)) return false;
+          } else {
+            Json* resolvers = nullptr;
+            if (!field(*settings, "resolvers", resolvers)) return false;
+            if (!resolvers || resolvers->is_null()) continue;
+            if (!resolvers->is_array()) return false;
+            for (auto& resolver : *resolvers) {
+              if (!field(resolver, "tlsConfig", tls)) return false;
+              if (tls && !tls->is_null() && !tls_files(*tls)) return false;
             }
           }
         }

@@ -33,5 +33,166 @@
     "name": "inline_and_null_paths_are_unchanged",
     "config": {"outbounds": [{"protocol": "freedom", "streamSettings": {"security": "tls", "tlsSettings": {"certificates": [{"certificateFile": null, "keyFile": "", "certificate": ["INLINE_CERTIFICATE"], "key": ["INLINE_KEY"]}]}}}]},
     "bind": []
+  },
+  {
+    "name": "realm_typed_tls_files",
+    "config": {
+      "dns": {
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "inbounds": [
+        {
+          "tag": "caller-in",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "protocol": "http"
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "192.0.2.7",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "finalmask": {
+              "udp": [
+                {
+                  "type": "realm",
+                  "settings": {
+                    "url": "realm://synthetic-token@192.0.2.8:443/fixture-id",
+                    "stunServers": [
+                      "192.0.2.9:3478"
+                    ],
+                    "tlsConfig": {
+                      "certificates": [
+                        {
+                          "certificateFile": "fixture.pem",
+                          "keyFile": "fixture.key",
+                          "oneTimeLoading": false
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "custom": {
+        "tlsConfig": {
+          "certificates": [
+            {
+              "certificateFile": "opaque-missing.pem",
+              "keyFile": "opaque-missing.key"
+            }
+          ]
+        }
+      }
+    },
+    "bind": [
+      "/outbounds/0/streamSettings/finalmask/udp/0/settings/tlsConfig/certificates/0/certificateFile",
+      "/outbounds/0/streamSettings/finalmask/udp/0/settings/tlsConfig/certificates/0/keyFile"
+    ]
+  },
+  {
+    "name": "xdns_typed_tls_files",
+    "config": {
+      "dns": {
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "inbounds": [
+        {
+          "tag": "caller-in",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "protocol": "http"
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "192.0.2.7",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "finalmask": {
+              "udp": [
+                {
+                  "type": "xdns",
+                  "settings": {
+                    "resolvers": [
+                      {
+                        "addrs": [
+                          "https://192.0.2.8/dns-query"
+                        ],
+                        "tlsConfig": {
+                          "certificates": [
+                            {
+                              "certificateFile": "fixture.pem",
+                              "keyFile": "fixture.key",
+                              "oneTimeLoading": false
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "custom": {
+        "tlsConfig": {
+          "certificates": [
+            {
+              "certificateFile": "opaque-missing.pem",
+              "keyFile": "opaque-missing.key"
+            }
+          ]
+        }
+      }
+    },
+    "bind": [
+      "/outbounds/0/streamSettings/finalmask/udp/0/settings/resolvers/0/tlsConfig/certificates/0/certificateFile",
+      "/outbounds/0/streamSettings/finalmask/udp/0/settings/resolvers/0/tlsConfig/certificates/0/keyFile"
+    ]
   }
 ]

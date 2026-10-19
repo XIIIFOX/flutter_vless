@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Bind relative Realm/XDNS TLS certificate and key files to the explicit certificate assets directory, retaining effective XHTTP download and opaque-data semantics.
+
 * Distinguish endpoint DNS exhaustion from rejected configuration preparation before VPN route installation, keeping diagnostics free of profile data.
 
 * Capture byte-exact environment names once for port/address binding, allocation and startup retries. Preserve distinct Unicode spellings and exact empty values, with isolated native-reader and host-admission checks.

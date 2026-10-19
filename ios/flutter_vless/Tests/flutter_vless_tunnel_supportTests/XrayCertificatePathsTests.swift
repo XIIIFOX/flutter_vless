@@ -25,7 +25,7 @@ final class XrayCertificatePathsTests: XCTestCase {
             root.deleteLastPathComponent()
         }
         let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/certificate-paths.json"))) as? [[String: Any]])
-        XCTAssertEqual(cases.count, 6)
+        XCTAssertEqual(cases.count, 8)
         let base = try directory().path
         for item in cases {
             let source = try XCTUnwrap(item["config"] as? [String: Any])
@@ -90,6 +90,47 @@ final class XrayCertificatePathsTests: XCTestCase {
         let invalid: [String: Any] = ["outbounds": [["streamSettings": ["security": "tls", "tlsSettings": ["certificates": [["certificateFile": "private\0canary.pem"]]]]]]]
         XCTAssertThrowsError(try XrayCertificatePaths.bind(configData: JSONSerialization.data(withJSONObject: invalid), directory: base))
         let inactive = Data(#"{"outbounds":[{"streamSettings":{"security":"none","tlsSettings":{"certificates":[{"certificateFile":"bad\u0000inactive.pem"}]}}}]}"#.utf8)
+        XCTAssertEqual(try XrayCertificatePaths.bind(configData: inactive, directory: base), inactive)
+    }
+
+    func testTypedMaskTLSUsesFoldedKeysAndKeepsOpaqueLookalikes() throws {
+        let base = try directory().path
+        let source = Data(#"{"outbounds":[{"streamSettings":{"finalmask":{"udp":[{"TyPe":"ReAlM","SeTtInGs":{"TlSCoNfIg":{"CeRtIfIcAtEs":[{"CeRtIfIcAtEfIlE":"fixture.pem","KeYfIlE":"fixture.key","custom":{"certificateFile":"opaque.pem"}}]}}},{"type":"XdNs","settings":{"ReSoLvErS":[{"TlSCoNfIg":{"certificates":[{"certificateFile":"fixture.pem"},{"certificateFile":null,"keyFile":""}]}}]}},{"type":"xdnſ","settings":{"resolvers":[{"tlsConfig":{"certificates":[{"certificateFile":"opaque.pem"}]}}]}}],"tcp":[{"type":"realm","settings":{"tlsConfig":{"certificates":[{"certificateFile":"opaque.pem"}]}}}]}},"custom":{"tlsConfig":{"certificates":[{"certificateFile":"opaque.pem"}]}}}]}"#.utf8)
+        var expected = String(decoding: source, as: UTF8.self)
+        for name in ["fixture.pem", "fixture.key"] {
+            expected = expected.replacingOccurrences(of: "\"" + name + "\"", with: "\"" + base + "/" + name + "\"")
+        }
+        let bound = try XrayCertificatePaths.bind(configData: source, directory: base)
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: bound) as? NSDictionary,
+                       try JSONSerialization.jsonObject(with: Data(expected.utf8)) as? NSDictionary)
+        XCTAssertEqual(try XrayCertificatePaths.bind(configData: bound, directory: base), bound)
+    }
+
+    func testTypedMaskFileValidationDoesNotInspectOtherOwners() throws {
+        let base = try directory().path
+        for type in ["realm", "xdns"] {
+            for certificate in [#"{"certificateFile":"bad\u0000.pem"}"#,
+                                #"{"certificateFile":"fixture.pem","CERTIFICATEFILE":"other.pem"}"#] {
+                let tls = #"{"certificates":["# + certificate + "]}"
+                let settings = type == "realm" ? #"{"tlsConfig":"# + tls + "}" : #"{"resolvers":[{"tlsConfig":"# + tls + "}]}"
+                let source = #"{"inbounds":[{"streamSettings":{"finalmask":{"udp":[{"type":""# + type + #"","settings":"# + settings + "}]}}}]}"
+                XCTAssertThrowsError(try XrayCertificatePaths.bind(configData: Data(source.utf8), directory: base), type)
+            }
+        }
+        for source in [#"{"outbounds":[{"streamSettings":{"finalmask":{"udp":[{"type":"noise","settings":{"tlsConfig":{"certificates":[{"certificateFile":"bad\u0000.pem"}]}}}]}}}]}"#,
+                       #"{"outbounds":[{"streamSettings":{"finalmask":{"udp":[{"type":"realm","settings":{"tlsConfig":null}},{"type":"xdns","settings":{"resolvers":null}}]}}}]}"#] {
+            let data = Data(source.utf8)
+            XCTAssertEqual(try XrayCertificatePaths.bind(configData: data, directory: base), data)
+        }
+    }
+
+    func testTypedMaskTLSFollowsExistingEffectiveDownloadBuildSelection() throws {
+        let base = try directory().path
+        let source = Data(#"{"outbounds":[{"streamSettings":{"network":"tcp","xhttpSettings":{"downloadSettings":{"finalmask":{"udp":[{"type":"realm","settings":{"tlsConfig":{"certificates":[{"certificateFile":"missing-outer.pem"}]}}}]}},"extra":{"downloadSettings":{"finalmask":{"udp":[{"type":"realm","settings":{"tlsConfig":{"certificates":[{"certificateFile":"fixture.pem"}]}}}]}}}},"splithttpSettings":{"downloadSettings":{"finalmask":{"udp":[{"type":"realm","settings":{"tlsConfig":{"certificates":[{"certificateFile":"missing-alias.pem"}]}}}]}}}}}]}"#.utf8)
+        let expected = Data(String(decoding: source, as: UTF8.self).replacingOccurrences(of: "\"fixture.pem\"", with: "\"" + base + "/fixture.pem\"").utf8)
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: XrayCertificatePaths.bind(configData: source, directory: base)) as? NSDictionary,
+                       try JSONSerialization.jsonObject(with: expected) as? NSDictionary)
+        let inactive = Data(#"{"outbounds":[{"streamSettings":{"xhttpSettings":{"extra":null,"downloadSettings":{"finalmask":{"udp":[{"type":"realm","settings":{"tlsConfig":{"certificates":[{"certificateFile":"bad\u0000.pem"}]}}}]}}}}}]}"#.utf8)
         XCTAssertEqual(try XrayCertificatePaths.bind(configData: inactive, directory: base), inactive)
     }
 

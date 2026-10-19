@@ -140,8 +140,8 @@ func testCertificatePaths(t *testing.T, native bool) {
 	}
 	key := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	var cases []certificatePathCase
-	if json.Unmarshal(data, &cases) != nil || len(cases) != 6 {
-		t.Fatal("six shared certificate path cases required")
+	if json.Unmarshal(data, &cases) != nil || len(cases) != 8 {
+		t.Fatal("eight shared certificate path cases required")
 	}
 	inline := cases[5].Config["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)["tlsSettings"].(map[string]any)["certificates"].([]any)[0].(map[string]any)
 	inline["certificate"], inline["key"] = []any{string(certificate)}, []any{string(key)}
@@ -190,6 +190,21 @@ func testCertificatePaths(t *testing.T, native bool) {
 			}
 			if after, _ := json.Marshal(tc.Config); !bytes.Equal(source, after) {
 				t.Fatal("certificate preparation mutated caller JSON")
+			}
+		})
+	}
+	for _, tc := range cases[6:] {
+		t.Run(tc.Name+"-missing-file", func(t *testing.T) {
+			for _, pointer := range tc.Bind {
+				path := strings.Split(strings.TrimPrefix(pointer, "/"), "/")
+				missing := dnsLiteralControl(t, dnsAddressCase{Config: tc.Config, Bindings: []dnsAddressBinding{{Path: path, Value: "missing-specialized.pem"}}})
+				if native {
+					missing = bindCertificateFixture(t, missing, root)
+				}
+				t.Setenv("xray.location.cert", root)
+				if _, err := certificateBuild(missing); err == nil {
+					t.Fatal("missing specialized TLS file did not fail actual Core Build")
+				}
 			}
 		})
 	}

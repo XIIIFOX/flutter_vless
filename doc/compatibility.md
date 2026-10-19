@@ -166,6 +166,13 @@ caller `UseIPv4` still produces successful AAAA NODATA. Other record types retur
 Imported listeners do not acquire this private path. Proxy-only and measurement
 preparation retain their separate behavior.
 
+Apple transport endpoint lookup happens before installing VPN routes and stays
+separate from caller DNS. Both Apple platforms use cancellable, bounded system
+IPv4 lookup, then HTTPS bootstrap to `1.1.1.1` for public hostnames
+only. The fallback retains normal TLS validation and refuses redirects. The
+physical iPhone check at `78a68c7` used system lookup successfully; it does not
+qualify the encrypted fallback branch or IPv6-only endpoint bootstrap.
+
 Full JSON import, startup and delay normalization retain explicit `null`, empty
 objects/arrays and null array elements. In particular, an explicit `fakedns: []`
 must reach Core as an empty engine rather than becoming an absent engine with
@@ -905,12 +912,21 @@ The directory must already exist and be absolute. It is not a sandbox: relative
 remain readable through Stop, including background reload; Apple VPN needs App
 Group access. Core preflight checks referenced files before replacing a session.
 No global certificate root, trust store or file-copy lifecycle is changed. This
-increment covers StreamConfig TLS file fields; certificate references in other
-specialized features remain separate work.
+increment covers StreamConfig TLS file fields and the TLS configurations owned
+by `finalmask.udp` Realm and XDNS resolvers. Other masks, TCP mask lookalikes and
+arbitrary metadata remain untouched, including unknown mask type values that
+resemble known schema names.
 
-The [six-case shared certificate corpus](../tool/fixtures/compatibility/certificate-paths.json)
+The [eight-case shared certificate corpus](../tool/fixtures/compatibility/certificate-paths.json)
 checks complete JSON preservation and pinned Core protobuf equivalence, with
-missing-root/file controls and source immutability. The controlled DoH runtime
+missing-root/file controls and source immutability. Realm/XDNS relative-file
+cases reproduce the old native preparation failure; literal absolute controls
+and missing-file Core Build checks distinguish path binding from protocol
+handshake acceptance. Native regressions retain folded keys, effective XHTTP
+downloads, nulls and opaque lookalikes. Realm/XDNS handshake, physical file
+access and background reload remain separate acceptance work.
+
+The controlled DoH runtime
 also uses a TLS-wrapped caller proxy whose explicit CA file is bound through the
 native helper; DoH trust/name rejection remains independent. In the
 [ca96891 CI run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39211822084),

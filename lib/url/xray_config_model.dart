@@ -401,9 +401,17 @@ JsonMap? _immutableMap(JsonMap? value) {
   return UnmodifiableMapView<String, dynamic>(value);
 }
 
-dynamic sanitizeXrayJson(dynamic params) {
+/// Normalizes legacy fields while optionally retaining raw JSON structure.
+///
+/// Typed generators omit absent values by default. Raw configurations must keep
+/// explicit nulls and empty containers because Core can distinguish them from
+/// omitted fields.
+dynamic sanitizeXrayJson(dynamic params, {bool preserveStructure = false}) {
   if (params is XrayJsonModel) {
-    return sanitizeXrayJson(params.toJson());
+    return sanitizeXrayJson(
+      params.toJson(),
+      preserveStructure: preserveStructure,
+    );
   }
   if (params is Map) {
     final source = Map<String, dynamic>.fromEntries(
@@ -415,22 +423,28 @@ dynamic sanitizeXrayJson(dynamic params) {
 
     final map = <String, dynamic>{};
     source.forEach((key, value) {
-      final sanitized = sanitizeXrayJson(value);
-      if (sanitized != null) {
+      final sanitized = sanitizeXrayJson(
+        value,
+        preserveStructure: preserveStructure,
+      );
+      if (preserveStructure || sanitized != null) {
         map[key] = sanitized;
       }
     });
-    return map.isEmpty ? null : map;
+    return !preserveStructure && map.isEmpty ? null : map;
   }
   if (params is Iterable) {
     final list = <dynamic>[];
     for (final value in params) {
-      final sanitized = sanitizeXrayJson(value);
-      if (sanitized != null) {
+      final sanitized = sanitizeXrayJson(
+        value,
+        preserveStructure: preserveStructure,
+      );
+      if (preserveStructure || sanitized != null) {
         list.add(sanitized);
       }
     }
-    return list.isEmpty ? null : list;
+    return !preserveStructure && list.isEmpty ? null : list;
   }
   return params;
 }

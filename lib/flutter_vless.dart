@@ -345,6 +345,6 @@ class FlutterVless {
 
   static String _normalizeConfigString(String config) {
     final decoded = _configValidator.validateJsonString(config);
-    return jsonEncode(sanitizeXrayJson(decoded));
+    return jsonEncode(sanitizeXrayJson(decoded, preserveStructure: true));
   }
 }

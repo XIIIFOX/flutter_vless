@@ -29,7 +29,8 @@ class XrayJsonConfig extends FlutterVlessURL {
     }
 
     const XrayConfigValidator().validate(decodedConfig);
-    rawConfig = sanitizeXrayJson(decodedConfig) as Map<String, dynamic>;
+    rawConfig = sanitizeXrayJson(decodedConfig, preserveStructure: true)
+        as Map<String, dynamic>;
   }
 
   late final Map<String, dynamic> rawConfig;

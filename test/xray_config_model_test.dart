@@ -5,6 +5,26 @@ import 'package:flutter_vless/url/vless.dart';
 
 void main() {
   group('P0 typed Xray config generation', () {
+    test('default sanitizer keeps typed model empty-value cleanup', () {
+      final source = {
+        'settings': <String, dynamic>{},
+        'null': null,
+        'items': [null, <String, dynamic>{}, <dynamic>[], 'keep'],
+        'streamSettings': {
+          'network': 'XHTTP',
+          'xHTTPSettings': <String, dynamic>{},
+          'tlsSettings': {'allowInsecure': false},
+        },
+      };
+      expect(sanitizeXrayJson(source), {
+        'items': ['keep'],
+        'streamSettings': {'network': 'xhttp'},
+      });
+      expect(source['settings'], isEmpty);
+      expect((source['items'] as List).first, isNull);
+      expect((source['streamSettings'] as Map)['xHTTPSettings'], isEmpty);
+    });
+
     test('returns a fresh sanitized configuration snapshot', () {
       const link =
           'vless://00000000-0000-0000-0000-000000000000@example.com:443?type=tcp&security=none#Snapshot';

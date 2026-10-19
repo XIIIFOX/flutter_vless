@@ -140,7 +140,7 @@ Track the small delivery gates separately from the eight full requirements:
 
 | Minimum increment | Status | Acceptance boundary |
 | --- | --- | --- |
-| Preserve caller DNS and private A/AAAA path | Core/Android/Windows FakeDNS qualified; Apple SDK gate pending | Caller DNS baseline and the new controlled FakeDNS Core/Android TUN/Windows TUN gates pass. Apple SDK FakeDNS, combined Apple HEV/FakeDNS, physical devices and wider DNS semantics remain open. |
+| Preserve caller DNS and private A/AAAA path | Core/Android/Windows and iOS preview SDK FakeDNS qualified; macOS SDK gate pending | Caller DNS baseline and the new controlled FakeDNS Core/Android TUN/Windows TUN/iOS preview SDK gates pass. macOS SDK FakeDNS, combined Apple HEV/FakeDNS, physical devices and wider DNS semantics remain open. |
 | Protocol/transport preparation and controlled XHTTP | Qualified | Shared pinned-Core corpus and controlled payloads; the exhaustive external-server matrix is deferred. |
 | Imported API/services/stats/policy | Qualified | Shared preparation and API/traffic gates, including Windows service acceptance. |
 | Port/address syntax and explicit data/certificate roots | Qualified baseline | Shared Core/native controls and the targeted runtime cases below; OS allocation/reload and managed import lifetime remain open. |
@@ -190,9 +190,15 @@ The implicit pool subsequently passes the [Android TUN run](https://github.com/X
 (all six jobs, 460 passing result rows). Both new gates transfer opaque TCP/UDP
 through two fresh sessions and require cleanup before restart. Android runs
 without physical capture, so this is not universal physical leak qualification.
-Apple SDK FakeDNS acceptance remains pending; its `db2ac65` CI run could not
-acquire a hosted ARM64 runner and executed no SDK tests. Combined Apple HEV/FakeDNS and physical
-iOS packets also remain separate.
+The [iOS preview SDK gate at 2ef989f](https://github.com/XIIIFOX/flutter_vless/actions/runs/39275604631)
+then passes two fresh FakeDNS TCP/UDP sessions, all twelve ordinary modes,
+three counter cases, routing, occupied-port and preflight controls. Its exact
+committed log qualifier and forty source hashes are verified independently.
+The full job was intentionally cancelled later during the macOS app build;
+its macOS runtime was skipped. This qualifies the iOS SDK path, with simulator
+and device HEV still link-only. macOS SDK FakeDNS, combined Apple HEV/FakeDNS
+and physical iOS packets remain open. The earlier `db2ac65` CI run acquired no
+hosted ARM64 runner and executed no SDK tests.
 
 
 The default Android CI job runs the production adapter and five focused
@@ -1300,7 +1306,7 @@ Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |
 | --- | --- | --- |
-| 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private address queries. Caller AAAA, bare/full resolver hosts and encrypted DoH trust/name controls pass ordinary Core on all three desktop systems. Missing/null/empty localhost server tags pass shared preparation and native Apple DNS generations. Direct-only traffic passes shared Core, Android TUN, native Apple and Windows TUN gates. Controlled FakeDNS TCP/UDP passes native-prepared ordinary Core on Linux/macOS/Windows and Android/Windows TUN at f5acbbc. Apple SDK FakeDNS, combined HEV/FakeDNS and additional DNS paths remain open. |
+| 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private address queries. Caller AAAA, bare/full resolver hosts and encrypted DoH trust/name controls pass ordinary Core on all three desktop systems. Missing/null/empty localhost server tags pass shared preparation and native Apple DNS generations. Direct-only traffic passes shared Core, Android TUN, native Apple and Windows TUN gates. Controlled FakeDNS TCP/UDP passes native-prepared ordinary Core on Linux/macOS/Windows and Android/Windows TUN at f5acbbc, plus the iOS preview SDK at 2ef989f. macOS SDK FakeDNS, combined HEV/FakeDNS and additional DNS paths remain open. |
 | 2. IPv6 | Partial; physical iOS packet gate pending | IPv6 TCP/UDP with preserved AAAA policy passes ordinary Core on all three desktop systems, actual Android TUN and Windows 2022/2025 TUN/recovery/physical-interface controls. Actual shipped macOS HEV packet controls pass remotely; iOS simulator HEV is a verified link-only stub and physical iOS remains pending. Full macOS system-VPN acceptance, IPv6-only endpoints, NAT64, cross-family handover and broader physical bypass qualification remain open. |
 | 3. Protocol/transport matrix | Partial; controlled XHTTP increment qualified | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP and null legacy-endpoint preparation fixes pass a nine-case pinned Core build corpus with native preparation, including shared XHTTP upload/download socket policy. At cdc5b94, ordinary Core on all three desktop systems carries actual XHTTP HTTP/1.1 packet-up payloads with and without a caller SOCKS chain; both Apple and Windows preparers pass on macOS. Further protocol handshakes, XHTTP TLS/HTTP3/QUIC, physical iOS packets and the full matrix remain open. |
 | 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes pass shared component, ordinary Core and native platform traffic gates at a475374. Per-session source/default selection passes Android TUN at 2f74f13, both enabled Apple SDK runtimes at e5f9fc6 and Windows 2022/2025 at fb2eb75. Session-owned counters pass Android/Windows again at f5acbbc and both complete enabled Apple controlled gates at 02136f1. Public full-JSON startup/delay/import now also preserves explicit nulls and empty containers through all four platform message adapters. Wildcard isolation and physical/system-VPN acceptance remain open. |

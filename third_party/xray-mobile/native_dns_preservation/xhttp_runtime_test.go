@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +18,10 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
-	"reflect"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -28,6 +32,16 @@ import (
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 )
+
+const xhttpChildSpec = "FLUTTER_VLESS_XHTTP_CHILD_SPEC"
+
+type xhttpSpec struct {
+	Prepared, Origin string
+	Port             int
+	Chained          bool
+}
+
+func xhttpPayload() []byte { return bytes.Repeat([]byte("XHTTP_SHARED_SOCKET_PAYLOAD_"), 2048) }
 
 func testNativeXHTTPPenetrate(t *testing.T) {
 	var systemAttempts atomic.Int64
@@ -48,19 +62,20 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 	complete := false
 	// This runs after all owned engines and servers have drained.
 	t.Cleanup(func() {
-		if !complete {
-			return
-		}
 		events, failures := observations.snapshot()
 		counts := map[string]int{}
 		for _, event := range events {
 			counts[event]++
 		}
+		if !complete {
+			t.Logf("XHTTP_FIXTURE_FAILURE events=%d trace=%v failures=%v", len(events), events[:min(len(events), 32)], failures[:min(len(failures), 8)])
+			return
+		}
 		if counts["origin"] != 2 || counts["upload POST"] < 2 || counts["download GET"] < 2 || len(failures) != 0 {
 			t.Error("XHTTP did not carry both payloads through the controlled fronts", counts, failures)
 		}
 	})
-	payload := bytes.Repeat([]byte("XHTTP_SHARED_SOCKET_PAYLOAD_"), 2048)
+	payload := xhttpPayload()
 	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, int64(len(payload)+1)))
 		if err != nil || r.Method != "POST" || r.Host != "payload.invalid" || !bytes.Equal(body, payload) {
@@ -137,6 +152,9 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 			request.SetURL(backend)
 			request.Out.Host = "backend.invalid"
 			request.Out.URL.Path = "/fixture" + strings.TrimPrefix(request.In.URL.Path, "/"+role)
+		}, ModifyResponse: func(response *http.Response) error {
+			observations.record(fmt.Sprintf("%s backend-status=%d", role, response.StatusCode))
+			return nil
 		}, ErrorHandler: func(w http.ResponseWriter, request *http.Request, err error) {
 			if !stopping.Load() && request.Context().Err() == nil {
 				observations.fail(fmt.Errorf("%s front: %w", role, err))
@@ -151,6 +169,8 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 				return
 			}
 			observations.record(role + " " + r.Method)
+			parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"+role+"/"), "/")
+			observations.record(fmt.Sprintf("%s session=%x", role, sha256.Sum256([]byte(parts[0]))))
 			proxy.ServeHTTP(w, r)
 		}))
 		server.Config.ReadHeaderTimeout = 5 * time.Second
@@ -206,46 +226,115 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 			if chained && stream["sockopt"].(map[string]any)["dialerProxy"] != "carrier" {
 				t.Fatal("XHTTP parent caller chain changed")
 			}
-			decoded, err := serial.DecodeJSONConfig(bytes.NewReader(prepared))
+			// Core's system dialer and XHTTP clients keep process-global state.
+			// The backend and each prepared client need separate processes, so
+			// delayed HTTP workers cannot use another instance's DNS/handlers.
+			directory := t.TempDir()
+			preparedPath, specPath := filepath.Join(directory, "effective.json"), filepath.Join(directory, "child.json")
+			if err := os.WriteFile(preparedPath, prepared, 0600); err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(xhttpSpec{Prepared: preparedPath, Origin: originAddress.String(), Port: managedPort, Chained: chained})
 			if err != nil {
 				t.Fatal(err)
 			}
-			built, err := decoded.Build()
-			if err != nil {
+			if err := os.WriteFile(specPath, data, 0600); err != nil {
 				t.Fatal(err)
 			}
-			clientCore, err := core.New(built)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() {
-				if err := clientCore.Close(); err != nil {
-					t.Error(err)
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestNativeXHTTPChild$", "-test.v", "-test.timeout=10s")
+			command.WaitDelay = time.Second
+			for _, entry := range os.Environ() {
+				key := strings.ToUpper(strings.SplitN(entry, "=", 2)[0])
+				if key != xhttpChildSpec && !strings.HasPrefix(key, "XRAY_") && !strings.HasPrefix(key, "XRAY.") {
+					command.Env = append(command.Env, entry)
 				}
-			})
-			if err := clientCore.Start(); err != nil {
-				t.Fatal(err)
 			}
-			connection, _ := connect(t, managedPort, 1, originAddress, "")
-			defer connection.Close()
-			if _, err := fmt.Fprintf(connection, "POST /echo HTTP/1.1\r\nHost: payload.invalid\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", len(payload)); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := io.Copy(connection, bytes.NewReader(payload)); err != nil {
-				t.Fatal(err)
-			}
-			response, err := http.ReadResponse(bufio.NewReader(connection), nil)
-			if err != nil {
-				t.Fatal("XHTTP response failed", err)
-			}
-			defer response.Body.Close()
-			body, err := io.ReadAll(io.LimitReader(response.Body, int64(len(payload)+1)))
-			if err != nil || response.StatusCode != http.StatusOK || !reflect.DeepEqual(body, payload) {
-				t.Fatal("XHTTP upload/download bytes changed", err)
+			command.Env = append(command.Env, xhttpChildSpec+"="+specPath)
+			capture := new(dohOutput)
+			command.Stdout, command.Stderr = capture, capture
+			err = command.Run()
+			output, truncated := capture.snapshot()
+			marker := fmt.Sprintf("XHTTP_CHILD_OK chained=%t", chained)
+			if err != nil || truncated || !bytes.Contains(output, []byte(marker)) || !bytes.Contains(output, []byte("--- PASS: TestNativeXHTTPChild")) {
+				events, failures := observations.snapshot()
+				t.Fatalf("isolated XHTTP client failed: %v; events=%d trace=%v failures=%v; child=%s", err,
+					len(events), events[:min(len(events), 32)], failures[:min(len(failures), 8)], output)
 			}
 			t.Logf("XHTTP_PENETRATE_PAYLOAD_PASS chained=%t bytes=%d", chained, len(payload))
 		})
 		allPassed = passed && allPassed
 	}
 	complete = allPassed
+}
+
+func TestNativeXHTTPChild(t *testing.T) {
+	if !strings.EqualFold(os.Getenv("CI"), "true") || runtime.GOOS == "darwin" && !strings.EqualFold(os.Getenv("GITHUB_ACTIONS"), "true") {
+		t.Fatal("XHTTP child runtime is CI-only")
+	}
+	data, err := os.ReadFile(os.Getenv(xhttpChildSpec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spec xhttpSpec
+	if err := json.Unmarshal(data, &spec); err != nil {
+		t.Fatal(err)
+	}
+	var systemAttempts atomic.Int64
+	trap := &net.Resolver{PreferGo: true, Dial: func(context.Context, string, string) (net.Conn, error) {
+		systemAttempts.Add(1)
+		return nil, errors.New("forbidden XHTTP client OS resolution")
+	}}
+	net.DefaultResolver, xnet.DefaultResolver = trap, trap
+	t.Cleanup(func() {
+		// This isolated test process exits next. Keep the trap installed until
+		// exit, including any detached XHTTP work after clientCore.Close.
+		if systemAttempts.Load() != 0 {
+			t.Error("XHTTP client attempted an OS resolver")
+		}
+	})
+	prepared, err := os.ReadFile(spec.Prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := serial.DecodeJSONConfig(bytes.NewReader(prepared))
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := decoded.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientCore, err := core.New(built)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := clientCore.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := clientCore.Start(); err != nil {
+		t.Fatal(err)
+	}
+	connection, _ := connect(t, spec.Port, 1, netip.MustParseAddrPort(spec.Origin), "")
+	defer connection.Close()
+	payload := xhttpPayload()
+	if _, err := fmt.Fprintf(connection, "POST /echo HTTP/1.1\r\nHost: payload.invalid\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", len(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(connection, bytes.NewReader(payload)); err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(connection), nil)
+	if err != nil {
+		t.Fatal("XHTTP response failed", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, int64(len(payload)+1)))
+	if err != nil || response.StatusCode != http.StatusOK || !bytes.Equal(body, payload) {
+		t.Fatal("XHTTP upload/download bytes changed", err)
+	}
+	t.Logf("XHTTP_CHILD_OK chained=%t bytes=%d", spec.Chained, len(payload))
 }

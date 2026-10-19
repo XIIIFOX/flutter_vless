@@ -387,8 +387,10 @@ safe CLI checks construct no Core; all three Core runners pass them at
 Foreground CLI traffic and native launcher adoption remain separate. The Apple
 static archive fixtures pass locally on arm64/x86_64. CI exposed a same-address
 weak-entry alias being rebound with the strong runtime symbol. The fallback
-anchors now use distinct alternate-entry offsets; local ABI/shape checks pass,
-while qualification with the CI Apple linker remains pending.
+anchors now use distinct alternate-entry offsets. At
+[5c41b3e](https://github.com/XIIIFOX/flutter_vless/actions/runs/39226845029),
+the remote Xcode 26.6 linker passes all 16 arm64/x86_64 link-and-run cases and
+both object-shape checks, including partial and unknown-capability refusals.
 Capability probing does not trial Start or Check, and unsupported Start returns
 a fixed error.
 
@@ -406,31 +408,41 @@ adapter and DNS transformations. Its metadata hashes those exact final bytes,
 maps the original inbound index explicitly, and records only rules inserted by
 the preparer. A caller rule with a matching service name does not become a
 private guard. Mirrored pure tests cover this metadata, ordinary preparation
-and DNS; the exported synthetic pair passes the shared Go Check without
-constructing Core. Provider adoption and device traffic acceptance remain open.
+and DNS. Both actual iOS and macOS preparation modules export synthetic pairs
+which pass the shared Go Check on the remote macOS runner without constructing
+Core. Provider adoption and device traffic acceptance remain open.
 
 Matching native-only Kotlin and C++ encoders retain that same byte/digest and
 selection contract. Focused JVM and portable C++ tests exercise their ordinary
 path, immutable inputs, explicit source mapping and guard/default refusals;
 both synthetic exported pairs also pass Go Check without constructing Core.
-The C++ Windows hash implementation uses BCrypt; its Windows execution gate
-remains pending CI. CI pairs each platform's metadata producer with the shared
-Go validator. These helpers do not yet expose or enable a public routing option.
+The C++ Windows hash implementation uses BCrypt; all 42 checks pass under real
+Windows/MSVC, and its exported pair passes Go Check. Android passes 202 JVM
+checks, including the 11 encoder cases, and its exported pair also passes Go
+Check. CI pairs each platform's metadata producer with the shared Go validator.
+These helpers do not yet expose or enable a public routing option.
 
-The Android emulator at ada26d6 passes all 37 native cases without skips and
-three Flutter cases, including the four protected system-DNS scenarios. This
-does not identify the earlier intermittent empty HTTP ready response. A
-confirmed fixture gap is corrected separately: the cellular-skip branch now
-waits for Wi-Fi restoration and controlled traffic in its finally block.
+The Android emulator at 5c41b3e passes 36 native cases and three Flutter cases,
+including the four protected system-DNS scenarios. One native case skips because
+the emulator has no cellular network. Its finally block completes the Wi-Fi
+restoration and controlled HTTP assertions before that skip is reported;
+cellular traffic remains unverified. This does not identify the earlier
+intermittent empty HTTP ready response.
 
-The same run's Apple privacy app stops reporting after ten of twelve modes,
-so that entire Apple job is not qualified. Earlier DNS/routing/asset markers
-do not substitute for the two missing privacy modes. The fixture now guards
-its owned client sockets against SIGPIPE and records each mode's entry. A
-failure-only collector retains bounded termination metadata for the exact
-test bundle/process/PID, preserving the original failure and uninstall. These
-fixture changes do not establish the cause of the original termination or
-qualify the missing modes before a fresh runtime result.
+The earlier ada26d6 Apple privacy app stopped reporting after ten of twelve
+modes. The fresh 5c41b3e run passes all twelve modes on both ordinary iOS and
+macOS SDKs, plus the DNS generations, direct/proxy and custom-asset markers.
+The fixture guards its owned client sockets against SIGPIPE and records each
+mode's entry; the successful rerun does not establish the cause of the earlier
+termination. A failure-only collector retains bounded metadata for the exact
+test bundle/process/PID while preserving the original failure and uninstall.
+
+All eight CI jobs pass at 5c41b3e, including actual shared factory traffic on
+Linux/macOS/Windows, unsigned iOS/example builds and remote macOS HEV traffic.
+The Apple SDK runtime acceptance uses ordinary capability-zero artifacts;
+factory-capable SDKs are not yet qualified through native consumers. iOS HEV
+is compile-only here, not physical-device packet acceptance. No local Mac VPN,
+OS network settings, emulator or device were used for this run.
 
 The fifth case adds an explicit null tag on the default direct outbound. Core
 decodes this as untagged; Windows previously rejected it before preflight.

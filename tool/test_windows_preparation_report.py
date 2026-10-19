@@ -57,13 +57,15 @@ using Stage = flutter_vless::preparation::Stage;
 using Root = flutter_vless::asset_location::Root;
 using Intent = flutter_vless::native_routing::NativeRoutingIntent;
 namespace fs = std::filesystem;
+#ifndef _WIN32
 using DWORD = unsigned long;
 using HANDLE = void*;
 constexpr DWORD WAIT_OBJECT_0 = 0;
+#endif
 struct NativeState { bool write = true, launch = true, wait = true; DWORD exit = 0; std::string written; fs::path launched; } native_state;
+namespace flutter_vless::native {
 DWORD WaitForSingleObject(HANDLE, unsigned) { return native_state.wait ? WAIT_OBJECT_0 : 258; }
 bool GetExitCodeProcess(HANDLE, DWORD* code) { *code = native_state.exit; return true; }
-namespace flutter_vless::native {
 enum class ConfigCheckStorage { currentUser, administrators };
 struct ProcessHandle { intptr_t hProcess = 1; };
 bool WritePrivateConfig(const std::string& config, fs::path& path) {

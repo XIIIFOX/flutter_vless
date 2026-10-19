@@ -419,6 +419,13 @@ String _xrayField(String key) =>
 
 bool _matchesXrayField(String key, String field) => _xrayField(key) == field;
 
+bool _isRoutingAttrs(List<String> path) =>
+    path.length == 4 &&
+    _matchesXrayField(path[0], 'routing') &&
+    _matchesXrayField(path[1], 'rules') &&
+    path[2] == '*' &&
+    _matchesXrayField(path[3], 'attrs');
+
 bool _isTransportHeaders(List<String> path) {
   if (path.length < 5 || !_matchesXrayField(path.last, 'headers')) {
     return false;
@@ -483,8 +490,8 @@ dynamic _sanitizeXrayJson(
       params.entries
           .map((entry) => MapEntry(entry.key.toString(), entry.value)),
     );
-    // DNS hosts and transport headers contain caller keys and values, including
-    // names which match legacy stream fields. Only schema needs that cleanup.
+    // DNS hosts, transport headers and routing attributes contain caller data,
+    // including names matching legacy stream fields. Only schema needs cleanup.
     if (!dictionaryData) {
       _normalizeStreamSettingsAliases(source);
       source.remove('allowInsecure');
@@ -499,7 +506,8 @@ dynamic _sanitizeXrayJson(
         dnsFields: root && _matchesXrayField(key, 'dns'),
         dictionaryData: dictionaryData ||
             (dnsFields && _matchesXrayField(key, 'hosts')) ||
-            _isTransportHeaders(childPath),
+            _isTransportHeaders(childPath) ||
+            _isRoutingAttrs(childPath),
         path: childPath,
       );
       if (preserveStructure || sanitized != null) {

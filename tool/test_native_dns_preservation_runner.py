@@ -24,6 +24,7 @@ class PreservationRunnerGuards(unittest.TestCase):
         self.assertEqual(snapshot['tool/fixtures/compatibility/fakedns.json'], 'synthetic-digest')
         self.assertEqual(snapshot['tool/fixtures/compatibility/dns-data-maps.json'], 'synthetic-digest')
         self.assertEqual(snapshot['tool/fixtures/compatibility/transport-data-maps.json'], 'synthetic-digest')
+        self.assertEqual(snapshot['tool/fixtures/compatibility/routing-attrs.json'], 'synthetic-digest')
 
     def test_snapshot_binds_shared_counter_wire_corpus(self):
         seen = []
@@ -145,6 +146,8 @@ class PreservationRunnerGuards(unittest.TestCase):
                     (evidence / 'protocol-preparation-pure.log').write_text(
                         '--- PASS: TestNativeProtocolPreparation (0.01s)\n--- PASS: TestProtocolCorpusBuilds (0.01s)\n--- PASS: TestNativeDoHMaterialOnly (0.01s)\n--- PASS: TestNativeSelectorPrefixAllocation (0.01s)\n'
                         '--- PASS: TestNativeCertificatePaths (0.01s)\n--- PASS: TestNativeRoutingContextTailCatchall (0.01s)\n--- PASS: TestNativeRoutingContextLoopbackDNS (0.01s)\n--- PASS: TestNativeRoutingContextCandidate (0.01s)\n')
+                    with (evidence / 'protocol-preparation-pure.log').open('a') as output:
+                        output.write('--- PASS: TestRoutingAttrsBuilds (0.01s)\n--- PASS: TestNativeRoutingAttrsPreservation (0.01s)\n')
 
             with mock.patch.object(runner, 'EVIDENCE', evidence), mock.patch.object(runner.sys, 'argv', ['runner']), \
                     mock.patch.object(runner.platform, 'system', return_value='Linux'), \
@@ -155,7 +158,7 @@ class PreservationRunnerGuards(unittest.TestCase):
                 self.assertEqual(runner.main(), 0)
             self.assertTrue(any('test' in command and '-c' in command for command in commands))
             selections = [command[command.index('-test.run') + 1] for command in commands if '-test.run' in command]
-            self.assertEqual(selections, ['^(TestNativeProtocolPreparation|TestProtocolCorpusBuilds|TestNativeDoHMaterialOnly|TestNativeSelectorPrefixAllocation|TestNativeCertificatePaths|TestNativeRoutingContextTailCatchall|TestNativeRoutingContextLoopbackDNS|TestNativeRoutingContextCandidate)$'])
+            self.assertEqual(selections, ['^(TestNativeProtocolPreparation|TestProtocolCorpusBuilds|TestNativeDoHMaterialOnly|TestNativeSelectorPrefixAllocation|TestNativeCertificatePaths|TestNativeRoutingContextTailCatchall|TestNativeRoutingContextLoopbackDNS|TestNativeRoutingContextCandidate|TestRoutingAttrsBuilds|TestNativeRoutingAttrsPreservation)$'])
             self.assertFalse(any(runner.SELECTED_TEST in selection for selection in selections))
             report = json.loads((evidence / 'result.json').read_text())
             self.assertFalse(report['runtime_requested'])

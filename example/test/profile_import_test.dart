@@ -66,6 +66,22 @@ void main() {
     );
   }
 
+  test('Routing attribute expressions survive example import', () {
+    final fixture =
+        jsonDecode(
+              File(
+                '../tool/fixtures/compatibility/routing-attrs.json',
+              ).readAsStringSync(),
+            )
+            as Map<String, dynamic>;
+    final config = fixture['config'] as Map<String, dynamic>;
+    final source = jsonEncode(config);
+    for (final input in [source, '[$source]']) {
+      expect(jsonDecode(importProfile(input).config), config);
+    }
+    expect(jsonEncode(config), source);
+  });
+
   test('Raw JSON retains existing remark aliases', () {
     for (final key in ['remarks', 'remark', 'ps']) {
       final input = jsonEncode({

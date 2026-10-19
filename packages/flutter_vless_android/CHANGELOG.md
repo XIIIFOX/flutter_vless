@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve root routing-rule attribute dictionaries during normalization and protected-feature checks, including literal values that resemble DNS or transport settings.
+
 * Preserve the remaining typed transport header maps, including XHTTP `extra`/download streams and TCP HTTP header lists, through runtime normalization and protected-feature admission. Keep inherited XHTTP download socket options unchanged in proxy-DNS mode and validate its active transport before bootstrap.
 
 * Treat root DNS hosts and inbound/outbound WebSocket headers as caller data during normalization and protected-feature checks. Preserve literal values while retaining rejection of actual unsupported XICMP and local QUIC DNS paths.

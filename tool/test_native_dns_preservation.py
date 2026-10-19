@@ -58,6 +58,7 @@ def source_snapshot():
     paths.append(ROOT / 'tool/fixtures/compatibility/dns-default-tags.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/dns-data-maps.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/transport-data-maps.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/routing-attrs.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/selector-prefixes.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/selector-traffic.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/listen-addresses.json')
@@ -200,7 +201,8 @@ def main():
         # selector manager: no Core instance, listener, resolver or engine.
         pure_tests = [PROTOCOL_TEST, 'TestProtocolCorpusBuilds', MATERIAL_TEST, 'TestNativeSelectorPrefixAllocation',
                       'TestNativeCertificatePaths', 'TestNativeRoutingContextTailCatchall',
-                      'TestNativeRoutingContextLoopbackDNS', 'TestNativeRoutingContextCandidate']
+                      'TestNativeRoutingContextLoopbackDNS', 'TestNativeRoutingContextCandidate',
+                      'TestRoutingAttrsBuilds', 'TestNativeRoutingAttrsPreservation']
         checked('protocol-preparation-pure', [str(binary), '-test.run', '^(' + '|'.join(pure_tests) + ')$',
                 '-test.v', '-test.timeout=60s'], 75, MOBILE, runtime_environment)
         output = (EVIDENCE / 'protocol-preparation-pure.log').read_text(encoding='utf-8')

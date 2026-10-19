@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve routing-rule `attrs` keys and case-sensitive expressions through full-JSON import, startup and delay on all platform adapters. Keep dictionary data separate from Android protected-feature admission.
+
 * Preserve typed HTTPUpgrade, XHTTP/SplitHTTP, MASQUE, TCP/RAW HTTP and Hysteria masquerade header dictionaries, including lists and effective download streams. Add a shared ten-profile corpus and controlled XHTTP wire-header checks. Align protected proxy-DNS preparation with XHTTP socket inheritance while validating the active download transport.
 
 * Preserve WebSocket header dictionaries through full JSON imports, startup and delay checks on all four platforms. Keep header names/values separate from legacy settings; prevent Android DNS hosts and headers from being mistaken for protected socket features.

@@ -1,0 +1,54 @@
+{
+  "name": "routing_attribute_dictionary",
+  "config": {
+    "log": {
+      "loglevel": "none"
+    },
+    "inbounds": [],
+    "dns": {
+      "queryStrategy": "UseIPv4",
+      "servers": [
+        "tcp://9.9.9.9"
+      ]
+    },
+    "outbounds": [
+      {
+        "tag": "caller-proxy",
+        "protocol": "socks",
+        "settings": {
+          "address": "198.51.100.7",
+          "port": 19090
+        }
+      },
+      {
+        "tag": "direct",
+        "protocol": "freedom"
+      },
+      {
+        "tag": "block",
+        "protocol": "blackhole"
+      }
+    ],
+    "routing": {
+      "domainStrategy": "AsIs",
+      "rules": [
+        {
+          "type": "field",
+          "attrs": {
+            "allowInsecure": "^required$",
+            "network": "^MiXeD$",
+            "xHTTPSettings": "^Alias$",
+            "type": "xicmp",
+            "Origin": "quic+local://literal.invalid"
+          },
+          "outboundTag": "direct"
+        },
+        {
+          "type": "field",
+          "network": "tcp",
+          "outboundTag": "block"
+        }
+      ]
+    }
+  }
+}

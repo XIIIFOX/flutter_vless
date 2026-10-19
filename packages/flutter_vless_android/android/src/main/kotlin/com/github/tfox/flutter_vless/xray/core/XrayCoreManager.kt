@@ -57,6 +57,7 @@ object XrayCoreManager {
     /** Core treats these exact schema-owned maps as caller names and values. */
     private fun callerDictionary(path: List<String>): Boolean {
         if (path == listOf("dns", "hosts")) return true
+        if (path == listOf("routing", "rules", "*", "attrs")) return true
         if (path.size < 5 || path[0] !in setOf("inbounds", "outbounds") ||
             path[1] != "*" || path[2] != "streamsettings") return false
         var streamStart = 3

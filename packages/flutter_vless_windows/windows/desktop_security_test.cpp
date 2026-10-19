@@ -49,6 +49,100 @@ Json& DnsAddressPath(Json& value, const Json& path) {
   }
   return *current;
 }
+void LogicalAddressCases(const std::string& only = "") {
+  std::ifstream input("tool/fixtures/compatibility/logical-addresses.json");
+  Require(input.good(), "shared logical Address corpus is required");
+  Json fixtures; input >> fixtures; Require(fixtures.size() == 4, "shared logical Address corpus changed");
+  auto prepare = [](const Json& profile, std::vector<std::string>& calls) {
+    return PrepareProtectedVpn(profile.dump(), "session-user", "session-password", "Ethernet", [&](const std::string& host) {
+      calls.push_back(host); return host == "endpoint.invalid" ? "192.0.2.5" : "";
+    });
+  };
+  bool selected = only.empty();
+  for (const auto& fixture : fixtures) {
+    const auto name = fixture["name"].get<std::string>();
+    if (!only.empty() && only != name) continue;
+    selected = true;
+    const auto source = fixture["config"]; const auto original = source.dump();
+    EndpointEnvironment environment(fixture["environment"]);
+    std::vector<std::string> calls; const auto result = prepare(source, calls);
+    auto literal = source;
+    for (const auto& binding : fixture["bindings"]) DnsAddressPath(literal, binding["path"]) = binding["value"];
+    std::vector<std::string> literal_calls; const auto expected = prepare(literal, literal_calls);
+    Require(expected.has_value(), "literal logical Address control rejected");
+    Require(result && Parse(*result) == Parse(*expected), "logical env Address differs from literal candidate");
+    Require(calls.empty() && literal_calls.empty(), "logical target was physically bootstrapped");
+    Require(source.dump() == original, "logical Address preparation mutated caller source");
+  }
+  if (only.empty() || only == "precedence-and-scope") {
+    selected = true;
+    for (const auto& fixture : fixtures) {
+      auto source = fixture["config"];
+      const bool input_target = fixture["bindings"][0]["path"][0] == "inbounds";
+      auto& settings = input_target ? source["inbounds"][0]["settings"] : source["outbounds"][1]["settings"];
+      settings["address"] = "env:PRIMARY"; settings["rewriteAddress"] = "env:DORMANT";
+      settings["custom"] = {{"address", "env:PRIMARY"}};
+      settings["portMap"] = {{"80", "env:PRIMARY:80"}};
+      std::vector<std::string> reads;
+      Require(Normalize(source, [&](const std::string& name) -> std::optional<std::string> {
+        reads.push_back(name); return name == "PRIMARY" ? "logical.invalid" : "env:SHOULD_NOT_EXPAND";
+      }) && reads == std::vector<std::string>{"PRIMARY"} && settings["address"] == "logical.invalid"
+          && settings["rewriteAddress"] == "env:DORMANT" && settings["custom"]["address"] == "env:PRIMARY"
+          && settings["portMap"]["80"] == "env:PRIMARY:80", "logical target precedence expanded dormant/opaque settings");
+      settings["address"] = ""; reads.clear();
+      Require(Normalize(source, [&](const std::string& name) -> std::optional<std::string> { reads.push_back(name); return "unexpected.invalid"; })
+          && reads.empty() && settings["address"] == "" && settings["rewriteAddress"] == "env:DORMANT", "empty nonnull logical primary fell back to rewriteAddress");
+    }
+    auto source = fixtures[1]["config"]; auto& settings = source["outbounds"][1]["settings"];
+    settings.erase("address"); settings["RewriteAddress"] = settings["rewriteAddress"]; settings.erase("rewriteAddress");
+    const auto original = source;
+    Require(Normalize(source, [](const std::string&) -> std::optional<std::string> { return "127.0.0.2"; })
+        && settings["RewriteAddress"] == "127.0.0.2" && !settings.contains("rewriteAddress")
+        && source["dns"] == original["dns"], "absent logical primary or folded rewrite field was not bound in place");
+  }
+  if (only.empty() || only == "before-bootstrap") {
+    selected = true;
+    auto source = fixtures[0]["config"];
+    source["inbounds"] = fixtures[2]["config"]["inbounds"];
+    source["inbounds"][0]["settings"]["address"] = "env:FLUTTER_VLESS_FIXTURE_LOGICAL_SECOND";
+    source["outbounds"].push_back({{"tag", "proxy"}, {"protocol", "vless"}, {"settings", {{"address", "endpoint.invalid"}, {"port", 443}}}});
+    EndpointEnvironment environment({{"FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET", "127.0.0.1"}, {"FLUTTER_VLESS_FIXTURE_LOGICAL_SECOND", "127.0.0.2"}});
+    std::vector<std::string> calls;
+    const auto result = PrepareProtectedVpn(source.dump(), "session-user", "session-password", "Ethernet", [&](const std::string& host) {
+      calls.push_back(host);
+#ifdef _WIN32
+      Require(_putenv_s("FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET", "unreachable.invalid") == 0
+          && _putenv_s("FLUTTER_VLESS_FIXTURE_LOGICAL_SECOND", "unreachable.invalid") == 0, "cannot alter logical target environment");
+#else
+      Require(setenv("FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET", "unreachable.invalid", 1) == 0
+          && setenv("FLUTTER_VLESS_FIXTURE_LOGICAL_SECOND", "unreachable.invalid", 1) == 0, "cannot alter logical target environment");
+#endif
+      return host == "endpoint.invalid" ? "192.0.2.5" : "";
+    });
+    source["outbounds"][1]["settings"]["address"] = "127.0.0.1";
+    source["inbounds"][0]["settings"]["address"] = "127.0.0.2";
+    std::vector<std::string> literal_calls; const auto expected = prepare(source, literal_calls);
+    Require(result && expected && Parse(*result) == Parse(*expected) && calls == std::vector<std::string>{"endpoint.invalid"}, "logical targets were bound after physical bootstrap");
+  }
+  if (only.empty() || only == "invalid-and-once") {
+    selected = true;
+    for (const auto& invalid : {Json(true), Json(7), Json::array(), Json::object()}) {
+      auto source = fixtures[1]["config"];
+      source["outbounds"][1]["settings"]["address"] = invalid;
+      std::vector<std::string> calls; Require(!prepare(source, calls), "invalid nonnull logical primary fell back to rewriteAddress");
+    }
+    auto source = fixtures[0]["config"]; source["outbounds"][1]["settings"]["ADDRESS"] = "127.0.0.2";
+    Require(!Normalize(source), "ambiguous logical Address field was admitted");
+    source = fixtures[0]["config"];
+    EndpointEnvironment environment({{"FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET", "env:SECOND"}, {"SECOND", "127.0.0.1"}});
+    const auto original = source.dump(); std::vector<std::string> calls;
+    Require(!prepare(source, calls) && source.dump() == original, "nested logical env target was resolved twice or caller mutated");
+    source["outbounds"][1]["settings"]["address"] = " env:FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET";
+    const auto result = prepare(source, calls);
+    Require(result && calls.empty() && Parse(*result)["outbounds"][1]["settings"]["address"] == " env:FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET", "logical env prefix was eagerly trimmed or physically resolved");
+  }
+  Require(selected, "unknown logical Address case");
+}
 void DnsAddressCases(const std::string& only = "") {
   std::ifstream input("tool/fixtures/compatibility/dns-addresses.json");
   Require(input.good(), "shared root DNS Address corpus is required");
@@ -828,6 +922,7 @@ int main(int argc, char** argv) try {
   if (argc == 3 && std::string(argv[1]) == "--direct-only-case") { DirectOnlyCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--ipv6-case") { IPv6PayloadCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--protocol-case") { ProtocolCompatibilityCases(argv[2]); return 0; }
+  if (argc == 3 && std::string(argv[1]) == "--logical-address-case") { LogicalAddressCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--dns-address-case") { DnsAddressCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--endpoint-address-case") { EndpointAddressCases(argv[2]); return 0; }
   if (argc != 1) {
@@ -848,6 +943,7 @@ int main(int argc, char** argv) try {
   ProtocolCompatibilityCases();
   EndpointAddressCases();
   DnsAddressCases();
+  LogicalAddressCases();
   const auto source = Parse(R"({
     "log":{"access":"private-canary.log","error":"secret.log","loglevel":"debug","dnsLog":true},
     "inbounds":[{"protocol":"socks","listen":"127.0.0.1","port":18580,"tag":"socks-in","settings":{"auth":"noauth"},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":false}}],

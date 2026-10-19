@@ -438,6 +438,112 @@ class AndroidTunnelDnsPolicyTest {
         }
     }
 
+    @Test fun sharedLogicalAddressEnvironmentFreezesOnlyEffectiveTypedFields() {
+        val cases = JSONArray(requireNotNull(javaClass.getResource("/logical-addresses.json")).readText())
+        assertEquals(4, cases.length())
+        for (index in 0 until cases.length()) for (policy in listOf("config", "proxy")) {
+            val item = cases.getJSONObject(index); val label = item.getString("name") + "/" + policy
+            val original = item.getJSONObject("config"); val originalBefore = original.toString()
+            val input = JSONObject(originalBefore)
+            // The corpus is direct-only. This literal proxy supplies only the
+            // explicit override's transport, never the logical destination.
+            if (policy == "proxy") input.getJSONArray("outbounds").put(outbound(address = "192.0.2.17"))
+            val before = input.toString(); val expected = JSONObject(before)
+            val bindings = item.getJSONArray("bindings")
+            for (bindingIndex in 0 until bindings.length()) {
+                val binding = bindings.getJSONObject(bindingIndex); val path = binding.getJSONArray("path")
+                var parent: Any = expected
+                for (part in 0 until path.length() - 1)
+                    parent = if (parent is JSONArray) parent.get(path.getString(part).toInt()) else (parent as JSONObject).get(path.getString(part))
+                (parent as JSONObject).put(path.getString(path.length() - 1), binding.getString("value"))
+            }
+            val environment = item.getJSONObject("environment"); val lookups = mutableListOf<String>()
+            val prepared = AndroidTunnelDnsPolicy.prepare(before, policy, environment = { name ->
+                lookups.add(name); if (environment.has(name)) environment.getString(name) else null
+            }) { error("Logical destinations must not bootstrap physical endpoints") }
+            val actual = JSONObject(prepared.configJson)
+            for (collection in listOf("inbounds", "outbounds")) {
+                // Explicit proxy preparation owns only the appended proxy's
+                // stream options; the original imported objects stay exact.
+                val source = original.getJSONArray(collection)
+                for (entry in 0 until source.length())
+                    assertEquals(label, expected.getJSONArray(collection).get(entry).toString(), actual.getJSONArray(collection).get(entry).toString())
+            }
+            val expectedRules = input.getJSONObject("routing").getJSONArray("rules")
+            val actualRules = actual.getJSONObject("routing").getJSONArray("rules")
+            for (rule in 0 until expectedRules.length())
+                assertEquals(label, expectedRules.get(rule).toString(), actualRules.get(actualRules.length() - expectedRules.length() + rule).toString())
+            if (policy == "config") assertEquals(label, input.getJSONObject("dns").toString(), actual.getJSONObject("dns").toString())
+            assertEquals(label, input.getJSONObject("custom").toString(), actual.getJSONObject("custom").toString())
+            assertEquals(label, input.getString("remarks"), actual.getString("remarks"))
+            assertEquals(label, listOf("FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET"), lookups)
+            assertTrue(label, prepared.bootstrapHostnames.isEmpty())
+            assertEquals(label, if (policy == "proxy") setOf("192.0.2.17") else emptySet<String>(), prepared.bootstrapAddresses)
+            assertEquals(label, before, input.toString())
+            assertEquals(label, originalBefore, original.toString())
+        }
+    }
+
+    @Test fun logicalAddressSelectionKeepsSchemaAliasesAndOneSnapshot() {
+        val raw = "[ \u00a0127.0.0.1\u3000]"
+        for (policy in listOf("config", "proxy")) {
+            val input = config(outbound(address = "192.0.2.17"))
+            val inboundSettings = JSONObject().put("AdDrEſS", "env:SHARED").put("RewriteAddress", "env:DORMANT")
+                .put("port", 18083).put("network", "tcp").put("custom", JSONObject().put("address", "env:OPAQUE"))
+            input.getJSONArray("inbounds").put(JSONObject().put("protocol", "DoKoDeMo-DoOr").put("tag", "logical-input")
+                .put("settings", inboundSettings).put("sniffing", JSONObject().put("enabled", true)))
+            val outboundSettings = JSONObject().put("address", JSONObject.NULL).put("ReWriteAddreſs", "env:SHARED")
+                .put("rewritePort", 5353).put("rules", JSONArray().put(JSONObject().put("action", "direct")))
+            input.getJSONArray("outbounds").put(JSONObject().put("protocol", "DnS").put("tag", "logical-dns").put("settings", outboundSettings))
+            val before = input.toString(); val lookups = mutableListOf<String>()
+            val prepared = AndroidTunnelDnsPolicy.prepare(before, policy, environment = { name ->
+                lookups.add(name); assertEquals("SHARED", name); assertEquals(1, lookups.size); raw
+            }) { error("Logical Address must not issue DNS") }
+            val actual = JSONObject(prepared.configJson)
+            assertEquals(JSONObject(inboundSettings.toString()).put("AdDrEſS", raw).toString(),
+                actual.getJSONArray("inbounds").getJSONObject(1).getJSONObject("settings").toString())
+            assertEquals(JSONObject(outboundSettings.toString()).put("ReWriteAddreſs", raw).toString(),
+                actual.getJSONArray("outbounds").getJSONObject(2).getJSONObject("settings").toString())
+            assertEquals(listOf("SHARED"), lookups)
+            assertTrue(prepared.bootstrapHostnames.isEmpty())
+            assertEquals(before, input.toString())
+        }
+    }
+
+    @Test fun logicalAddressesKeepEmptyMissingNestedAndMalformedPrimarySemantics() {
+        for (policy in listOf("config", "proxy")) {
+            for ((token, values) in listOf("env:logical.address" to mapOf("logical.address" to "", "LOGICAL_ADDRESS" to "wrong.invalid"),
+                    "env:MISSING" to emptyMap())) {
+                val input = config(outbound(address = "192.0.2.17"))
+                val settings = JSONObject().put("address", token).put("rewriteAddress", "env:DORMANT")
+                input.getJSONArray("outbounds").put(JSONObject().put("protocol", "dns").put("settings", settings))
+                val before = input.toString(); val lookups = mutableListOf<String>()
+                val output = JSONObject(AndroidTunnelDnsPolicy.prepare(before, policy, environment = { name -> lookups.add(name); values[name] }) {
+                    error("Logical Address must not issue DNS")
+                }.configJson)
+                val actual = output.getJSONArray("outbounds").getJSONObject(2).getJSONObject("settings")
+                assertEquals("", actual.getString("address")); assertEquals("env:DORMANT", actual.getString("rewriteAddress"))
+                if (token == "env:logical.address") assertEquals(listOf("logical.address"), lookups)
+                assertFalse(lookups.contains("DORMANT")); assertEquals(before, input.toString())
+            }
+            for (primary in listOf<Any>(42, JSONObject(), "", "ENV:OPAQUE")) {
+                val input = config(outbound(address = "192.0.2.17"))
+                val settings = JSONObject().put("address", primary).put("rewriteAddress", "env:DORMANT")
+                input.getJSONArray("inbounds").put(JSONObject().put("protocol", "tunnel").put("settings", settings))
+                val before = input.toString()
+                val output = JSONObject(AndroidTunnelDnsPolicy.prepare(before, policy, environment = { error("Nonnull primary must not expand the dormant alias") }).configJson)
+                assertEquals(settings.toString(), output.getJSONArray("inbounds").getJSONObject(1).getJSONObject("settings").toString())
+                assertEquals(before, input.toString())
+            }
+            val nested = config(outbound(address = "192.0.2.17"))
+            nested.getJSONArray("inbounds").put(JSONObject().put("protocol", "tunnel")
+                .put("settings", JSONObject().put("address", JSONObject.NULL).put("rewriteAddress", "env:FIRST")))
+            val before = nested.toString(); val lookups = mutableListOf<String>()
+            rejected { AndroidTunnelDnsPolicy.prepare(before, policy, environment = { name -> lookups.add(name); "env:SECOND" }) }
+            assertEquals(listOf("FIRST"), lookups); assertEquals(before, nested.toString())
+        }
+    }
+
     @Test fun sharedRootDnsAddressEnvironmentMatchesLiteralDnsAndKeepsOpaqueFields() {
         val cases = JSONArray(requireNotNull(javaClass.getResource("/dns-addresses.json")).readText())
         assertEquals(3, cases.length())

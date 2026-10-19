@@ -592,10 +592,32 @@ The three [shared DNS Address cases](../tool/fixtures/compatibility/dns-addresse
 compare pinned Core DNS protobufs and complete prepared profiles with literal
 controls, then change the receiving environment and require identical compiled
 DNS. The controlled HTTPS DoH fixture also freezes its server and `full:` host
-mapping before starting the child with different environment values. New-head
-runtime qualification remains separate from these file-only controls. Logical
-DNS outbound/inbound addresses and other non-server typed Address fields remain
-outside this increment; it does not claim universal environment expansion.
+mapping before starting the child with different environment values. On
+[fdf936c](https://github.com/XIIIFOX/flutter_vless/actions/runs/39201573852),
+all three ordinary Core jobs pass that handoff and the existing IPv6, routing
+and XHTTP payload controls. Native platform and physical-device qualification
+remain separate from this controlled Core proof.
+
+Logical handler destination progress: DNS outbounds and imported
+`dokodemo-door`/`tunnel` inputs now freeze their effective typed destination on
+all native backends. A non-null `settings.address` takes precedence over
+`rewriteAddress`; null or missing selects the latter. The dormant alias stays
+unchanged, as do network/port aliases, rules, sniffing and input identity.
+These are logical handler targets, so this pass adds no physical endpoint
+lookup, pin or routing override. It does not apply Address expansion to
+WireGuard endpoint strings, `portMap`, arbitrary user maps or other protocols.
+
+The four [shared logical Address cases](../tool/fixtures/compatibility/logical-addresses.json)
+check raw Core equivalence, complete native literal controls and a second Core
+build under a different environment. A fifth file-only case builds the exact
+runtime document. The CI-only runtime owns one HTTP and one DNS origin and starts
+Core in a bounded child with changed environment values: both imported input
+aliases must echo 32 KiB, and both DNS address aliases must deliver the expected
+wire question and answer. Final origin counts are checked after callback drain.
+New-head traffic acceptance remains pending until its exact CI artifacts are
+verified. Other typed Address roles and XDRIVE fronting/lifecycle remain open;
+there is no claim of universal environment expansion or a complete transport
+matrix.
 
 Core preflight is now wired into both Apple app entry points and into the final
 provider configuration before route installation. The additive Go bridge decodes

@@ -511,6 +511,111 @@ final class TunnelDNSPolicyTests: XCTestCase {
         }
     }
 
+    func testSharedLogicalAddressEnvironmentMatchesLiteralAndKeepsHandlerContext() throws {
+        func replace(_ object: Any, path: ArraySlice<String>, value: String) -> Any {
+            guard let head = path.first else { return value }
+            if var map = object as? [String: Any], let child = map[head] {
+                map[head] = replace(child, path: path.dropFirst(), value: value); return map
+            }
+            var list = object as! [Any]; let index = Int(head)!
+            list[index] = replace(list[index], path: path.dropFirst(), value: value); return list
+        }
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/logical-addresses.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/logical-addresses.json"))) as? [[String: Any]])
+        XCTAssertEqual(cases.count, 4)
+        for item in cases {
+            let original = try XCTUnwrap(item["config"] as? [String: Any])
+            let environment = try XCTUnwrap(item["environment"] as? [String: String])
+            let previous = environment.keys.map { ($0, getenv($0).map { String(cString: $0) }) }
+            for (key, value) in environment { setenv(key, value, 1) }
+            defer { for (key, value) in previous { if let value { setenv(key, value, 1) } else { unsetenv(key) } } }
+            let input = try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys])
+            var literal: Any = original
+            for binding in try XCTUnwrap(item["bindings"] as? [[String: Any]]) {
+                literal = replace(literal, path: ArraySlice(try XCTUnwrap(binding["path"] as? [String])), value: try XCTUnwrap(binding["value"] as? String))
+            }
+            let expected = try XCTUnwrap(literal as? [String: Any])
+            let control = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: JSONSerialization.data(withJSONObject: expected), credentials: Self.credentials,
+                resolveIPv4: { _ in XCTFail("Logical targets must not cause transport bootstrap"); return nil }))
+            let frozen = try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: input, environment: environment)
+            XCTAssertEqual(try JSONSerialization.jsonObject(with: frozen) as? NSDictionary, expected as NSDictionary)
+            let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: input, credentials: Self.credentials,
+                resolveIPv4: { _ in XCTFail("Logical targets must keep caller routing context"); return nil }))
+            XCTAssertEqual(try JSONSerialization.jsonObject(with: prepared.data) as? NSDictionary, try JSONSerialization.jsonObject(with: control.data) as? NSDictionary)
+            let changed = environment.mapValues { _ in "127.0.0.2" }
+            for (key, value) in changed { setenv(key, value, 1) }
+            XCTAssertEqual(try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: frozen, environment: changed), frozen)
+            let provider = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: frozen, credentials: Self.credentials,
+                resolveIPv4: { _ in XCTFail("Frozen logical targets must not be resolved by native code"); return nil }))
+            XCTAssertEqual(try JSONSerialization.jsonObject(with: provider.data) as? NSDictionary, try JSONSerialization.jsonObject(with: control.data) as? NSDictionary)
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys]), input)
+        }
+    }
+
+    func testLogicalAddressEnvironmentUsesEffectiveAliasWithoutOutboundRequirement() throws {
+        for proto in ["dokodemo-door", "tunnel"] {
+            for includeNull in [false, true] {
+                var settings: [String: Any] = ["ReWrItEaDdReSs": "env: target.name ", "rewritePort": 18083, "allowedNetwork": "tcp", "custom": ["address": "env:OPAQUE"]]
+                if includeNull { settings["AdDrEsS"] = NSNull() }
+                let source: [String: Any] = ["inbounds": [["protocol": proto, "tag": "caller", "settings": settings]]]
+                let data = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+                let frozen = try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: data, environment: ["TARGET_NAME": "[ logical.invalid ]"])
+                let output = try XCTUnwrap(JSONSerialization.jsonObject(with: frozen) as? [String: Any])
+                let target = try XCTUnwrap((output["inbounds"] as? [[String: Any]])?.first?["settings"] as? [String: Any])
+                XCTAssertEqual(target["ReWrItEaDdReSs"] as? String, "[ logical.invalid ]")
+                XCTAssertEqual(target["custom"] as? NSDictionary, settings["custom"] as? NSDictionary)
+                XCTAssertNil(output["outbounds"])
+                XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), data)
+            }
+        }
+    }
+
+    func testLogicalAddressEnvironmentNeverFallsBackFromNonnullPrimary() throws {
+        for proto in ["dns", "dokodemo-door", "tunnel"] {
+            let key = proto == "dns" ? "outbounds" : "inbounds"
+            let primaries: [Any] = [false, 42, ["opaque": "env:PRIMARY"], ["env:PRIMARY"], ""]
+            for primary in primaries {
+                let source: [String: Any] = [key: [["protocol": proto, "settings": ["address": primary, "rewriteAddress": "env:DORMANT"]]]]
+                let data = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+                XCTAssertEqual(try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: data, environment: ["DORMANT": "env:SECOND"]), data,
+                    "Nonnull invalid primary remains Core preflight input; never select or expand a dormant alias")
+            }
+            let settings: [String: Any] = ["address": "env: target.name ", "rewriteAddress": "env:DORMANT"]
+            let source: [String: Any] = [key: [["protocol": proto, "settings": settings]]]
+            let frozen = try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: JSONSerialization.data(withJSONObject: source), environment: [" target.name ": "", "TARGET_NAME": "wrong.invalid", "DORMANT": "env:SECOND"])
+            let output = try XCTUnwrap(JSONSerialization.jsonObject(with: frozen) as? [String: Any])
+            let bound = try XCTUnwrap((output[key] as? [[String: Any]])?.first?["settings"] as? [String: Any])
+            XCTAssertEqual(bound["address"] as? String, "")
+            XCTAssertEqual(bound["rewriteAddress"] as? String, "env:DORMANT")
+            XCTAssertEqual(try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: frozen, environment: ["TARGET_NAME": "different.invalid", "DORMANT": "127.0.0.2"]), frozen)
+        }
+    }
+
+    func testLogicalAddressEnvironmentFailureIsAtomicBeforeEndpointBootstrap() throws {
+        let source: [String: Any] = ["dns": ["servers": ["tcp://127.0.0.1"], "clientIp": "env:FLUTTER_VLESS_LOGICAL_EARLY"],
+            "inbounds": [["protocol": "tunnel", "settings": ["rewriteAddress": "env:FLUTTER_VLESS_LOGICAL_LATE"]]],
+            "outbounds": [["protocol": "http", "settings": ["address": "endpoint.invalid", "port": 443]]]]
+        let environment = ["FLUTTER_VLESS_LOGICAL_EARLY": "198.51.100.1", "FLUTTER_VLESS_LOGICAL_LATE": "env:SECOND"]
+        var transaction = source
+        XCTAssertThrowsError(try TunnelDNSPolicy.bindEndpointEnvironment(to: &transaction, environment: environment))
+        XCTAssertEqual(transaction as NSDictionary, source as NSDictionary)
+        let previous = environment.keys.map { ($0, getenv($0).map { String(cString: $0) }) }
+        for (key, value) in environment { setenv(key, value, 1) }
+        defer { for (key, value) in previous { if let value { setenv(key, value, 1) } else { unsetenv(key) } } }
+        XCTAssertNil(TunnelDNSPolicy.apply(to: &transaction, managedInboundTag: "managed", resolveIPv4: { _ in XCTFail("Failed logical binding must precede bootstrap"); return nil }))
+        XCTAssertEqual(transaction as NSDictionary, source as NSDictionary)
+        let duplicate: [String: Any] = ["inbounds": [["protocol": "dokodemo-door", "settings": ["rewriteAddress": "env:TARGET", "REWRITEADDRESS": "127.0.0.1"]]]]
+        XCTAssertThrowsError(try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: JSONSerialization.data(withJSONObject: duplicate), environment: ["TARGET": "127.0.0.1"]))
+        let opaque: [String: Any] = ["inbounds": [["protocol": "socks", "settings": ["address": "env:TARGET", "rewriteAddress": "env:TARGET"]]],
+            "outbounds": [["protocol": "blackhole", "settings": ["address": "env:TARGET"]]], "custom": ["rewriteAddress": "env:TARGET"]]
+        let opaqueData = try JSONSerialization.data(withJSONObject: opaque, options: [.sortedKeys])
+        XCTAssertEqual(try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: opaqueData, environment: ["TARGET": "wrong.invalid"]), opaqueData)
+    }
+
     func testRootDNSEnvironmentBindsOnlyTypedValuesAndRejectsPartialPublication() throws {
         let source: [String: Any] = ["DNS": ["SeRvErS": ["env:SERVER", ["AdDrEsS": "env:OBJECT", "ClIeNtIp": "env:ECS", "tag": "env:OPAQUE", "domains": ["full:env:OPAQUE.invalid"]]] as [Any],
             "cLiEnTiP": "env:ECS", "HoStS": ["env:KEY": "env:ALIAS", "full:array.invalid": ["127.0.0.7", "env:ALIAS", "env:IP", "second.invalid"]]],

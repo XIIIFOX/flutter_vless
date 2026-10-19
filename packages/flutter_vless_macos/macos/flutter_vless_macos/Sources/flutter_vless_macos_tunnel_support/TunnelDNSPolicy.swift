@@ -32,7 +32,7 @@ public enum TunnelDNSPolicy {
         ((stream["method"] as? String) ?? (stream["network"] as? String) ?? "tcp").lowercased()
     }
 
-    /// Bind schema-selected typed endpoint and caller DNS Address values.
+    /// Bind schema-selected transport, logical handler and caller DNS Address values.
     /// Keep user-map keys and opaque strings; never publish a partial edit.
     @discardableResult
     static func bindEndpointEnvironment(to config: inout [String: Any], environment: [String: String]) throws -> Bool {
@@ -53,6 +53,14 @@ public enum TunnelDNSPolicy {
             if let key = try fieldKey(object, name), let value = object[key] {
                 object[key] = try bindValue(value)
             }
+        }
+        func bindLogicalTarget(_ settings: inout [String: Any]) throws {
+            // Core selects non-null address over rewriteAddress, even when the
+            // primary value is malformed. Leave that error for Core preflight;
+            // never expand a dormant alias or silently fall back to it.
+            if let key = try fieldKey(settings, "address"), let value = settings[key], !(value is NSNull) {
+                settings[key] = try bindValue(value)
+            } else { try bindField(&settings, "rewriteAddress") }
         }
         if var dns = output["dns"] as? [String: Any] {
             try bindField(&dns, "clientIp")
@@ -78,6 +86,15 @@ public enum TunnelDNSPolicy {
                 dns[key] = hosts
             }
             output["dns"] = dns
+        }
+        if var inbounds = output["inbounds"] as? [[String: Any]] {
+            for index in inbounds.indices {
+                guard ["dokodemo-door", "tunnel"].contains(protocolRole(inbounds[index]["protocol"])),
+                      var settings = inbounds[index]["settings"] as? [String: Any] else { continue }
+                try bindLogicalTarget(&settings)
+                inbounds[index]["settings"] = settings
+            }
+            output["inbounds"] = inbounds
         }
         guard var outbounds = output["outbounds"] as? [[String: Any]] else {
             if changed { config = output }
@@ -106,6 +123,10 @@ public enum TunnelDNSPolicy {
         for index in outbounds.indices {
             let proto = protocolRole(outbounds[index]["protocol"])
             guard proto != "wireguard", endpointProtocols.contains(proto) || ["freedom", "dns"].contains(proto) else { continue }
+            if proto == "dns", var settings = outbounds[index]["settings"] as? [String: Any] {
+                try bindLogicalTarget(&settings)
+                outbounds[index]["settings"] = settings
+            }
             if endpointProtocols.contains(proto), var settings = outbounds[index]["settings"] as? [String: Any] {
                 if settings["address"] is String {
                     try bind(&settings)

@@ -1,0 +1,264 @@
+[
+  {
+    "name": "dns_address",
+    "environment": {
+      "FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET": "127.0.0.1",
+      "FLUTTER_VLESS_FIXTURE_LOGICAL_DORMANT": "127.0.0.9"
+    },
+    "bindings": [
+      {
+        "path": [
+          "outbounds",
+          "1",
+          "settings",
+          "address"
+        ],
+        "value": "127.0.0.1"
+      }
+    ],
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://1.1.1.1"
+        ]
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "caller-dns",
+          "protocol": "dns",
+          "settings": {
+            "network": "tcp",
+            "address": "env:FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET",
+            "rewriteAddress": "env:FLUTTER_VLESS_FIXTURE_LOGICAL_DORMANT",
+            "port": 5353,
+            "rules": [
+              {
+                "action": "direct"
+              }
+            ]
+          }
+        }
+      ],
+      "routing": {
+        "rules": []
+      },
+      "remarks": "env:FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET",
+      "custom": {
+        "address": "env:FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET"
+      }
+    }
+  },
+  {
+    "name": "dns_rewrite_address",
+    "environment": {
+      "FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET": "127.0.0.1",
+      "FLUTTER_VLESS_FIXTURE_LOGICAL_DORMANT": "127.0.0.9"
+    },
+    "bindings": [
+      {
+        "path": [
+          "outbounds",
+          "1",
+          "settings",
+          "rewriteAddress"
+        ],
+        "value": "127.0.0.1"
+      }
+    ],
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://1.1.1.1"
+        ]
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "caller-dns",
+          "protocol": "dns",
+          "settings": {
+            "rewriteNetwork": "tcp",
+            "address": null,
+            "rewriteAddress": "env:FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET",
+            "rewritePort": 5353,
+            "rules": [
+              {
+                "action": "direct"
+              }
+            ]
+          }
+        }
+      ],
+      "routing": {
+        "rules": []
+      },
+      "remarks": "env:FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET",
+      "custom": {
+        "address": "env:FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET"
+      }
+    }
+  },
+  {
+    "name": "dokodemo_address",
+    "environment": {
+      "FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET": "127.0.0.1",
+      "FLUTTER_VLESS_FIXTURE_LOGICAL_DORMANT": "127.0.0.9"
+    },
+    "bindings": [
+      {
+        "path": [
+          "inbounds",
+          "0",
+          "settings",
+          "address"
+        ],
+        "value": "127.0.0.1"
+      }
+    ],
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://1.1.1.1"
+        ]
+      },
+      "inbounds": [
+        {
+          "tag": "caller-tunnel",
+          "listen": "127.0.0.1",
+          "port": 12001,
+          "protocol": "dokodemo-door",
+          "settings": {
+            "network": "tcp",
+            "address": "env:FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET",
+            "rewriteAddress": "env:FLUTTER_VLESS_FIXTURE_LOGICAL_DORMANT",
+            "port": 18083,
+            "followRedirect": false
+          },
+          "sniffing": {
+            "enabled": true,
+            "destOverride": [
+              "http",
+              "tls"
+            ],
+            "routeOnly": true
+          }
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-tunnel"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      },
+      "remarks": "env:FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET",
+      "custom": {
+        "address": "env:FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET"
+      }
+    }
+  },
+  {
+    "name": "tunnel_rewrite_address",
+    "environment": {
+      "FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET": "127.0.0.1",
+      "FLUTTER_VLESS_FIXTURE_LOGICAL_DORMANT": "127.0.0.9"
+    },
+    "bindings": [
+      {
+        "path": [
+          "inbounds",
+          "0",
+          "settings",
+          "rewriteAddress"
+        ],
+        "value": "127.0.0.1"
+      }
+    ],
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://1.1.1.1"
+        ]
+      },
+      "inbounds": [
+        {
+          "tag": "caller-tunnel",
+          "listen": "127.0.0.1",
+          "port": 12001,
+          "protocol": "tunnel",
+          "settings": {
+            "allowedNetwork": "tcp",
+            "address": null,
+            "rewriteAddress": "env:FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET",
+            "rewritePort": 18083,
+            "followRedirect": false
+          },
+          "sniffing": {
+            "enabled": true,
+            "destOverride": [
+              "http",
+              "tls"
+            ],
+            "routeOnly": true
+          }
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-tunnel"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      },
+      "remarks": "env:FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET",
+      "custom": {
+        "address": "env:FLUTTER_VLESS_FIXTURE_LOGICAL_TARGET"
+      }
+    }
+  }
+]

@@ -21,6 +21,7 @@ inline std::string PortTrimSpace(std::string text);
 inline std::optional<std::string> ResolveInboundListen(const std::string& text, const PortEnvironmentReader& read_environment);
 inline bool UnixInboundListen(std::string resolved);
 inline bool BindDnsAddresses(Json& config, const PortEnvironmentReader& read_environment);
+inline bool BindLogicalAddresses(Json& config, const PortEnvironmentReader& read_environment);
 
 inline Json Parse(const std::string& text) {
   bool duplicate = false;
@@ -119,7 +120,7 @@ inline bool Normalize(Json& config, const PortEnvironmentReader& read_environmen
       if (entry.contains("streamSettings") && !entry["streamSettings"].is_null() && !PrivateStream(entry["streamSettings"])) return false;
     }
   }
-  if (!BindDnsAddresses(config, read_environment)) return false;
+  if (!BindDnsAddresses(config, read_environment) || !BindLogicalAddresses(config, read_environment)) return false;
   // No imported filenames, core stdout, DNS questions, TLS keys or Reality dumps.
   config["log"] = {{"access", "none"}, {"error", "none"}, {"loglevel", "none"}, {"dnsLog", false}};
   return true;
@@ -478,6 +479,40 @@ inline bool BindDnsAddresses(Json& config, const PortEnvironmentReader& read_env
   // Commit only after every inspected field has passed; never leave a partial
   // binding in a candidate rejected for an ambiguous field or nested env value.
   config["dns"] = std::move(dns);
+  return true;
+}
+// These targets are logical destinations of existing handlers, not physical
+// server endpoints. Core gives a nonnull legacy address precedence over
+// rewriteAddress; leave the dormant field and all forwarding policy untouched.
+inline bool BindLogicalAddresses(Json& config, const PortEnvironmentReader& read_environment) {
+  std::vector<std::pair<Json*, Json>> pending;
+  std::map<std::string, std::optional<std::string>> environment;
+  const PortEnvironmentReader snapshot = [&](const std::string& name) {
+    auto found = environment.find(name);
+    if (found == environment.end()) found = environment.emplace(name, read_environment(name)).first;
+    return found->second;
+  };
+  for (const auto* direction : {"inbounds", "outbounds"}) {
+    for (auto& handler : config[direction]) {
+      const auto protocol = handler["protocol"].get<std::string>();
+      const bool selected = std::string(direction) == "inbounds"
+          ? protocol == "dokodemo-door" || protocol == "tunnel" : protocol == "dns";
+      if (!selected || !handler.contains("settings") || handler["settings"].is_null()) continue;
+      auto settings = handler["settings"];
+      auto canonical = settings;
+      if (!Fields(canonical, {"address", "rewriteAddress"})) return false;
+      for (const auto* key : {"address", "rewriteAddress"})
+        if (canonical.contains(key) && !canonical[key].is_null() && !canonical[key].is_string()) return false;
+      const auto* key = canonical.contains("address") && !canonical["address"].is_null() ? "address" : "rewriteAddress";
+      if (!canonical.contains(key) || canonical[key].is_null()) continue;
+      const auto expanded = ResolveAddress(canonical[key].get<std::string>(), snapshot);
+      if (!expanded) return false;
+      for (auto it = settings.begin(); it != settings.end(); ++it)
+        if (Fold(it.key()) == Fold(key)) { it.value() = *expanded; break; }
+      pending.push_back({&handler["settings"], std::move(settings)});
+    }
+  }
+  for (auto& update : pending) *update.first = std::move(update.second);
   return true;
 }
 inline bool UnixInboundListen(std::string resolved) {

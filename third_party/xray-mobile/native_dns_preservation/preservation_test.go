@@ -495,6 +495,7 @@ func TestNativeDNSPreservation(t *testing.T) {
 	t.Run("WindowsPreparer", testNativeDNSPreservation)
 	t.Run("WindowsIPv6Payload", testNativeIPv6Payload)
 	t.Run("WindowsHTTPSDoH", testNativeHTTPSDoH)
+	t.Run("WindowsLogicalAddresses", testNativeLogicalAddresses)
 	t.Run("WindowsDirectOnly", testNativeDirectOnly)
 	t.Run("WindowsPrefixBalancer", func(t *testing.T) { runNativeDirectOnly(t, selectorTrafficProfile(t)) })
 	t.Run("WindowsNullDirectTag", testNativeNullDirectTag)
@@ -503,6 +504,7 @@ func TestNativeDNSPreservation(t *testing.T) {
 		t.Run("ApplePreparer", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeDNSPreservation(t) })
 		t.Run("AppleIPv6Payload", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeIPv6Payload(t) })
 		t.Run("AppleHTTPSDoH", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeHTTPSDoH(t) })
+		t.Run("AppleLogicalAddresses", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeLogicalAddresses(t) })
 		t.Run("AppleDirectOnly", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeDirectOnly(t) })
 		t.Run("ApplePrefixBalancer", func(t *testing.T) {
 			t.Setenv("NATIVE_DNS_PREPARER", apple)

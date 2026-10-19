@@ -58,6 +58,7 @@ internal object AndroidTunnelDnsPolicy {
         require(allowsRouteExclusions(excludedRoutes)) { "Excluded route conflicts with virtual system DNS" }
 
         val config = JSONObject(configJson)
+        bindLogicalAddresses(config, environment)
         canonicalize(config, "outbounds", "inbounds", "routing", "dns")
         val outbounds = objects(config, "outbounds", required = true)
         val inbounds = objects(config, "inbounds")
@@ -184,6 +185,7 @@ internal object AndroidTunnelDnsPolicy {
     private fun prepareCallerRoot(configJson: String, excludedRoutes: List<String>, environment: (String) -> String?): Prepared {
         require(allowsRouteExclusions(excludedRoutes)) { "Excluded route conflicts with virtual system DNS" }
         val config = JSONObject(configJson)
+        bindLogicalAddresses(config, environment)
         bindRootDnsAddresses(config, environment)
         requireNoFakeDns(config)
         canonicalize(config, "outbounds", "inbounds", "routing")
@@ -230,6 +232,30 @@ internal object AndroidTunnelDnsPolicy {
     }
 
     private fun schemaField(value: JSONObject, name: String): Any? = schemaKey(value, name)?.let(value::opt)
+
+    /** These typed Addresses describe a logical dispatch destination, not a
+     * physical transport endpoint. Match Core's non-null primary precedence
+     * without resolving it or changing its dormant compatibility alias. */
+    private fun bindLogicalAddresses(config: JSONObject, environment: (String) -> String?) {
+        fun bind(collection: String, protocols: Set<String>) {
+            val entries = schemaField(config, collection) as? JSONArray ?: return
+            for (index in 0 until entries.length()) {
+                val entry = entries.opt(index) as? JSONObject ?: continue
+                val protocol = (schemaField(entry, "protocol") as? String)?.lowercase(Locale.ROOT)
+                if (protocol !in protocols) continue
+                val settings = schemaField(entry, "settings") as? JSONObject ?: continue
+                val primary = schemaKey(settings, "address")
+                val selected = if (primary != null && !settings.isNull(primary)) primary
+                    else schemaKey(settings, "rewriteaddress") ?: continue
+                // Invalid non-null primary values stay invalid for Core's
+                // preflight, rather than falling back to a different target.
+                val raw = settings.opt(selected) as? String ?: continue
+                settings.put(selected, XrayPortSpec.bindAddressEnvironment(raw, environment))
+            }
+        }
+        bind("outbounds", setOf("dns"))
+        bind("inbounds", setOf("dokodemo-door", "tunnel"))
+    }
 
     /** Address values only: hosts dictionary keys, tags, URLs containing env:
      * and arbitrary nested caller objects never become environment references. */

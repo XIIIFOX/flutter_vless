@@ -22,7 +22,13 @@
     "transport/internet/splithttp/client.go": "b528c116a72e77cb51e4fb1978a07d0e92d6b0587e0bafb3011d4891a63499dc",
     "infra/conf/common.go": "74ac5deea7f399d9691895fbfd34673230a70e0962b741b56d4366d612aed78a",
     "common/net/address.go": "e4227567ade9104f8cdd90f6cd1b10844d7903c4baf01abe586ae28f5038dcb1",
-    "common/platform/platform.go": "8aaf82c4a54553484a5482d7778926743269408cf6ca0cd0937cccfeb8d66557"
+    "common/platform/platform.go": "8aaf82c4a54553484a5482d7778926743269408cf6ca0cd0937cccfeb8d66557",
+    "infra/conf/dns.go": "fdc0ba45b7c9a8885b7885ac44cbb7a6143f6de80e50abfdf461f06a48db7108",
+    "infra/conf/dns_proxy.go": "eda8a79ee16ae012770c6e17d0e4e126653790c7558dd037e975b8f9c4866a48",
+    "infra/conf/dokodemo.go": "dc615975e05922bd087d93135c4cb2e0da317a07d0e37b9de4447efbfdc2fd77",
+    "infra/conf/xray.go": "01d1808afc8478373a201990c55d0ef2c037939f083a4cde96f29cf04135b7bb",
+    "proxy/dns/dns.go": "f7c129a446b72cb350c852dac25bf84be2bbb479e253f831a029bee99f2617df",
+    "proxy/dokodemo/dokodemo.go": "dff9629cbf27841f063493659cd64f28c5f13f33f7d2a846e158e1c1b26a9076"
   },
   "module": "github.com/xtls/xray-core",
   "module_version": "v1.260327.1-0.20261017152356-92ccc939aaf4",

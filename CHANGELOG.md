@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Freeze effective DNS outbound and imported `dokodemo-door`/`tunnel` destination addresses before profile handoff on every native backend. Match Core's `address`/`rewriteAddress` precedence, preserve dormant aliases and caller routing, and add shared build/preparation and controlled HTTP/DNS regressions.
 * Freeze typed root DNS `env:` addresses for saved Apple/Windows profiles and Android's caller DNS mode. Preserve server options, ECS overrides, hosts aliases and opaque strings; add shared Core-equivalence controls and a controlled DoH handoff regression. Compile the actual Apple preparation helpers in the profile transaction fixture.
 * Bind selected server and active XHTTP download `env:` addresses before protected preparation on Apple and Windows, and in Android's explicit proxy DNS mode. Preserve raw values and caller DNS, freeze Apple sessions before persistence, and add shared Core-equivalence and cross-process traffic regressions.
 * Isolate controlled XHTTP clients from the backend and later tests in bounded processes. Preserve strict payload/DNS checks and retain bounded packet sequence, body length, origin entry and backend failure evidence after transport errors.

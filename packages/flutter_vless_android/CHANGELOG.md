@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Follow Core's legacy `servers`/`vnext` fallback when a flat address is null, retaining strict malformed-value rejection and the original settings. Cover Shadowsocks 2022 in the shared preparation corpus.
 * Cover the shared direct-only profiles in preparation and TUN runtime regressions: source default order, HTTP, domain blocking and caller TCP DNS through virtual UDP/TCP DNS.
 * Await the same Core process's local listener within a shared five-second startup/authentication/packet deadline. Retry only a pre-handshake native ECONNREFUSED; keep periodic checks, strict recovery and credential/permission failures immediate. Record bounded numeric stage/errno diagnostics.
 * Capture IPv6 in the VPN and send private AAAA queries through Core without overriding caller query strategy. Preserve the existing protected socket/DNS paths; add a controlled IPv6 TCP/UDP TUN regression through an IPv4 proxy.

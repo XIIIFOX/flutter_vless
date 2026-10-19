@@ -19,7 +19,7 @@ type protocolCase struct {
 }
 
 func protocolCorpus(t *testing.T) []protocolCase {
-	return preparationCorpus(t, "protocols.json", 7)
+	return preparationCorpus(t, "protocols.json", 8)
 }
 
 func fullConfigCorpus(t *testing.T) []protocolCase {

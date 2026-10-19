@@ -102,7 +102,7 @@ internal object AndroidTunnelDnsPolicy {
             val proto = protocol(outbound)
             val entries = when {
                 proto == "wireguard" -> objects(settings, "peers", required = true)
-                settings.has("address") -> listOf(settings)
+                settings.has("address") && !settings.isNull("address") -> listOf(settings)
                 proto == "vless" || proto == "vmess" -> objects(settings, "vnext", required = true)
                 else -> objects(settings, "servers", required = true)
             }

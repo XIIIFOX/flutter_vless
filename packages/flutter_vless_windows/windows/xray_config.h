@@ -787,7 +787,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
     if (!Object(outbound, "settings") || !Fields(outbound["settings"], {"address", "vnext", "servers", "peers"})) return std::nullopt;
     auto& settings = outbound["settings"];
     std::vector<Json*> endpoints;
-    if (settings.contains("address")) endpoints.push_back(&settings);
+    if (settings.contains("address") && !settings["address"].is_null()) endpoints.push_back(&settings);
     else {
       const auto key = protocol == "wireguard" ? "peers" : (protocol == "vless" || protocol == "vmess" ? "vnext" : "servers");
       if (!settings.contains(key) || !settings[key].is_array()) return std::nullopt;

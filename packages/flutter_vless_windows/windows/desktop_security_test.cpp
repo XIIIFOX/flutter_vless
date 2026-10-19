@@ -193,6 +193,31 @@ void ProtocolCompatibilityCases(const std::string& only = "") {
     Require(config["outbounds"][1]["streamSettings"]["sockopt"]["interface"] == "Ethernet"
         && config["outbounds"][1]["settings"]["domainStrategy"] == "ForceIPv4", "direct alias bypassed physical protection");
   };
+  cases["nullable-flat-address"] = [&] {
+    auto profile = source;
+    profile["outbounds"][0]["protocol"] = "shadowsocks";
+    auto& settings = profile["outbounds"][0]["settings"];
+    settings = {{"address", nullptr}, {"servers", Json::array({{{"address", "endpoint.invalid"}, {"port", 443},
+        {"method", "2022-blake3-aes-128-gcm"}, {"password", "AAAAAAAAAAAAAAAAAAAAAA=="}}})}};
+    auto output = prepare(profile); Require(output.has_value(), "Core null flat address did not fall back to the legacy server");
+    Require(Parse(*output)["outbounds"][0]["settings"] == settings, "null flat address adaptation changed source Shadowsocks settings");
+    for (const auto& invalid : {Json(7), Json(true), Json::object(), Json("")}) {
+      settings["address"] = invalid;
+      Require(!prepare(profile), "invalid nonnull flat address fell back to a dormant legacy server");
+    }
+    settings["address"] = "endpoint.invalid"; settings["port"] = 8443;
+    settings["method"] = "2022-blake3-aes-128-gcm"; settings["password"] = "AAAAAAAAAAAAAAAAAAAAAA==";
+    settings["servers"][0]["address"] = "dormant.invalid";
+    output = prepare(profile); Require(output.has_value(), "nonnull flat address lost precedence over a dormant legacy server");
+    const auto config = Parse(*output);
+    Require(config["outbounds"][0]["settings"] == settings, "nonnull flat priority changed source settings");
+    bool flat_pin = false;
+    for (const auto& rule : config["routing"]["rules"]) {
+      Require(rule.value("port", "") != "443", "dormant legacy server received a transport pin");
+      if (rule.value("port", "") == "8443") flat_pin = true;
+    }
+    Require(flat_pin, "effective nonnull flat endpoint did not receive its exact port pin");
+  };
   cases["null-stream-fields"] = [&] {
     auto profile = source;
     profile["outbounds"][0]["streamSettings"] = {{"method", nullptr}, {"network", "xhttp"}, {"sockopt", {{"dialerProxy", nullptr}}},

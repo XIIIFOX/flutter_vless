@@ -369,5 +369,48 @@
         }
       ]
     }
+  },
+  {
+    "name": "shadowsocks_2022_null_flat_address_legacy_servers",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "shadowsocks",
+          "settings": {
+            "address": null,
+            "servers": [
+              {
+                "address": "endpoint.invalid",
+                "port": 443,
+                "method": "2022-blake3-aes-128-gcm",
+                "password": "AAAAAAAAAAAAAAAAAAAAAA=="
+              }
+            ]
+          },
+          "streamSettings": {
+            "network": "tcp"
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    }
   }
 ]

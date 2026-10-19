@@ -409,9 +409,38 @@ class AndroidTunnelDnsPolicyTest {
         }
     }
 
+    @Test fun nonNullFlatShadowsocksAddressWinsLegacyAndMalformedValuesDoNotFallBack() {
+        for (address in listOf<Any>("flat.test", "", 42, JSONObject())) {
+            val key = "AAAAAAAAAAAAAAAAAAAAAA=="
+            val settings = JSONObject().put("address", address).put("port", 443)
+                .put("method", "2022-blake3-aes-128-gcm").put("password", key)
+                .put("servers", JSONArray().put(JSONObject().put("address", "inactive-legacy.test")
+                    .put("port", 443).put("method", "2022-blake3-aes-128-gcm").put("password", key)))
+            val input = config(JSONObject().put("protocol", "shadowsocks").put("tag", "proxy").put("settings", settings))
+            val before = input.toString()
+            val resolved = mutableListOf<String>()
+            val action = {
+                AndroidTunnelDnsPolicy.prepare(before, "proxy") { host ->
+                    assertEquals("Inactive legacy endpoint was selected", "flat.test", host)
+                    resolved.add(host); listOf("192.0.2.17")
+                }
+            }
+            if (address == "flat.test") {
+                val prepared = action()
+                assertEquals(listOf("flat.test"), resolved)
+                assertEquals(settings.toString(), JSONObject(prepared.configJson).getJSONArray("outbounds")
+                    .getJSONObject(0).getJSONObject("settings").toString())
+            } else {
+                rejected { action() }
+                assertTrue("Malformed flat address issued a lookup", resolved.isEmpty())
+            }
+            assertEquals(before, input.toString())
+        }
+    }
+
     @Test fun sharedPinnedCoreProtocolCorpusPreservesCallerOutboundsAndTransportFields() {
         val cases = JSONArray(requireNotNull(javaClass.getResource("/protocols.json")).readText())
-        assertEquals("Expected the complete shared protocol corpus", 7, cases.length())
+        assertEquals("Expected the complete shared protocol corpus", 8, cases.length())
         fun retained(label: String, expected: Any?, actual: Any?) {
             when (expected) {
                 is JSONObject -> {

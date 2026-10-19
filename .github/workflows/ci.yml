@@ -34,7 +34,18 @@ jobs:
       - name: Test ordinary and optional mobile routing factory
         run: python tool/test_native_routing_factory.py --run-runtime
       - name: Check additive routing CLI builds and private preflight
-        run: python tool/test_native_routing_cli.py
+        run: |
+          python tool/test_build_native_routing_cli.py
+          python tool/test_native_routing_cli.py
+      - name: Check final Apple routing metadata with the shared Core validator
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          for platform in ios macos; do
+            pair_dir="$RUNNER_TEMP/apple-routing-pair-$platform"
+            FLVLESS_EXPORT_ROUTING_PAIR="$pair_dir" bash "tool/test_${platform}_tunnel_support.sh" --filter TunnelRoutingMetadataTests > "build/native_routing_cli/apple-$platform-preparation.log" 2>&1
+            build/native_routing_cli/optional-xray native-routing check --config "$pair_dir/config.json" --spec "$pair_dir/spec.json" > "build/native_routing_cli/apple-$platform-check.log"
+          done
       - name: Test private Android forwarder ownership without TUN
         if: matrix.os == 'ubuntu-latest'
         run: python tool/test_native_tun_preview.py
@@ -169,6 +180,7 @@ jobs:
           python3 tool/test_android_protection_fixture.py
           python3 tool/test_android_flutter_smoke_retry.py
           python3 tool/test_android_emulator_failure_capture.py
+          python3 tool/test_android_routing_builder.py
       - name: Verify Maven Central Android runtime resolution
         run: tool/test_android_maven_runtime.sh
 
@@ -253,6 +265,7 @@ jobs:
         run: |
           python3 tool/test_build_apple_core_preview.py
           bash tool/test_apple_address_binding.sh
+          bash tool/test_apple_routing_spec.sh
           tool/test_ios_tunnel_support.sh
       - uses: actions/setup-go@v6
         with:

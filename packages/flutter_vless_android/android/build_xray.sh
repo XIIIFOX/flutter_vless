@@ -7,9 +7,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 CORE_MODULE_VERSION="v1.260327.1-0.20261017152356-92ccc939aaf4"
 XRAY_VERSION="${XRAY_VERSION:-v26.10.17}"
+XRAY_NATIVE_ROUTING="${XRAY_NATIVE_ROUTING:-0}"
+case "$XRAY_NATIVE_ROUTING" in 0|1) ;; *) echo 'XRAY_NATIVE_ROUTING must be 0 or 1' >&2; exit 2 ;; esac
+if [ "$XRAY_NATIVE_ROUTING" = 1 ] && [ -z "${TARGET_DIR:-}" ]; then
+    echo 'The optional routing build requires an explicit TARGET_DIR' >&2
+    exit 2
+fi
 TARGET_DIR="${TARGET_DIR:-../../../android_runtime/xray_android/src/main/jniLibs}"
-mkdir -p "$TARGET_DIR"
-TARGET_DIR="$(cd "$TARGET_DIR" && pwd)"
+if [ "$XRAY_NATIVE_ROUTING" = 1 ]; then
+    # Resolve without creating it; input/cache exclusions need the actual Go paths.
+    TARGET_DIR="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$TARGET_DIR")"
+else
+    mkdir -p "$TARGET_DIR"
+    TARGET_DIR="$(cd "$TARGET_DIR" && pwd)"
+fi
 if [ "$XRAY_VERSION" != "v26.10.17" ]; then
     echo "The protection overlay requires Xray v26.10.17; review before changing core versions." >&2
     exit 1
@@ -38,6 +49,82 @@ if [ ! -d "$TOOLCHAIN" ]; then
 fi
 
 # Never patch a developer checkout or the shared Go module cache.
+BUILD_FLAGS=()
+if [ "$XRAY_NATIVE_ROUTING" = 1 ]; then
+    unset GOFLAGS
+    export GOTOOLCHAIN=local GOWORK=off
+    mkdir -p "$SCRIPT_DIR/../../../build"
+    ROUTING_WORK="$(mktemp -d "$SCRIPT_DIR/../../../build/security-android-routing.XXXXXXXX")"
+    ROUTING_WORK="$(cd "$ROUTING_WORK" && pwd)"
+    SOURCE_DIR="$ROUTING_WORK/Core"
+    ROUTING_TAGS='flutter_vless_vpn_routing_cli,flutter_vless_vpn_routing'
+    BUILD_FLAGS=(-mod=readonly "-tags=$ROUTING_TAGS")
+    python3 - "$SCRIPT_DIR/../../.." "$ROUTING_WORK" "$ROUTING_TAGS" "$TARGET_DIR" <<'PY'
+from pathlib import Path
+import hashlib, importlib.util, json, os, re, shutil, subprocess, sys
+root, work, tags, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]).resolve()
+mobile, capability, protect = root/'third_party/xray-mobile', root/'third_party/xray-vpn-routing', root/'packages/flutter_vless_android/android/xray-protect'
+manifest = json.loads((capability/'pin-manifest.json').read_text())
+module, version, checksum = (manifest[k] for k in ('module', 'module_version', 'module_sum'))
+mobile_module = 'github.com/EbrahimTahernejad/xray-mobile'
+requirement = re.compile(r'^\s*(?:require\s+)?'+re.escape(module)+r'\s+'+re.escape(version)+r'\s*(?://[^\n]*)?$', re.M)
+if not requirement.search((mobile/'go.mod').read_text()) or f'{module} {version} {checksum}' not in (mobile/'go.sum').read_text().splitlines():
+    raise SystemExit('Routing Core pin differs from mobile module')
+metadata = json.loads(subprocess.check_output(['go', 'mod', 'download', '-json', module+'@'+version], cwd=mobile, text=True, timeout=180))
+if metadata.get('Error') or any(metadata.get(k) != v for k,v in [('Path',module),('Version',version),('Sum',checksum)]):
+    raise SystemExit('Downloaded Core Version/Sum differs from routing pin')
+source = Path(metadata['Dir']).resolve()
+cache_path = subprocess.check_output(['go','env','GOMODCACHE'], cwd=mobile, text=True, timeout=30).strip()
+if not cache_path or not Path(cache_path).is_absolute(): raise SystemExit('Cannot determine the Go module cache')
+cache_root = Path(cache_path).resolve()
+for protected in [cache_root, source, mobile, capability, protect]:
+    protected = protected.resolve()
+    if output == protected or protected in output.parents:
+        raise SystemExit('Routing output must be outside build inputs and the Go module cache')
+selected_abis = [arch for arch, key in [('arm64-v8a','XRAY_BUILD_ARM64'),('armeabi-v7a','XRAY_BUILD_ARMV7'),('x86','XRAY_BUILD_X86'),('x86_64','XRAY_BUILD_X86_64')] if os.environ.get(key,'1') == '1']
+if not selected_abis: raise SystemExit('Optional routing build requires at least one ABI')
+for arch in selected_abis:
+    for path in [output/arch, output/arch/'libxray.so']:
+        if path.is_symlink() or output not in path.resolve().parents:
+            raise SystemExit('Routing ABI output must remain within the admitted output directory without symlinks')
+def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+def tree(path):
+    if path.is_symlink() or not path.is_dir(): raise ValueError('Source must be a real directory')
+    entries = sorted(path.rglob('*'))
+    if any(p.is_symlink() for p in entries): raise ValueError('Source symlinks are unsupported')
+    return {str(p.relative_to(path)):digest(p) for p in entries if p.is_file()}
+paths = [root/'packages/flutter_vless_android/android/build_xray.sh', mobile/'go.mod', mobile/'go.sum', capability/'apply.py', capability/'pin-manifest.json']
+paths += sorted(mobile.glob('*.go')) + sorted((mobile/'nativecli').rglob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
+paths += sorted(protect.glob('*.py')) + sorted(protect.glob('*.go'))
+if mobile.is_symlink() or any(p.is_symlink() for p in paths): raise ValueError('Build input symlinks are unsupported')
+tree(mobile/'nativecli')
+before, cache_before = {str(p.relative_to(root)):digest(p) for p in paths}, tree(source)
+spec = importlib.util.spec_from_file_location('android_routing_applier', capability/'apply.py')
+applier = importlib.util.module_from_spec(spec); spec.loader.exec_module(applier)
+core = applier.copy_and_apply(source, work/'Core')
+# Protection's pinned replacements must compose before any module-file edits.
+subprocess.run([sys.executable, str(protect/'apply.py'), str(core)], check=True, timeout=30)
+copied = work/'mobile'; copied.mkdir()
+for path in [mobile/'go.mod', mobile/'go.sum', *sorted(mobile.glob('*.go'))]: shutil.copyfile(path, copied/path.name)
+shutil.copytree(mobile/'nativecli', copied/'nativecli')
+subprocess.run(['go','mod','edit','-require='+mobile_module+'@v0.0.0','-replace='+mobile_module+'='+str(copied)], cwd=core, check=True, timeout=30)
+subprocess.run(['go','mod','edit','-replace='+module+'='+str(core)], cwd=copied, check=True, timeout=30)
+for name, directory, target in [('core',core,'./main'),('mobile',copied,'./nativecli')]:
+    with (work/(name+'-graph-readonly.log')).open('wb') as log:
+        subprocess.run(['go','list','-mod=readonly','-tags='+tags,'-deps',target], cwd=directory, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180)
+for directory, selected_module, selected_version, replacement in [(core,mobile_module,'v0.0.0',copied),(copied,module,version,core)]:
+    selected = json.loads(subprocess.check_output(['go','list','-mod=readonly','-m','-json',selected_module], cwd=directory, text=True, timeout=30))
+    if selected.get('Path') != selected_module or selected.get('Version') != selected_version or Path(selected.get('Replace',{}).get('Dir','')).resolve() != replacement.resolve():
+        raise SystemExit('Routing build lost its intended local module replacement')
+state = {'success':False, 'core_module':module, 'core':version, 'core_sum':checksum, 'core_commit':manifest['core_commit'],
+         'overlay_capability':manifest['capability'], 'core_source':str(source), 'go_module_cache':str(cache_root),
+         'output_directory':str(output), 'core_replacement':str(core), 'mobile_replacement':str(copied),
+         'source_sha256':before, 'module_cache_before_sha256':cache_before, 'core_copy_sha256':tree(core), 'mobile_copy_sha256':tree(copied),
+         'routing_tags':tags.split(','), 'selected_abis':selected_abis, 'protection_overlay':'ordinary H/P/D',
+         'routing_capability_expected':1, 'runtime_executed':False, 'published':False}
+(work/'inputs.json').write_text(json.dumps(state,indent=2)+'\n')
+PY
+else
 SOURCE_DIR="$SCRIPT_DIR/../../../build/security-android-xray/Xray-core"
 MODULE_JSON="$(go mod download -json "github.com/xtls/xray-core@$CORE_MODULE_VERSION")"
 MODULE_DIR="$(printf '%s' "$MODULE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["Dir"])')"
@@ -46,6 +133,7 @@ mkdir -p "$(dirname "$SOURCE_DIR")"
 cp -R "$MODULE_DIR" "$SOURCE_DIR"
 chmod -R u+w "$SOURCE_DIR"
 python3 "$SCRIPT_DIR/xray-protect/apply.py" "$SOURCE_DIR"
+fi
 
 # Build Function
 build_xray() {
@@ -81,7 +169,7 @@ build_xray() {
     cd "$SOURCE_DIR"
     
     # Build with 16KB page alignment
-    if go build -v -trimpath -buildvcs=false \
+    if go build ${BUILD_FLAGS[@]+"${BUILD_FLAGS[@]}"} -v -trimpath -buildvcs=false \
         -gcflags "all=-l=4" \
         -ldflags "-X github.com/xtls/xray-core/core.build=${XRAY_VERSION} -s -w -buildid= -checklinkname=0 -linkmode=external -extldflags=${LDFLAGS}" \
         -buildmode=pie \
@@ -116,6 +204,40 @@ fi
 # x86_64 is included in the main runtime AAR.
 if [ "${XRAY_BUILD_X86_64:-1}" = "1" ]; then
     build_xray "x86_64" "amd64" "" "x86_64-linux-android21"
+fi
+
+if [ "$XRAY_NATIVE_ROUTING" = 1 ]; then
+    python3 - "$SCRIPT_DIR/../../.." "$ROUTING_WORK" "$TARGET_DIR" <<'PY'
+from pathlib import Path
+import hashlib, json, sys
+root, work, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]), Path(sys.argv[3])
+state = json.loads((work/'inputs.json').read_text())
+def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+def tree(path):
+    if path.is_symlink() or not path.is_dir(): raise ValueError('Copied source must be a real directory')
+    entries = sorted(path.rglob('*'))
+    if any(p.is_symlink() for p in entries): raise ValueError('Unexpected copied source symlink')
+    return {str(p.relative_to(path)):digest(p) for p in entries if p.is_file()}
+mobile, capability, protect = root/'third_party/xray-mobile', root/'third_party/xray-vpn-routing', root/'packages/flutter_vless_android/android/xray-protect'
+paths = [root/'packages/flutter_vless_android/android/build_xray.sh', mobile/'go.mod', mobile/'go.sum', capability/'apply.py', capability/'pin-manifest.json']
+paths += sorted(mobile.glob('*.go')) + sorted((mobile/'nativecli').rglob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
+paths += sorted(protect.glob('*.py')) + sorted(protect.glob('*.go'))
+if mobile.is_symlink() or any(p.is_symlink() for p in paths) or {str(p.relative_to(root)):digest(p) for p in paths} != state['source_sha256']:
+    raise SystemExit('Routing build input changed')
+if tree(Path(state['core_source'])) != state['module_cache_before_sha256']:
+    raise SystemExit('Original Core cache changed')
+if tree(work/'Core') != state['core_copy_sha256'] or tree(work/'mobile') != state['mobile_copy_sha256']:
+    raise SystemExit('Disposable source changed during build')
+artifacts = {}
+for arch in state['selected_abis']:
+    path = output/arch/'libxray.so'
+    if path.is_symlink() or not path.is_file(): raise SystemExit('Missing routing ABI output')
+    artifacts[arch+'/libxray.so'] = digest(path)
+state.update(success=True, source_unchanged=True, module_cache_source_unchanged=True, copies_unchanged=True, artifacts_sha256=artifacts)
+receipt = output/('routing-preview-'+work.name+'.json')
+with receipt.open('x') as file: file.write(json.dumps(state,indent=2)+'\n')
+print('Optional routing build receipt: '+str(receipt))
+PY
 fi
 
 echo "Build process finished."

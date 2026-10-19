@@ -382,10 +382,30 @@ need to adopt the new check/start ABI; no public option is enabled yet.
 The additive CLI now shares that factory's config/spec validation and lifecycle.
 Ordinary/capable builds pass registration, stock-version, capability and real
 decode/build Check controls, plus fake-backend cancellation/Stop tests. These
-safe CLI checks construct no Core; foreground CLI traffic and native launcher
-adoption remain separate. Both Apple shims also qualify static legacy/current,
-partial-symbol and unknown-version archives on arm64/x86_64. Capability probing
-does not trial Start or Check, and unsupported Start returns a fixed error.
+safe CLI checks construct no Core; all three Core runners pass them at
+[8cf9ef8](https://github.com/XIIIFOX/flutter_vless/actions/runs/39222171801).
+Foreground CLI traffic and native launcher adoption remain separate. The Apple
+static archive fixtures pass locally on arm64/x86_64; the capable archive's
+capability assertion fails on the CI Apple linker and remains under investigation.
+Capability probing does not trial Start or Check, and unsupported Start returns
+a fixed error.
+
+Disposable Android and desktop builders can now compose the same optional
+routing factory and CLI. Android requires `XRAY_NATIVE_ROUTING=1` and an explicit
+`TARGET_DIR`; the ordinary build remains unchanged. The desktop builder writes
+to a new directory and supports Linux, macOS and Windows targets. Both use
+verified copies of the pinned Core/mobile sources and retain source/cache
+integrity receipts. Android x86_64, Darwin arm64 and Windows amd64 artifacts
+compile locally without executing them. These are unpublished build paths;
+production launchers have not adopted them.
+
+Apple preparation can also freeze a native-only routing intent after all
+adapter and DNS transformations. Its metadata hashes those exact final bytes,
+maps the original inbound index explicitly, and records only rules inserted by
+the preparer. A caller rule with a matching service name does not become a
+private guard. Mirrored pure tests cover this metadata, ordinary preparation
+and DNS; the exported synthetic pair passes the shared Go Check without
+constructing Core. Provider adoption and device traffic acceptance remain open.
 
 The Android emulator at ada26d6 passes all 37 native cases without skips and
 three Flutter cases, including the four protected system-DNS scenarios. This

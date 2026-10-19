@@ -17,12 +17,14 @@ public struct TunnelPreparedConfig {
     public let logMessages: [String]
     public let proxyUsesXhttp: Bool
     public let bootstrapAddresses: [String]
+    public let routingEnvelope: NativeRoutingEnvelope?
 
-    public init(data: Data, logMessages: [String], proxyUsesXhttp: Bool, bootstrapAddresses: [String] = []) {
+    public init(data: Data, logMessages: [String], proxyUsesXhttp: Bool, bootstrapAddresses: [String] = [], routingEnvelope: NativeRoutingEnvelope? = nil) {
         self.data = data
         self.logMessages = logMessages
         self.proxyUsesXhttp = proxyUsesXhttp
         self.bootstrapAddresses = bootstrapAddresses
+        self.routingEnvelope = routingEnvelope
     }
 }
 
@@ -43,6 +45,7 @@ public enum TunnelXrayConfigPreparer {
     public static func prepareForStartup(
         jsonData: Data,
         credentials: LocalProxyCredentials,
+        routingIntent: NativeRoutingIntent? = nil,
         resolveIPv4: (String) async throws -> String?,
         attempts: Int = 5,
         retryDelay: () async throws -> Void = { try await Task.sleep(nanoseconds: 3_000_000_000) }
@@ -57,7 +60,7 @@ public enum TunnelXrayConfigPreparer {
             while true {
                 guard clock.now < deadline else { throw StartupError.endpointUnavailable }
                 var missingHost: String?
-                let prepared = prepare(jsonData: jsonData, credentials: credentials) { host in
+                let prepared = prepare(jsonData: jsonData, credentials: credentials, routingIntent: routingIntent) { host in
                     if let address = resolved[host] { return address }
                     missingHost = host
                     return nil
@@ -99,6 +102,7 @@ public enum TunnelXrayConfigPreparer {
     public static func prepare(
         jsonData: Data,
         credentials: LocalProxyCredentials,
+        routingIntent: NativeRoutingIntent? = nil,
         resolveIPv4: (String) -> String? = { _ in nil }
     ) -> TunnelPreparedConfig? {
         do {
@@ -107,6 +111,10 @@ public enum TunnelXrayConfigPreparer {
                 return nil
             }
             var messages: [String] = []
+            let importedCount = (configJSON["inbounds"] as? [[String: Any]])?.count ?? 0
+            if let index = routingIntent?.sourceInboundIndex {
+                guard index >= 0 && index < importedCount else { return nil }
+            }
 
             try LocalProxyAccessPolicy.applyVPN(to: &configJSON, credentials: credentials)
             guard let managedTag = (configJSON["inbounds"] as? [[String: Any]])?.first?["tag"] as? String else { return nil }
@@ -123,6 +131,7 @@ public enum TunnelXrayConfigPreparer {
             }
 
             var proxyUsesXhttp = false
+            var ownGuards: [Int] = []
             if var outbounds = configJSON["outbounds"] as? [[String: Any]],
                let index = TunnelDNSPolicy.primaryEndpointIndex(in: outbounds) {
                 var streamSettings = outbounds[index]["streamSettings"] as? [String: Any] ?? [:]
@@ -134,20 +143,29 @@ public enum TunnelXrayConfigPreparer {
 
             if proxyUsesXhttp {
                 let blackholeTag = blackholeOutboundTag(configJSON: &configJSON)
-                if ensureUdp443BlockRule(configJSON: &configJSON, outboundTag: blackholeTag, inboundTag: managedTag) {
+                if ensureUdp443BlockRule(configJSON: &configJSON, outboundTag: blackholeTag, inboundTag: managedTag, privateScopeOnly: routingIntent != nil) {
+                    ownGuards.append(0)
                     messages.append("Added XHTTP UDP/443 block rule to force browser TCP fallback")
                 }
             }
 
-            guard let bootstrapAddresses = TunnelDNSPolicy.apply(to: &configJSON, managedInboundTag: managedTag, resolveIPv4: resolveIPv4) else {
+            var dnsPrefixCount = 0
+            guard let bootstrapAddresses = TunnelDNSPolicy.apply(to: &configJSON, managedInboundTag: managedTag,
+                generatedRuleCount: { dnsPrefixCount = $0 }, resolveIPv4: resolveIPv4) else {
                 return nil
             }
             messages.append("Configured system address DNS through the caller Core DNS policy")
             guard TunnelIPv6Policy.apply(to: &configJSON, managedInboundTag: managedTag) else { return nil }
             messages.append("Captured IPv6 follows caller routing")
             let data = try JSONSerialization.data(withJSONObject: configJSON, options: [])
+            // DNS prepends its own rules. Preserve insertion provenance when
+            // shifting the earlier XHTTP guard; caller rules never enter this list.
+            let guards = Array(0..<dnsPrefixCount) + ownGuards.map { $0 + dnsPrefixCount }
+            let envelope = try NativeRoutingSpec.freeze(finalData: data, managedInboundIndex: 0,
+                managedInboundTag: managedTag, authUser: credentials.username, intent: routingIntent,
+                sourceInboundFinalIndex: routingIntent?.sourceInboundIndex.map { $0 + 1 }, guardRuleIndices: guards)
             return TunnelPreparedConfig(data: data, logMessages: messages, proxyUsesXhttp: proxyUsesXhttp,
-                                        bootstrapAddresses: bootstrapAddresses)
+                                        bootstrapAddresses: bootstrapAddresses, routingEnvelope: envelope)
         } catch {
             return nil
         }
@@ -195,7 +213,7 @@ public enum TunnelXrayConfigPreparer {
         return tag
     }
 
-    private static func ensureUdp443BlockRule(configJSON: inout [String: Any], outboundTag: String, inboundTag: String) -> Bool {
+    private static func ensureUdp443BlockRule(configJSON: inout [String: Any], outboundTag: String, inboundTag: String, privateScopeOnly: Bool = false) -> Bool {
         var routing = configJSON["routing"] as? [String: Any] ?? [:]
         var rules = routing["rules"] as? [[String: Any]] ?? []
         let alreadyExists = rules.contains { rule in
@@ -205,7 +223,7 @@ public enum TunnelXrayConfigPreparer {
             (rule["outboundTag"] as? String) == outboundTag &&
                 (rule["inboundTag"] == nil || (rule["inboundTag"] as? [String]) == [inboundTag])
         }
-        if alreadyExists {
+        if alreadyExists && !privateScopeOnly {
             return false
         }
         rules.insert([

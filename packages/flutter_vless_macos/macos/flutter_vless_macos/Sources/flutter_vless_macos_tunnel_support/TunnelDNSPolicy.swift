@@ -40,6 +40,7 @@ public enum TunnelDNSPolicy {
     }
 
     static func apply(to config: inout [String: Any], managedInboundTag: String,
+                      generatedRuleCount: ((Int) -> Void)? = nil,
                       resolveIPv4: (String) -> String?) -> [String]? {
         // Admission is transactional: a failed bootstrap must not partially
         // rewrite a caller dictionary which might be retried.
@@ -147,6 +148,7 @@ public enum TunnelDNSPolicy {
         output["dns"] = dns
         output["outbounds"] = outbounds
         config = output
+        generatedRuleCount?(privateRules.count)
         return addresses.sorted()
     }
 

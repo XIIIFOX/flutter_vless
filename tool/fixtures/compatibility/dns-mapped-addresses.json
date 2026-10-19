@@ -1,0 +1,215 @@
+{
+  "positiveCases": [
+    {
+      "name": "mapped_scalar_dns",
+      "config": {
+        "log": {
+          "loglevel": "none"
+        },
+        "dns": {
+          "queryStrategy": "UseIPv4",
+          "tag": "caller-root",
+          "servers": [
+            "::ffff:1.1.1.1"
+          ],
+          "hosts": {
+            "full:static.invalid": "192.0.2.17"
+          }
+        },
+        "inbounds": [],
+        "outbounds": [
+          {
+            "tag": "direct",
+            "protocol": "freedom"
+          }
+        ],
+        "routing": {
+          "rules": []
+        },
+        "remarks": "mapped DNS raw text must stay intact",
+        "custom": {
+          "address": "::ffff:192.0.2.99"
+        }
+      },
+      "bindings": [
+        {
+          "path": [
+            "dns",
+            "servers",
+            "0"
+          ],
+          "value": "1.1.1.1"
+        }
+      ]
+    },
+    {
+      "name": "mapped_object_dns_core_brackets",
+      "config": {
+        "log": {
+          "loglevel": "none"
+        },
+        "dns": {
+          "queryStrategy": "UseIPv4",
+          "tag": "caller-root",
+          "servers": [
+            {
+              "address": "[  ::ffff:0101:0101　]",
+              "port": 5353,
+              "tag": "caller-upstream",
+              "domains": [
+                "full:owned.invalid"
+              ],
+              "skipFallback": true,
+              "queryStrategy": "UseIPv4",
+              "timeoutMs": 1200
+            }
+          ],
+          "hosts": {
+            "full:static.invalid": "192.0.2.17"
+          }
+        },
+        "inbounds": [],
+        "outbounds": [
+          {
+            "tag": "direct",
+            "protocol": "freedom"
+          }
+        ],
+        "routing": {
+          "rules": []
+        },
+        "remarks": "mapped DNS raw text must stay intact",
+        "custom": {
+          "address": "::ffff:192.0.2.99"
+        }
+      },
+      "bindings": [
+        {
+          "path": [
+            "dns",
+            "servers",
+            "0",
+            "address"
+          ],
+          "value": "1.1.1.1"
+        }
+      ]
+    },
+    {
+      "name": "mapped_full_hosts_named_doh",
+      "config": {
+        "log": {
+          "loglevel": "none"
+        },
+        "dns": {
+          "queryStrategy": "UseIPv4",
+          "tag": "caller-root",
+          "servers": [
+            {
+              "address": "https://resolver.invalid/dns-query?raw=mapped",
+              "tag": "caller-upstream",
+              "queryStrategy": "UseIPv4",
+              "skipFallback": true
+            }
+          ],
+          "hosts": {
+            "full:resolver.invalid": "[::ffff:127.0.0.1]",
+            "full:static.invalid": "192.0.2.17"
+          }
+        },
+        "inbounds": [],
+        "outbounds": [
+          {
+            "tag": "direct",
+            "protocol": "freedom"
+          }
+        ],
+        "routing": {
+          "rules": []
+        },
+        "remarks": "mapped DNS raw text must stay intact",
+        "custom": {
+          "address": "::ffff:192.0.2.99"
+        }
+      },
+      "bindings": [
+        {
+          "path": [
+            "dns",
+            "hosts",
+            "full:resolver.invalid"
+          ],
+          "value": "127.0.0.1"
+        }
+      ]
+    }
+  ],
+  "nativeRefusalControls": [
+    {
+      "name": "true_ipv6_scalar_dns",
+      "config": {
+        "log": {
+          "loglevel": "none"
+        },
+        "dns": {
+          "queryStrategy": "UseIPv4",
+          "tag": "caller-root",
+          "servers": [
+            "2001:db8::53"
+          ],
+          "hosts": {
+            "full:static.invalid": "192.0.2.17"
+          }
+        },
+        "inbounds": [],
+        "outbounds": [
+          {
+            "tag": "direct",
+            "protocol": "freedom"
+          }
+        ],
+        "routing": {
+          "rules": []
+        },
+        "remarks": "mapped DNS raw text must stay intact",
+        "custom": {
+          "address": "::ffff:192.0.2.99"
+        }
+      },
+      "bindings": []
+    },
+    {
+      "name": "compatible_not_mapped_scalar_dns",
+      "config": {
+        "log": {
+          "loglevel": "none"
+        },
+        "dns": {
+          "queryStrategy": "UseIPv4",
+          "tag": "caller-root",
+          "servers": [
+            "::192.0.2.53"
+          ],
+          "hosts": {
+            "full:static.invalid": "192.0.2.17"
+          }
+        },
+        "inbounds": [],
+        "outbounds": [
+          {
+            "tag": "direct",
+            "protocol": "freedom"
+          }
+        ],
+        "routing": {
+          "rules": []
+        },
+        "remarks": "mapped DNS raw text must stay intact",
+        "custom": {
+          "address": "::ffff:192.0.2.99"
+        }
+      },
+      "bindings": []
+    }
+  ]
+}

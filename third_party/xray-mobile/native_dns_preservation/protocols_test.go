@@ -97,6 +97,7 @@ func TestProtocolCorpusBuilds(t *testing.T) {
 	testLocalhostDNSTags(t, false)
 	testEndpointAddresses(t, false)
 	testDNSAddresses(t, false)
+	testMappedDNSAddresses(t, false)
 	testLogicalAddresses(t, false)
 	testLogicalDNSFixtureIO(t)
 }
@@ -171,6 +172,7 @@ func testNativeProtocolPreparation(t *testing.T) {
 	testLocalhostDNSTags(t, true)
 	testEndpointAddresses(t, true)
 	testDNSAddresses(t, true)
+	testMappedDNSAddresses(t, true)
 	testLogicalAddresses(t, true)
 }
 

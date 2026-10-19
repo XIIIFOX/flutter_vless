@@ -49,6 +49,64 @@ Json& DnsAddressPath(Json& value, const Json& path) {
   }
   return *current;
 }
+void MappedDnsCases(const std::string& only = "") {
+  std::ifstream input("tool/fixtures/compatibility/dns-mapped-addresses.json");
+  Require(input.good(), "shared mapped DNS Address corpus required");
+  Json corpus; input >> corpus;
+  Require(corpus["positiveCases"].size() == 3 && corpus["nativeRefusalControls"].size() == 2, "shared mapped DNS corpus changed");
+  auto prepare = [](const Json& source, unsigned& calls) {
+    return PrepareProtectedVpn(source.dump(), "session-user", "session-password", "Ethernet", [&](const std::string&) { ++calls; return ""; });
+  };
+  bool selected = only.empty();
+  for (const auto* group : {"positiveCases", "nativeRefusalControls"}) for (const auto& fixture : corpus[group]) {
+    const auto name = fixture["name"].get<std::string>();
+    if (!only.empty() && only != name) continue;
+    selected = true;
+    const auto source = fixture["config"]; const auto original = source.dump(); unsigned calls = 0;
+    const auto result = prepare(source, calls);
+    if (std::string(group) == "nativeRefusalControls") Require(!result, "true/nonmapped IPv6 DNS was admitted");
+    else {
+      auto literal = source;
+      for (const auto& binding : fixture["bindings"]) DnsAddressPath(literal, binding["path"]) = binding["value"];
+      unsigned literal_calls = 0; const auto expected = prepare(literal, literal_calls);
+      Require(expected.has_value(), "dotted IPv4 DNS control rejected");
+      Require(result.has_value(), "Core-canonical mapped IPv4 DNS rejected");
+      auto equivalent = Parse(*result);
+      Require(equivalent["dns"] == source["dns"] && equivalent["remarks"] == source["remarks"] && equivalent["custom"] == source["custom"], "mapped DNS admission changed raw caller JSON");
+      for (const auto& binding : fixture["bindings"]) DnsAddressPath(equivalent, binding["path"]) = binding["value"];
+      Require(equivalent == Parse(*expected) && literal_calls == 0, "mapped DNS used a different policy or bootstrap than IPv4");
+    }
+    Require(calls == 0 && source.dump() == original, "mapped DNS attempted physical bootstrap or mutated source");
+  }
+  if (only.empty() || only == "family-boundary") {
+    selected = true;
+    auto source = corpus["positiveCases"][0]["config"];
+    for (const auto* address : {"::ffff:192.0.2.1", "[ \t::ffff:c000:0201 ]", "0:0:0:0:0:FFFF:C000:201"}) {
+      source["dns"]["servers"][0] = address; unsigned calls = 0;
+      Require(prepare(source, calls).has_value() && calls == 0, "valid mapped IPv4 syntax did not canonicalize for DNS policy");
+    }
+    for (const auto* address : {"::ffff:192.000.2.1", "::ffff:192.0.2.1:1", "::ffff::192.0.2.1", "0:0:0:0:0:ffff:0:0:1", "::1", "64:ff9b::192.0.2.1", "::192.0.2.1"}) {
+      source["dns"]["servers"][0] = address; unsigned calls = 0;
+      Require(!prepare(source, calls) && calls == 0, "invalid/nonmapped IPv6 DNS crossed the IPv4 policy boundary");
+    }
+    source = corpus["positiveCases"][2]["config"];
+    source["dns"]["hosts"]["full:resolver.invalid"] = Json::array({"[::ffff:127.0.0.1]", "2001:db8::53"}); unsigned calls = 0;
+    Require(!prepare(source, calls) && calls == 0, "mixed actual-IPv6 caller DNS hosts were admitted");
+  }
+  if (only.empty() || only == "url-authority") {
+    selected = true;
+    auto source = corpus["positiveCases"][0]["config"];
+    for (const auto* address : {"tcp://[::ffff:127.0.0.1]:5353", "https://[::ffff:0101:0101]/dns-query", "h2c://[0:0:0:0:0:FFFF:7f00:1]:8053/dns-query", "tcp://127.0.0.1:5353"}) {
+      source["dns"]["servers"][0] = address; unsigned calls = 0; const auto result = prepare(source, calls);
+      Require(result && calls == 0 && Parse(*result)["dns"] == source["dns"], "mapped IPv4 DNS URL authority was rejected or rewritten");
+    }
+    for (const auto* address : {"tcp://[2001:db8::53]:5353", "tcp://[::192.0.2.53]:5353", "tcp://[::ffff:127.0.0.1:5353", "tcp://[::ffff:127.0.0.1]]:53", "tcp://[::ffff:127.0.0.1]:", "tcp://[::ffff:127.0.0.1]:bad", "tcp://[::ffff:127.0.0.1]:0", "tcp://[::ffff:127.0.0.1]:65536", "tcp://[::ffff:127.0.0.1]:-1", "tcp://127.0.0.1:65536"}) {
+      source["dns"]["servers"][0] = address; unsigned calls = 0;
+      Require(!prepare(source, calls) && calls == 0, "invalid port/authority or actual IPv6 DNS URL admitted");
+    }
+  }
+  Require(selected, "unknown mapped DNS case");
+}
 void LogicalAddressCases(const std::string& only = "") {
   std::ifstream input("tool/fixtures/compatibility/logical-addresses.json");
   Require(input.good(), "shared logical Address corpus is required");
@@ -922,6 +980,7 @@ int main(int argc, char** argv) try {
   if (argc == 3 && std::string(argv[1]) == "--direct-only-case") { DirectOnlyCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--ipv6-case") { IPv6PayloadCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--protocol-case") { ProtocolCompatibilityCases(argv[2]); return 0; }
+  if (argc == 3 && std::string(argv[1]) == "--mapped-dns-case") { MappedDnsCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--logical-address-case") { LogicalAddressCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--dns-address-case") { DnsAddressCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--endpoint-address-case") { EndpointAddressCases(argv[2]); return 0; }
@@ -944,6 +1003,7 @@ int main(int argc, char** argv) try {
   EndpointAddressCases();
   DnsAddressCases();
   LogicalAddressCases();
+  MappedDnsCases();
   const auto source = Parse(R"({
     "log":{"access":"private-canary.log","error":"secret.log","loglevel":"debug","dnsLog":true},
     "inbounds":[{"protocol":"socks","listen":"127.0.0.1","port":18580,"tag":"socks-in","settings":{"auth":"noauth"},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":false}}],

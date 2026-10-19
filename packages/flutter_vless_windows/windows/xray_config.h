@@ -925,6 +925,59 @@ inline std::string DnsDomainLower(std::string value) {
   return value;
 }
 
+// The caller supplies Core's already-parsed Address view. Recognize only
+// IPv4 or the exact IPv4-mapped IPv6 prefix which Core IPAddress collapses;
+// other IPv6 families stay outside this protected IPv4 DNS policy.
+inline std::optional<std::string> DnsIPv4(const std::string& value) {
+  if (Literal4(value)) return value;
+  const auto compression = value.find("::");
+  if (value.find(':') == std::string::npos ||
+      (compression != std::string::npos && value.find("::", compression + 2) != std::string::npos)) return std::nullopt;
+  auto parse = [](const std::string& half, std::vector<unsigned>& words, bool last) {
+    if (half.empty()) return true;
+    size_t offset = 0;
+    for (;;) {
+      const auto colon = half.find(':', offset);
+      const auto word = half.substr(offset, colon == std::string::npos ? colon : colon - offset);
+      if (word.empty()) return false;
+      if (word.find('.') != std::string::npos) {
+        if (!last || colon != std::string::npos || !Literal4(word)) return false;
+        unsigned bytes[4]{}; size_t start = 0;
+        for (int i = 0; i < 4; ++i) {
+          const auto dot = word.find('.', start);
+          bytes[i] = static_cast<unsigned>(std::stoul(word.substr(start, dot == std::string::npos ? dot : dot - start)));
+          start = dot + 1;
+        }
+        words.push_back((bytes[0] << 8) | bytes[1]); words.push_back((bytes[2] << 8) | bytes[3]);
+      } else {
+        if (word.size() > 4) return false;
+        unsigned number = 0;
+        for (const char digit : word) {
+          number <<= 4;
+          if (digit >= '0' && digit <= '9') number += digit - '0';
+          else if (digit >= 'a' && digit <= 'f') number += digit - 'a' + 10;
+          else if (digit >= 'A' && digit <= 'F') number += digit - 'A' + 10;
+          else return false;
+        }
+        words.push_back(number);
+      }
+      if (words.size() > 8) return false;
+      if (colon == std::string::npos) return true;
+      offset = colon + 1;
+    }
+  };
+  std::vector<unsigned> left, right;
+  if (!parse(value.substr(0, compression), left, compression == std::string::npos)) return std::nullopt;
+  if (compression != std::string::npos && !parse(value.substr(compression + 2), right, true)) return std::nullopt;
+  if ((compression == std::string::npos && left.size() != 8) ||
+      (compression != std::string::npos && left.size() + right.size() >= 8)) return std::nullopt;
+  left.resize(8 - right.size(), 0); left.insert(left.end(), right.begin(), right.end());
+  for (size_t i = 0; i < 5; ++i) if (left[i] != 0) return std::nullopt;
+  if (left[5] != 0xffff) return std::nullopt;
+  return std::to_string(left[6] >> 8) + "." + std::to_string(left[6] & 255) + "." +
+      std::to_string(left[7] >> 8) + "." + std::to_string(left[7] & 255);
+}
+
 inline bool ProtectedDnsAddress(const std::string& address, const Json& hosts) {
   auto host = ParsedAddressText(address);
   const auto scheme = host.find("://");
@@ -933,16 +986,28 @@ inline bool ProtectedDnsAddress(const std::string& address, const Json& hosts) {
     if (protocol != "tcp" && protocol != "https" && protocol != "h2c") return false;
     host = host.substr(scheme + 3);
     host = host.substr(0, host.find_first_of("/?#"));
-    const auto colon = host.find(':');
-    if (colon != std::string::npos) {
-      const auto port = host.substr(colon + 1);
-      if (port.empty() || port.size() > 5 || port.find_first_not_of("0123456789") != std::string::npos
-          || std::stoul(port) == 0 || std::stoul(port) > 65535) return false;
+    std::optional<std::string> port;
+    if (!host.empty() && host.front() == '[') {
+      const auto close = host.find(']');
+      if (close == std::string::npos) return false;
+      const auto suffix = host.substr(close + 1);
+      if (!suffix.empty()) {
+        if (suffix.front() != ':') return false;
+        port = suffix.substr(1);
+      }
+      host = host.substr(1, close - 1);
+      // URL authority brackets belong to the URL parser, not a second pass
+      // over the root Address. Only numeric IPv4/mapped hosts are qualified.
+      if (!DnsIPv4(host)) return false;
+    } else if (const auto colon = host.find(':'); colon != std::string::npos) {
+      port = host.substr(colon + 1);
       host = host.substr(0, colon);
     }
+    if (port && (port->empty() || port->size() > 5 || port->find_first_not_of("0123456789") != std::string::npos
+        || std::stoul(*port) == 0 || std::stoul(*port) > 65535)) return false;
   }
+  if (DnsIPv4(host)) return true;
   if (host.empty() || host.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.") != std::string::npos) return false;
-  if (Literal4(host)) return true;
   // Named remote resolvers need a caller-owned static bootstrap. No native
   // endpoint mapping is added to this map; URLs/TLS names remain unchanged.
   host = DnsDomainLower(host);
@@ -956,10 +1021,10 @@ inline bool ProtectedDnsAddress(const std::string& address, const Json& hosts) {
     if (domain.rfind("full:", 0) == 0) domain.erase(0, 5);
     if (DnsDomainLower(domain) != host) continue;
     found = true;
-    if (it->is_string()) { if (!Literal4(ParsedAddressText(it->get<std::string>()))) return false; }
+    if (it->is_string()) { if (!DnsIPv4(ParsedAddressText(it->get<std::string>()))) return false; }
     else {
       if (!it->is_array() || it->empty()) return false;
-      for (const auto& entry : *it) if (!entry.is_string() || !Literal4(ParsedAddressText(entry.get<std::string>()))) return false;
+      for (const auto& entry : *it) if (!entry.is_string() || !DnsIPv4(ParsedAddressText(entry.get<std::string>()))) return false;
     }
   }
   return found;

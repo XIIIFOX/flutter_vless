@@ -185,6 +185,18 @@ The pinned Core has no `tls://` DoT implementation. These limitations, arbitrary
 DNS record types and full dual-stack/FakeDNS support remain open; this MVP does not
 complete item 1. Test compilation and runtime results are recorded separately.
 
+The numeric IPv4 check also accepts Core's exact IPv4-mapped IPv6 spelling
+(`::ffff:1.1.1.1`, including Core's bracket/whitespace parsing), both as a
+resolver address, inside TCP/HTTPS/h2c URLs and in its caller-owned static hosts
+values. It leaves raw
+caller DNS untouched and does not admit genuine IPv6, IPv4-compatible `::x`
+addresses or NAT64 prefixes through this IPv4 policy. Three shared positive
+cases compare compiled DNS against dotted IPv4 controls; two genuine IPv6
+controls retain the desktop admission boundary. Android retains caller DNS for
+both families. Controlled DoH uses a mapped static host with the same TLS,
+wire-answer, environment-handoff and zero-OS-resolver checks; new-head runtime
+acceptance of this spelling is pending CI.
+
 [CI on 6c19e2d](https://github.com/XIIIFOX/flutter_vless/actions/runs/39172041164)
 qualifies the production C++ preparer on Linux/macOS/Windows and the Apple preparer on
 macOS against ordinary pinned Core: TCP/UDP virtual DNS, numeric TCP/UDP and

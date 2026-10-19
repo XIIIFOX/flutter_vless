@@ -642,6 +642,77 @@ final class TunnelDNSPolicyTests: XCTestCase {
         XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), input)
     }
 
+    func testMappedIPv4DNSKeepsCallerJSONAndMatchesLiteralControl() throws {
+        func replace(_ object: Any, path: ArraySlice<String>, value: String) -> Any {
+            guard let head = path.first else { return value }
+            if var map = object as? [String: Any], let child = map[head] {
+                map[head] = replace(child, path: path.dropFirst(), value: value); return map
+            }
+            var list = object as! [Any]; let index = Int(head)!
+            list[index] = replace(list[index], path: path.dropFirst(), value: value); return list
+        }
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/dns-mapped-addresses.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/dns-mapped-addresses.json"))) as? [String: Any])
+        let cases = try XCTUnwrap(fixture["positiveCases"] as? [[String: Any]])
+        XCTAssertEqual(cases.count, 3)
+        for item in cases {
+            let source = try XCTUnwrap(item["config"] as? [String: Any])
+            let input = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            let bindings = try XCTUnwrap(item["bindings"] as? [[String: Any]])
+            var literal: Any = source
+            for binding in bindings {
+                literal = replace(literal, path: ArraySlice(try XCTUnwrap(binding["path"] as? [String])), value: try XCTUnwrap(binding["value"] as? String))
+            }
+            let control = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: JSONSerialization.data(withJSONObject: literal), credentials: Self.credentials,
+                resolveIPv4: { _ in XCTFail("Explicit numeric caller DNS must not bootstrap endpoints"); return nil }))
+            let prepared = TunnelXrayConfigPreparer.prepare(jsonData: input, credentials: Self.credentials,
+                resolveIPv4: { _ in XCTFail("Mapped IPv4 DNS must not cause native DNS lookup"); return nil })
+            XCTAssertNotNil(prepared, "Core maps this DNS address to IPv4: \(item["name"] ?? "")")
+            if let prepared {
+                let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+                XCTAssertEqual(output["dns"] as? NSDictionary, source["dns"] as? NSDictionary, "Admission must preserve raw mapped DNS addresses")
+                XCTAssertTrue(prepared.bootstrapAddresses.isEmpty)
+                var projected: Any = output
+                for binding in bindings {
+                    projected = replace(projected, path: ArraySlice(try XCTUnwrap(binding["path"] as? [String])), value: try XCTUnwrap(binding["value"] as? String))
+                }
+                XCTAssertEqual(projected as? NSDictionary, try JSONSerialization.jsonObject(with: control.data) as? NSDictionary)
+            }
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), input)
+        }
+        let refused = try XCTUnwrap(fixture["nativeRefusalControls"] as? [[String: Any]])
+        XCTAssertEqual(refused.count, 2)
+        for item in refused {
+            let source = try XCTUnwrap(item["config"] as? [String: Any])
+            var transaction = source
+            XCTAssertNil(TunnelDNSPolicy.apply(to: &transaction, managedInboundTag: "mapped-test",
+                resolveIPv4: { _ in XCTFail("Nonmapped IPv6 DNS must be refused before native lookup"); return nil }))
+            XCTAssertEqual(transaction as NSDictionary, source as NSDictionary)
+        }
+        for server in ["tcp://[::ffff:127.0.0.1]:5353", "https://[::ffff:7f00:1]/dns-query"] {
+            let dns: [String: Any] = ["servers": [server], "queryStrategy": "UseIPv4", "tag": "caller-root"]
+            let source: [String: Any] = ["dns": dns, "outbounds": [["tag": "direct", "protocol": "freedom"]]]
+            let input = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: input, credentials: Self.credentials,
+                resolveIPv4: { _ in XCTFail("Mapped numeric DNS URL must not bootstrap endpoints"); return nil }))
+            let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+            XCTAssertEqual(output["dns"] as? NSDictionary, dns as NSDictionary)
+            XCTAssertTrue(prepared.bootstrapAddresses.isEmpty)
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), input)
+        }
+        for server in ["tcp://[2001:db8::53]:5353", "https://[::192.0.2.53]/dns-query"] {
+            let source: [String: Any] = ["dns": ["servers": [server]], "outbounds": [["tag": "direct", "protocol": "freedom"]]]
+            var transaction = source
+            XCTAssertNil(TunnelDNSPolicy.apply(to: &transaction, managedInboundTag: "mapped-test",
+                resolveIPv4: { _ in XCTFail("Nonmapped DNS URL must not bootstrap endpoints"); return nil }))
+            XCTAssertEqual(transaction as NSDictionary, source as NSDictionary)
+        }
+    }
+
     func testRootDNSAdmissionUsesCoreParsedAddressWithoutLosingRawExpandedValue() throws {
         for (server, hosts) in [
             ("[ 127.0.0.1 ]", [String: Any]()),

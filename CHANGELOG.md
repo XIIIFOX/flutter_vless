@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Admit Core's exact IPv4-mapped DNS addresses on Apple and Windows without rewriting caller DNS. Keep genuine IPv6 restrictions unchanged; add shared Core-equivalence controls, Android preservation checks and mapped-host DoH traffic coverage.
 * Share Apple address preparation through the existing privacy module so both containing apps can freeze saved profiles without a tunnel-support dependency. Add a real module-boundary regression and verify unsigned iOS/macOS example builds.
 * Make the controlled logical DNS origin complete one framed exchange per connection; retain exact payload and drained request counts. Add memory-only malformed-frame controls and bounded Windows direct-only failure diagnostics without retries.
 * Freeze effective DNS outbound and imported `dokodemo-door`/`tunnel` destination addresses before profile handoff on every native backend. Match Core's `address`/`rewriteAddress` precedence, preserve dormant aliases and caller routing, and add shared build/preparation and controlled HTTP/DNS regressions.

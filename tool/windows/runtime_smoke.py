@@ -190,7 +190,68 @@ def exact(sock, count):
     return data
 
 
+def diagnostic_error_class(error):
+    return type(error).__name__[:48]
+
+
+class DirectOrigin(ThreadingHTTPServer):
+    def get_request(self):
+        connection, address = super().get_request()
+        if hasattr(self, "direct_only_lock"):
+            with self.direct_only_lock:
+                owner = self.direct_only_active
+                if owner is not None:
+                    if len(self.direct_only_pending) < 64:
+                        self.direct_only_pending[connection] = owner
+                    self.direct_only_evidence[owner]["accepts"] += 1
+        return connection, address
+
+
+def direct_origin_event(handler, event, value=1):
+    owner = getattr(handler, "direct_only_owner", None)
+    if owner is not None:
+        with handler.server.direct_only_lock:
+            handler.server.direct_only_evidence[owner][event] += value
+
+
+def save_direct_evidence(path, record, error=None):
+    # Only fixed labels, booleans, byte counts and exception classes; no body,
+    # raw native output, profile contents or exception messages are retained.
+    encoded = json.dumps(record, sort_keys=True)
+    if len(encoded) > 8192:
+        encoded = json.dumps({"diagnostic": "bounded evidence overflow"})
+    try:
+        path.write_text(encoded + "\n", encoding="utf-8")
+    except OSError:
+        encoded = json.dumps({"diagnostic": "evidence write failed"})
+    if error is not None and hasattr(error, "add_note"):
+        error.add_note("DIRECT_ONLY_EVIDENCE " + encoded)
+
+
+def direct_failure_evidence(label, stage, process, state, origin, requests):
+    try:
+        with state.open("rb") as stream:
+            data = stream.read(4097)
+        value = json.loads(data) if len(data) <= 4096 else None
+        state_value = ({name: value[name] for name in ("running", "protecting")}
+                       if isinstance(value, dict) and all(type(value.get(name)) is bool for name in ("running", "protecting"))
+                       else {"status": "invalid"})
+    except (OSError, ValueError) as error:
+        state_value = {"status": diagnostic_error_class(error)}
+    with origin.direct_only_lock:
+        observed = dict(origin.direct_only_evidence[label])
+    return dict(case=label, stage=stage, before_stop=True, process_exit=process.poll(),
+                state=state_value, requests=requests, origin=observed)
+
+
 class Direct(BaseHTTPRequestHandler):
+    def __init__(self, request, client_address, server):
+        self.direct_only_owner = None
+        if hasattr(server, "direct_only_lock"):
+            with server.direct_only_lock:
+                self.direct_only_owner = server.direct_only_pending.pop(request, None)
+        super().__init__(request, client_address, server)
+
     def setup(self):
         super().setup()
         self.connection.settimeout(5)
@@ -199,11 +260,23 @@ class Direct(BaseHTTPRequestHandler):
         if hasattr(self.server, "direct_only_lock"):
             with self.server.direct_only_lock:
                 self.server.direct_only_observed.append(self.headers.get("Host"))
+        kind = {"direct-only.invalid": "allowed", "blocked.invalid": "blocked"}.get(self.headers.get("Host"), "other")
+        direct_origin_event(self, "get_" + kind)
         body = b"DIRECT-FIXTURE"
-        self.send_response(200)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            direct_origin_event(self, "headers_completed")
+            written = self.wfile.write(body)
+            direct_origin_event(self, "body_bytes", written if isinstance(written, int) else 0)
+        except BaseException as error:
+            direct_origin_event(self, "errors")
+            owner = getattr(self, "direct_only_owner", None)
+            if owner is not None:
+                with self.server.direct_only_lock:
+                    self.server.direct_only_evidence[owner]["last_error_class"] = diagnostic_error_class(error)
+            raise
 
     def log_message(self, *_):
         pass
@@ -325,32 +398,45 @@ def direct_only_dns(server, tcp):
         assert question.hex() in server.questions, "Direct-only DNS did not reach the numeric TCP resolver"
 
 
-def request(host, vpn, loopback=False, proxy_port=None):
-    destination = ("127.0.0.1", PORTS["direct"]) if loopback else (("203.0.113.10", PORTS["direct"]) if vpn else ("127.0.0.1", proxy_port or PORTS["inbound"]))
-    with socket.create_connection(destination, timeout=4) as sock:
-        sock.settimeout(4)
-        if vpn:
-            assert sock.getsockname()[0] == ("127.0.0.1" if loopback else "10.0.85.2"), "Unexpected client interface"
-        encoded = host.encode()
-        if not vpn and not loopback:
-            sock.sendall(b"\x05\x01\x00")
-            assert exact(sock, 2) == b"\x05\x00"
-            sock.sendall(b"\x05\x01\x00\x03" + bytes([len(encoded)]) + encoded +
-                         PORTS["direct"].to_bytes(2, "big"))
-            head = exact(sock, 4)
-            assert head[1] == 0, head
-            count = exact(sock, 1)[0] if head[3] == 3 else {1: 4, 4: 16}[head[3]]
-            exact(sock, count + 2)
-        sock.sendall(b"GET / HTTP/1.1\r\nHost: " + encoded + b"\r\nConnection: close\r\n\r\n")
-        data = b""
-        while True:
-            part = sock.recv(4096)
-            if not part:
-                break
-            data += part
-        if b"\r\n\r\n" not in data:
-            raise RuntimeError("connection ended without an HTTP response")
-        return data.split(b"\r\n\r\n", 1)[1].decode()
+def request(host, vpn, loopback=False, proxy_port=None, diagnostic=None):
+    data = b""
+    read_end = "not_read"
+    try:
+        destination = ("127.0.0.1", PORTS["direct"]) if loopback else (("203.0.113.10", PORTS["direct"]) if vpn else ("127.0.0.1", proxy_port or PORTS["inbound"]))
+        with socket.create_connection(destination, timeout=4) as sock:
+            sock.settimeout(4)
+            if vpn:
+                assert sock.getsockname()[0] == ("127.0.0.1" if loopback else "10.0.85.2"), "Unexpected client interface"
+            encoded = host.encode()
+            if not vpn and not loopback:
+                sock.sendall(b"\x05\x01\x00")
+                assert exact(sock, 2) == b"\x05\x00"
+                sock.sendall(b"\x05\x01\x00\x03" + bytes([len(encoded)]) + encoded +
+                             PORTS["direct"].to_bytes(2, "big"))
+                head = exact(sock, 4)
+                assert head[1] == 0, head
+                count = exact(sock, 1)[0] if head[3] == 3 else {1: 4, 4: 16}[head[3]]
+                exact(sock, count + 2)
+            sock.sendall(b"GET / HTTP/1.1\r\nHost: " + encoded + b"\r\nConnection: close\r\n\r\n")
+            read_end = "reading"
+            while True:
+                part = sock.recv(4096)
+                if not part:
+                    read_end = "eof"
+                    break
+                data += part
+            if b"\r\n\r\n" not in data:
+                raise RuntimeError("connection ended without an HTTP response")
+            return data.split(b"\r\n\r\n", 1)[1].decode()
+    except BaseException as error:
+        if read_end == "reading":
+            read_end = "error"
+        if diagnostic is not None:
+            diagnostic["error_class"] = diagnostic_error_class(error)
+        raise
+    finally:
+        if diagnostic is not None:
+            diagnostic.update(response_bytes=len(data), header_present=b"\r\n\r\n" in data, read_end=read_end)
 
 
 def external_http(address, vpn=False):
@@ -671,9 +757,15 @@ def adapter_datagram(directory, subnet, ipv6, denied):
 
 
 def direct_only_gate(probe, directory, address, dns, origin, results):
-    origin.direct_only_observed, origin.direct_only_lock = [], threading.Lock()
+    origin.direct_only_observed = []
+    origin.direct_only_evidence, origin.direct_only_pending, origin.direct_only_active = {}, {}, None
+    origin.direct_only_lock = threading.Lock()  # Publish after every observer field exists.
     for index, shape in enumerate(("freedom-default", "block-default", "selector-round-robin")):
         label = "vpn-direct-only-" + shape
+        with origin.direct_only_lock:
+            origin.direct_only_active = label
+            origin.direct_only_evidence[label] = dict(accepts=0, get_allowed=0, get_blocked=0, get_other=0,
+                headers_completed=0, body_bytes=0, errors=0, last_error_class=None)
         profile, stop, state, guard_stop = [directory / (label + suffix) for suffix in (".json", ".stop", ".state.json", ".guard-stop")]
         for stale in (stop, state, guard_stop):
             stale.unlink(missing_ok=True)
@@ -683,6 +775,13 @@ def direct_only_gate(probe, directory, address, dns, origin, results):
             process = subprocess.Popen([str(probe), "run-vpn", str(profile), "120", str(stop), str(state)],
                                        cwd=directory, stdout=log, stderr=log)
             guard = None
+            stage, requests = "startup", []
+            def observed_request(host):
+                detail = {"stage": stage}
+                try:
+                    return request(host, True, diagnostic=detail)
+                finally:
+                    requests.append(detail)
             try:
                 guard = subprocess.Popen([str(probe), "guard", str(process.pid), "120", str(guard_stop)],
                                          cwd=directory, stdout=log, stderr=log)
@@ -690,20 +789,25 @@ def direct_only_gate(probe, directory, address, dns, origin, results):
                 while "START_RETURN=1" not in log_path.read_text(errors="replace"):
                     assert process.poll() is None and time.monotonic() < deadline, "Direct-only VPN did not become ready"
                     time.sleep(0.1)
-                assert request("direct-only.invalid", True) == "DIRECT-FIXTURE", "Direct-only HTTP bytes failed"
+                stage = "positive_before"
+                assert observed_request("direct-only.invalid") == "DIRECT-FIXTURE", "Direct-only HTTP bytes failed"
+                stage = "blocked"
                 try:
-                    request("blocked.invalid", True)
+                    observed_request("blocked.invalid")
                 except (OSError, EOFError, RuntimeError):
                     pass
                 else:
                     raise AssertionError("Direct-only caller domain block was bypassed")
-                assert request("direct-only.invalid", True) == "DIRECT-FIXTURE", "Direct-only HTTP did not survive the blocked request"
+                stage = "positive_after"
+                assert observed_request("direct-only.invalid") == "DIRECT-FIXTURE", "Direct-only HTTP did not survive the blocked request"
                 with origin.direct_only_lock:
                     assert origin.direct_only_observed.count("direct-only.invalid") == 2 * (index + 1) \
                         and "blocked.invalid" not in origin.direct_only_observed, "Caller domain block reached the controlled origin"
+                stage = "dns"
                 for tcp in (False, True):
                     direct_only_dns(dns, tcp)
                 results.append(dict(mode=label, check="no-proxy HTTP, caller domain block and numeric TCP root DNS via virtual TCP/UDP", passed=True))
+                stage = "stop_cleanup"
                 stop.touch()
                 assert process.wait(timeout=25) == 0, "Direct-only VPN Stop failed"
                 assert native(probe, "policy-count") == "0", "Direct-only Stop retained WFP filters"
@@ -712,6 +816,14 @@ def direct_only_gate(probe, directory, address, dns, origin, results):
                     "IPv6Addresses=@(Get-NetIPAddress -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -eq 'flutter_vless_tun' -and $_.IPAddress -eq 'fd00:198:18::2' }).Count} | ConvertTo-Json -Compress"], text=True, timeout=25))
                 assert inventory == {"Routes": 0, "IPv6Addresses": 0}, "Direct-only Stop retained tunnel routes/address"
                 results.append(dict(mode=label, check="explicit Stop removes owned WFP, capture routes and IPv6 address", passed=True))
+            except BaseException as error:
+                try:
+                    evidence = direct_failure_evidence(label, stage, process, state, origin, requests)
+                    save_direct_evidence(directory / (label + ".evidence.log"), evidence, error)
+                except BaseException:
+                    if hasattr(error, "add_note"):
+                        error.add_note("DIRECT_ONLY_EVIDENCE capture failed")
+                raise
             finally:
                 try:
                     if process.poll() is None:
@@ -773,7 +885,7 @@ def main():
                 results.append(dict(check="IPv6 adapter baseline" if ipv6 else "IPv4 adapter baseline", actual=actual, passed=True))
         # A VPN freedom socket is pinned to the underlay; use a local target
         # on that interface, not a loopback-only target on another interface.
-        servers = [ThreadingHTTPServer((direct_address, 0), Direct),
+        servers = [DirectOrigin((direct_address, 0), Direct),
                    Server((direct_address, 0), Socks)]
         servers[0].daemon_threads = False  # Join bounded HTTP callbacks before final direct-only observations.
         PORTS["direct"] = servers[0].server_address[1]
@@ -1082,6 +1194,9 @@ def main():
                 clean = servers[0].direct_only_observed.count("direct-only.invalid") == 6 \
                     and "blocked.invalid" not in servers[0].direct_only_observed
             results.append(dict(check="direct-only origin counts after owned callbacks drain", passed=clean))
+            with servers[0].direct_only_lock:
+                evidence = {name: dict(value) for name, value in servers[0].direct_only_evidence.items()}
+            save_direct_evidence(directory / "direct-only-origin.evidence.log", dict(after_drain=True, cases=evidence))
         if ipv6_payload is not None:
             try:
                 ipv6_payload.require_clean()

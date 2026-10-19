@@ -438,6 +438,34 @@ class AndroidTunnelDnsPolicyTest {
         }
     }
 
+    @Test fun sharedMappedIpv4DnsAndRealIpv6RemainCallerCorePolicy() {
+        val corpus = JSONObject(requireNotNull(javaClass.getResource("/dns-mapped-addresses.json")).readText())
+        assertEquals(3, corpus.getJSONArray("positiveCases").length())
+        assertEquals(2, corpus.getJSONArray("nativeRefusalControls").length())
+        for (group in listOf("positiveCases", "nativeRefusalControls")) {
+            val cases = corpus.getJSONArray(group)
+            for (index in 0 until cases.length()) {
+                val item = cases.getJSONObject(index); val label = item.getString("name")
+                val input = item.getJSONObject("config"); val before = input.toString()
+                val prepared = AndroidTunnelDnsPolicy.prepare(before, "config", environment = {
+                    error("Literal caller DNS must not read environment")
+                }) { error("Mapped or actual IPv6 DNS must not bootstrap transport endpoints") }
+                val actual = JSONObject(prepared.configJson)
+                for (field in listOf("dns", "inbounds", "remarks", "custom"))
+                    assertEquals(label, input.get(field).toString(), actual.get(field).toString())
+                val sourceOutbounds = input.getJSONArray("outbounds")
+                assertEquals(sourceOutbounds.length() + 1, actual.getJSONArray("outbounds").length())
+                for (outbound in 0 until sourceOutbounds.length())
+                    assertEquals(label, sourceOutbounds.get(outbound).toString(), actual.getJSONArray("outbounds").get(outbound).toString())
+                assertTrue(label, prepared.bootstrapHostnames.isEmpty())
+                assertTrue(label, prepared.bootstrapAddresses.isEmpty())
+                assertEquals(label, before, input.toString())
+                // The two refusal controls apply only to the current desktop
+                // family boundary. Android retains its existing Core policy.
+            }
+        }
+    }
+
     @Test fun sharedLogicalAddressEnvironmentFreezesOnlyEffectiveTypedFields() {
         val cases = JSONArray(requireNotNull(javaClass.getResource("/logical-addresses.json")).readText())
         assertEquals(4, cases.length())

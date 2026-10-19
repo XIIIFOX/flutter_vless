@@ -383,7 +383,9 @@ func testNativeHTTPSDoH(t *testing.T) {
 			}
 			hosts := fullSource["dns"].(map[string]any)["hosts"].(map[string]any)
 			delete(hosts, "resolver.invalid")
-			hosts["full:resolver.invalid"] = "127.0.0.1"
+			// Core folds only the exact IPv4-mapped prefix to an IPv4 address.
+			// Keep this raw caller spelling through native admission and handoff.
+			hosts["full:resolver.invalid"] = "[::ffff:127.0.0.1]"
 			fullPrepared, fullPort := prepare(t, fullSource)
 			fullJSON, err := json.Marshal(fullSource)
 			if err != nil {
@@ -393,7 +395,7 @@ func testNativeHTTPSDoH(t *testing.T) {
 			// Compare the whole prepared profile with the literal control before
 			// starting that child; URL substrings and host keys stay opaque.
 			t.Setenv(dohAddressEnvironment, "https://"+authority+"/dns-query")
-			t.Setenv(dohHostEnvironment, "127.0.0.1")
+			t.Setenv(dohHostEnvironment, "[::ffff:127.0.0.1]")
 			fullSource["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["address"] = "env:" + dohAddressEnvironment
 			hosts["full:resolver.invalid"] = "env:" + dohHostEnvironment
 			environmentJSON, err := json.Marshal(fullSource)
@@ -451,6 +453,7 @@ func testNativeHTTPSDoH(t *testing.T) {
 		}
 		if variant == "good-full-hosts" {
 			t.Log("DNS_ADDRESS_DOH_ENVIRONMENT_FROZEN_PASS")
+			t.Log("DNS_IPV4_MAPPED_DOH_PASS")
 		}
 	}
 	completed = true

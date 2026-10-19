@@ -3,6 +3,7 @@ import unittest
 import base64
 import hashlib
 import json
+import io
 from pathlib import Path
 import subprocess
 import tempfile
@@ -105,7 +106,7 @@ class RuntimeFixtureTest(unittest.TestCase):
                     if command[1] == "run-vpn":
                         kwargs["stdout"].write("START_RETURN=1\n"); kwargs["stdout"].flush()
                     return child
-                def http(host, vpn):
+                def http(host, vpn, **diagnostic):
                     self.assertTrue(vpn)
                     if host == "blocked.invalid":
                         if delivered: origin.direct_only_observed.append(host)
@@ -131,6 +132,102 @@ class RuntimeFixtureTest(unittest.TestCase):
                     self.assertEqual(2 if delivered else 6, len(children))
                     for child in children: child.wait.assert_called(); child.kill.assert_not_called()
                     self.assertTrue(any(call.args[1] == "release-protection" for call in native.call_args_list))
+
+    def test_http_diagnostics_preserve_eof_reset_and_response_bytes(self):
+        for outcome in ("complete", "eof", "reset"):
+            with self.subTest(outcome=outcome):
+                client = Mock(); client.__enter__ = Mock(return_value=client); client.__exit__ = Mock(return_value=False)
+                client.getsockname.return_value = ("10.0.85.2", 50000)
+                response = b"HTTP/1.0 200 OK\r\nContent-Length: 14\r\n\r\nDIRECT-FIXTURE"
+                failure = ConnectionResetError("synthetic-private-message")
+                client.recv.side_effect = [response, b""] if outcome == "complete" else [b""] if outcome == "eof" else failure
+                detail = {}
+                with patch.object(runtime.socket, "create_connection", return_value=client):
+                    if outcome == "complete": self.assertEqual("DIRECT-FIXTURE", runtime.request("direct-only.invalid", True, diagnostic=detail))
+                    elif outcome == "eof":
+                        with self.assertRaisesRegex(RuntimeError, "without an HTTP response"):
+                            runtime.request("direct-only.invalid", True, diagnostic=detail)
+                    else:
+                        with self.assertRaises(ConnectionResetError) as raised:
+                            runtime.request("direct-only.invalid", True, diagnostic=detail)
+                        self.assertIs(failure, raised.exception)
+                self.assertEqual(len(response) if outcome == "complete" else 0, detail["response_bytes"])
+                self.assertEqual(outcome == "complete", detail["header_present"])
+                self.assertEqual("error" if outcome == "reset" else "eof", detail["read_end"])
+                self.assertNotIn("synthetic-private-message", json.dumps(detail))
+                client.settimeout.assert_called_once_with(4)
+
+    def test_origin_diagnostics_keep_accept_case_across_late_handler_and_record_write_error(self):
+        server = runtime.DirectOrigin.__new__(runtime.DirectOrigin)
+        server.direct_only_lock = runtime.threading.Lock()
+        server.direct_only_pending = {}; server.direct_only_observed = []
+        def counters():
+            return dict(accepts=0, get_allowed=0, get_blocked=0, get_other=0, headers_completed=0,
+                        body_bytes=0, errors=0, last_error_class=None)
+        server.direct_only_evidence = {"first": counters(), "second": counters()}
+        server.direct_only_active = "first"; connection = object()
+        with patch.object(runtime.ThreadingHTTPServer, "get_request", return_value=(connection, ("192.0.2.10", 50000))):
+            self.assertEqual(connection, server.get_request()[0])
+        server.direct_only_active = "second"
+        handler = runtime.Direct.__new__(runtime.Direct)
+        with patch.object(runtime.BaseHTTPRequestHandler, "__init__", return_value=None):
+            handler.__init__(connection, ("192.0.2.10", 50000), server)
+        handler.server = server; handler.headers = {"Host": "direct-only.invalid"}
+        handler.send_response = Mock(); handler.send_header = Mock(); handler.end_headers = Mock(); handler.wfile = io.BytesIO()
+        handler.do_GET()
+        self.assertEqual(1, server.direct_only_evidence["first"]["accepts"])
+        self.assertEqual(1, server.direct_only_evidence["first"]["get_allowed"])
+        self.assertEqual(14, server.direct_only_evidence["first"]["body_bytes"])
+        self.assertEqual(0, server.direct_only_evidence["second"]["get_allowed"])
+        failure = BrokenPipeError("synthetic-private-write")
+        handler.end_headers.side_effect = failure
+        with self.assertRaises(BrokenPipeError) as raised: handler.do_GET()
+        self.assertIs(failure, raised.exception)
+        self.assertEqual(1, server.direct_only_evidence["first"]["errors"])
+        self.assertEqual("BrokenPipeError", server.direct_only_evidence["first"]["last_error_class"])
+        self.assertNotIn("synthetic-private-write", json.dumps(server.direct_only_evidence))
+
+    def test_direct_only_failure_evidence_precedes_stop_and_keeps_original_exception(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary); origin = SimpleNamespace(); children = []; calls = []
+            class FixtureFailure(RuntimeError):
+                def add_note(self, note):
+                    self.__notes__ = getattr(self, "__notes__", []) + [note]
+            failure = FixtureFailure("synthetic-private-original")
+            def launch(command, **kwargs):
+                child = Mock(pid=300 + len(children)); child.poll.return_value = None
+                def wait(timeout): child.poll.return_value = 0; return 0
+                child.wait.side_effect = wait; children.append(child)
+                if command[1] == "run-vpn":
+                    kwargs["stdout"].write("START_RETURN=1\n"); kwargs["stdout"].flush()
+                    Path(command[5]).write_text('{"running":true,"protecting":true,"ignored":"private-state"}')
+                return child
+            def request(host, vpn, diagnostic=None):
+                calls.append(host)
+                diagnostic.update(response_bytes=0, header_present=False, read_end="eof")
+                if len(calls) == 3: raise failure
+                if host == "blocked.invalid": raise EOFError("synthetic blocked")
+                origin.direct_only_observed.append(host)
+                return "DIRECT-FIXTURE"
+            with patch.object(runtime.subprocess, "Popen", side_effect=launch), \
+                 patch.object(runtime, "request", side_effect=request), patch.object(runtime, "native", return_value="0"), \
+                 patch.object(runtime.time, "sleep"):
+                with self.assertRaises(RuntimeError) as raised:
+                    runtime.direct_only_gate(directory / "runtime_probe.exe", directory, "192.0.2.10",
+                        SimpleNamespace(server_address=("192.0.2.10", 15353)), origin, [])
+            self.assertIs(failure, raised.exception)
+            self.assertEqual(["direct-only.invalid", "blocked.invalid", "direct-only.invalid"], calls)
+            evidence = json.loads((directory / "vpn-direct-only-freedom-default.evidence.log").read_text())
+            self.assertEqual("positive_after", evidence["stage"])
+            self.assertTrue(evidence["before_stop"]); self.assertIsNone(evidence["process_exit"])
+            self.assertEqual({"running": True, "protecting": True}, evidence["state"])
+            self.assertEqual(3, len(evidence["requests"]))
+            self.assertNotIn("private", json.dumps(evidence))
+            self.assertTrue(any("DIRECT_ONLY_EVIDENCE" in note for note in failure.__notes__))
+            for child in children: child.wait.assert_called(); child.kill.assert_not_called()
+            with patch.object(Path, "write_text", side_effect=OSError("private-write-error")):
+                runtime.save_direct_evidence(directory / "unused.log", {}, failure)
+            self.assertNotIn("private-write-error", failure.__notes__[-1])
 
     def test_ipv6_profile_keeps_numeric_ipv4_proxy_and_exact_payload_route(self):
         ordinary = runtime.config(False, "203.0.113.1", "192.0.2.10")

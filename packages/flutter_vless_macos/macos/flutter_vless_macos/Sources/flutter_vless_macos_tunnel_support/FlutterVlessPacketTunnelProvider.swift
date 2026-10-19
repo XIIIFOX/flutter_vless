@@ -207,6 +207,15 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         do { prepared = try await preparation.value }
         catch {
             if error is CancellationError || !sessionAdmission.isCurrent(epoch) { throw CancellationError() }
+            switch error {
+            case TunnelXrayConfigPreparer.StartupError.endpointUnavailable:
+                rememberTunnelLog("Tunnel endpoint DNS unavailable before route installation")
+                throw tunnelError("Unable to resolve VPN transport endpoint")
+            case TunnelXrayConfigPreparer.StartupError.invalidConfiguration:
+                rememberTunnelLog("Tunnel configuration rejected before route installation")
+                throw tunnelError("Unable to prepare tunnel configuration")
+            default: break
+            }
             rememberTunnelLog("Tunnel preparation failed before route installation")
             throw tunnelError("Unable to prepare tunnel configuration or resolve its endpoint")
         }

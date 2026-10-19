@@ -48,21 +48,34 @@ public enum TunnelXrayConfigPreparer {
         routingIntent: NativeRoutingIntent? = nil,
         tcpPortAvailable: ((Int) -> Bool)? = nil,
         environmentSnapshot: XrayEnvironmentSnapshot = .capture(),
-        resolveIPv4: (String) -> String?,
+        resolveIPv4: (String) async throws -> String?,
         attempts: Int = 5,
         retryDelay: () async throws -> Void = { try await Task.sleep(nanoseconds: 3_000_000_000) }
     ) async throws -> TunnelPreparedConfig {
+        var resolved: [String: String] = [:]
+        // A monotonic deadline compatible with the iOS 15 deployment target.
+        let deadline = ProcessInfo.processInfo.systemUptime + 25
         for attempt in 0..<max(1, attempts) {
             try Task.checkCancellation()
-            var resolutionFailed = false
-            let prepared = prepare(jsonData: jsonData, credentials: credentials, routingIntent: routingIntent, tcpPortAvailable: tcpPortAvailable, environmentSnapshot: environmentSnapshot) { host in
-                let address = resolveIPv4(host)
-                resolutionFailed = resolutionFailed || address == nil
-                return address
+            // Discover only transport endpoints requested by the existing
+            // normalizer. Never resolve routing/sniffing domains or TLS SNI.
+            while true {
+                guard ProcessInfo.processInfo.systemUptime < deadline else { throw StartupError.endpointUnavailable }
+                var missingHost: String?
+                let prepared = prepare(jsonData: jsonData, credentials: credentials, routingIntent: routingIntent, tcpPortAvailable: tcpPortAvailable, environmentSnapshot: environmentSnapshot) { host in
+                    if let address = resolved[host] { return address }
+                    missingHost = host
+                    return nil
+                }
+                try Task.checkCancellation()
+                if let prepared { return prepared }
+                guard let host = missingHost else { throw StartupError.invalidConfiguration }
+                guard resolved.count < 64 else { throw StartupError.invalidConfiguration }
+                guard let address = try await resolveIPv4(host) else { break }
+                try Task.checkCancellation()
+                guard ProcessInfo.processInfo.systemUptime < deadline else { throw StartupError.endpointUnavailable }
+                resolved[host] = address
             }
-            try Task.checkCancellation()
-            if let prepared { return prepared }
-            guard resolutionFailed else { throw StartupError.invalidConfiguration }
             if attempt + 1 < attempts { try await retryDelay() }
         }
         throw StartupError.endpointUnavailable

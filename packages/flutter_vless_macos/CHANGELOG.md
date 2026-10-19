@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Distinguish endpoint DNS exhaustion from rejected configuration preparation before VPN route installation, keeping diagnostics free of profile data.
+
 * Capture byte-exact environment names once for port/address binding, allocation and startup retries. Preserve distinct Unicode spellings and exact empty values, with isolated native-reader and host-admission checks.
 
 * Use Core-compatible Unicode environment aliases and whitespace for imported ports and addresses. Share validation and frozen port binding while preserving exact-value and empty-value precedence.

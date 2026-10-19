@@ -23,7 +23,7 @@ final class TunnelDNSPolicyTests: XCTestCase {
             }, attempts: 2, retryDelay: { pauses += 1; entries = [] })
         XCTAssertEqual(captures, 1)
         XCTAssertEqual(hosts, ["frozen.invalid", "frozen.invalid"])
-        XCTAssertEqual(allocations, [10809, 10809])
+        XCTAssertEqual(allocations, [10809, 10809, 10809])
         XCTAssertEqual(pauses, 1)
         let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
         let inputs = try XCTUnwrap(output["inbounds"] as? [[String: Any]])

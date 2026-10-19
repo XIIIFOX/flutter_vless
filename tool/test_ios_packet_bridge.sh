@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # CI-only iOS simulator HEV binary proof using the macOS bridge as a test adapter.
 # This does not exercise the iOS provider's utun descriptor discovery or NE path.
-# --compile-only builds the exact app without installing or executing it.
+# Stock Tun2SocksKit5.15.0 simulator HEV is a link-only stub returning -2.
+# --compile-only validates that app; --device-compile-only links the real shipped
+# device library. Neither installs/launches; physical packet qualification is pending.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HEV_DIR="${1:?Pass the ios-arm64_x86_64-simulator directory of the shipped HevSocks5Tunnel.xcframework}"
+HEV_DIR="${1:?Pass the matching simulator or device directory of the shipped HevSocks5Tunnel.xcframework}"
 MODE="${2:-}"
-case "$MODE" in ''|--compile-only) ;; *) echo 'Unknown packet proof argument' >&2; exit 2 ;; esac
+case "$MODE" in ''|--compile-only|--device-compile-only) ;; *) echo 'Unknown packet proof argument' >&2; exit 2 ;; esac
 OUT="$ROOT/build/ios_packet_bridge_probe"
+if [[ "$MODE" == --device-compile-only ]]; then OUT="$ROOT/build/ios_device_packet_bridge_probe"; fi
 BUNDLE=dev.tfox.security-runtime-probe
 mkdir -p "$OUT/Probe.app"
 python3 - "$ROOT" "$OUT" <<'PY'
@@ -41,15 +44,21 @@ with (out/'Probe.app/Info.plist').open('wb') as file:
         'CFBundleShortVersionString':'1.0','MinimumOSVersion':'15.0','LSRequiresIPhoneOS':True,
         'UIDeviceFamily':[1,2]},file)
 PY
-SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
-ARCH="$(uname -m)"
-case "$ARCH" in arm64|x86_64) ;; *) echo "Unsupported simulator architecture: $ARCH" >&2; exit 1 ;; esac
-xcrun swiftc -O -D PACKET_BRIDGE_IOS_APPLICATION -target "$ARCH-apple-ios15.0-simulator" -sdk "$SDK" \
+if [[ "$MODE" == --device-compile-only ]]; then
+    SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+    TARGET=arm64-apple-ios15.0
+else
+    SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+    ARCH="$(uname -m)"
+    case "$ARCH" in arm64|x86_64) ;; *) echo "Unsupported simulator architecture: $ARCH" >&2; exit 1 ;; esac
+    TARGET="$ARCH-apple-ios15.0-simulator"
+fi
+xcrun swiftc -O -D PACKET_BRIDGE_IOS_APPLICATION -target "$TARGET" -sdk "$SDK" \
     -I "$HEV_DIR/Headers" -L "$HEV_DIR" -lhev-socks5-tunnel -framework UIKit -framework NetworkExtension \
     "$ROOT/packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_tunnel_support/TunnelPacketBridge.swift" \
     "$OUT/main.swift" -o "$OUT/Probe.app/Probe"
 echo 'PROBE_PHASE=ios-hev-compile-complete'
-if [[ "$MODE" == --compile-only ]]; then exit 0; fi
+if [[ "$MODE" == --compile-only || "$MODE" == --device-compile-only ]]; then exit 0; fi
 [[ "${CI:-}" == true && "${GITHUB_ACTIONS:-}" == true ]] || {
     echo 'Actual HEV packet proof requires CI=true and GITHUB_ACTIONS=true' >&2; exit 1;
 }

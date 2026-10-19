@@ -285,6 +285,11 @@ object XrayCoreManager {
         } catch (_: Exception) { stopWorkers(); false }
     }
 
+    /** An identity snapshot, not a readiness result. Startup checks this exact
+     * child and its session generation around every bounded probe operation. */
+    internal fun currentCoreProcess(): Process? = xrayProcess
+    internal fun ownsCoreProcess(candidate: Process): Boolean = xrayProcess === candidate && candidate.isAlive
+
     @Synchronized internal fun stopWorkers(): Boolean {
         val process = xrayProcess
         xrayProcess = null // Invalidate callbacks before signaling the old process.

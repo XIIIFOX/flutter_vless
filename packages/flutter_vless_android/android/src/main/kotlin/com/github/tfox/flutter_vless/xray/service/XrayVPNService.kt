@@ -19,6 +19,9 @@ import com.github.tfox.flutter_vless.xray.core.LocalProxyAccessPolicy
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
 import com.github.tfox.flutter_vless.xray.core.XrayDiagnosticsStore
 import com.github.tfox.flutter_vless.xray.core.XrayDiagnosticsStore.Event
+import com.github.tfox.flutter_vless.xray.core.StartupReadiness
+import com.github.tfox.flutter_vless.xray.core.ReadinessFailure
+import com.github.tfox.flutter_vless.xray.core.ReadinessStage
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import com.github.tfox.flutter_vless.NativeQuickAccess
@@ -301,12 +304,12 @@ class XrayVPNService : VpnService() {
                 event(Event.FD_SENT)
             }
             if (!current.PROXY_ONLY) {
-                try { probeAuthenticatedPath() }
-                catch (_: Exception) { recover(Event.AUTH_PROBE_FAILED); return }
-                // A real host-UID request traverses the captured TUN and authenticated tun2socks.
-                // Explicit user app exclusions mean this cannot prove that path; do not claim it.
-                if (!current.BLOCKED_APPS.contains(packageName)) {
-                    try { requireNotNull(readinessProbe).verify() } catch (_: Exception) { recover(Event.PATH_PROBE_FAILED); return }
+                try { probeAuthenticatedPath(owner) }
+                catch (error: Exception) {
+                    val stage = (error as? ReadinessFailure)?.stage
+                    recover(if (stage == ReadinessStage.PACKET_CHALLENGE) Event.PATH_PROBE_FAILED else Event.AUTH_PROBE_FAILED,
+                        (error as? ReadinessFailure)?.diagnosticValue)
+                    return
                 }
             }
             if (!recovery.owns(owner)) return
@@ -372,10 +375,10 @@ class XrayVPNService : VpnService() {
         })
     }
 
-    private fun recover(reason: Event) {
+    private fun recover(reason: Event, detail: Long? = null) {
         if (!recovery.authorized) return
         val next = recovery.restart() // Late callbacks from both workers lose ownership together.
-        event(reason)
+        event(reason, detail)
         stopWorkers() // TUN remains installed throughout backoff, including persistent failure.
         if (!recovery.mayRetry()) {
             XrayCoreManager.publishState(this,AppConfigs.V2RAY_STATES.V2RAY_CONNECTING)
@@ -393,7 +396,7 @@ class XrayVPNService : VpnService() {
         worker.schedule({
             if (!recovery.owns(owner)) return@schedule
             if (count > 0 && count % 30 == 0 && config?.PROXY_ONLY == false) {
-                try { probeAuthenticatedPath() }
+                try { probeAuthenticatedPathOnce() }
                 catch (_: Exception) { recover(Event.AUTH_PROBE_FAILED); return@schedule }
                 if (config?.BLOCKED_APPS?.contains(packageName) == false) {
                     try { requireNotNull(readinessProbe).verify() }
@@ -405,11 +408,26 @@ class XrayVPNService : VpnService() {
         }, 1, TimeUnit.SECONDS)
     }
 
-    private fun probeAuthenticatedPath() {
+    private fun probeAuthenticatedPath(owner: Long) {
+        if (!recovery.owns(owner)) throw ReadinessFailure(ReadinessStage.OWNER)
+        val child = XrayCoreManager.currentCoreProcess() ?: throw ReadinessFailure(ReadinessStage.OWNER)
+        if (!XrayCoreManager.ownsCoreProcess(child)) throw ReadinessFailure(ReadinessStage.OWNER)
+        StartupReadiness(isCurrent = { recovery.owns(owner) && XrayCoreManager.ownsCoreProcess(child) }).use { readiness ->
+            readiness.authenticated { probeAuthenticatedPathOnce(readiness) }
+            // A real host-UID token also traverses TUN and the forwarder. An
+            // explicit app exclusion cannot qualify that packet path.
+            if (config?.BLOCKED_APPS?.contains(packageName) == false)
+                requireNotNull(readinessProbe).verify(readiness, ReadinessStage.PACKET_CHALLENGE)
+            readiness.check()
+        }
+        if (!recovery.owns(owner) || !XrayCoreManager.ownsCoreProcess(child)) throw ReadinessFailure(ReadinessStage.OWNER)
+    }
+
+    private fun probeAuthenticatedPathOnce(readiness: StartupReadiness? = null) {
         val probe = requireNotNull(readinessProbe)
-        probe.verify {
+        probe.verify(readiness, ReadinessStage.PRIVATE_CHALLENGE) {
             AuthenticatedSocksClient.connect(requireNotNull(config).LOCAL_SOCKS5_PORT,
-                requireNotNull(credentials), probe.host, probe.port)
+                requireNotNull(credentials), probe.host, probe.port, readiness)
         }
     }
 

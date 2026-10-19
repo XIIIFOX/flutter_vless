@@ -143,7 +143,7 @@ preparation retain their separate behavior.
 
 The default Android CI job runs the production adapter and its two focused
 caller-DNS TUN tests in parallel with desktop Core checks; a third IPv6 payload
-case is added in this increment and awaits runtime acceptance. It uses the existing
+case passes in the current increment. It uses the existing
 `--no-capture` mode: functional Wi-Fi DNS/system-policy tests remain mandatory,
 while the report explicitly marks physical packet capture unverified. Cellular
 capture/handover qualification remains separate because the emulator may not
@@ -182,6 +182,19 @@ run. The iOS simulator and remote macOS runtime on 6c19e2d pass both HTTP/SOCKS
 DNS proxy variants, two generations, non-IP refusal and failure without direct
 fallback. This qualifies the minimum DNS increment, not full advanced DNS,
 physical Apple VPN routing or encrypted DoH/TLS.
+
+The next DNS runtime gate uses a synthetic HTTPS/HTTP2 resolver with a private
+test CA. It requires A/AAAA wire answers over the managed TCP/UDP resolver,
+preserved SNI/HTTP authority/path, caller service/tag policy, an independent
+transport pin and zero OS-resolver attempts. Fresh bounded child processes
+test valid trust, an unrelated CA and a certificate for the wrong name against
+the same source/effective configuration. Each child must also retain static
+hosts, working proxy traffic and disabled caller counters after TLS rejection.
+The trust file is selected only in those disposable Go 1.27 test children;
+host trust stores, production DNS policy and public runtime artifacts are
+unchanged. Crypto/material, bounded-output and Core Build checks pass locally.
+Actual encrypted DoH acceptance is pending. This does not qualify DoQ, ECH
+background lookups or additional production certificate/import APIs.
 
 ### Minimum protocol and transport adaptation
 
@@ -322,24 +335,62 @@ The shared [two-config corpus](../tool/fixtures/compatibility/ipv6-payload.json)
 checks both DNS strategies against production preparation and pinned Core Build.
 Regression tests first reproduced AAAA suppression and managed IPv6 blocks.
 Local preparation passes for both C++ and Apple exporters without starting Core.
-Android passes 139 JVM checks and compiles a third caller-root device fixture.
+Android passes 139 JVM checks and a third caller-root device fixture in CI.
 Apple pure policy checks and both shipped HEV fixture targets compile. Windows
 policy, cleanup and runtime-fixture checks pass locally without running VPN.
 
 New remote runtime gates require actual IPv6 TCP/UDP payloads through an IPv4
 proxy, exact targets/nonces, and preserved caller AAAA policy. Separate HEV
-binary checks exercise framed IPv6 TCP/UDP packets on macOS and iOS simulator;
-the simulator check does not establish physical iOS Network Extension behavior.
-Windows also rechecks bytes after recovery and owned route/address cleanup.
-These new gates are pending. IPv6-only transport endpoints, NAT64, cross-family
+binary checks exercise framed IPv6 TCP/UDP packets on macOS. The shared fixture
+also compiles for physical iOS; the simulator slice only supports linking.
+Windows also rechecks bytes after recovery and route cleanup; failed address
+deletion ownership has separate production-helper unit coverage.
+[Ordinary Core on aeae2c0](https://github.com/XIIIFOX/flutter_vless/actions/runs/39182393132)
+passes IPv6 TCP/UDP over IPv4 VLESS on Linux/macOS/Windows, with both caller DNS
+strategies and both production preparers on macOS. Source hashes match the
+commit, caller counters remain disabled and no OS resolver is attempted.
+[Windows service acceptance on aeae2c0](https://github.com/XIIIFOX/flutter_vless/actions/runs/39182405856)
+passes all six jobs and 386 proxy/portable/VPN rows on Windows 2022/2025,
+including 155 VPN rows per OS. IPv6 payload and AAAA, underlay rename, both
+worker recoveries and physical-interface blocking pass.
+[Android TUN on aeae2c0](https://github.com/XIIIFOX/flutter_vless/actions/runs/39182393132)
+passes all 36 native checks without skips, including actual IPv6 TCP/UDP and
+caller AAAA. Three Flutter checks and separate-UID authorization controls also
+pass. Physical capture is explicitly unverified; cross-UID IPv6 bypass is a
+separate qualification requirement.
+
+The same run passes all iOS simulator Xray/privacy checks, then the new HEV
+packet fixture fails before its first IPv4 packet. Inspection of the original
+checksum-pinned Tun2SocksKit 5.15.0 archive proves its simulator slice is a
+link-only stub: all main entrypoints return `-2`. The compiled device/macOS
+slices are real implementations. CI therefore links the simulator packet
+fixture without claiming runtime support; the script still fails if an actual
+stub runtime is requested. A device compile-only target prepares that same
+fixture for later physical acceptance without installing or launching it.
+The physical iOS packet gate remains pending, and the first remote macOS HEV
+gate was not reached after the simulator failure. IPv6-only endpoints, NAT64, cross-family
 handover and physical IPv6 bypass qualification remain open. The physical
 iPhone and host Mac VPN are not used by this increment.
 
 The preceding [bea89db Android run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39180284967)
 passes 34 native checks and three Flutter checks, including caller DNS/assets,
 but fails one strict Always-on readiness check with `AUTH_PROBE_FAILED`. Its
-bounded logs do not identify the underlying error. This remains an unresolved
-runtime issue; the unchanged Android tree previously passed on cecac3a.
+bounded logs do not identify the underlying error. The later aeae2c0 strict
+Always-on case passes; the earlier failure's cause remains unproven.
+
+An independent test-first Android regression reproduces a local-listener race:
+the FD-protection acknowledgement precedes Core listener startup. Startup now
+uses one five-second budget for authenticated SOCKS and both private/packet
+challenges, tied to the original session generation and exact live Core child.
+Only a native `ECONNREFUSED` at the initial local connect can wait/retry that
+same process. Permission failures, unknown causes, auth/protocol/token errors
+and post-connect timeouts fail immediately; periodic checks remain one-shot.
+An owned deadline task closes only readiness sockets and is drained on exit.
+Strict disabled recovery still does not relaunch workers. All 164 JVM checks
+and the test APK compile pass; the new startup runtime gate is pending.
+Diagnostics retain fixed numeric stage/errno metadata without raw errors,
+credentials or tokens. The specific H-before-listener gap does not apply to
+Apple's synchronous Core Start; Windows already has a bounded startup check.
 
 Port grammar progress (2026-10-18): the Dart, Kotlin, Swift and C++ paths now
 share a 20-case corpus checked against the pinned Core decoder/build path.
@@ -598,7 +649,7 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | Item | Status | Evidence and remaining work |
 | --- | --- | --- |
 | 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private address queries. The original DNS increment passes Core/native runtime and Android TUN checks. New AAAA forwarding is awaiting runtime acceptance. Localhost adaptation and unsupported paths are documented above. Full advanced/FakeDNS semantics remain open. |
-| 2. IPv6 | Partial; payload runtime pending | IPv6 capture/routing and AAAA preparation pass focused regressions. New TCP/UDP Core, Android TUN, HEV binary and Windows recovery gates await CI. IPv6-only endpoints, NAT64, cross-family handover and physical bypass qualification remain open. |
+| 2. IPv6 | Partial; Apple packet gates pending | IPv6 TCP/UDP with preserved AAAA policy passes ordinary Core on all three desktop systems, actual Android TUN and Windows 2022/2025 TUN/recovery/physical-interface controls. iOS simulator HEV is a verified link-only stub; physical iOS and remote macOS HEV packet gates remain pending. IPv6-only endpoints, NAT64, cross-family handover and broader physical bypass qualification remain open. |
 | 3. Protocol/transport matrix | Partial | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP preparation fixes and a seven-case pinned Core build corpus pass native tests. Imported loopback/DNS traffic passes ordinary Core acceptance on all three desktop systems at dacfd59; new protocol handshakes, XHTTP penetrate and the full matrix remain open. |
 | 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Source-inbound context, explicit VPN default selection, prefix-selector isolation and exact adapter counters remain open. |
 | 5. Ports/addresses | Partial | Shared 20-case port, 12-case service-tag, 21-case numeric API and 36-case service-listener fixtures cover allocation. Real Android/iPhone list/range/env/Unix and tag-collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. OS port checks, service-name resolution, prefix-selector isolation, bind retries and broader proxy-only parity remain open. |

@@ -3,6 +3,9 @@ package com.github.tfox.flutter_vless.xray.service
 import org.json.JSONArray
 import org.json.JSONObject
 import com.github.tfox.flutter_vless.xray.core.XrayServiceTags
+import com.github.tfox.flutter_vless.xray.core.StartupReadiness
+import com.github.tfox.flutter_vless.xray.core.ReadinessFailure
+import com.github.tfox.flutter_vless.xray.core.ReadinessStage
 import java.io.Closeable
 import java.io.DataInputStream
 import java.net.InetAddress
@@ -54,17 +57,43 @@ internal class SessionReadinessProbe(val host: String) : Closeable {
         return json
     }
 
-    fun verify(connect: () -> Socket = {
-        Socket().also { socket ->
-            try { socket.connect(InetSocketAddress(host, port), 3000) }
-            catch (error: Exception) { socket.close(); throw error }
+    fun verify(readiness: StartupReadiness? = null, stage: ReadinessStage = ReadinessStage.PACKET_CHALLENGE,
+        connect: (() -> Socket)? = null) {
+        val client = if (connect != null) connect() else Socket().also { socket ->
+            try {
+                readiness?.adopt(socket)
+                socket.connect(InetSocketAddress(host, port), readiness?.remainingMillis() ?: 3000)
+                readiness?.check()
+            } catch (error: Exception) {
+                try { socket.close(); readiness?.release(socket) } catch (cleanup: Exception) { error.addSuppressed(cleanup) }
+                if (readiness != null) { readiness.check(); throw ReadinessFailure(stage) }
+                throw error
+            }
         }
-    }) {
-        connect().use { client ->
-            client.soTimeout = 3000
+        var primary: Throwable? = null
+        try {
+            readiness?.adopt(client)
+            client.soTimeout = readiness?.remainingMillis() ?: 3000
             val response = ByteArray(token.size)
-            DataInputStream(client.getInputStream()).readFully(response)
-            check(response.contentEquals(token)) { "Local packet path mismatch" }
+            if (readiness == null) DataInputStream(client.getInputStream()).readFully(response)
+            else readiness.readFully(client, client.getInputStream(), response, stage)
+            if (!response.contentEquals(token)) {
+                if (readiness != null) throw ReadinessFailure(stage)
+                error("Local packet path mismatch")
+            }
+            readiness?.check()
+        } catch (error: Throwable) {
+            primary = error
+            if (readiness != null && error is Exception && error !is ReadinessFailure) {
+                try { readiness.check() } catch (guard: ReadinessFailure) { primary = guard; throw guard }
+                val failure = ReadinessFailure(stage)
+                primary = failure
+                throw failure
+            }
+            throw error
+        } finally {
+            try { client.close(); readiness?.release(client) }
+            catch (cleanup: Throwable) { if (primary != null) primary.addSuppressed(cleanup) else throw cleanup }
         }
     }
 

@@ -178,7 +178,7 @@ struct PacketBridgeProbe {
                     hev_socks5_tunnel_main_from_str($0, UInt32(config.utf8.count), bridge.workerDescriptor)
                 }
             }
-            guard code == 0 else { fputs("FAIL HEV exit\n", stderr); exit(1) }
+            guard code == 0 else { fputs("FAIL HEV exit code=\(code)\n", stderr); exit(1) }
             done.signal()
         }
         do {

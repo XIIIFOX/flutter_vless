@@ -909,8 +909,11 @@ def main():
                         assert native(probe, "policy-count") == "0"
                         remaining = subprocess.check_output([
                             "powershell", "-NoProfile", "-Command",
-                            "@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1','::/1','8000::/1') }).Count"], text=True, timeout=25)
-                        results.append(dict(mode=label, check="capture routes removed by service", passed=remaining.strip() == "0"))
+                            "[pscustomobject]@{Routes=@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1','::/1','8000::/1') }).Count; "
+                            "IPv6Addresses=@(Get-NetIPAddress -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -eq 'flutter_vless_tun' -and $_.IPAddress -eq 'fd00:198:18::2' }).Count} | ConvertTo-Json -Compress"], text=True, timeout=25)
+                        inventory = json.loads(remaining)
+                        results.append(dict(mode=label, check="capture routes removed by service", passed=inventory["Routes"] == 0))
+                        results.append(dict(mode=label, check="owned IPv6 address removed by service", passed=inventory["IPv6Addresses"] == 0))
                         assert external_http(external_address) == baseline
                         results.append(dict(mode=label, check="explicit stop restores ordinary HTTPS", passed=True))
                         if not reverse and ending == "stop":

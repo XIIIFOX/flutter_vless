@@ -263,7 +263,7 @@ jobs:
         run: |
           swift package --package-path ios/flutter_vless resolve
           tool/test_ios_hev_auth.sh
-      - name: Test real iOS Xray and HEV packets in simulator
+      - name: Test real iOS Xray in simulator and link HEV fixture
         timeout-minutes: 18
         run: |
           SIMULATOR_UDID="$(xcrun simctl create 'Flutter Vless Security' com.apple.CoreSimulator.SimDeviceType.iPhone-16)"
@@ -273,7 +273,10 @@ jobs:
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b
           REQUIRE_CORE_PREFLIGHT=1 tool/test_ios_privacy_runtime.sh
           HEV=ios/flutter_vless/.build/artifacts/tun2sockskit/HevSocks5Tunnel/HevSocks5Tunnel.xcframework
-          bash tool/test_ios_packet_bridge.sh "$HEV/ios-arm64_x86_64-simulator"
+          # The checksum-pinned simulator HEV slice is a link-only stub.
+          # Its packet runtime must be checked on a physical iOS device.
+          bash tool/test_ios_packet_bridge.sh "$HEV/ios-arm64_x86_64-simulator" --compile-only
+          bash tool/test_ios_packet_bridge.sh "$HEV/ios-arm64" --device-compile-only
       - name: Test bounded Apple Xray diagnostics store and typed native options
         run: |
           tool/test_bounded_native_log_store.sh

@@ -107,7 +107,7 @@ class PreservationRunnerGuards(unittest.TestCase):
                     (evidence / 'core-pin.log').write_text(json.dumps({'Version': 'v1.0.0', 'Sum': 'synthetic', 'Dir': str(core)}))
                 if name == 'protocol-preparation-pure':
                     (evidence / 'protocol-preparation-pure.log').write_text(
-                        '--- PASS: TestNativeProtocolPreparation (0.01s)\n--- PASS: TestProtocolCorpusBuilds (0.01s)\n')
+                        '--- PASS: TestNativeProtocolPreparation (0.01s)\n--- PASS: TestProtocolCorpusBuilds (0.01s)\n--- PASS: TestNativeDoHMaterialOnly (0.01s)\n')
 
             with mock.patch.object(runner, 'EVIDENCE', evidence), mock.patch.object(runner.sys, 'argv', ['runner']), \
                     mock.patch.object(runner.platform, 'system', return_value='Linux'), \
@@ -118,7 +118,7 @@ class PreservationRunnerGuards(unittest.TestCase):
                 self.assertEqual(runner.main(), 0)
             self.assertTrue(any('test' in command and '-c' in command for command in commands))
             selections = [command[command.index('-test.run') + 1] for command in commands if '-test.run' in command]
-            self.assertEqual(selections, ['^(TestNativeProtocolPreparation|TestProtocolCorpusBuilds)$'])
+            self.assertEqual(selections, ['^(TestNativeProtocolPreparation|TestProtocolCorpusBuilds|TestNativeDoHMaterialOnly)$'])
             self.assertFalse(any(runner.SELECTED_TEST in selection for selection in selections))
             report = json.loads((evidence / 'result.json').read_text())
             self.assertFalse(report['runtime_requested'])

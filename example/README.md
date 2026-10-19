@@ -169,6 +169,10 @@ The Windows backend does not download Xray automatically.
   [DNS MVP behavior and current limits](../doc/compatibility.md#incremental-delivery-order-2026-10-19)
   before testing localhost defaults, IPv6 or FakeDNS. Use a fresh browser
   connection after changing a DNS or routing rule.
+  HTTPS DoH URLs and caller DNS routing stay in the full JSON. Named resolver
+  bootstrap currently requires an explicit IPv4 entry in caller `dns.hosts`
+  on Apple/Windows. The controlled TLS test uses a disposable test CA; it does
+  not add a public certificate-installation option.
 - Use proxy-only mode first when you want the smallest runtime path.
 - The [IPv6 payload fixtures](../tool/fixtures/compatibility/ipv6-payload.json)
   preserve caller `UseIP` or `UseIPv4` DNS strategy. Controlled CI checks cover

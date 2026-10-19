@@ -21,6 +21,7 @@ MOBILE = ROOT / 'third_party/xray-mobile'
 SWIFT = ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos'
 SELECTED_TEST = 'TestNativeDNSPreservation'
 PROTOCOL_TEST = 'TestNativeProtocolPreparation'
+MATERIAL_TEST = 'TestNativeDoHMaterialOnly'
 
 spec = importlib.util.spec_from_file_location('dns_preservation_checked', ROOT / 'tool/test_native_dns_context_runtime.py')
 common = importlib.util.module_from_spec(spec)
@@ -172,13 +173,14 @@ def main():
         report['acceptance_sha256'] = digest(binary)
         # These exact tests only decode/build and invoke file-only preparers.
         # They create no Core instance, listener, resolver or runtime engine.
-        checked('protocol-preparation-pure', [str(binary), '-test.run', '^(' + PROTOCOL_TEST + '|TestProtocolCorpusBuilds)$',
+        pure_tests = [PROTOCOL_TEST, 'TestProtocolCorpusBuilds', MATERIAL_TEST]
+        checked('protocol-preparation-pure', [str(binary), '-test.run', '^(' + '|'.join(pure_tests) + ')$',
                 '-test.v', '-test.timeout=60s'], 75, MOBILE, runtime_environment)
         output = (EVIDENCE / 'protocol-preparation-pure.log').read_text(encoding='utf-8')
-        for name in [PROTOCOL_TEST, 'TestProtocolCorpusBuilds']:
+        for name in pure_tests:
             common.require_selected_test_pass(output, name)
         results[-1]['selected_test_pass'] = True
-        results[-1]['selected_tests'] = [PROTOCOL_TEST, 'TestProtocolCorpusBuilds']
+        results[-1]['selected_tests'] = pure_tests
         if arguments.run_runtime:
             checked('actual-core-dns', [str(binary), '-test.run', '^' + SELECTED_TEST + '$', '-test.v', '-test.timeout=120s'],
                     140, MOBILE, runtime_environment)

@@ -55,10 +55,27 @@ object XrayCoreManager {
         key.replace('ſ', 's').replace('K', 'k').lowercase(java.util.Locale.ROOT)
 
     /** Core treats these exact schema-owned maps as caller names and values. */
-    private fun callerDictionary(path: List<String>): Boolean =
-        path == listOf("dns", "hosts") ||
-            (path.size == 5 && path[0] in setOf("inbounds", "outbounds") &&
-                path.subList(1, 5) == listOf("*", "streamsettings", "wssettings", "headers"))
+    private fun callerDictionary(path: List<String>): Boolean {
+        if (path == listOf("dns", "hosts")) return true
+        if (path.size < 5 || path[0] !in setOf("inbounds", "outbounds") ||
+            path[1] != "*" || path[2] != "streamsettings") return false
+        var streamStart = 3
+        while (streamStart < path.size) {
+            val tail = path.subList(streamStart, path.size)
+            if (tail.size == 2 && tail[0] in setOf("wssettings", "httpupgradesettings", "xhttpsettings", "splithttpsettings", "masquesettings") &&
+                tail[1] == "headers") return true
+            if (tail.size == 4 && tail[0] in setOf("tcpsettings", "rawsettings") && tail[1] == "header" &&
+                tail[2] in setOf("request", "response") && tail[3] == "headers") return true
+            if (tail == listOf("hysteriasettings", "masquerade", "headers")) return true
+            if (tail[0] !in setOf("xhttpsettings", "splithttpsettings")) return false
+            var field = streamStart + 1
+            if (path.getOrNull(field) == "extra") field++
+            if (path.getOrNull(field) == "headers") return field == path.lastIndex
+            if (path.getOrNull(field) != "downloadsettings") return false
+            streamStart = field + 1
+        }
+        return false
+    }
 
     private fun normalizeRuntimeConfig(value: Any?, path: List<String> = emptyList()): Any? {
         if (value is JSONObject && callerDictionary(path)) return value

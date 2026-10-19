@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Validate the effective immediate XHTTP download transport in proxy-DNS preparation. Preserve inactive nested downloads and keep the immediate client's own socket policy separate from explicit parent inheritance.
+
 * Preserve caller `useSystemHosts` for numeric remote DNS instead of rejecting the flag before Core can read the hosts file. Keep named resolver and local transport admission unchanged; add shared DNS preservation controls.
 
 * Prepare compatible FakeDNS pools without changing caller DNS or imported sniffing. Move owned IPv4/DNS addresses outside the default pool and reject native namespace conflicts before bootstrap; add shared regressions.

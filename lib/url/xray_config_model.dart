@@ -414,18 +414,51 @@ dynamic sanitizeXrayJson(dynamic params, {bool preserveStructure = false}) {
   );
 }
 
-bool _matchesXrayField(String key, String field) =>
-    key.replaceAll('\u017f', 's').replaceAll('\u212a', 'k').toLowerCase() ==
-    field;
+String _xrayField(String key) =>
+    key.replaceAll('\u017f', 's').replaceAll('\u212a', 'k').toLowerCase();
 
-bool _isWebSocketHeaders(List<String> path) =>
-    path.length == 5 &&
-    (_matchesXrayField(path[0], 'inbounds') ||
-        _matchesXrayField(path[0], 'outbounds')) &&
-    path[1] == '*' &&
-    _matchesXrayField(path[2], 'streamsettings') &&
-    _matchesXrayField(path[3], 'wssettings') &&
-    _matchesXrayField(path[4], 'headers');
+bool _matchesXrayField(String key, String field) => _xrayField(key) == field;
+
+bool _isTransportHeaders(List<String> path) {
+  if (path.length < 5 || !_matchesXrayField(path.last, 'headers')) {
+    return false;
+  }
+  final fields = path.map(_xrayField).toList(growable: false);
+  if (!{'inbounds', 'outbounds'}.contains(fields[0]) ||
+      fields[1] != '*' ||
+      fields[2] != 'streamsettings') {
+    return false;
+  }
+  var cursor = 3;
+  while (cursor < fields.length - 1) {
+    final transport = fields[cursor++];
+    switch (transport) {
+      case 'xhttpsettings':
+      case 'splithttpsettings':
+        if (fields[cursor] == 'extra') cursor++;
+        if (cursor < fields.length - 1 &&
+            fields[cursor] == 'downloadsettings') {
+          cursor++;
+          continue;
+        }
+        return cursor == fields.length - 1;
+      case 'wssettings':
+      case 'httpupgradesettings':
+      case 'masquesettings':
+        return cursor == fields.length - 1;
+      case 'tcpsettings':
+      case 'rawsettings':
+        return cursor + 3 == fields.length &&
+            fields[cursor] == 'header' &&
+            {'request', 'response'}.contains(fields[cursor + 1]);
+      case 'hysteriasettings':
+        return cursor + 2 == fields.length && fields[cursor] == 'masquerade';
+      default:
+        return false;
+    }
+  }
+  return false;
+}
 
 dynamic _sanitizeXrayJson(
   dynamic params, {
@@ -450,7 +483,7 @@ dynamic _sanitizeXrayJson(
       params.entries
           .map((entry) => MapEntry(entry.key.toString(), entry.value)),
     );
-    // DNS hosts and WebSocket headers contain caller keys and values, including
+    // DNS hosts and transport headers contain caller keys and values, including
     // names which match legacy stream fields. Only schema needs that cleanup.
     if (!dictionaryData) {
       _normalizeStreamSettingsAliases(source);
@@ -466,7 +499,7 @@ dynamic _sanitizeXrayJson(
         dnsFields: root && _matchesXrayField(key, 'dns'),
         dictionaryData: dictionaryData ||
             (dnsFields && _matchesXrayField(key, 'hosts')) ||
-            _isWebSocketHeaders(childPath),
+            _isTransportHeaders(childPath),
         path: childPath,
       );
       if (preserveStructure || sanitized != null) {

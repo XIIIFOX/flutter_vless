@@ -941,7 +941,9 @@ inline bool BootstrapStream(Json& stream, const std::vector<BootstrapEndpoint>& 
   Json* download = nullptr;
   Json null_extra = Json::object();
   const auto* key = stream.contains("xhttpSettings") && !stream["xhttpSettings"].is_null() ? "xhttpSettings" : "splithttpSettings";
-  if ((network == "xhttp" || network == "splithttp") && stream.contains(key) && !stream[key].is_null()) {
+  // getHTTPClient consumes the immediate client without another XHTTP Dial;
+  // that client's nested download stays inactive with either socket policy.
+  if (!independent_destination && (network == "xhttp" || network == "splithttp") && stream.contains(key) && !stream[key].is_null()) {
     auto& settings = stream[key];
     if (!Fields(settings, {"extra", "downloadSettings"})) return false;
     auto* container = &settings;
@@ -949,13 +951,18 @@ inline bool BootstrapStream(Json& stream, const std::vector<BootstrapEndpoint>& 
     if (!Fields(*container, {"downloadSettings"})) return false;
     if (container->contains("downloadSettings") && !(*container)["downloadSettings"].is_null()) download = &(*container)["downloadSettings"];
   }
+  if (download) {
+    auto child = *download;
+    if (!Fields(child, {"network", "method"})) return false;
+    const auto child_network = EffectiveStreamNetwork(child);
+    // Both HTTP clients use XHTTP Config, even with independent socket policy.
+    if (child_network != "xhttp" && child_network != "splithttp") return false;
+  }
   if (download && penetrate) {
     auto child = *download;
     if (!Fields(child, {"address", "port", "network", "method", "tlsSettings"})) return false;
-    const auto child_network = EffectiveStreamNetwork(child);
     const auto port = Port(child);
-    // Core casts the download's ProtocolSettings directly to XHTTP Config.
-    if ((child_network != "xhttp" && child_network != "splithttp") || !child.contains("address")
+    if (!child.contains("address")
         || !child["address"].is_string() || child["address"].get<std::string>().empty() || !port) return false;
     if (child.contains("tlsSettings") && !child["tlsSettings"].is_null()) {
       auto tls = child["tlsSettings"];

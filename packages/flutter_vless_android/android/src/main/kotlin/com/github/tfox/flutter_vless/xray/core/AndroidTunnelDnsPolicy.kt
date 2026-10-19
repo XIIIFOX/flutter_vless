@@ -368,22 +368,29 @@ internal object AndroidTunnelDnsPolicy {
     }
 
     private fun prepareStream(stream: JSONObject, pinEndpoint: (String) -> Unit, independentDownload: Boolean = false,
-                              environment: (String) -> String?) {
+                              inheritedSocketPolicy: Boolean = false, environment: (String) -> String?) {
         canonicalize(stream, "sockopt", "address", "network", "method", "xhttpSettings", "splithttpSettings")
         // Core treats an absent or null SocketSettings as nil. The independent
         // download keeps its own policy; only Core's explicit penetrate flag
         // makes it inherit the parent at dial time.
-        val sockopt = if (stream.isNull("sockopt")) JSONObject() else objectValue(stream, "sockopt") ?: JSONObject()
-        canonicalize(sockopt, "domainStrategy", "addressPortStrategy", "dialerProxy")
-        val addressPortStrategy = if (sockopt.isNull("addressPortStrategy")) null else optionalString(sockopt, "addressPortStrategy")
-        require(addressPortStrategy.isNullOrEmpty() || addressPortStrategy.equals("none", true)) {
-            "SRV/TXT endpoint overrides cannot use the protected system DNS policy"
+        val penetrating = if (inheritedSocketPolicy) false else {
+            val sockopt = if (stream.isNull("sockopt")) JSONObject() else objectValue(stream, "sockopt") ?: JSONObject()
+            canonicalize(sockopt, "domainStrategy", "addressPortStrategy", "dialerProxy", "penetrate")
+            val addressPortStrategy = if (sockopt.isNull("addressPortStrategy")) null else optionalString(sockopt, "addressPortStrategy")
+            require(addressPortStrategy.isNullOrEmpty() || addressPortStrategy.equals("none", true)) {
+                "SRV/TXT endpoint overrides cannot use the protected system DNS policy"
+            }
+            sockopt.put("domainStrategy", "ForceIP")
+            stream.put("sockopt", sockopt)
+            sockopt.opt("penetrate") == true
         }
-        sockopt.put("domainStrategy", "ForceIP")
-        stream.put("sockopt", sockopt)
         // Core method overrides network; JSON null retains the fallback/default.
         val method = if (stream.isNull("method")) null else optionalString(stream, "method")
         val network = method ?: if (stream.isNull("network")) "tcp" else optionalString(stream, "network")
+        val xhttp = network?.lowercase(Locale.ROOT) in setOf("xhttp", "splithttp")
+        // Core consumes the immediate download as an XHTTP Config, regardless
+        // of whether its socket policy is independent or inherited.
+        require(!independentDownload || xhttp) { "XHTTP download transport must be xhttp or splithttp" }
         // Primary TCP/WS/gRPC/XHTTP use the protocol's server address. Only
         // XDRIVE uses the primary MemoryStreamConfig destination; an independent
         // XHTTP download always has its own destination, regardless of method.
@@ -393,7 +400,11 @@ internal object AndroidTunnelDnsPolicy {
                 stream.put("address", address)
                 pinEndpoint(address)
             }
-        if (network?.lowercase(Locale.ROOT) !in setOf("xhttp", "splithttp")) return
+        // getHTTPClient consumes the immediate download's own address and TLS,
+        // with either its own or inherited socket policy. It never recursively
+        // dials another nested XHTTP download.
+        if (independentDownload) return
+        if (!xhttp) return
         fun nullableObject(value: JSONObject, key: String) =
             if (value.isNull(key)) null else objectValue(value, key)
         // These are separate Core aliases with defined precedence, not ambiguous
@@ -404,8 +415,12 @@ internal object AndroidTunnelDnsPolicy {
             // Even explicit extra:null replaces outer advanced settings in Core.
             val extra = nullableObject(transport, "extra") ?: return
             canonicalize(extra, "downloadSettings")
-            nullableObject(extra, "downloadSettings")?.let { prepareStream(it, pinEndpoint, independentDownload = true, environment = environment) }
-        } else nullableObject(transport, "downloadSettings")?.let { prepareStream(it, pinEndpoint, independentDownload = true, environment = environment) }
+            nullableObject(extra, "downloadSettings")?.let {
+                prepareStream(it, pinEndpoint, independentDownload = true, inheritedSocketPolicy = penetrating, environment = environment)
+            }
+        } else nullableObject(transport, "downloadSettings")?.let {
+            prepareStream(it, pinEndpoint, independentDownload = true, inheritedSocketPolicy = penetrating, environment = environment)
+        }
     }
 
     /** User bypass routes may never remove the reserved resolver from TUN capture. */

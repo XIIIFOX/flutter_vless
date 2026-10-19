@@ -1,0 +1,942 @@
+[
+  {
+    "name": "websocket",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "caller-transport",
+          "protocol": "vless",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "ws",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "service.invalid",
+              "masterKeyLog": ""
+            },
+            "wsSettings": {
+              "path": "/ws",
+              "headers": {
+                "allowInsecure": "literal-header-value",
+                "network": "MiXeD-CaSe",
+                "xHTTPSettings": "literal-alias-name",
+                "type": "xicmp",
+                "Origin": "quic+local://literal.invalid"
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    },
+    "maps": [
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "wsSettings",
+          "headers"
+        ],
+        "kind": "string"
+      }
+    ]
+  },
+  {
+    "name": "httpupgrade",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "caller-transport",
+          "protocol": "vless",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "httpupgrade",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "service.invalid",
+              "masterKeyLog": ""
+            },
+            "httpupgradeSettings": {
+              "path": "/upgrade",
+              "host": "upgrade.invalid",
+              "headers": {
+                "allowInsecure": "literal-header-value",
+                "network": "MiXeD-CaSe",
+                "xHTTPSettings": "literal-alias-name",
+                "type": "xicmp",
+                "Origin": "quic+local://literal.invalid"
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    },
+    "maps": [
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "httpupgradeSettings",
+          "headers"
+        ],
+        "kind": "string"
+      }
+    ]
+  },
+  {
+    "name": "xhttp_preferred",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "caller-transport",
+          "protocol": "vless",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xhttp",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "service.invalid",
+              "masterKeyLog": ""
+            },
+            "xhttpSettings": {
+              "path": "/upload",
+              "mode": "packet-up",
+              "headers": {
+                "allowInsecure": "literal-header-value",
+                "network": "MiXeD-CaSe",
+                "xHTTPSettings": "literal-alias-name",
+                "type": "xicmp",
+                "Origin": "quic+local://literal.invalid"
+              }
+            },
+            "splithttpSettings": {
+              "headers": {
+                "X-Dormant": "legacy"
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    },
+    "maps": [
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "xhttpSettings",
+          "headers"
+        ],
+        "kind": "string"
+      },
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "splithttpSettings",
+          "headers"
+        ],
+        "kind": "string"
+      }
+    ]
+  },
+  {
+    "name": "splithttp_alias",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "caller-transport",
+          "protocol": "vless",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "splithttp",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "service.invalid",
+              "masterKeyLog": ""
+            },
+            "splithttpSettings": {
+              "path": "/alias",
+              "mode": "packet-up",
+              "headers": {
+                "allowInsecure": "literal-header-value",
+                "network": "MiXeD-CaSe",
+                "xHTTPSettings": "literal-alias-name",
+                "type": "xicmp",
+                "Origin": "quic+local://literal.invalid"
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    },
+    "maps": [
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "splithttpSettings",
+          "headers"
+        ],
+        "kind": "string"
+      }
+    ]
+  },
+  {
+    "name": "xhttp_extra_override_download",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "caller-transport",
+          "protocol": "vless",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xhttp",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "service.invalid",
+              "masterKeyLog": ""
+            },
+            "xhttpSettings": {
+              "path": "/extra",
+              "mode": "packet-up",
+              "headers": {
+                "X-Dormant": "outer"
+              },
+              "downloadSettings": {
+                "address": "dormant.invalid",
+                "port": 9443,
+                "network": "tcp"
+              },
+              "extra": {
+                "downloadSettings": {
+                  "address": "endpoint.invalid",
+                  "port": 8443,
+                  "network": "xhttp",
+                  "security": "tls",
+                  "tlsSettings": {
+                    "serverName": "download.invalid",
+                    "masterKeyLog": ""
+                  },
+                  "xhttpSettings": {
+                    "path": "/download",
+                    "mode": "stream-one",
+                    "headers": {
+                      "allowInsecure": "literal-header-value",
+                      "network": "MiXeD-CaSe",
+                      "xHTTPSettings": "literal-alias-name",
+                      "type": "xicmp",
+                      "Origin": "quic+local://literal.invalid"
+                    }
+                  }
+                },
+                "headers": {
+                  "allowInsecure": "literal-header-value",
+                  "network": "MiXeD-CaSe",
+                  "xHTTPSettings": "literal-alias-name",
+                  "type": "xicmp",
+                  "Origin": "quic+local://literal.invalid"
+                }
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    },
+    "maps": [
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "xhttpSettings",
+          "extra",
+          "headers"
+        ],
+        "kind": "string"
+      },
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "xhttpSettings",
+          "extra",
+          "downloadSettings",
+          "xhttpSettings",
+          "headers"
+        ],
+        "kind": "string"
+      },
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "xhttpSettings",
+          "headers"
+        ],
+        "kind": "string"
+      }
+    ]
+  },
+  {
+    "name": "xhttp_direct_download",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "caller-transport",
+          "protocol": "vless",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xhttp",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "service.invalid",
+              "masterKeyLog": ""
+            },
+            "xhttpSettings": {
+              "path": "/direct-download",
+              "mode": "packet-up",
+              "downloadSettings": {
+                "address": "endpoint.invalid",
+                "port": 8443,
+                "network": "xhttp",
+                "security": "tls",
+                "tlsSettings": {
+                  "serverName": "download.invalid",
+                  "masterKeyLog": ""
+                },
+                "xhttpSettings": {
+                  "path": "/download",
+                  "mode": "stream-one",
+                  "headers": {
+                    "allowInsecure": "literal-header-value",
+                    "network": "MiXeD-CaSe",
+                    "xHTTPSettings": "literal-alias-name",
+                    "type": "xicmp",
+                    "Origin": "quic+local://literal.invalid"
+                  }
+                }
+              },
+              "headers": {
+                "allowInsecure": "literal-header-value",
+                "network": "MiXeD-CaSe",
+                "xHTTPSettings": "literal-alias-name",
+                "type": "xicmp",
+                "Origin": "quic+local://literal.invalid"
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    },
+    "maps": [
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "xhttpSettings",
+          "headers"
+        ],
+        "kind": "string"
+      },
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "xhttpSettings",
+          "downloadSettings",
+          "xhttpSettings",
+          "headers"
+        ],
+        "kind": "string"
+      }
+    ]
+  },
+  {
+    "name": "masque",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "caller-transport",
+          "protocol": "masque",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443,
+            "remoteDNS": [
+              "9.9.9.9"
+            ]
+          },
+          "streamSettings": {
+            "network": "masque",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "service.invalid",
+              "masterKeyLog": ""
+            },
+            "masqueSettings": {
+              "host": "service.invalid",
+              "path": "/.well-known/masque/udp/{target}/",
+              "user": "synthetic-user",
+              "pass": "synthetic-password",
+              "headers": {
+                "allowInsecure": "literal-header-value",
+                "network": "MiXeD-CaSe",
+                "xHTTPSettings": "literal-alias-name",
+                "type": "xicmp",
+                "Origin": "quic+local://literal.invalid"
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    },
+    "maps": [
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "masqueSettings",
+          "headers"
+        ],
+        "kind": "string"
+      }
+    ]
+  },
+  {
+    "name": "tcp_http",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [
+        {
+          "tag": "caller-transport-input",
+          "protocol": "socks",
+          "listen": "127.0.0.1",
+          "port": 18080,
+          "settings": {
+            "auth": "noauth",
+            "udp": false
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "tcpSettings": {
+              "header": {
+                "type": "http",
+                "request": {
+                  "path": [
+                    "/header"
+                  ],
+                  "headers": {
+                    "allowInsecure": "literal-header-value",
+                    "network": [
+                      "MiXeD-CaSe",
+                      "second-list-value"
+                    ],
+                    "xHTTPSettings": [
+                      "literal-alias-name",
+                      "second-list-value"
+                    ],
+                    "type": "xicmp",
+                    "Origin": "quic+local://literal.invalid"
+                  }
+                },
+                "response": {
+                  "status": "200",
+                  "reason": "OK",
+                  "headers": {
+                    "allowInsecure": "literal-header-value",
+                    "network": [
+                      "MiXeD-CaSe",
+                      "second-list-value"
+                    ],
+                    "xHTTPSettings": [
+                      "literal-alias-name",
+                      "second-list-value"
+                    ],
+                    "type": "xicmp",
+                    "Origin": "quic+local://literal.invalid"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "caller-transport",
+          "protocol": "vless",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "service.invalid",
+              "masterKeyLog": ""
+            },
+            "tcpSettings": {
+              "header": {
+                "type": "http",
+                "request": {
+                  "path": [
+                    "/header"
+                  ],
+                  "headers": {
+                    "allowInsecure": "literal-header-value",
+                    "network": [
+                      "MiXeD-CaSe",
+                      "second-list-value"
+                    ],
+                    "xHTTPSettings": [
+                      "literal-alias-name",
+                      "second-list-value"
+                    ],
+                    "type": "xicmp",
+                    "Origin": "quic+local://literal.invalid"
+                  }
+                },
+                "response": {
+                  "status": "200",
+                  "reason": "OK",
+                  "headers": {
+                    "allowInsecure": "literal-header-value",
+                    "network": [
+                      "MiXeD-CaSe",
+                      "second-list-value"
+                    ],
+                    "xHTTPSettings": [
+                      "literal-alias-name",
+                      "second-list-value"
+                    ],
+                    "type": "xicmp",
+                    "Origin": "quic+local://literal.invalid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    },
+    "maps": [
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "tcpSettings",
+          "header",
+          "request",
+          "headers"
+        ],
+        "kind": "string-list"
+      },
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "tcpSettings",
+          "header",
+          "response",
+          "headers"
+        ],
+        "kind": "string-list"
+      },
+      {
+        "path": [
+          "inbounds",
+          "0",
+          "streamSettings",
+          "tcpSettings",
+          "header",
+          "request",
+          "headers"
+        ],
+        "kind": "string-list"
+      },
+      {
+        "path": [
+          "inbounds",
+          "0",
+          "streamSettings",
+          "tcpSettings",
+          "header",
+          "response",
+          "headers"
+        ],
+        "kind": "string-list"
+      }
+    ]
+  },
+  {
+    "name": "tcp_raw_alias",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "caller-transport",
+          "protocol": "vless",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "service.invalid",
+              "masterKeyLog": ""
+            },
+            "rawSettings": {
+              "header": {
+                "type": "http",
+                "request": {
+                  "path": [
+                    "/header"
+                  ],
+                  "headers": {
+                    "allowInsecure": "literal-header-value",
+                    "network": [
+                      "MiXeD-CaSe",
+                      "second-list-value"
+                    ],
+                    "xHTTPSettings": [
+                      "literal-alias-name",
+                      "second-list-value"
+                    ],
+                    "type": "xicmp",
+                    "Origin": "quic+local://literal.invalid"
+                  }
+                },
+                "response": {
+                  "status": "200",
+                  "reason": "OK",
+                  "headers": {
+                    "allowInsecure": "literal-header-value",
+                    "network": [
+                      "MiXeD-CaSe",
+                      "second-list-value"
+                    ],
+                    "xHTTPSettings": [
+                      "literal-alias-name",
+                      "second-list-value"
+                    ],
+                    "type": "xicmp",
+                    "Origin": "quic+local://literal.invalid"
+                  }
+                }
+              }
+            },
+            "tcpSettings": {
+              "header": {
+                "type": "none"
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    },
+    "maps": [
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "rawSettings",
+          "header",
+          "request",
+          "headers"
+        ],
+        "kind": "string-list"
+      },
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "rawSettings",
+          "header",
+          "response",
+          "headers"
+        ],
+        "kind": "string-list"
+      }
+    ]
+  },
+  {
+    "name": "hysteria_masquerade",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "caller-transport",
+          "protocol": "vless",
+          "settings": {
+            "address": "endpoint.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "hysteria",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "service.invalid",
+              "masterKeyLog": ""
+            },
+            "hysteriaSettings": {
+              "version": 2,
+              "auth": "synthetic-auth",
+              "masquerade": {
+                "type": "string",
+                "content": "synthetic-body",
+                "statusCode": 200,
+                "headers": {
+                  "allowInsecure": "literal-header-value",
+                  "network": "MiXeD-CaSe",
+                  "xHTTPSettings": "literal-alias-name",
+                  "type": "xicmp",
+                  "Origin": "quic+local://literal.invalid"
+                }
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    },
+    "maps": [
+      {
+        "path": [
+          "outbounds",
+          "0",
+          "streamSettings",
+          "hysteriaSettings",
+          "masquerade",
+          "headers"
+        ],
+        "kind": "string"
+      }
+    ]
+  }
+]

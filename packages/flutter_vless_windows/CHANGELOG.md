@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Validate the effective immediate XHTTP download transport before proxy-DNS bootstrap. Retain dormant grandchild settings and apply preparation only to the HTTP clients Core actually consumes.
+
 * Accept remote DoH URLs containing `+local` in their path or query while retaining the exact transport-scheme checks. Add shared DNS dictionary and URL preservation controls.
 
 * Prepare compatible FakeDNS profiles with managed destination restoration and unchanged caller DNS/pools. Relocate private DNS/probe addresses, reject native namespace conflicts before bootstrap, and add shared and controlled TUN regressions.

@@ -125,4 +125,20 @@ class XrayDictionaryDataTest {
         val dnsError = assertThrows(IllegalArgumentException::class.java) { build(dnsSource) }
         assertTrue(dnsError.message.orEmpty().contains("quic+local"))
     }
+
+    @Test fun unrelatedHeaderLookalikesDoNotGainAProtectedFeatureExemption() {
+        val forbidden = JSONObject().put("type", "xicmp")
+        val nonStreamOwner = source().put("extension", JSONObject().put("headers", forbidden))
+        assertThrows(IllegalArgumentException::class.java) { build(nonStreamOwner) }
+
+        val wrongTransportPath = source()
+        stream(wrongTransportPath).getJSONObject("wsSettings")
+            .put("extra", JSONObject().put("headers", forbidden))
+        assertThrows(IllegalArgumentException::class.java) { build(wrongTransportPath) }
+
+        val repeatedExtra = source()
+        stream(repeatedExtra).put("xhttpSettings", JSONObject().put("extra", JSONObject()
+            .put("extra", JSONObject().put("headers", forbidden))))
+        assertThrows(IllegalArgumentException::class.java) { build(repeatedExtra) }
+    }
 }

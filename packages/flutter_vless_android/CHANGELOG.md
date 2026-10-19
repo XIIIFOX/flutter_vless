@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve the remaining typed transport header maps, including XHTTP `extra`/download streams and TCP HTTP header lists, through runtime normalization and protected-feature admission. Keep inherited XHTTP download socket options unchanged in proxy-DNS mode and validate its active transport before bootstrap.
+
 * Treat root DNS hosts and inbound/outbound WebSocket headers as caller data during normalization and protected-feature checks. Preserve literal values while retaining rejection of actual unsupported XICMP and local QUIC DNS paths.
 
 * Preserve caller DNS hosts keys and values through runtime normalization, including names matching legacy stream settings. Retain TLS cleanup and add shared preparation and TUN DNS controls.

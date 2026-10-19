@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -56,6 +57,7 @@ def source_snapshot():
     paths.append(ROOT / 'tool/fixtures/compatibility/direct-only.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/dns-default-tags.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/dns-data-maps.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/transport-data-maps.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/selector-prefixes.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/selector-traffic.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/listen-addresses.json')
@@ -79,6 +81,14 @@ def source_snapshot():
         paths.extend(sorted((SWIFT / 'Sources').rglob('*.swift')))
         paths.extend(sorted((SWIFT / 'Tests').rglob('*.swift')))
     return {str(path.relative_to(ROOT)).replace(os.sep, '/'): digest(path) for path in paths}
+
+
+def require_transport_data_runtime(output, preparers):
+    markers = re.findall(r'^\s+xhttp_runtime_test\.go:\d+: XHTTP_TRANSPORT_DATA_MAPS_PASS chained=(true|false)\r?$',
+                         output, re.MULTILINE)
+    independent = re.findall(r'^\s+xhttp_runtime_test\.go:\d+: XHTTP_INDEPENDENT_DOWNLOAD_PASS\r?$', output, re.MULTILINE)
+    if preparers not in (1, 2) or any(markers.count(mode) != preparers for mode in ('true', 'false')) or len(independent) != preparers:
+        raise RuntimeError('Exact XHTTP transport dictionary runtime markers missing or duplicated')
 
 
 def cmd_path(path):
@@ -203,8 +213,13 @@ def main():
                     140, MOBILE, runtime_environment)
             output = (EVIDENCE / 'actual-core-dns.log').read_text(encoding='utf-8')
             common.require_selected_test_pass(output, SELECTED_TEST)
+            preparers = 1 + bool(runtime_environment.get('NATIVE_DNS_PREPARER_APPLE'))
+            require_transport_data_runtime(output, preparers)
             results[-1]['selected_test_pass'] = True
             results[-1]['selected_tests'] = [SELECTED_TEST]
+            results[-1]['transport_data_runtime_modes_per_preparer'] = 2
+            results[-1]['transport_data_runtime_preparers'] = preparers
+            results[-1]['independent_download_runtime_modes_per_preparer'] = 1
         if source_snapshot() != report['source_sha256']:
             raise RuntimeError('Production preparer/acceptance source changed during verification')
         report['source_snapshot_unchanged'] = True

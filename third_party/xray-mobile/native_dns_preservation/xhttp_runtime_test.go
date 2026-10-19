@@ -36,6 +36,11 @@ import (
 
 const xhttpChildSpec = "FLUTTER_VLESS_XHTTP_CHILD_SPEC"
 
+func xhttpHeaderData() map[string]string {
+	return map[string]string{"allowInsecure": "literal-header-value", "network": "MiXeD-CaSe",
+		"xHTTPSettings": "literal-alias-name", "type": "xicmp", "Origin": "quic+local://literal.invalid"}
+}
+
 type xhttpSpec struct {
 	Prepared, Origin string
 	Port             int
@@ -127,8 +132,8 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 		for _, event := range events {
 			counts[event]++
 		}
-		if complete && (counts["origin"] != 2 || counts["upload POST"] < 2 || counts["download GET"] < 2 || len(failures) != 0) {
-			t.Error("XHTTP did not carry both payloads through the controlled fronts", counts, failures)
+		if complete && (counts["origin"] != 3 || counts["upload POST"] < 3 || counts["download GET"] < 3 || len(failures) != 0) {
+			t.Error("XHTTP did not carry all three payloads through the controlled fronts", counts, failures)
 		}
 		if !complete || t.Failed() {
 			t.Logf("XHTTP_FIXTURE_FAILURE events=%d trace=%v failures=%v", len(events), events[:min(len(events), 48)], failures[:min(len(failures), 8)])
@@ -236,6 +241,13 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 				http.Error(w, "fixture front mismatch", http.StatusBadRequest)
 				return
 			}
+			for key, expected := range xhttpHeaderData() {
+				if r.Header.Get(key) != expected {
+					observations.fail(fmt.Errorf("%s caller header data changed: %s", role, key))
+					http.Error(w, "fixture header mismatch", http.StatusBadRequest)
+					return
+				}
+			}
 			observations.record(role + " " + r.Method)
 			parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"+role+"/"), "/")
 			observations.record(fmt.Sprintf("%s session=%x", role, sha256.Sum256([]byte(parts[0]))))
@@ -273,19 +285,29 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 	}
 	uploadPort, downloadPort := front("upload"), front("download")
 	allPassed := true
-	for _, chained := range []bool{false, true} {
-		passed := t.Run(fmt.Sprintf("caller_chain_%t", chained), func(t *testing.T) {
-			options := map[string]any{"penetrate": true, "tcpKeepAliveIdle": 30, "addressPortStrategy": ""}
+	for _, mode := range []struct{ chained, independent bool }{{}, {chained: true}, {independent: true}} {
+		chained := mode.chained
+		name := fmt.Sprintf("caller_chain_%t", chained)
+		if mode.independent {
+			name = "independent_download"
+		}
+		passed := t.Run(name, func(t *testing.T) {
+			options := map[string]any{"penetrate": !mode.independent, "tcpKeepAliveIdle": 30, "addressPortStrategy": ""}
 			if chained {
 				options["dialerProxy"] = "carrier"
 				options["addressPortStrategy"] = "NoNe"
 			}
 			download := map[string]any{"address": "endpoint.invalid", "port": downloadPort, "network": "xhttp",
-				"sockopt":       map[string]any{"dialerProxy": "dormant-download-handler", "tcpKeepAliveIdle": 7},
-				"xhttpSettings": map[string]any{"path": "/download", "host": "download.invalid"}}
+				"sockopt":       map[string]any{"dialerProxy": "dormant-download-handler", "tcpKeepAliveIdle": 7, "addressPortStrategy": "srvportonly"},
+				"xhttpSettings": map[string]any{"path": "/download", "host": "download.invalid", "headers": xhttpHeaderData()}}
+			if mode.independent {
+				download["sockopt"] = map[string]any{"tcpKeepAliveIdle": 7}
+				download["xhttpSettings"].(map[string]any)["downloadSettings"] = map[string]any{"address": "127.0.0.1", "port": 9, "network": "tcp"}
+			}
 			outbounds := []any{map[string]any{"tag": "proxy", "protocol": "vless", "settings": map[string]any{"address": "endpoint.invalid", "port": uploadPort, "id": identity, "encryption": "none"},
 				"streamSettings": map[string]any{"network": "xhttp", "sockopt": options, "xhttpSettings": map[string]any{
-					"path": "/upload", "host": "upload.invalid", "mode": "packet-up", "extra": map[string]any{"downloadSettings": download}}}},
+					"path": "/upload", "host": "upload.invalid", "mode": "packet-up", "headers": map[string]string{"network": "dormant-outer-header"},
+					"extra": map[string]any{"headers": xhttpHeaderData(), "downloadSettings": download}}}},
 				map[string]any{"tag": "direct", "protocol": "freedom"}, map[string]any{"tag": "block", "protocol": "blackhole"}}
 			if chained {
 				outbounds = append(outbounds, map[string]any{"tag": "carrier", "protocol": "socks", "settings": map[string]any{"address": "endpoint.invalid", "port": carrierPort}})
@@ -330,7 +352,28 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 			}
 			actualDownload := stream["xhttpSettings"].(map[string]any)["extra"].(map[string]any)["downloadSettings"]
 			got, _ := json.Marshal(actualDownload)
-			if !bytes.Equal(wantDownload, got) {
+			if mode.independent {
+				actualChild := actualDownload.(map[string]any)
+				wantFields, actualFields := map[string]any{}, map[string]any{}
+				for key, value := range download {
+					if key != "sockopt" {
+						wantFields[key] = value
+					}
+				}
+				for key, value := range actualChild {
+					if key != "sockopt" {
+						actualFields[key] = value
+					}
+				}
+				want, _ := json.Marshal(wantFields)
+				actual, _ := json.Marshal(actualFields)
+				childOptions := actualChild["sockopt"].(map[string]any)
+				childScope, _ := childOptions["dialerProxy"].(string)
+				if !bytes.Equal(want, actual) || childOptions["tcpKeepAliveIdle"] != float64(7) || childOptions["domainStrategy"] != "AsIs" ||
+					childScope == "" || childScope == stream["sockopt"].(map[string]any)["dialerProxy"] {
+					t.Fatal("independent child lost its own policy, private scope or inactive grandchild")
+				}
+			} else if !bytes.Equal(wantDownload, got) {
 				t.Fatal("XHTTP preparation rewrote the inherited download stream")
 			}
 			if chained && stream["sockopt"].(map[string]any)["dialerProxy"] != "carrier" {
@@ -372,10 +415,15 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 				t.Fatalf("isolated XHTTP client failed: %v; events=%d trace=%v failures=%v; child=%s", err,
 					len(events), events[:min(len(events), 48)], failures[:min(len(failures), 8)], output)
 			}
-			t.Logf("XHTTP_PENETRATE_PAYLOAD_PASS chained=%t bytes=%d", chained, len(payload))
-			t.Logf("TRANSPORT_NONE_XHTTP_PAYLOAD_PASS chained=%t", chained)
-			if chained {
-				t.Log("XHTTP_ENVIRONMENT_FROZEN_PASS")
+			if mode.independent {
+				t.Log("XHTTP_INDEPENDENT_DOWNLOAD_PASS")
+			} else {
+				t.Logf("XHTTP_PENETRATE_PAYLOAD_PASS chained=%t bytes=%d", chained, len(payload))
+				t.Logf("TRANSPORT_NONE_XHTTP_PAYLOAD_PASS chained=%t", chained)
+				t.Logf("XHTTP_TRANSPORT_DATA_MAPS_PASS chained=%t", chained)
+				if chained {
+					t.Log("XHTTP_ENVIRONMENT_FROZEN_PASS")
+				}
 			}
 		})
 		allPassed = passed && allPassed

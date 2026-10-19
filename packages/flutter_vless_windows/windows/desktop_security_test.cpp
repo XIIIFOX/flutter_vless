@@ -711,6 +711,56 @@ void ProtocolCompatibilityCases(const std::string& only = "") {
   auto loop_count = [](const Json& config) { return std::count_if(config["outbounds"].begin(), config["outbounds"].end(),
       [](const Json& outbound) { return outbound.value("protocol", "") == "loopback"; }); };
   std::map<std::string, std::function<void()>> cases;
+  cases["xhttp-download-effective-type"] = [&] {
+    for (const bool penetrate : {false, true}) {
+      for (const auto& fields : {Json{{"network", "tcp"}}, Json{{"network", "xhttp"}, {"method", "tcp"}},
+          Json::object(), Json{{"network", "tcp"}, {"method", nullptr}}}) {
+        auto profile = penetrating();
+        profile["outbounds"][0]["streamSettings"]["sockopt"]["penetrate"] = penetrate;
+        download(profile) = {{"address", "endpoint.invalid"}, {"port", 8443}};
+        download(profile).update(fields);
+        unsigned calls = 0;
+        const auto result = PrepareProtectedVpn(profile.dump(), "session-user", "session-password", "Ethernet",
+            [&](const std::string&) { ++calls; return "192.0.2.5"; });
+        Require(!result && calls == 0, "non-XHTTP effective download reached endpoint bootstrap");
+      }
+      for (const auto& fields : {Json{{"network", "tcp"}, {"method", "xhttp"}},
+          Json{{"network", "xhttp"}, {"method", nullptr}}, Json{{"network", "splithttp"}}}) {
+        auto profile = penetrating();
+        profile["outbounds"][0]["streamSettings"]["sockopt"]["penetrate"] = penetrate;
+        download(profile) = {{"address", "endpoint.invalid"}, {"port", 8443}, {"xhttpSettings", Json::object()}};
+        download(profile).update(fields);
+        const auto result = prepare(profile);
+        Require(result.has_value(), "valid method-aware XHTTP download rejected");
+        auto effective = Parse(*result);
+        for (auto field = fields.begin(); field != fields.end(); ++field)
+          Require(download(effective)[field.key()] == field.value(), "caller child transport field changed");
+      }
+      for (const bool null_extra : {false, true}) {
+        auto profile = penetrating(); auto& parent = profile["outbounds"][0]["streamSettings"];
+        parent["sockopt"]["penetrate"] = penetrate;
+        const Json dormant = {{"address", "unresolved.invalid"}, {"port", 8443}, {"network", "tcp"}};
+        if (null_extra) parent["xhttpSettings"] = {{"extra", nullptr}, {"downloadSettings", dormant}};
+        else { parent["xhttpSettings"] = Json::object(); parent["splithttpSettings"] = {{"downloadSettings", dormant}}; }
+        const auto result = prepare(profile);
+        Require(result.has_value(), "inactive non-XHTTP download constrained the active transport");
+        const auto actual = Parse(*result)["outbounds"][0]["streamSettings"];
+        Require(actual["xhttpSettings"] == parent["xhttpSettings"] && actual.value("splithttpSettings", Json()) == parent.value("splithttpSettings", Json()),
+            "inactive download JSON changed");
+      }
+    }
+  };
+  cases["xhttp-download-inactive-grandchild"] = [&] {
+    auto profile = penetrating();
+    profile["outbounds"][0]["streamSettings"]["sockopt"]["penetrate"] = false;
+    const Json dormant = {{"address", "127.0.0.1"}, {"port", 9443}, {"network", "tcp"}};
+    download(profile)["xhttpSettings"]["downloadSettings"] = dormant;
+    const auto output = prepare(profile);
+    Require(output.has_value(), "immediate XHTTP client's inactive TCP download constrained bootstrap");
+    auto actual = Parse(*output);
+    Require(download(actual)["xhttpSettings"]["downloadSettings"] == dormant,
+        "inactive grandchild JSON changed");
+  };
   cases["xhttp-penetrate-union"] = [&] {
     auto profile = penetrating(); std::vector<std::string> calls;
     const auto output = PrepareProtectedVpn(profile.dump(), "session-user", "session-password", "Ethernet", [&](const std::string& host) {
@@ -1011,7 +1061,7 @@ void ProtocolCompatibilityCases(const std::string& only = "") {
   cases["null-stream-fields"] = [&] {
     auto profile = source;
     profile["outbounds"][0]["streamSettings"] = {{"method", nullptr}, {"network", "xhttp"}, {"sockopt", {{"dialerProxy", nullptr}}},
-        {"xhttpSettings", {{"downloadSettings", {{"address", "endpoint.invalid"}, {"port", 8443}, {"network", "tcp"}}}}}};
+        {"xhttpSettings", {{"downloadSettings", {{"address", "endpoint.invalid"}, {"port", 8443}, {"network", "xhttp"}}}}}};
     auto output = prepare(profile); Require(output.has_value(), "Core nullable stream fields were rejected");
     auto config = Parse(*output);
     Require(config["outbounds"][0]["streamSettings"]["method"].is_null(), "source nullable method was rewritten");
@@ -1344,7 +1394,7 @@ int main(int argc, char** argv) try {
   auto downloads = source;
   downloads["outbounds"][0]["streamSettings"]["network"] = "xhttp";
   downloads["outbounds"][0]["streamSettings"]["xhttpSettings"] = {{"downloadSettings", {{"address", "dormant.invalid"}, {"port", 444}}},
-      {"extra", {{"downloadSettings", {{"address", "endpoint.invalid"}, {"port", 8443}, {"network", "tcp"}}}}}};
+      {"extra", {{"downloadSettings", {{"address", "endpoint.invalid"}, {"port", 8443}, {"network", "xhttp"}}}}}};
   auto download_prepared = prepare(downloads); Require(download_prepared.has_value(), "effective XHTTP download bootstrap rejected");
   auto download_config = Parse(*download_prepared);
   Require(download_config["outbounds"][0]["streamSettings"]["xhttpSettings"]["downloadSettings"] == downloads["outbounds"][0]["streamSettings"]["xhttpSettings"]["downloadSettings"], "dormant XHTTP download changed");
@@ -1355,6 +1405,7 @@ int main(int argc, char** argv) try {
   broken_download_chain["outbounds"][0]["streamSettings"]["xhttpSettings"]["extra"]["downloadSettings"]["sockopt"] = {{"dialerProxy", "missing-download-handler"}};
   Require(!prepare(broken_download_chain), "effective XHTTP download references a missing handler");
   downloads["outbounds"][0]["streamSettings"]["sockopt"] = {{"penetrate", true}};
+  downloads["outbounds"][0]["streamSettings"]["xhttpSettings"]["extra"]["downloadSettings"]["network"] = "tcp";
   Require(!prepare(downloads), "non-XHTTP penetrating download admitted");
   downloads["outbounds"][0]["streamSettings"]["xhttpSettings"]["extra"]["downloadSettings"]["network"] = "xhttp";
   Require(prepare(downloads).has_value(), "explicit XHTTP penetrating download rejected");

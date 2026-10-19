@@ -245,7 +245,7 @@ public enum TunnelDNSPolicy {
     private static func prepareStream(_ stream: inout [String: Any], endpoints: [Endpoint], sendThrough: Any?,
         allocator: inout XrayServiceTags, denied: String, generated: inout [[String: Any]],
         rules: inout [[String: Any]], resolved: inout [String: String], addresses: inout Set<String>,
-        resolver: (String) -> String?) -> Bool {
+        resolver: (String) -> String?, followDownload: Bool = true) -> Bool {
         guard stream["sockopt"] == nil || stream["sockopt"] is NSNull || stream["sockopt"] is [String: Any] else { return false }
         var sockopt = stream["sockopt"] as? [String: Any] ?? [:]
         guard sockopt["dialerProxy"] == nil || sockopt["dialerProxy"] is NSNull || sockopt["dialerProxy"] is String else { return false }
@@ -257,11 +257,17 @@ public enum TunnelDNSPolicy {
         guard network != "xdrive" else { return false }
         let penetrating = sockopt["penetrate"] as? Bool == true
         var physicalTargets = endpoints
-        if penetrating, let download = effectiveDownload(in: stream) {
+        // The immediate client uses getHTTPClient, not another XHTTP Dial;
+        // its nested download is inactive even with independent socket policy.
+        let downloadSettings = followDownload ? effectiveDownload(in: stream) : nil
+        // Core casts both immediate HTTP clients to XHTTP Config, regardless
+        // of whether their socket policies are independent or inherited.
+        if let download = downloadSettings,
+           !["xhttp", "splithttp"].contains(effectiveTransport(in: download)) { return false }
+        if penetrating, let download = downloadSettings {
             // Core replaces the child's entire socket policy with this parent
             // and dials its immediate XHTTP destination without child recursion.
-            guard ["xhttp", "splithttp"].contains(effectiveTransport(in: download)),
-                  let raw = download["address"] as? String,
+            guard let raw = download["address"] as? String,
                   let p = port(download["port"]) else { return false }
             let host = LocalProxyAccessPolicy.coreAddressText(raw)
             guard !host.isEmpty else { return false }
@@ -308,14 +314,14 @@ public enum TunnelDNSPolicy {
         // Only the effective XHTTP settings participate. A supplied extra
         // replaces outer downloadSettings; dormant data must not bootstrap.
         let key = stream["xhttpSettings"] is [String: Any] ? "xhttpSettings" : "splithttpSettings"
-        if ["xhttp", "splithttp"].contains(network), var settings = stream[key] as? [String: Any] {
+        if followDownload, ["xhttp", "splithttp"].contains(network), var settings = stream[key] as? [String: Any] {
             if let extraValue = settings["extra"] {
                 var extra = extraValue as? [String: Any] ?? [:]
                 if var download = extra["downloadSettings"] as? [String: Any] {
                     guard let host = download["address"] as? String, let p = port(download["port"]),
                           prepareStream(&download, endpoints: [Endpoint(host: LocalProxyAccessPolicy.coreAddressText(host), port: p)], sendThrough: sendThrough, allocator: &allocator,
                                         denied: denied, generated: &generated, rules: &rules, resolved: &resolved,
-                                        addresses: &addresses, resolver: resolver) else { return false }
+                                        addresses: &addresses, resolver: resolver, followDownload: false) else { return false }
                     extra["downloadSettings"] = download
                     settings["extra"] = extra
                 }
@@ -323,7 +329,7 @@ public enum TunnelDNSPolicy {
                 guard let host = download["address"] as? String, let p = port(download["port"]),
                       prepareStream(&download, endpoints: [Endpoint(host: LocalProxyAccessPolicy.coreAddressText(host), port: p)], sendThrough: sendThrough, allocator: &allocator,
                                     denied: denied, generated: &generated, rules: &rules, resolved: &resolved,
-                                    addresses: &addresses, resolver: resolver) else { return false }
+                                    addresses: &addresses, resolver: resolver, followDownload: false) else { return false }
                 settings["downloadSettings"] = download
             }
             stream[key] = settings

@@ -310,8 +310,9 @@ class AndroidTunnelDnsPolicyTest {
         for (transportKey in listOf("xHTTPSettings", "SplitHTTPSettings")) {
             val stream = JSONObject().put("Address", "transport.test").put("network", "xhttp")
                 .put(transportKey, JSONObject()
-                    .put("downloadSettings", JSONObject().put("Address", "outer-download.test"))
+                    .put("downloadSettings", JSONObject().put("Address", "outer-download.test").put("network", "xhttp"))
                     .put("Extra", JSONObject().put("DownloadSettings", JSONObject().put("address", "extra-download.test")
+                        .put("network", "xhttp")
                         .put("sockopt", JSONObject().put("DomainStrategy", "AsIs")))))
             val prepared = prepare(config(outbound().put("StreamSettings", stream)))
             assertEquals(setOf("proxy.test", "extra-download.test"), prepared.bootstrapHostnames)
@@ -359,7 +360,7 @@ class AndroidTunnelDnsPolicyTest {
         val outerDownload = JSONObject().put("address", "inactive-outer.test")
         val selected = JSONObject().put("downloadSettings", outerDownload).put("extra", JSONObject()
             .put("headers", JSONObject().put("X-Secret", "active-secret"))
-            .put("downloadSettings", JSONObject().put("address", "active-download.test")))
+            .put("downloadSettings", JSONObject().put("address", "active-download.test").put("network", "xhttp")))
         val stream = JSONObject().put("network", "splithttp").put("xhttpSettings", selected).put("splithttpSettings", inactive)
         val input = config(outbound().put("streamSettings", stream)); val original = input.toString()
         val prepared = prepare(input)
@@ -372,7 +373,7 @@ class AndroidTunnelDnsPolicyTest {
     }
 
     @Test fun nullXhttpFallsBackToSplitHttpAndNullExtraReplacesOuterDownloads() {
-        val split = JSONObject().put("downloadSettings", JSONObject().put("address", "active-split.test"))
+        val split = JSONObject().put("downloadSettings", JSONObject().put("address", "active-split.test").put("network", "xhttp"))
         val stream = JSONObject().put("network", "splithttp").put("xhttpSettings", JSONObject.NULL).put("splithttpSettings", split)
         assertEquals(setOf("proxy.test", "active-split.test"), prepare(config(outbound().put("streamSettings", stream))).bootstrapHostnames)
         for (extra in listOf<Any>(JSONObject.NULL, JSONObject().put("downloadSettings", JSONObject.NULL))) {
@@ -385,7 +386,7 @@ class AndroidTunnelDnsPolicyTest {
     }
 
     @Test fun methodOverridesNetworkAndNullMethodRetainsNetworkDefault() {
-        val download = JSONObject().put("address", "download.test")
+        val download = JSONObject().put("address", "download.test").put("network", "xhttp")
         for ((network, method, active) in listOf(Triple("tcp", "xhttp", true),
                 Triple("splithttp", JSONObject.NULL, true), Triple("xhttp", "tcp", false),
                 Triple(JSONObject.NULL, JSONObject.NULL, false))) {
@@ -438,14 +439,23 @@ class AndroidTunnelDnsPolicyTest {
                     assertEquals(parent.get(key), actualParent.get(key))
                 assertEquals(parent.has("penetrate"), actualParent.has("penetrate"))
                 if (penetrate != null) assertEquals(penetrate, actualParent.getBoolean("penetrate"))
-                val actualChild = output.getJSONObject("xhttpSettings").getJSONObject("extra")
-                    .getJSONObject("downloadSettings").getJSONObject("sockopt")
-                assertEquals("ForceIP", actualChild.getString("domainStrategy"))
-                if (child === explicit) {
-                    for (key in listOf("dialerProxy", "interface", "tcpKeepAliveIdle"))
-                        assertEquals(explicit.get(key), actualChild.get(key))
+                val actualDownload = output.getJSONObject("xhttpSettings").getJSONObject("extra")
+                    .getJSONObject("downloadSettings")
+                if (penetrate == true) {
+                    // Core replaces this whole policy at runtime, so even its
+                    // original absence/null/object representation stays intact.
+                    assertEquals(download.has("sockopt"), actualDownload.has("sockopt"))
+                    if (download.has("sockopt"))
+                        assertEquals(download.get("sockopt").toString(), actualDownload.get("sockopt").toString())
                 } else {
-                    assertEquals("No eager caller/private parent-policy copy is allowed", 1, actualChild.length())
+                    val actualChild = actualDownload.getJSONObject("sockopt")
+                    assertEquals("ForceIP", actualChild.getString("domainStrategy"))
+                    if (child === explicit) {
+                        for (key in listOf("dialerProxy", "interface", "tcpKeepAliveIdle"))
+                            assertEquals(explicit.get(key), actualChild.get(key))
+                    } else {
+                        assertEquals("No eager caller/private parent-policy copy is allowed", 1, actualChild.length())
+                    }
                 }
                 // Core, not this JSON preparer, performs its penetrate=true
                 // runtime override. The explicit child object must survive too.

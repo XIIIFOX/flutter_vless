@@ -23,6 +23,7 @@ class PreservationRunnerGuards(unittest.TestCase):
         self.assertIn('tool/fixtures/compatibility/fakedns.json', snapshot)
         self.assertEqual(snapshot['tool/fixtures/compatibility/fakedns.json'], 'synthetic-digest')
         self.assertEqual(snapshot['tool/fixtures/compatibility/dns-data-maps.json'], 'synthetic-digest')
+        self.assertEqual(snapshot['tool/fixtures/compatibility/transport-data-maps.json'], 'synthetic-digest')
 
     def test_snapshot_binds_shared_counter_wire_corpus(self):
         seen = []
@@ -107,6 +108,21 @@ class PreservationRunnerGuards(unittest.TestCase):
             with self.subTest(output=output), self.assertRaises(RuntimeError):
                 runner.common.require_selected_test_pass(output, runner.SELECTED_TEST)
         runner.common.require_selected_test_pass('--- PASS: TestNativeDNSPreservation (0.01s)\nPASS\n', runner.SELECTED_TEST)
+
+    def test_runtime_transport_maps_requires_both_modes_per_preparer(self):
+        def line(mode):
+            return f'    xhttp_runtime_test.go:400: XHTTP_TRANSPORT_DATA_MAPS_PASS chained={mode}\n'
+        independent = '    xhttp_runtime_test.go:401: XHTTP_INDEPENDENT_DOWNLOAD_PASS\n'
+        pair = line('false') + line('true')
+        valid = pair + independent
+        runner.require_transport_data_runtime(valid, 1)
+        runner.require_transport_data_runtime(valid * 2, 2)
+        for output, preparers in [('', 1), (line('false'), 1), (valid * 2, 1),
+                                    (valid, 2), (valid + line('true'), 1),
+                                    (pair, 1), (valid + independent, 1),
+                                    ('noise XHTTP_TRANSPORT_DATA_MAPS_PASS chained=false\n' + line('true'), 1)]:
+            with self.subTest(output=output, preparers=preparers), self.assertRaises(RuntimeError):
+                runner.require_transport_data_runtime(output, preparers)
 
     def test_default_selects_pure_preparation_without_core_runtime(self):
         with tempfile.TemporaryDirectory() as directory:

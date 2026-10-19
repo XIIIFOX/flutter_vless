@@ -10,6 +10,7 @@ on:
         options:
           - all
           - android-emulator
+          - core-dns-context
   pull_request:
   push:
     branches:
@@ -18,7 +19,7 @@ on:
 
 jobs:
   core-dns-context:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'core-dns-context'
     name: Scoped Core DNS runtime (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
@@ -228,6 +229,7 @@ jobs:
           retention-days: 7
 
   android-emulator:
+    if: github.event_name != 'workflow_dispatch' || inputs.validation != 'core-dns-context'
     name: Android emulator security and runtime
     runs-on: ubuntu-latest
     timeout-minutes: 45

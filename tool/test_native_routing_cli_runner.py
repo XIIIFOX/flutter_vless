@@ -34,7 +34,11 @@ class RoutingCLIRunnerTest(unittest.TestCase):
                 runner.safe_cli_args(command)
 
     def test_exact_pure_selection_excludes_runtime(self):
-        self.assertEqual(runner.MAIN_TESTS, ['TestNativeRoutingCLIStockLogger', 'TestNativeRoutingCLIRegisteredOnce'])
+        self.assertEqual(runner.MAIN_TESTS, [
+            'TestNativeRoutingCLIStockLogger', 'TestNativeRoutingCLIRegisteredOnce',
+            'TestNativeRoutingCLIParentInputLifecycle', 'TestNativeRoutingCLIParentInputRefusal',
+            'TestNativeRoutingCLIParentInputGrammar', 'TestNativeRoutingCLIParentInputOrdinaryForeground',
+        ])
         pattern = runner.core_runner.test_pattern(runner.MAIN_TESTS)
         import re
         for name in runner.MAIN_TESTS:

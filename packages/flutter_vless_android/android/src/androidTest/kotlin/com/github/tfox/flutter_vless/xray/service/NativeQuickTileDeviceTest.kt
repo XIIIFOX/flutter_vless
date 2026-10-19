@@ -2,10 +2,12 @@ package com.github.tfox.flutter_vless.xray.service
 
 import android.app.ActivityManager
 import android.content.Intent
+import android.content.ComponentName
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
+import android.service.quicksettings.TileService
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
@@ -76,13 +78,18 @@ class NativeQuickTileDeviceTest {
         // Shell statusbar commands enqueue work in SystemUI. A returned command
         // does not mean the previous CustomTile/binding has been disposed.
         awaitRemovedTile()
+        val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(45)
         shell("cmd statusbar add-tile $component")
-        await("SystemUI tile reports current connection") {
+        await("SystemUI registered the fixture's active tile", deadline) { tileLines().isNotEmpty() }
+        // Session notifications preceded this shell addition. Active tiles use
+        // an explicit listening request; issue it once after actual registration,
+        // then require the real rendered state before the test's single click.
+        TileService.requestListeningState(context, ComponentName.unflattenFromString(component)!!)
+        await("SystemUI tile reports current connection", deadline) {
             tileState(2, context.getString(R.string.flutter_vless_tile_connected))
         }
     }
-    private fun await(description:String, predicate:()->Boolean) {
-        val end=System.nanoTime()+TimeUnit.SECONDS.toNanos(45)
+    private fun await(description:String, end:Long=System.nanoTime()+TimeUnit.SECONDS.toNanos(45), predicate:()->Boolean) {
         while(System.nanoTime()<end) { if(predicate())return; Thread.sleep(100) }
         // Preserve the actual presentation/lifecycle before the caller's finally
         // removes the tile and destroys the evidence. Never retry a tile click.

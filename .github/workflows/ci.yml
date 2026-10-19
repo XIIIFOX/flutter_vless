@@ -1,6 +1,15 @@
 name: CI
 
 on:
+  workflow_dispatch:
+    inputs:
+      validation:
+        description: Validation scope
+        type: choice
+        default: all
+        options:
+          - all
+          - android-emulator
   pull_request:
   push:
     branches:
@@ -9,6 +18,7 @@ on:
 
 jobs:
   core-dns-context:
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all'
     name: Scoped Core DNS runtime (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
@@ -76,6 +86,7 @@ jobs:
           retention-days: 7
 
   dart:
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all'
     name: Dart and Flutter tests
     runs-on: ubuntu-latest
     steps:
@@ -148,6 +159,7 @@ jobs:
           flutter test
 
   android-native:
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all'
     name: Android native unit tests
     runs-on: ubuntu-latest
     steps:
@@ -258,6 +270,7 @@ jobs:
           if-no-files-found: ignore
 
   ios:
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all'
     name: iOS Swift and Xcode build
     runs-on: macos-latest
     timeout-minutes: 45
@@ -381,6 +394,7 @@ jobs:
             build/macos_packet_bridge_probe/runtime.log
 
   windows:
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all'
     name: Windows native plugin build
     runs-on: windows-latest
     steps:

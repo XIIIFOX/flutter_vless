@@ -71,19 +71,14 @@ class ActualProfileRoutingTest {
         } finally { connection.disconnect() }
     }
     private fun traffic(): Map<String, Long> {
-        val process = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
-            "api", "statsquery", "--server=127.0.0.1:10809", "--pattern", "outbound>>>").start()
-        try {
-            val stats = JSONObject(process.inputStream.bufferedReader().readText()).getJSONArray("stat")
-            assertTrue(process.waitFor(3, TimeUnit.SECONDS)); assertEquals(0, process.exitValue())
-            val result = mutableMapOf("direct" to 0L, "proxy" to 0L, "direct_down" to 0L)
-            for (i in 0 until stats.length()) {
-                val entry = stats.getJSONObject(i); val name = entry.getString("name")
-                for (tag in listOf("direct", "proxy")) if (name.startsWith("outbound>>>$tag>>>traffic>>>")) result[tag] = result.getValue(tag) + entry.optLong("value", 0L)
-                if (name == "outbound>>>direct>>>traffic>>>downlink") result["direct_down"] = entry.optLong("value", 0L)
-            }
-            return result
-        } finally { process.destroy() }
+        val stats = NativeOwnedStatsReader.read(context)
+        val result = mutableMapOf("direct" to 0L, "proxy" to 0L, "direct_down" to 0L)
+        for (i in 0 until stats.length()) {
+            val entry = stats.getJSONObject(i); val name = entry.getString("name")
+            for (tag in listOf("direct", "proxy")) if (name.startsWith("outbound>>>$tag>>>traffic>>>")) result[tag] = result.getValue(tag) + entry.optLong("value", 0L)
+            if (name == "outbound>>>direct>>>traffic>>>downlink") result["direct_down"] = entry.optLong("value", 0L)
+        }
+        return result
     }
     private fun assertRoutes(generation: Int) {
         val before = traffic()

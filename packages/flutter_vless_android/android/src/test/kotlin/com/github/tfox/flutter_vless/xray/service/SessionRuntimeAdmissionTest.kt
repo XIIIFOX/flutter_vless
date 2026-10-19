@@ -2,6 +2,7 @@ package com.github.tfox.flutter_vless.xray.service
 
 import android.content.pm.ApplicationInfo
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
+import com.github.tfox.flutter_vless.xray.core.LocalProxyCredentials
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import org.json.JSONArray
 import org.json.JSONObject
@@ -21,6 +22,28 @@ import java.util.concurrent.atomic.AtomicLong
 
 /** Calls the actual service admission method with mocked probe/ProcessBuilder only. */
 class SessionRuntimeAdmissionTest {
+    @Test fun readinessProbeReceivesAllFutureListenerPortsBeforeOpeningItsSocket() {
+        for (callerApi in listOf(false,true)) {
+            val source=JSONObject("""{"inbounds":[{"protocol":"http","listen":"127.0.0.1","port":"10807-10808"},{"protocol":"http","listen":"/tmp/owned-probe-corpus.sock","port":"0-65535"},{"protocol":"http","listen":"127.0.0.1","port":0}],"metrics":{"listen":"127.0.0.1:+10810"},"outbounds":[{"protocol":"freedom"}]}""")
+            if (callerApi) source.put("api",JSONObject("""{"tag":"caller-api","listen":"127.0.0.1:10809","services":["StatsService"]}"""))
+            val base=XrayCoreManager.buildRuntimeConfigJson(XrayConfig(V2RAY_FULL_JSON_CONFIG=source.toString()),
+                File("."),LocalProxyCredentials("synthetic-user","synthetic-password"))
+            val before=base.toString();val arguments=mutableListOf<List<Any?>>()
+            val service=Mockito.mock(XrayVPNService::class.java,Answers.CALLS_REAL_METHODS)
+            // Constructor interception skips the real listener and worker entirely.
+            Mockito.mockConstruction(SessionReadinessProbe::class.java) { _, construction ->
+                arguments.add(construction.arguments().toList())
+            }.use { probes ->
+                service.createReadinessProbe(base).use { probe ->
+                    assertSame(probes.constructed().single(),probe)
+                    assertEquals(before,base.toString())
+                    assertEquals("Actual service must pass host and future TCP exclusions",2,arguments.single().size)
+                    assertEquals((10807..10811).toSet(),arguments.single()[1])
+                }
+            }
+        }
+    }
+
     // Mockito's Java matcher returns null; keep Kotlin's non-null call boundary inert.
     private fun anyJson(): JSONObject { Mockito.any(JSONObject::class.java); return JSONObject() }
     private fun anyProfile(): XrayConfig { Mockito.any(XrayConfig::class.java); return XrayConfig() }
@@ -33,14 +56,16 @@ class SessionRuntimeAdmissionTest {
     } catch (error: InvocationTargetException) { throw error.targetException }
 
     private fun fixture(rejectFinal: Boolean = false, staleDuringCheck: Boolean = false, failSave: Boolean = false,
-                        routingCapability: Int? = null, allTcpOccupied: Boolean = false) {
+                        routingCapability: Int? = null, allTcpOccupied: Boolean = false, failProbePreparation: Boolean = false) {
         val directory = Files.createTempDirectory("native-service-admission").toFile()
         val service = Mockito.mock(XrayVPNService::class.java, Answers.CALLS_REAL_METHODS)
         Mockito.doReturn(directory).`when`(service).filesDir
         Mockito.doReturn(directory).`when`(service).noBackupFilesDir
         Mockito.doReturn(ApplicationInfo().apply { nativeLibraryDir = directory.path }).`when`(service).applicationInfo
         val probe = Mockito.mock(SessionReadinessProbe::class.java) // Never invokes its socket-binding constructor.
-        Mockito.doReturn(probe).`when`(service).createReadinessProbe(anyJson())
+        if (failProbePreparation) Mockito.doThrow(IllegalStateException("Synthetic probe listener exhaustion"))
+            .`when`(service).createReadinessProbe(anyJson())
+        else Mockito.doReturn(probe).`when`(service).createReadinessProbe(anyJson())
         Mockito.`when`(probe.configure(anyJson(), Mockito.anyInt())).thenAnswer {
             JSONObject(it.getArgument<JSONObject>(0).toString()).apply {
                 getJSONArray("outbounds").put(JSONObject().put("tag", "synthetic-final-probe").put("protocol", "freedom"))
@@ -119,17 +144,17 @@ class SessionRuntimeAdmissionTest {
                     Mockito.verify(service,Mockito.never()).createReadinessProbe(anyJson())
                 } else if (failSave) assertSame(saveFailure, assertThrows(IllegalStateException::class.java) { accept(service, incoming) })
                 else assertFalse(accept(service, incoming))
-                if (!allTcpOccupied) assertEquals(if(routingCapability == 1) 2 else 1, builds.constructed().size)
+                if (!allTcpOccupied) assertEquals(if(failProbePreparation) 0 else if(routingCapability == 1) 2 else 1, builds.constructed().size)
             }
             }
-            if(allTcpOccupied || routingCapability == 0) assertFalse(checkedFinal)
+            if(allTcpOccupied || failProbePreparation || routingCapability == 0) assertFalse(checkedFinal)
             else assertTrue("Actual service native preflight must include generated readiness rule", checkedFinal)
             assertSame(active, XrayVPNService::class.java.getDeclaredField("config").apply { isAccessible = true }.get(service))
             assertEquals(1L, recovery.generation)
             assertSame(oldChild, processField.get(XrayCoreManager))
             Mockito.verify(oldChild, Mockito.never()).destroy()
             Mockito.verify(oldChild, Mockito.never()).destroyForcibly()
-            if(allTcpOccupied || routingCapability == 0) Mockito.verify(probe,Mockito.never()).close() else Mockito.verify(probe).close()
+            if(allTcpOccupied || failProbePreparation || routingCapability == 0) Mockito.verify(probe,Mockito.never()).close() else Mockito.verify(probe).close()
             if (!failSave) Mockito.verify(profiles, Mockito.never()).save(anyProfile())
         } finally { processField.set(XrayCoreManager, previous); directory.deleteRecursively() }
     }
@@ -139,4 +164,5 @@ class SessionRuntimeAdmissionTest {
     @Test fun unsupportedInstalledRuntimeRefusesBeforeProbeProfileOrActiveStop() = fixture(routingCapability=0)
     @Test fun requestedRoutingChecksFinalConfigAndSpecBeforeRejectingWithoutChangingActiveSession() = fixture(routingCapability=1,rejectFinal=true)
     @Test fun occupiedGeneratedTcpListenersRefuseBeforeSavingOrStoppingAnAcceptedSession() = fixture(allTcpOccupied=true)
+    @Test fun failedProbePreparationNeverSavesOrStopsAnAcceptedSession() = fixture(failProbePreparation=true)
 }

@@ -11,6 +11,7 @@ on:
           - all
           - android-emulator
           - core-dns-context
+          - native-listeners
   pull_request:
   push:
     branches:
@@ -19,7 +20,7 @@ on:
 
 jobs:
   core-dns-context:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'core-dns-context'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'core-dns-context' || inputs.validation == 'native-listeners'
     name: Scoped Core DNS runtime (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
@@ -166,7 +167,7 @@ jobs:
           flutter test test/vpn_routing_test.dart test/widget_test.dart
 
   android-native:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'native-listeners'
     name: Android native unit tests
     runs-on: ubuntu-latest
     steps:
@@ -415,7 +416,7 @@ jobs:
             build/macos_packet_bridge_probe/runtime.log
 
   windows:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'native-listeners'
     name: Windows native plugin build
     runs-on: windows-latest
     steps:

@@ -216,8 +216,10 @@ std::unique_ptr<VpnService::WorkerCandidate> VpnService::PrepareWorkerCandidate(
   UINT64 identity = 0;
   const auto underlay = Underlay(&identity);
   if (!underlay) return nullptr;
+  const auto excluded = flutter_vless::xray_config::ListenerPortExclusions(flutter_vless::xray_config::Parse(base));
+  if (!excluded) return nullptr;
   auto candidate = WorkerCandidate::Prepare(base, *underlay, identity, managed_port,
-      [] { return std::make_unique<flutter_vless::PacketPathProbe>(); },
+      [ports = *excluded] { return std::make_unique<flutter_vless::PacketPathProbe>(ports); },
       [&](const std::string& bytes, fs::path& path, std::string& metadata, fs::path& metadata_path,
           const std::vector<int64_t>& probe_guards) {
         if (!routing) return flutter_vless::native::CheckPreparedConfig(bytes, runtime, path, assets);

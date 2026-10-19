@@ -34,22 +34,41 @@ PacketPathProbe::~PacketPathProbe() {
   if (winsock_) WSACleanup();
 }
 bool PacketPathProbe::Start() {
+  if (winsock_ || listener_ != INVALID_SOCKET || worker_.joinable()) return false;
   WSADATA data{};
   if (WSAStartup(MAKEWORD(2, 2), &data)) return false;
-  winsock_ = true; challenge_ = native::RandomHex(32);
-  if (challenge_.empty()) return false;
-  listener_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (listener_ == INVALID_SOCKET) return false;
-  BOOL exclusive = TRUE;
-  setsockopt(listener_, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<char*>(&exclusive), sizeof(exclusive));
-  sockaddr_in local{}; local.sin_family = AF_INET;
-  InetPtonA(AF_INET, "127.0.0.1", &local.sin_addr);
-  if (bind(listener_, reinterpret_cast<sockaddr*>(&local), sizeof(local)) || listen(listener_, 4)) return false;
-  int size = sizeof(local);
-  if (getsockname(listener_, reinterpret_cast<sockaddr*>(&local), &size)) return false;
-  port_ = ntohs(local.sin_port); running_.store(true);
-  worker_ = std::thread(&PacketPathProbe::Serve, this);
-  return true;
+  winsock_ = true;
+  auto refuse = [&] {
+    running_.store(false); port_ = 0;
+    if (listener_ != INVALID_SOCKET) { closesocket(listener_); listener_ = INVALID_SOCKET; }
+    if (winsock_) { WSACleanup(); winsock_ = false; }
+    return false;
+  };
+  challenge_ = native::RandomHex(32);
+  if (challenge_.empty()) return refuse();
+  for (unsigned attempt = 0; attempt < 32; ++attempt) {
+    listener_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (listener_ == INVALID_SOCKET) return refuse();
+    BOOL exclusive = TRUE;
+    sockaddr_in local{}; local.sin_family = AF_INET;
+    if (setsockopt(listener_, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<char*>(&exclusive), sizeof(exclusive))
+        || InetPtonA(AF_INET, "127.0.0.1", &local.sin_addr) != 1
+        || bind(listener_, reinterpret_cast<sockaddr*>(&local), sizeof(local))) return refuse();
+    int size = sizeof(local);
+    if (getsockname(listener_, reinterpret_cast<sockaddr*>(&local), &size)) return refuse();
+    const auto port = ntohs(local.sin_port);
+    if (!port) return refuse();
+    if (excluded_ports_.count(port)) {
+      closesocket(listener_); listener_ = INVALID_SOCKET;
+      continue;
+    }
+    if (listen(listener_, 4)) return refuse();
+    port_ = port; running_.store(true);
+    try { worker_ = std::thread(&PacketPathProbe::Serve, this); }
+    catch (...) { return refuse(); }
+    return true;
+  }
+  return refuse();
 }
 void PacketPathProbe::Serve() {
   while (running_.load()) {

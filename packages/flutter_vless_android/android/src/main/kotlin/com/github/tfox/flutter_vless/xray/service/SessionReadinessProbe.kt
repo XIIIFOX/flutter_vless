@@ -16,12 +16,12 @@ import java.util.Locale
 import java.util.UUID
 
 /** An owned response through SOCKS and TUN, independent of Internet-site policy. */
-internal class SessionReadinessProbe(val host: String) : Closeable {
+internal class SessionReadinessProbe(val host: String, excludedPorts: Set<Int> = emptySet()) : Closeable {
     private val token = UUID.randomUUID().toString().toByteArray(Charsets.US_ASCII)
-    private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
+    private val server = bindAvailableListener(excludedPorts)
     val port: Int get() = server.localPort
     @Volatile private var accepted: Socket? = null
-    private val listener = Thread({
+    private val listener = try { Thread({
         while (!server.isClosed) {
             runCatching {
                 server.accept().use { client ->
@@ -35,7 +35,11 @@ internal class SessionReadinessProbe(val host: String) : Closeable {
             }
             accepted = null
         }
-    }, "vpn-path-probe").apply { isDaemon = true; start() }
+    }, "vpn-path-probe").apply { isDaemon = true; start() } }
+    catch (error: Throwable) {
+        try { server.close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+        throw error
+    }
 
     fun configure(source: JSONObject, managedPort: Int): JSONObject {
         val json = JSONObject(source.toString())
@@ -105,6 +109,30 @@ internal class SessionReadinessProbe(val host: String) : Closeable {
     }
 
     companion object {
+        /** Retain one actual bound listener; future Core listeners have not bound yet. */
+        internal fun bindAvailableListener(excludedPorts: Set<Int>, bind: () -> ServerSocket = {
+            ServerSocket(0, 16, InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)))
+        }): ServerSocket {
+            repeat(32) {
+                val candidate = bind()
+                var retained = false
+                var primary: Throwable? = null
+                try {
+                    val port = candidate.localPort
+                    check(port in 1..65535) { "Invalid readiness listener port" }
+                    if (port !in excludedPorts) {
+                        retained = true
+                        return candidate
+                    }
+                } catch (error: Throwable) { primary = error; throw error }
+                finally {
+                    if (!retained) try { candidate.close() }
+                    catch (cleanup: Throwable) { if (primary != null) primary.addSuppressed(cleanup) else throw cleanup }
+                }
+            }
+            error("No readiness listener port is available")
+        }
+
         /** Keep the probe outside every FakeDNS pool, including its implicit default. */
         fun selectHost(config: JSONObject): String {
             fun field(objectValue: JSONObject, name: String): Any? {

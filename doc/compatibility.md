@@ -144,7 +144,7 @@ Track the small delivery gates separately from the eight full requirements:
 | Imported API/services/stats/policy | Qualified | Shared preparation and API/traffic gates, including Windows service acceptance. |
 | Port/address syntax and explicit data/certificate roots | Qualified baseline | Shared Core/native controls and the targeted runtime cases below; OS allocation/reload and managed import lifetime remain open. |
 | Source inbound and explicit VPN default | In progress | Shared Core, Windows 2022/2025 and enabled iOS simulator routing checks pass. Android, enabled native macOS, the complete Apple suite and device acceptance remain pending. |
-| Occupied private TCP listeners | In progress | Tests first cover bounded selection before candidate publication. OS availability is checked only for generated VPN listeners; port ownership and reload acceptance remain separate. |
+| Occupied private TCP listeners | In progress | Bounded selection and held-port traffic pass Windows 2022/2025. Android and Apple acceptance remain pending; ownership transfer and reload are separate. |
 
 Each qualified row refers to the specific checks recorded below. It does not
 mark an entire long-term requirement complete.
@@ -1134,10 +1134,22 @@ publishing or replacing a candidate. Caller listener ranges, API and metrics
 ports are excluded before counting at most 32 OS candidates for each generated
 SOCKS/API listener. Caller listeners and their configuration remain intact.
 The fixed SOCKS listener uses TCP; an unrelated UDP listener does not consume
-that TCP port. Focused fake-kernel and pure chooser regressions pass. Actual
-occupied-port runtime acceptance is pending; releasing the test socket is not
-an atomic transfer to Core. Held probe exclusion, recovery relocation and
-broader proxy-only allocation remain separate work under item 5.
+that TCP port. Focused fake-kernel and pure chooser regressions pass.
+[Windows acceptance at e5f9fc6](https://github.com/XIIIFOX/flutter_vless/actions/runs/39244521230)
+also passes real availability checks and VPN traffic while preferred TCP ports
+10807/10086 remain occupied, on both Windows 2022 and 2025; all 426 ordinary and
+routing result rows pass. Android and Apple occupied-port acceptance remain
+pending. Releasing the test socket is not an atomic transfer to Core.
+
+Android and Windows readiness listeners additionally exclude ports declared in
+the final Core configuration, including numeric API/metrics ports and imported
+ranges. They close rejected port-zero allocations and try at most 32 times
+before starting a worker, retaining the accepted socket for the probe lifetime.
+Pure/fake regressions cover exclusion, exhaustion, cleanup and admission refusal;
+this change still needs remote runtime acceptance. Apple VPN health checks
+connect to the existing adapter and do not own an analogous TCP listener.
+Standalone delay allocation, Core handoff races, recovery relocation and broader
+proxy-only allocation remain separate work under item 5.
 
 Current implementation/acceptance status (1.1.7, unreleased):
 
@@ -1147,7 +1159,7 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | 2. IPv6 | Partial; physical iOS packet gate pending | IPv6 TCP/UDP with preserved AAAA policy passes ordinary Core on all three desktop systems, actual Android TUN and Windows 2022/2025 TUN/recovery/physical-interface controls. Actual shipped macOS HEV packet controls pass remotely; iOS simulator HEV is a verified link-only stub and physical iOS remains pending. Full macOS system-VPN acceptance, IPv6-only endpoints, NAT64, cross-family handover and broader physical bypass qualification remain open. |
 | 3. Protocol/transport matrix | Partial; controlled XHTTP increment qualified | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP and null legacy-endpoint preparation fixes pass a nine-case pinned Core build corpus with native preparation, including shared XHTTP upload/download socket policy. At cdc5b94, ordinary Core on all three desktop systems carries actual XHTTP HTTP/1.1 packet-up payloads with and without a caller SOCKS chain; both Apple and Windows preparers pass on macOS. Further protocol handshakes, XHTTP TLS/HTTP3/QUIC, physical iOS packets and the full matrix remain open. |
 | 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes pass shared component, ordinary Core and native platform traffic gates at a475374. Per-session source/default selection passes Windows 2022/2025 and enabled iOS simulator routing at 64e8cff. Android, native macOS and the complete Apple suite remain pending. Wildcard isolation and exact adapter counters remain open. |
-| 5. Ports/addresses | Partial | Shared port/service/tag fixtures and Android/iPhone list/range/env/Unix and collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. Bounded OS-aware generated TCP port admission is implemented with pure/fake regressions; occupied-port runtime acceptance remains pending. Held probe exclusion, recovery relocation, service-name resolution, wildcard isolation, bind races and broader proxy-only parity remain open. |
+| 5. Ports/addresses | Partial | Shared port/service/tag fixtures and Android/iPhone list/range/env/Unix and collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. Bounded OS-aware generated TCP port admission passes Windows 2022/2025 held-port traffic at e5f9fc6; Android and Apple remain pending. Held probe exclusion has pure/fake regressions with runtime acceptance pending. Recovery relocation, service-name resolution, wildcard isolation, bind races and broader proxy-only parity remain open. |
 | 6. Assets/import syntax | Partial; data-root increment qualified | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit roots propagate across native backends; custom GeoSite traffic passes Android TUN, both Apple preview runtimes and Windows 2022/2025. Explicit TLS certificate/key directory binding passes shared native/Core regressions; controlled CA-file TLS traffic passes ordinary Core on all three desktop systems at ca96891 (four variants per preparer, 16 markers). Physical Apple access/reload, managed asset import/lifetime, specialized certificate features and explicit multi-document merging remain open. |
 | 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |
 | 8. Runtime corpus | Partial | Shared port/syntax fixtures and platform/device HTTP, DNS, routing and recovery checks exist. The complete ECH/DoH/QUIC/protocol corpus and remaining physical options acceptance are not complete. |

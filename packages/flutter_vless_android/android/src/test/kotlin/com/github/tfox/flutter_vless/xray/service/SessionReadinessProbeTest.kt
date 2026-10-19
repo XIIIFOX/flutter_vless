@@ -4,8 +4,53 @@ import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import java.net.Socket
+import java.net.ServerSocket
+import java.io.IOException
+import org.mockito.Mockito
 
 class SessionReadinessProbeTest {
+    @Test fun boundProbeListenerClosesDeclaredCollisionBeforeRetainingNextCandidate() {
+        val collision=Mockito.mock(ServerSocket::class.java);val accepted=Mockito.mock(ServerSocket::class.java)
+        Mockito.`when`(collision.localPort).thenReturn(10807);Mockito.`when`(accepted.localPort).thenReturn(49000)
+        var attempts=0
+        val selected=SessionReadinessProbe.bindAvailableListener(setOf(10807)) {
+            if (attempts++==0) collision else accepted.also { Mockito.verify(collision).close() }
+        }
+        assertEquals(2,attempts);assertSame(accepted,selected)
+        Mockito.verify(accepted,Mockito.never()).close();selected.close()
+    }
+
+    @Test fun boundProbeListenerExhaustionClosesExactly32CollidingCandidates() {
+        val candidates=(0 until 32).map { Mockito.mock(ServerSocket::class.java).also { socket ->
+            Mockito.`when`(socket.localPort).thenReturn(10807)
+        } }
+        var attempts=0
+        assertThrows(IllegalStateException::class.java) {
+            SessionReadinessProbe.bindAvailableListener(setOf(10807)) { candidates[attempts++] }
+        }
+        assertEquals(32,attempts);candidates.forEach { Mockito.verify(it).close() }
+    }
+
+    @Test fun boundProbeListenerGetterAndCloseFailuresCannotSelectAnotherCandidate() {
+        val getter=IllegalStateException("Synthetic bound-port getter failure")
+        val cleanup=IOException("Synthetic listener close failure")
+        val candidate=Mockito.mock(ServerSocket::class.java)
+        Mockito.`when`(candidate.localPort).thenThrow(getter)
+        Mockito.doThrow(cleanup).`when`(candidate).close()
+        var attempts=0
+        val failure=assertThrows(IllegalStateException::class.java) {
+            SessionReadinessProbe.bindAvailableListener(emptySet()) { attempts++;candidate }
+        }
+        assertSame(getter,failure);assertSame(cleanup,failure.suppressed.single());assertEquals(1,attempts)
+        val collision=Mockito.mock(ServerSocket::class.java)
+        Mockito.`when`(collision.localPort).thenReturn(10807);Mockito.doThrow(cleanup).`when`(collision).close()
+        attempts=0
+        assertSame(cleanup,assertThrows(IOException::class.java) {
+            SessionReadinessProbe.bindAvailableListener(setOf(10807)) { attempts++;collision }
+        })
+        assertEquals(1,attempts)
+    }
+
     @Test fun probePreservesDefaultOutboundAndUserRulesAndCannotBeStalledByIdleClients() {
         val source = JSONObject("""{"inbounds":[{"tag":"fixture-tun","protocol":"socks","listen":"127.0.0.1","port":19000}],"outbounds":[{"protocol":"blackhole","tag":"block"}],"routing":{"rules":[{"domain":["full:www.gstatic.com"],"outboundTag":"block"}]}}""")
         val original = source.toString()

@@ -38,6 +38,9 @@ void Tests() {
       && checks == std::vector<uint16_t>{10810, 10087}
       && Parse(*output)["inbounds"][1] == ranges["inbounds"][0] && Parse(*output)["metrics"] == ranges["metrics"],
       "caller ranges/metrics consumed callbacks or changed");
+  const auto excluded = ListenerPortExclusions(Parse(*output));
+  Require(excluded && *excluded == std::set<unsigned>{10086, 10087, 10807, 10808, 10809, 10810},
+      "probe exclusions must contain caller ranges, metrics and both generated listeners");
 
   ranges["api"] = {{"tag", "caller-api"}, {"listen", "127.0.0.1:10088"}, {"services", Json::array({"StatsService"})}};
   checks.clear();

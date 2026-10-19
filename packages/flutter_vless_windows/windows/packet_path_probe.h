@@ -9,6 +9,8 @@ class PacketPathProbe {
  public:
   static constexpr const char* address = "198.18.0.3";
   static constexpr const char* tag = "flutter-vless-packet-probe";
+  explicit PacketPathProbe(std::set<unsigned> excluded_ports = {})
+      : excluded_ports_(std::move(excluded_ports)) {}
   ~PacketPathProbe();
   bool Start();
   bool Configure(xray_config::Json& config, uint16_t managed_port,
@@ -22,5 +24,6 @@ class PacketPathProbe {
   std::string challenge_;
   std::atomic<bool> running_{false};
   std::thread worker_;
+  std::set<unsigned> excluded_ports_;
 };
 }  // namespace flutter_vless

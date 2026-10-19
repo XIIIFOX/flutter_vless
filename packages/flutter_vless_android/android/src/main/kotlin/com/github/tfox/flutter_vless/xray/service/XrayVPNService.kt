@@ -17,6 +17,7 @@ import com.github.tfox.flutter_vless.xray.core.AndroidTunnelDnsPolicy
 import com.github.tfox.flutter_vless.xray.core.LocalProxyCredentials
 import com.github.tfox.flutter_vless.xray.core.LocalProxyAccessPolicy
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
+import com.github.tfox.flutter_vless.xray.core.XrayPortSpec
 import com.github.tfox.flutter_vless.xray.core.NativeRuntimeConfig
 import com.github.tfox.flutter_vless.xray.core.XrayDiagnosticsStore
 import com.github.tfox.flutter_vless.xray.core.XrayDiagnosticsStore.Event
@@ -299,7 +300,17 @@ class XrayVPNService : VpnService() {
     }
 
     /** Test seam supplies an inert probe; normal startup still uses the existing owned listener. */
-    internal fun createReadinessProbe(base: JSONObject) = SessionReadinessProbe(SessionReadinessProbe.selectHost(base))
+    internal fun createReadinessProbe(base: JSONObject): SessionReadinessProbe {
+        val excluded = XrayPortSpec.serviceListenerPorts(base).toMutableSet()
+        base.optJSONArray("inbounds")?.let { inputs ->
+            for (index in 0 until inputs.length()) {
+                val input = inputs.getJSONObject(index)
+                if (!XrayPortSpec.isUnixListen(input.optString("listen")) && input.has("port"))
+                    excluded.addAll(XrayPortSpec.reservedPorts(input.get("port")))
+            }
+        }
+        return SessionReadinessProbe(SessionReadinessProbe.selectHost(base), excluded)
+    }
 
     private fun closePendingRuntime() {
         pendingRuntime?.second?.close()

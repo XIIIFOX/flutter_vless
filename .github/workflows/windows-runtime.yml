@@ -76,6 +76,8 @@ jobs:
           if ($log -notmatch 'WINDOWS_ROUTING_PARENT_STDIN_PASS=1') { throw 'Owned routing parent pipe lifecycle was not tested' }
           if ($log -notmatch 'WINDOWS_PRIVATE_PORT_ADMISSION_PURE_PASS=8') { throw 'Bounded private TCP port admission was not tested' }
           if ($log -notmatch 'WINDOWS_PRIVATE_PORT_AVAILABILITY_PASS=2') { throw 'Occupied TCP listener availability was not tested' }
+          if ($log -notmatch 'WINDOWS_PACKET_PROBE_SOURCE_GUARD_PASS=4') { throw 'Actual packet-probe allocation source was not tested' }
+          if ($log -notmatch 'WINDOWS_PACKET_PROBE_EXCLUSION_PURE_PASS=8') { throw 'Packet-probe listener exclusion and cleanup were not tested' }
       - name: Verify gateway selection through Windows APIs
         shell: pwsh
         run: |

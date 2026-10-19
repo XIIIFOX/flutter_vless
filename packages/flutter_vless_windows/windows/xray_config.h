@@ -687,9 +687,8 @@ inline std::set<unsigned> ListenerPorts(const Json& config, const std::set<std::
 inline std::set<unsigned> ApiListenerPorts(const Json& config) { return ListenerPorts(config, {"api"}); }
 inline std::set<unsigned> ServiceListenerPorts(const Json& config) { return ListenerPorts(config, {"api", "metrics"}); }
 
-inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t preferred,
-    const PortEnvironmentReader& read_environment,
-    const std::function<bool(uint16_t)>& tcp_available) {
+inline std::optional<std::set<unsigned>> ListenerPortExclusions(const Json& config,
+    const PortEnvironmentReader& read_environment = PortEnvironment) {
   auto occupied = ServiceListenerPorts(config);
   if (config.contains("inbounds") && config["inbounds"].is_array()) for (auto inbound : config["inbounds"]) {
     if (inbound.is_object() && !Fields(inbound, {"listen", "port"})) return std::nullopt;
@@ -703,6 +702,14 @@ inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t prefer
     if (!ports) return std::nullopt;
     occupied.insert(ports->begin(), ports->end());
   }
+  return occupied;
+}
+inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t preferred,
+    const PortEnvironmentReader& read_environment,
+    const std::function<bool(uint16_t)>& tcp_available) {
+  const auto excluded = ListenerPortExclusions(config, read_environment);
+  if (!excluded) return std::nullopt;
+  const auto& occupied = *excluded;
   unsigned attempts = 0;
   for (unsigned port = preferred; port <= 65535; ++port) if (!occupied.count(port)) {
     if (tcp_available && attempts++ >= 32) return std::nullopt;

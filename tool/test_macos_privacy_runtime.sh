@@ -3,13 +3,19 @@
 # SystemConfiguration is replaced at the test boundary: no host VPN, proxy,
 # DNS, routes, NetworkExtension or Keychain preferences are changed.
 set -euo pipefail
+case "$#:${1-}" in
+    0:) APPLE_RUNTIME_PROBE_MODE=full ;;
+    1:--fakedns-only) APPLE_RUNTIME_PROBE_MODE=fakedns-only ;;
+    *) echo 'Usage: test_macos_privacy_runtime.sh [--fakedns-only]' >&2; exit 2 ;;
+esac
+export APPLE_RUNTIME_PROBE_MODE
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/build/macos_privacy_runtime_probe"
 SOURCE="$ROOT/packages/flutter_vless_macos/macos/flutter_vless_macos/Sources"
 mkdir -p "$OUT/modules"
 python3 - "$ROOT" "$OUT" <<'PY'
 from pathlib import Path
-import base64, sys
+import base64, os, sys
 root,out=map(Path,sys.argv[1:])
 source=(root/'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos/FlutterVlessPlugin.swift').read_text()
 head=source[:source.index('public class FlutterVlessPlugin:')].replace('import FlutterMacOS\n','')
@@ -24,6 +30,15 @@ asset=source[source.index('private func configureXrayAssetLocation'):]
 harness='\n'.join((root/'tool/fixtures'/name).read_text() for name in ['ios_local_auth_probe.swift','ios_dns_runtime_probe.swift','apple_fakedns_runtime.swift','apple_native_routing_runtime.swift','ios_privacy_probe.swift'])
 harness=(root/'tool/fixtures/macos_runtime_regressions.swift').read_text()+'\n'+harness
 harness=harness.replace('    let markers = [', '    do { try await runAppleProxyCounterChecks() } catch { print("MACOS_COUNTERS_FAILED"); exit(1) }\n    do { try runAppleFakeDNSRuntimeChecks() } catch { print("APPLE_FAKEDNS_SDK_FAILED"); exit(1) }\n    let markers = [')
+if os.environ.get('APPLE_RUNTIME_PROBE_MODE') == 'fakedns-only':
+    begin, end = harness.index('func runModes() async {'), harness.index('class ModeDelegate:')
+    harness = harness[:begin] + r'''func runModes() async {
+    setbuf(stdout, nil)
+    print("RUNTIME=\(XRayGetVersion())")
+    do { try runAppleFakeDNSRuntimeChecks() } catch { print("APPLE_FAKEDNS_SDK_FAILED"); exit(1) }
+    exit(0)
+}
+''' + harness[end:]
 harness=harness[:harness.index('class ModeDelegate:')]+ '\nTask { await runModes() }; dispatchMain()\n'
 harness=harness.replace('__ASSET_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/asset-files.json').read_bytes()).decode('ascii'))
 harness=harness.replace('__DIRECT_ONLY_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/direct-only.json').read_bytes()).decode('ascii'))
@@ -53,6 +68,12 @@ import os, sys
 text=Path(sys.argv[1]).read_text()
 assert "RUNTIME=26.10.17" in text, "Unexpected embedded Xray version"
 assert text.splitlines().count('APPLE_FAKEDNS_SDK_PASS=2') == 1
+if os.environ.get('APPLE_RUNTIME_PROBE_MODE') == 'fakedns-only':
+    assert text.splitlines().count('RUNTIME=26.10.17') == 1
+    for marker in ['privacy-canary.invalid','synthetic-password-canary','d2719f44-f51f-4c35-aeae-246230d21f38','local-user-canary','local-password-canary']:
+        assert marker not in text, 'Private marker escaped'
+    print('PASS: stock Apple SDK FakeDNS only, 2 generations')
+    raise SystemExit(0)
 assert 'MACOS_COUNTERS_AND_API_PASSTHROUGH_PASS' in text
 for marker in ['MACOS_COUNTERS_UNTAGGED_UNAVAILABLE_PASS', 'MACOS_COUNTERS_DISABLED_UNAVAILABLE_PASS']:
     assert text.splitlines().count(marker) == 1, marker

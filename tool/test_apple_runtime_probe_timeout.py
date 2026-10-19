@@ -17,7 +17,7 @@ import run_apple_runtime_probe as probe
 class AppleCounterRuntimeWiringTest(unittest.TestCase):
     root = Path(__file__).resolve().parents[1]
 
-    def generated(self, platform):
+    def generated(self, platform, *, fakedns_only=False):
         script = (self.root / ('tool/test_' + platform + '_privacy_runtime.sh')).read_text()
         begin = 'python3 - "$ROOT" "$OUT" <<\'PY\'\n'
         self.assertEqual(1, script.count(begin))
@@ -27,7 +27,8 @@ class AppleCounterRuntimeWiringTest(unittest.TestCase):
             (output / 'Probe.app').mkdir()
             # Execute only the actual file-generation block. Swift is text;
             # none of its SDK/Core calls, nor any shell step, are executed.
-            with mock.patch.object(sys, 'argv', ['-', str(self.root), str(output)]):
+            with mock.patch.dict(os.environ, {'APPLE_RUNTIME_PROBE_MODE': 'fakedns-only' if fakedns_only else 'full'}), \
+                    mock.patch.object(sys, 'argv', ['-', str(self.root), str(output)]):
                 exec(compile(body, 'counter-harness-generation', 'exec'), {})
             return (output / 'main.swift').read_text()
 
@@ -81,6 +82,76 @@ class AppleFakeDNSRuntimeWiringTest(unittest.TestCase):
         self.assertNotIn('[0, 0, 0, 1, 198, 18, 0, 2, 0, 53]', generated)
         self.assertIn('host: TunnelDNSPolicy.virtualServer, port: 53, payload: query)', generated)
         self.assertIn('dnsProbeUDPHeader(host: host, port: port)', generated)
+
+
+class AppleFakeDNSOnlyModeTest(unittest.TestCase):
+    root = AppleCounterRuntimeWiringTest.root
+    generated = AppleCounterRuntimeWiringTest.generated
+
+    def test_generated_entry_runs_only_existing_fakedns_fixture(self):
+        for platform in ('ios', 'macos'):
+            with self.subTest(platform=platform):
+                generated = self.generated(platform, fakedns_only=True)
+                entry = generated[generated.index('func runModes() async {'):]
+                end = '\nclass ModeDelegate:' if platform == 'ios' else '\nTask { await runModes() }'
+                entry = entry.split(end, 1)[0]
+                self.assertIn('print("RUNTIME=\\(XRayGetVersion())")', entry)
+                self.assertEqual(1, entry.count('try runAppleFakeDNSRuntimeChecks()'))
+                self.assertIn('exit(0)', entry)
+                for unrelated in ('runRawRuntimeProbe()', 'runNativeRoutingRuntimeChecks()',
+                                  'runAppleProxyCounterChecks()', 'MODE_PASS=', 'let markers ='):
+                    self.assertNotIn(unrelated, entry)
+                self.assertIn('func runNativeRoutingRuntimeChecks()', generated)
+
+    def test_scoped_qualifier_requires_version_single_marker_and_privacy(self):
+        for platform in ('ios', 'macos'):
+            script = (self.root / ('tool/test_' + platform + '_privacy_runtime.sh')).read_text()
+            body = script.rsplit('python3 - "$OUT/runtime.log" <<\'PY\'\n', 1)[1].split('\nPY', 1)[0]
+            valid = 'RUNTIME=26.10.17\nAPPLE_FAKEDNS_SDK_PASS=2\n'
+            cases = [(valid, True), ('APPLE_FAKEDNS_SDK_PASS=2\n', False),
+                     (valid.replace('26.10.17', '26.10.18'), False),
+                     (valid.replace('26.10.17', '26.10.170'), False),
+                     (valid + 'RUNTIME=26.10.17\n', False),
+                     ('RUNTIME=26.10.17\n', False), (valid + 'APPLE_FAKEDNS_SDK_PASS=2\n', False),
+                     (valid + 'synthetic-password-canary\n', False)]
+            with tempfile.TemporaryDirectory() as folder:
+                log = Path(folder) / 'runtime.log'
+                for content, accepted in cases:
+                    with self.subTest(platform=platform, accepted=accepted, content=content):
+                        log.write_text(content)
+                        with mock.patch.dict(os.environ, {'APPLE_RUNTIME_PROBE_MODE': 'fakedns-only',
+                                                          'REQUIRE_CORE_PREFLIGHT': '1', 'REQUIRE_VPN_ROUTING': '1'}), \
+                                mock.patch.object(sys, 'argv', ['-', str(log)]), contextlib.redirect_stdout(io.StringIO()):
+                            if accepted:
+                                with self.assertRaises(SystemExit) as result:
+                                    exec(compile(body, 'fakedns-only-qualifier', 'exec'), {})
+                                self.assertEqual(0, result.exception.code)
+                            else:
+                                with self.assertRaises(AssertionError):
+                                    exec(compile(body, 'fakedns-only-qualifier', 'exec'), {})
+                # A scoped log must never qualify the default full gate.
+                log.write_text(valid)
+                with mock.patch.dict(os.environ, {'APPLE_RUNTIME_PROBE_MODE': 'full'}), \
+                        mock.patch.object(sys, 'argv', ['-', str(log)]):
+                    with self.assertRaises(AssertionError):
+                        exec(compile(body, 'default-full-qualifier', 'exec'), {})
+
+    def test_shell_arguments_are_closed_before_any_compile_or_runtime(self):
+        for platform in ('ios', 'macos'):
+            script = (self.root / ('tool/test_' + platform + '_privacy_runtime.sh')).read_text()
+            prefix = script[:script.index('ROOT=')]
+            for args in (['--unknown'], ['--fakedns-only', '--extra'], ['', ''], ['--fakedns-only', '--fakedns-only']):
+                with self.subTest(platform=platform, args=args):
+                    result = subprocess.run(['bash', '-c', prefix, 'probe', *args],
+                                            env={**os.environ, 'SIMULATOR_UDID': 'inert-no-simulator'},
+                                            capture_output=True, timeout=3)
+                    self.assertEqual(2, result.returncode)
+            for args in ([], ['--fakedns-only']):
+                result = subprocess.run(['bash', '-c', prefix + '\nprintf "%s" "$APPLE_RUNTIME_PROBE_MODE"\n', 'probe', *args],
+                                        env={**os.environ, 'SIMULATOR_UDID': 'inert-no-simulator'},
+                                        capture_output=True, timeout=3)
+                self.assertEqual(0, result.returncode)
+                self.assertEqual(b'fakedns-only' if args else b'full', result.stdout)
 
 
 class ApplePhaseMetadataTest(unittest.TestCase):

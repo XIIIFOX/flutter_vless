@@ -21,6 +21,31 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    def test_occupied_private_ports_close_exact_owners_on_success_and_failure(self):
+        for failure_stage in (None, "second_bind", "body"):
+            with self.subTest(failure_stage=failure_stage):
+                owners = [Mock(), Mock()]
+                for owner in owners:
+                    owner.__enter__ = Mock(return_value=owner)
+                    owner.__exit__ = Mock(return_value=False)
+                failure = RuntimeError("synthetic controlled failure")
+                if failure_stage == "second_bind": owners[1].bind.side_effect = failure
+                with patch.object(runtime.socket, "socket", side_effect=owners), \
+                     patch.object(runtime.socket, "SO_EXCLUSIVEADDRUSE", 123, create=True):
+                    if failure_stage:
+                        with self.assertRaises(RuntimeError) as raised:
+                            with runtime.occupied_private_ports():
+                                if failure_stage == "body": raise failure
+                        self.assertIs(failure, raised.exception)
+                    else:
+                        with runtime.occupied_private_ports(): pass
+                for owner, port in zip(owners, (10807, 10086)):
+                    owner.bind.assert_called_once_with(("127.0.0.1", port))
+                    owner.setsockopt.assert_called_once_with(runtime.socket.SOL_SOCKET, 123, 1)
+                    owner.__exit__.assert_called_once()
+                if failure_stage != "second_bind":
+                    for owner in owners: owner.listen.assert_called_once_with(1)
+
     def test_native_routing_proxy_does_not_feed_previous_ipv6_nonce_observer(self):
         state = runtime.IPv6PayloadState()
         # This is a valid ordinary HTTP payload to an IPv6 target, not the

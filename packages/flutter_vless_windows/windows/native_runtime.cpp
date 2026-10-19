@@ -282,6 +282,24 @@ bool CheckRoutingPreparedConfig(const std::string& config, const std::string& me
   return Command(runtime.Executable(), {L"native-routing", L"check", L"--config", config_path.wstring(),
       L"--spec", metadata_path.wstring()}, output, 10000, assets) && native_routing::SuccessfulReply(output, "check");
 } catch (...) { return false; }
+bool TcpPortAvailable(uint16_t port) {
+  if (!port) return false;
+  WSADATA sockets{};
+  if (WSAStartup(MAKEWORD(2, 2), &sockets)) return false;
+  SOCKET candidate = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  bool available = false;
+  if (candidate != INVALID_SOCKET) {
+    BOOL exclusive = TRUE;
+    sockaddr_in address{}; address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK); address.sin_port = htons(port);
+    available = setsockopt(candidate, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+        reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) == 0
+        && bind(candidate, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0;
+    closesocket(candidate);
+  }
+  WSACleanup();
+  return available;
+}
 bool SocksReady(uint16_t port, const std::string& user, const std::string& password) {
   WSADATA data{};
   if (WSAStartup(MAKEWORD(2,2), &data)) return false;

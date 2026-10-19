@@ -73,18 +73,33 @@ func runModes() async {
                 precondition(log["access"] as? String == "none" && log["error"] as? String == "none")
                 precondition(log["loglevel"] as? String == (["error","none"].contains(level) ? level : "warning"))
                 print("MODE_BEGIN=\(mode);LEVEL=\(level)")
+                func stage(_ name: String, _ detail: String = "") {
+                    print("MODE_STAGE=\(name);MODE=\(mode);LEVEL=\(level)\(detail)")
+                    fflush(stdout)
+                }
                 var error: NSError?
-                if !XRayStartPrivate(prepared,logger,&error) { print("START_FAILURE mode=\(mode) error=\(error?.localizedDescription ?? "nil")");exit(1) }
+                stage("start-enter")
+                let started = XRayStartPrivate(prepared,logger,&error)
+                stage("start-return", ";OK=\(started)")
+                if !started { print("START_FAILURE mode=\(mode) error=\(error?.localizedDescription ?? "nil")");exit(1) }
+                stage("socket-enter")
                 let fd = runtimeProbeSocket()
+                stage("socket-return", ";FD=\(fd)")
                 var address = sockaddr_in(); address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
                 let port = (decoded["inbounds"] as! [[String: Any]])[0]["port"] as! Int
                 address.sin_family = sa_family_t(AF_INET);address.sin_port = UInt16(port).bigEndian
                 inet_pton(AF_INET,"127.0.0.1",&address.sin_addr)
                 let connected = withUnsafePointer(to:&address) { $0.withMemoryRebound(to:sockaddr.self,capacity:1) { connect(fd,$0,socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+                let connectError = errno
+                stage("connect-return", ";RESULT=\(connected);ERRNO=\(connectError)")
                 precondition(connected == 0)
                 let request = Array("GET http://\(markers[0])/\(markers[2]) HTTP/1.1\r\nHost: \(markers[0])\r\nConnection: close\r\n\r\n".utf8)
-                _ = request.withUnsafeBytes { send(fd,$0.baseAddress,$0.count,0) }
-                try await Task.sleep(nanoseconds: 100_000_000);close(fd);XRayStop()
+                let sent = request.withUnsafeBytes { send(fd,$0.baseAddress,$0.count,0) }
+                let sendError = errno
+                stage("send-return", ";RESULT=\(sent);ERRNO=\(sendError)")
+                try await Task.sleep(nanoseconds: 100_000_000)
+                stage("close-enter");close(fd);stage("close-return")
+                stage("stop-enter");XRayStop();stage("stop-return")
                 print("MODE_PASS=\(mode);LEVEL=\(level)")
             }
             // Exercise real app-process start/stop/snapshot and async delay runner.

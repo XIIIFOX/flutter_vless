@@ -195,6 +195,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         let credentials = try LocalProxyCredentials.generate()
         let preparation = Task {
             try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: config, credentials: credentials, routingIntent: routingIntent,
+                tcpPortAvailable: LocalProxyAccessPolicy.isTCPPortAvailable,
                 resolveIPv4: {
                     rememberTunnelLog("Resolving VPN transport endpoint")
                     return try await TunnelEndpointResolver.resolveIPv4($0, event: rememberTunnelLog)

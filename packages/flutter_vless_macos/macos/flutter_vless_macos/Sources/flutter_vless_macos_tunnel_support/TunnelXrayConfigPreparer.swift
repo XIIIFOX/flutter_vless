@@ -46,6 +46,7 @@ public enum TunnelXrayConfigPreparer {
         jsonData: Data,
         credentials: LocalProxyCredentials,
         routingIntent: NativeRoutingIntent? = nil,
+        tcpPortAvailable: ((Int) -> Bool)? = nil,
         resolveIPv4: (String) async throws -> String?,
         attempts: Int = 5,
         retryDelay: () async throws -> Void = { try await Task.sleep(nanoseconds: 3_000_000_000) }
@@ -60,7 +61,7 @@ public enum TunnelXrayConfigPreparer {
             while true {
                 guard clock.now < deadline else { throw StartupError.endpointUnavailable }
                 var missingHost: String?
-                let prepared = prepare(jsonData: jsonData, credentials: credentials, routingIntent: routingIntent) { host in
+                let prepared = prepare(jsonData: jsonData, credentials: credentials, routingIntent: routingIntent, tcpPortAvailable: tcpPortAvailable) { host in
                     if let address = resolved[host] { return address }
                     missingHost = host
                     return nil
@@ -103,6 +104,7 @@ public enum TunnelXrayConfigPreparer {
         jsonData: Data,
         credentials: LocalProxyCredentials,
         routingIntent: NativeRoutingIntent? = nil,
+        tcpPortAvailable: ((Int) -> Bool)? = nil,
         resolveIPv4: (String) -> String? = { _ in nil }
     ) -> TunnelPreparedConfig? {
         do {
@@ -117,7 +119,7 @@ public enum TunnelXrayConfigPreparer {
                 guard index >= 0 && index < importedCount else { return nil }
             }
 
-            try LocalProxyAccessPolicy.applyVPN(to: &configJSON, credentials: credentials)
+            try LocalProxyAccessPolicy.applyVPN(to: &configJSON, credentials: credentials, tcpPortAvailable: tcpPortAvailable)
             guard let managedTag = (configJSON["inbounds"] as? [[String: Any]])?.first?["tag"] as? String else { return nil }
             messages.append("Applied session authentication to the managed loopback SOCKS inbound")
 

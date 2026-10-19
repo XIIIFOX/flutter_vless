@@ -75,6 +75,7 @@ func preparationCorpus(t *testing.T, name string, count int) []protocolCase {
 // Decode/build only: no core.Instance, listeners, DNS or runtime initialization.
 func TestProtocolCorpusBuilds(t *testing.T) {
 	t.Run("Core-empty-inbound-tag", testNativeRoutingEmptyInboundTag)
+	t.Run("Core-android-preview-isolation", testAndroidRoutingPreviewIsolation)
 	for _, tc := range preparationCases(t) {
 		t.Run(tc.Name, func(t *testing.T) {
 			data, err := json.Marshal(tc.Config)

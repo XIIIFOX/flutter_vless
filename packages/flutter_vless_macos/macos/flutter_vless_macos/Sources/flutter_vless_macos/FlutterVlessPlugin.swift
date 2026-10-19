@@ -1112,7 +1112,8 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     /// config, the method avoids unnecessary profile rewrites because rewriting
     /// preferences while NetworkExtension is active can emit extra configuration
     /// changes and transient status noise.
-    private func startVless(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    private func startVless(call: FlutterMethodCall, result: @escaping FlutterResult,
+                            tcpPortAvailable: @escaping (Int) -> Bool = LocalProxyAccessPolicy.isTCPPortAvailable) {
         guard let arguments = call.arguments as? [String: Any],
               let remark = arguments["remark"] as? String,
               let config = arguments["config"] as? String,
@@ -1156,7 +1157,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             if proxyOnly {
                 preparedProxyConfig = try ProxyOnlyRunner.prepare(configData: effectiveConfigData)
             } else {
-                try LocalProxyAccessPolicy.validateVPN(configData: effectiveConfigData)
+                try LocalProxyAccessPolicy.validateVPN(configData: effectiveConfigData, tcpPortAvailable: tcpPortAvailable)
                 preparedProxyConfig = nil
             }
         } catch is NativeRoutingSpecError {

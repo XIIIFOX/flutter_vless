@@ -74,6 +74,8 @@ jobs:
           if ($log -notmatch 'WINDOWS_FINAL_CONFIG_PREFLIGHT_PASS=2') { throw 'Exact final VPN configuration preflight was not tested' }
           if ($log -notmatch 'WINDOWS_ROUTING_ADOPTION_PURE_PASS=36') { throw 'Native routing adoption controls were not tested' }
           if ($log -notmatch 'WINDOWS_ROUTING_PARENT_STDIN_PASS=1') { throw 'Owned routing parent pipe lifecycle was not tested' }
+          if ($log -notmatch 'WINDOWS_PRIVATE_PORT_ADMISSION_PURE_PASS=8') { throw 'Bounded private TCP port admission was not tested' }
+          if ($log -notmatch 'WINDOWS_PRIVATE_PORT_AVAILABILITY_PASS=2') { throw 'Occupied TCP listener availability was not tested' }
       - name: Verify gateway selection through Windows APIs
         shell: pwsh
         run: |
@@ -200,6 +202,7 @@ jobs:
         run: |
           $log = Get-Content build/windows-runtime/native-routing-runtime.log -Raw
           if ($log -notmatch 'WINDOWS_NATIVE_ROUTING_TRAFFIC_PASS=2') { throw 'Native routing traffic proof is incomplete' }
+          if ($log -notmatch 'WINDOWS_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2') { throw 'VPN traffic with occupied preferred TCP ports was not tested' }
       - name: Restore the disposable runner after any failure
         if: always()
         shell: pwsh

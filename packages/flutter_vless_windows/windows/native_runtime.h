@@ -39,5 +39,8 @@ bool CheckRoutingPreparedConfig(const std::string& config, const std::string& me
     ProtectedRuntime& runtime, fs::path& config_path, fs::path& metadata_path,
     const asset_location::Root& assets = std::nullopt);
 bool SocksReady(uint16_t port, const std::string& user = {}, const std::string& password = {});
+// A point-in-time TCP loopback bind check; closes its socket before returning.
+// It neither reserves the port for Core nor changes caller-owned listeners.
+bool TcpPortAvailable(uint16_t port);
 }  // namespace flutter_vless::native
 #endif

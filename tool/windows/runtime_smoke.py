@@ -5,6 +5,7 @@ ordinary TCP to a documentation IP; HTTP sniffing selects a domain rule and
 Xray delivers to a local underlay HTTP server or a loopback SOCKS server. No server secrets.
 """
 import argparse
+from contextlib import contextmanager, ExitStack
 import base64
 import hashlib
 import http.client
@@ -864,6 +865,19 @@ def native_routing_proxy(address):
     return server
 
 
+@contextmanager
+def occupied_private_ports():
+    # Only the separate optional-routing scenario holds these owned listeners.
+    # The real VPN admission must choose different private SOCKS/API ports.
+    with ExitStack() as owned:
+        for port in (10807, 10086):
+            listener = owned.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            listener.bind(("127.0.0.1", port))
+            listener.listen(1)
+        yield
+
+
 def native_routing_gate(probe, directory, address, dns, origin, results):
     # This is a separate opt-in profile. The preceding ordinary-input isolation
     # assertions remain untouched and do not run with an aliased adapter.
@@ -1286,7 +1300,9 @@ def main():
         if args.vpn:
             direct_only_gate(probe, directory, direct_address, direct_dns, servers[0], results)
             if args.native_routing:
-                native_routing_gate(probe, directory, direct_address, direct_dns, servers[0], results)
+                with occupied_private_ports():
+                    native_routing_gate(probe, directory, direct_address, direct_dns, servers[0], results)
+                print("WINDOWS_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2", flush=True)
     finally:
         for process, stop in adapters:
             stop.touch()

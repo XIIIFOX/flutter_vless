@@ -130,15 +130,24 @@ class NativeRoutingSelectionDeviceTest {
         val bytes=config.readBytes(); val spec=JSONObject(File(config.parentFile,config.name.removeSuffix(".json")+".spec.json").readText())
         assertEquals(digest(bytes),spec.getString("source_sha256")); return bytes to spec
     }
+    private fun withOccupiedPrivatePreferences(block:()->Unit) {
+        val loopback=InetAddress.getByAddress(byteArrayOf(127,0,0,1))
+        ServerSocket(10807,1,loopback).use {
+            ServerSocket(10809,1,loopback).use { block() }
+        }
+    }
     private fun source(alias:String?, host:String, aliasOrigin:Origin, defaultOrigin:Origin):JSONObject {
         val port=ServerSocket(0,1,InetAddress.getByAddress(byteArrayOf(127,0,0,1))).use { it.localPort }
         val input=JSONObject().put("listen","127.0.0.1").put("port",port).put("protocol","http").put("settings",JSONObject())
         if(alias!=null) input.put("tag",alias)
         fun outbound(tag:String,origin:Origin)=JSONObject().put("tag",tag).put("protocol","freedom")
             .put("settings",JSONObject().put("redirect","127.0.0.1:${origin.port}"))
-        val rules=JSONArray()
+        // Limit marker traffic to the controlled destination port. Native DNS
+        // and readiness guards must beat this caller block before alias/default selection.
+        val rules=JSONArray().put(JSONObject().put("type","field")
+            .put("port","1-18082,18084-65535").put("outboundTag","blocked-first"))
         if(alias!=null) {
-            // Both private DNS and readiness would be stolen by this catchall without native trusted guards.
+            // The remaining controlled flow still exercises the source inbound alias.
             rules.put(JSONObject().put("type","field").put("inboundTag",JSONArray().put(alias)).put("outboundTag","alias-marker"))
         }
         return JSONObject().put("inbounds",JSONArray().put(input))
@@ -158,6 +167,15 @@ class NativeRoutingSelectionDeviceTest {
         if(sourceIndex) assertEquals(0,spec.getInt("source_inbound_index")) else assertFalse(spec.has("source_inbound_index"))
         assertEquals("default-marker",spec.getString("default_outbound_tag"))
         assertEquals("[0,2]",spec.getJSONArray("guard_rule_indices").toString()) // API insertion shifts DNS, not an API guard.
+        val socksPort=runtime.getJSONArray("inbounds").getJSONObject(spec.getInt("managed_inbound_index")).getInt("port")
+        val apiRule=runtime.getJSONObject("routing").getJSONArray("rules").getJSONObject(1)
+        assertEquals(runtime.getJSONObject("api").getString("tag"),apiRule.getString("outboundTag"))
+        val apiTag=apiRule.getJSONArray("inboundTag").getString(0)
+        val apiPort=(0 until runtime.getJSONArray("inbounds").length()).map { runtime.getJSONArray("inbounds").getJSONObject(it) }
+            .single { it.optString("tag")==apiTag }.getInt("port")
+        assertFalse("Generated SOCKS reused an occupied listener",socksPort in setOf(10807,10809))
+        assertFalse("Generated API reused an occupied listener",apiPort in setOf(10807,10809))
+        assertNotEquals(socksPort,apiPort)
         assertEquals(source.getJSONArray("inbounds").getJSONObject(0).toString(),runtime.getJSONArray("inbounds").getJSONObject(0).toString())
         assertEquals(source.getJSONObject("dns").toString(),runtime.getJSONObject("dns").toString())
         for(i in 0 until source.getJSONArray("outbounds").length())
@@ -200,6 +218,7 @@ class NativeRoutingSelectionDeviceTest {
     }
     @Test fun taggedAndUntaggedOriginalSourceContextKeepsPrivateDnsAndProbeGuards() {
         verifyPreview()
+        withOccupiedPrivatePreferences {
         for(alias in listOf("caller-source", "")) {
             Origin("alias-$run",run).use { aliasOrigin -> Origin("default-$run",run).use { defaultOrigin ->
                 // Core never matches an empty inbound tag, including a caller selector containing "".
@@ -220,9 +239,11 @@ class NativeRoutingSelectionDeviceTest {
                 println(if(alias.isEmpty())"NATIVE_ROUTING_ALIAS_UNTAGGED_PASS" else "NATIVE_ROUTING_ALIAS_TAGGED_PASS")
             } }
         }
+        }
     }
     @Test fun nonfirstDefaultSurvivesRejectedCandidateAndWorkerRecoveryWithFreshPair() {
         verifyPreview()
+        withOccupiedPrivatePreferences {
         Origin("unused-$run",run).use { unused -> Origin("default-$run",run).use { selected ->
             val host="default-$run.dns-audit.invalid";val source=source(null,host,unused,selected);val original=source.toString()
             try {
@@ -246,6 +267,7 @@ class NativeRoutingSelectionDeviceTest {
             selected.close();unused.close();selected.checkCounts(3,1);unused.checkCounts(0,0)
             println("NATIVE_ROUTING_DEFAULT_RECOVERY_PASS")
         } }
+        }
     }
 
     /** Device-owned TCP+UDP origins; exact counts also detect a guard sending private probes here. */
@@ -258,16 +280,18 @@ class NativeRoutingSelectionDeviceTest {
         private val accepted=AtomicReference<Socket?>()
         private val failure=AtomicReference<Throwable?>()
         val tcp=AtomicInteger();val udp=AtomicInteger()
+        private val acceptedTcp=AtomicInteger();private val requestHeaderBytes=AtomicInteger()
         private val tcpWorker=Thread({
             try { while(!closed.get()) {
                 val client=try { server.accept() } catch(error:SocketException) { if(closed.get()) break else throw error }
+                acceptedTcp.incrementAndGet()
                 accepted.set(client)
                 client.use {
                     if(closed.get()) return@use
                     it.soTimeout=3000
                     val header=ByteArrayOutputStream()
                     while(header.size()<4096 && !header.toString("US-ASCII").endsWith("\r\n\r\n")) {
-                        val value=it.getInputStream().read();check(value>=0);header.write(value)
+                        val value=it.getInputStream().read();check(value>=0);header.write(value);requestHeaderBytes.incrementAndGet()
                     }
                     check(header.toString("US-ASCII").startsWith("GET /routing-$run HTTP/1.1\r\n"))
                     val body=marker.toByteArray(Charsets.US_ASCII)
@@ -292,9 +316,9 @@ class NativeRoutingSelectionDeviceTest {
         }
         fun checkCounts(expectedTcp:Int,expectedUdp:Int) {
             failure.get()?.let { throw AssertionError("Owned routing marker failed",it) }
-            assertEquals(expectedTcp,tcp.get());assertEquals(expectedUdp,udp.get())
+            assertEquals(expectedTcp,tcp.get());assertEquals(expectedTcp,acceptedTcp.get());assertEquals(expectedUdp,udp.get())
         }
-        fun safeState()="tcp:${tcp.get()},udp:${udp.get()},failure:${failure.get()?.javaClass?.simpleName?.take(64)?:"none"}"
+        fun safeState()="tcp:${tcp.get()},accepted:${acceptedTcp.get()},requestHeaderBytes:${requestHeaderBytes.get()},udp:${udp.get()},failure:${failure.get()?.javaClass?.simpleName?.take(64)?:"none"}"
         override fun close() {
             if(!closed.compareAndSet(false,true)) return
             var primary:Throwable?=null;var interrupted=Thread.interrupted()

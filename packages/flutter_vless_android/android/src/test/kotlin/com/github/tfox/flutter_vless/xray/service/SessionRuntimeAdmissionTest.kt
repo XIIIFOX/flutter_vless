@@ -13,6 +13,9 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.lang.reflect.InvocationTargetException
+import java.net.BindException
+import java.net.ServerSocket
+import java.net.SocketAddress
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicLong
 
@@ -29,7 +32,8 @@ class SessionRuntimeAdmissionTest {
             .apply { isAccessible = true }.invoke(service, profile, true, 1L, false) as Boolean
     } catch (error: InvocationTargetException) { throw error.targetException }
 
-    private fun fixture(rejectFinal: Boolean = false, staleDuringCheck: Boolean = false, failSave: Boolean = false, routingCapability: Int? = null) {
+    private fun fixture(rejectFinal: Boolean = false, staleDuringCheck: Boolean = false, failSave: Boolean = false,
+                        routingCapability: Int? = null, allTcpOccupied: Boolean = false) {
         val directory = Files.createTempDirectory("native-service-admission").toFile()
         val service = Mockito.mock(XrayVPNService::class.java, Answers.CALLS_REAL_METHODS)
         Mockito.doReturn(directory).`when`(service).filesDir
@@ -51,7 +55,8 @@ class SessionRuntimeAdmissionTest {
         val requests = AtomicLong(1); val recovery = SessionRecoveryPolicy().apply { activate() }
         val profiles = Mockito.mock(AuthorizedProfileStore::class.java)
         val saveFailure = IllegalStateException("Synthetic profile save refusal")
-        if (failSave) Mockito.doThrow(saveFailure).`when`(profiles).save(anyProfile())
+        // An old implementation must stop at this tripwire, never reach old-worker cleanup.
+        if (failSave || allTcpOccupied) Mockito.doThrow(saveFailure).`when`(profiles).save(anyProfile())
         val active = XrayConfig(REMARK = "Existing accepted session")
         set(service, "requests", requests); set(service, "recovery", recovery); set(service, "profiles", profiles)
         set(service, "config", active)
@@ -63,6 +68,15 @@ class SessionRuntimeAdmissionTest {
             VPN_ROUTING_SELECTION_JSON = if(routingCapability == null) null else "{}")
         var checkedFinal = false
         try {
+            // No real ServerSocket constructor or bind is executed in this control.
+            Mockito.mockConstruction(ServerSocket::class.java) { listener, _ ->
+                if (allTcpOccupied) {
+                    Mockito.doThrow(BindException("Synthetic occupied TCP listener")).`when`(listener)
+                        .bind(Mockito.any(SocketAddress::class.java), Mockito.anyInt())
+                    Mockito.doThrow(BindException("Synthetic occupied TCP listener")).`when`(listener)
+                        .bind(Mockito.any(SocketAddress::class.java))
+                }
+            }.use { listeners ->
             Mockito.mockConstruction(ProcessBuilder::class.java) { builder, construction ->
                 val args = (construction.arguments()[0] as Array<*>).map { it as String }
                 Mockito.`when`(builder.redirectErrorStream(true)).thenReturn(builder)
@@ -91,17 +105,31 @@ class SessionRuntimeAdmissionTest {
                     }
                 }
             }.use { builds ->
-                if (failSave) assertSame(saveFailure, assertThrows(IllegalStateException::class.java) { accept(service, incoming) })
+                if (allTcpOccupied) {
+                    val outcome=runCatching { accept(service, incoming) }
+                    assertSame(oldChild, processField.get(XrayCoreManager))
+                    Mockito.verify(oldChild, Mockito.never()).destroy()
+                    Mockito.verify(oldChild, Mockito.never()).destroyForcibly()
+                    assertEquals("Occupied generated TCP listeners must refuse before saving a candidate",0,
+                        Mockito.mockingDetails(profiles).invocations.count { it.method.name=="save" })
+                    assertEquals("Only 32 OS candidates may be tested before refusal",32,listeners.constructed().size)
+                    listeners.constructed().forEach { Mockito.verify(it).close() }
+                    assertEquals("No Core parser process is needed after allocation exhaustion",0,builds.constructed().size)
+                    assertFalse(outcome.getOrThrow())
+                    Mockito.verify(service,Mockito.never()).createReadinessProbe(anyJson())
+                } else if (failSave) assertSame(saveFailure, assertThrows(IllegalStateException::class.java) { accept(service, incoming) })
                 else assertFalse(accept(service, incoming))
-                assertEquals(if(routingCapability == 1) 2 else 1, builds.constructed().size)
+                if (!allTcpOccupied) assertEquals(if(routingCapability == 1) 2 else 1, builds.constructed().size)
             }
-            if(routingCapability == 0) assertFalse(checkedFinal) else assertTrue("Actual service native preflight must include generated readiness rule", checkedFinal)
+            }
+            if(allTcpOccupied || routingCapability == 0) assertFalse(checkedFinal)
+            else assertTrue("Actual service native preflight must include generated readiness rule", checkedFinal)
             assertSame(active, XrayVPNService::class.java.getDeclaredField("config").apply { isAccessible = true }.get(service))
             assertEquals(1L, recovery.generation)
             assertSame(oldChild, processField.get(XrayCoreManager))
             Mockito.verify(oldChild, Mockito.never()).destroy()
             Mockito.verify(oldChild, Mockito.never()).destroyForcibly()
-            if(routingCapability == 0) Mockito.verify(probe,Mockito.never()).close() else Mockito.verify(probe).close()
+            if(allTcpOccupied || routingCapability == 0) Mockito.verify(probe,Mockito.never()).close() else Mockito.verify(probe).close()
             if (!failSave) Mockito.verify(profiles, Mockito.never()).save(anyProfile())
         } finally { processField.set(XrayCoreManager, previous); directory.deleteRecursively() }
     }
@@ -110,4 +138,5 @@ class SessionRuntimeAdmissionTest {
     @Test fun profileSaveFailureClosesCandidateAndLeavesOldWorkersAndGenerationUntouched() = fixture(failSave = true)
     @Test fun unsupportedInstalledRuntimeRefusesBeforeProbeProfileOrActiveStop() = fixture(routingCapability=0)
     @Test fun requestedRoutingChecksFinalConfigAndSpecBeforeRejectingWithoutChangingActiveSession() = fixture(routingCapability=1,rejectFinal=true)
+    @Test fun occupiedGeneratedTcpListenersRefuseBeforeSavingOrStoppingAnAcceptedSession() = fixture(allTcpOccupied=true)
 }

@@ -24,6 +24,24 @@ final class TunnelRoutingMetadataTests: XCTestCase {
         ])
     }
 
+    func testManagedTCPAvailabilityPrecedesBootstrapAndFreezesChosenPort() throws {
+        let input = try source()
+        var attempts: [Int] = [], resolutions = 0
+        XCTAssertNil(TunnelXrayConfigPreparer.prepare(jsonData: input, credentials: credentials,
+            routingIntent: try NativeRoutingIntent(sourceInboundIndex: 0), tcpPortAvailable: {
+                attempts.append($0); return false
+            }, resolveIPv4: { _ in resolutions += 1; return "203.0.113.8" }))
+        XCTAssertEqual(attempts, Array(10808...10839)); XCTAssertEqual(resolutions, 0)
+        attempts = []
+        let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: input, credentials: credentials,
+            routingIntent: try NativeRoutingIntent(sourceInboundIndex: 0), tcpPortAvailable: {
+                attempts.append($0); return $0 == 10809
+            }, resolveIPv4: { _ in resolutions += 1; return "203.0.113.8" }))
+        XCTAssertEqual(attempts, [10808,10809])
+        XCTAssertEqual(TunnelXrayConfigPreparer.parseConfig(jsonData: prepared.data)?.inboundPort, 10809)
+        XCTAssertEqual(prepared.routingEnvelope?.configurationData, prepared.data)
+    }
+
     func testEnvelopeBindsFinalBytesAndOnlyGeneratedRules() throws {
         let input = try source(), original = input
         let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: input, credentials: credentials,

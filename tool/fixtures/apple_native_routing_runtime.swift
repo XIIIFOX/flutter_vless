@@ -6,7 +6,9 @@ func runNativeRoutingRuntimeChecks() throws {
     // The only configured upstream is TCP. A joined HTTP fixture records any
     // attempted connection without answering DNS; static hosts must avoid it.
     let trap = LocalProbeOrigin(port: 18104)
-    defer { XRayStop(); aliased.stop(); fallback.stop(); trap.stop() }
+    // This owned TCP listener remains occupied across both source variants.
+    let occupied = LocalProbeOrigin(port: 10808)
+    defer { XRayStop(); aliased.stop(); fallback.stop(); trap.stop(); occupied.stop() }
     var assetError: NSError?
     precondition(XRaySetAssetLocation("", &assetError))
     let credentials = try LocalProxyCredentials(username: "routing-session-user", password: "routing-session-password")
@@ -28,6 +30,7 @@ func runNativeRoutingRuntimeChecks() throws {
         let source = try JSONSerialization.data(withJSONObject: raw)
         let intent = try NativeRoutingIntent(sourceInboundIndex: 0, defaultOutboundTag: "selected-default")
         guard let prepared = TunnelXrayConfigPreparer.prepare(jsonData: source, credentials: credentials, routingIntent: intent,
+            tcpPortAvailable: LocalProxyAccessPolicy.isTCPPortAvailable,
             resolveIPv4: { _ in preconditionFailure("Direct routing fixture must not bootstrap") }),
             let envelope = prepared.routingEnvelope else { preconditionFailure("Routing preparation failed") }
         let effective = try JSONSerialization.jsonObject(with: envelope.configurationData) as! [String: Any]
@@ -35,6 +38,7 @@ func runNativeRoutingRuntimeChecks() throws {
         let metadata = try JSONSerialization.jsonObject(with: envelope.metadataData) as! [String: Any]
         precondition(metadata["source_inbound_index"] as? Int == 1 && metadata["default_outbound_tag"] as? String == "selected-default")
         let port = TunnelXrayConfigPreparer.parseConfig(jsonData: prepared.data)!.inboundPort
+        precondition(port != 10808)
         func start() throws {
             try NativeRoutingSpec.check(envelope, capability: FLVlessCoreRoutingCapability, check: FLVlessCheckCoreRoutingPrivate)
             var error: NSError?
@@ -77,9 +81,11 @@ func runNativeRoutingRuntimeChecks() throws {
         print("NATIVE_ROUTING_RUNTIME_PASS=\(variant)")
     }
     print("NATIVE_ROUTING_STAGE=drain")
-    aliased.stop(); fallback.stop(); trap.stop()
+    aliased.stop(); fallback.stop(); trap.stop(); occupied.stop()
     print("NATIVE_ROUTING_DRAIN_COUNTS;ALIAS=\(aliased.state().0);ALIAS_CONNECTIONS=\(aliased.connections());DEFAULT=\(fallback.state().0);DEFAULT_CONNECTIONS=\(fallback.connections());FALLBACK=\(trap.connections())")
     precondition(aliased.state().0 == 3 && fallback.state().0 == 9 && aliased.connections() == 3 && fallback.connections() == 9)
     precondition(!aliased.state().1 && !fallback.state().1 && trap.connections() == 0)
+    precondition(occupied.connections() == 0)
     print("NATIVE_ROUTING_RUNTIME_DRAIN_PASS")
+    print("APPLE_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2")
 }

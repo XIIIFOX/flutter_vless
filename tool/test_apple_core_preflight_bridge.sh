@@ -236,3 +236,6 @@ done
 
 # Execute the real provider final admission/start branches against inert APIs.
 python3 "$ROOT/tool/test_apple_native_routing_admission.py"
+
+# Actual host admission must use the injected, bounded TCP chooser.
+python3 "$ROOT/tool/test_apple_private_port_availability.py"

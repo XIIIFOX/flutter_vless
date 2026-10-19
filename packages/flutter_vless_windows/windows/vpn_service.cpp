@@ -99,7 +99,8 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     return address;
   };
   xray_config::VpnRoutingProvenance provenance;
-  auto prepared = underlay ? xray_config::PrepareProtectedVpn(config, user, password, *underlay, resolve, &provenance) : std::nullopt;
+  auto prepared = underlay ? xray_config::PrepareProtectedVpn(config, user, password, *underlay, resolve,
+      &provenance, native::TcpPortAvailable) : std::nullopt;
   if (!prepared) {
     Event("VPN configuration rejected or endpoint bootstrap unavailable");
     if (!protection_.Active()) protection_.Release();

@@ -242,6 +242,32 @@ int main(int argc, char** argv) {
     };
     const auto documents_before = temporary_documents();
     WSADATA sockets{}; assert(WSAStartup(MAKEWORD(2,2), &sockets) == 0);
+    {
+      std::vector<SOCKET> preferred;
+      for (const uint16_t port : {uint16_t{10807}, uint16_t{10086}}) {
+        SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        assert(listener != INVALID_SOCKET);
+        BOOL exclusive = TRUE;
+        assert(setsockopt(listener, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+            reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) == 0);
+        sockaddr_in local{}; local.sin_family = AF_INET; local.sin_port = htons(port);
+        local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        assert(bind(listener, reinterpret_cast<sockaddr*>(&local), sizeof(local)) == 0 && listen(listener, 1) == 0);
+        preferred.push_back(listener);
+        assert(!TcpPortAvailable(port));
+      }
+      const auto candidate = flutter_vless::xray_config::PrepareProtectedVpn(
+          R"({"inbounds":[],"outbounds":[{"protocol":"freedom","tag":"direct"}],"dns":{"servers":["1.1.1.1"]}})",
+          "synthetic-user", "synthetic-password", "synthetic-interface",
+          [](const std::string&) { return std::string(); }, nullptr, TcpPortAvailable);
+      assert(candidate);
+      const auto managed = flutter_vless::xray_config::Port(flutter_vless::xray_config::Parse(*candidate)["inbounds"][0]);
+      const auto api = flutter_vless::xray_config::ApiPort(*candidate);
+      assert(managed && api && *managed != 10807 && *api != 10086 && TcpPortAvailable(*managed) && TcpPortAvailable(*api));
+      for (const auto listener : preferred) closesocket(listener);
+      assert(TcpPortAvailable(10807) && TcpPortAvailable(10086));
+      std::cout << "WINDOWS_PRIVATE_PORT_AVAILABILITY_PASS=2\n";
+    }
     SOCKET occupied = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     assert(occupied != INVALID_SOCKET);
     sockaddr_in address{}; address.sin_family = AF_INET;

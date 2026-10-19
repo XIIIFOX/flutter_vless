@@ -32,6 +32,7 @@ def block(source, marker):
 
 def check_wiring(source):
     entry = block(source, '    ' + ('open override' if '    open override func startTunnel' in source else 'override') + ' func startTunnel')
+    assert 'tcpPortAvailable: LocalProxyAccessPolicy.isTCPPortAvailable' in entry
     assert 'let epoch = sessionAdmission.begin()' in entry
     assert 'isCancelled: { !self.sessionAdmission.isCurrent(epoch) }' in entry
     assert 'guard sessionAdmission.isCurrent(epoch) else { throw CancellationError() }\n        try await setTunnelNetworkSettings(settings)' in entry

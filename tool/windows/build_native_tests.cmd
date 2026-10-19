@@ -21,6 +21,10 @@ cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX %S%\vpn_worker_candidate_t
 if errorlevel 1 exit /b 1
 build\windows-runtime\vpn_worker_candidate_test.exe
 if errorlevel 1 exit /b 1
+cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX %S%\vpn_port_admission_test.cpp /Fe:build\windows-runtime\vpn_port_admission_test.exe /Fo:build\windows-runtime\vpn_port_admission_test.obj
+if errorlevel 1 exit /b 1
+build\windows-runtime\vpn_port_admission_test.exe
+if errorlevel 1 exit /b 1
 cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX %S%\native_routing_adoption_test.cpp %S%\native_routing_spec.cpp /Fe:build\windows-runtime\native_routing_adoption_test.exe /Fo:build\windows-runtime\ /link bcrypt.lib
 if errorlevel 1 exit /b 1
 build\windows-runtime\native_routing_adoption_test.exe

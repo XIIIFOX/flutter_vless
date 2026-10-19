@@ -231,7 +231,9 @@ class XrayVPNService : VpnService() {
                 candidate.V2RAY_FULL_JSON_CONFIG = dns.configJson
                 candidateDnsServers = dns.systemDnsServers
             }
-            val runtime = XrayCoreManager.buildRuntimeConfigJson(candidate, noBackupFilesDir, secret, dns, routingPrepared = { candidateRouting=it })
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(candidate, noBackupFilesDir, secret, dns,
+                routingPrepared = { candidateRouting=it },
+                tcpAvailable = if (candidate.PROXY_ONLY) null else XrayCoreManager::tcpListenerAvailable)
             val localCredentials = if (candidate.PROXY_ONLY)
                 LocalProxyAccessPolicy.credentialsForProxyOnly(runtime, candidate.LOCAL_SOCKS5_PORT) else secret
             // The candidate probe/rule belong to this request. Final native

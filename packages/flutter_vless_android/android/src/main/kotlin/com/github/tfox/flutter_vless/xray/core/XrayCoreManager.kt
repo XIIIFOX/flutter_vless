@@ -13,6 +13,10 @@ import com.github.tfox.flutter_vless.xray.utils.Utilities
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -22,11 +26,29 @@ object XrayCoreManager {
     private var runtimeInputs: NativeRuntimeConfig.Inputs? = null
     private var lastProxyUplink = 0L
     private var lastProxyDownlink = 0L
-    private fun nextFreePort(preferredPort: Int, usedPorts: Set<Int>): Int {
+    private fun nextFreePort(preferredPort: Int, usedPorts: Set<Int>, tcpAvailable: ((Int) -> Boolean)?): Int {
         require(preferredPort in 1..65535) { "Invalid private listener port" }
-        return ((preferredPort..65535).asSequence() + (1024 until preferredPort).asSequence())
-            .firstOrNull { it !in usedPorts } ?: error("No private listener port is available")
+        var attempts = 0
+        for (port in (preferredPort..65535).asSequence() + (1024 until preferredPort).asSequence()) {
+            if (port in usedPorts) continue
+            if (tcpAvailable != null) {
+                if (attempts == 32) break
+                attempts++
+                if (!tcpAvailable(port)) continue
+            }
+            return port
+        }
+        error("No private listener port is available")
     }
+
+    /** Availability only: release-to-Core.bind remains a race, not a held reservation. */
+    internal fun tcpListenerAvailable(port: Int): Boolean = try {
+        ServerSocket().use { listener ->
+            listener.reuseAddress = false
+            listener.bind(InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)), port), 1)
+        }
+        true
+    } catch (_: IOException) { false }
 
     private fun normalizeRuntimeConfig(value: Any?): Any? {
         return when (value) {
@@ -116,6 +138,7 @@ object XrayCoreManager {
     internal fun buildRuntimeConfigJson(config: XrayConfig, filesDir: File,
         credentials: LocalProxyCredentials? = null, protectedDns: AndroidTunnelDnsPolicy.Prepared? = null,
         routingPrepared: ((NativeRoutingPreparation) -> Unit)? = null,
+        tcpAvailable: ((Int) -> Boolean)? = null,
         environment: (String) -> String? = System::getenv): JSONObject {
         // The DNS preparer chooses the adapter identity before adding its rule.
         // Accept it only with the exact native-prepared document, including on
@@ -165,7 +188,7 @@ object XrayCoreManager {
         // A full Xray profile may contain several intentional SOCKS/HTTP or
         // other listeners. Never reuse/rewrite them for the tunnel adapter.
         if (!config.PROXY_ONLY || !hasSocks) {
-            config.LOCAL_SOCKS5_PORT = nextFreePort(config.LOCAL_SOCKS5_PORT, used)
+            config.LOCAL_SOCKS5_PORT = nextFreePort(config.LOCAL_SOCKS5_PORT, used, tcpAvailable)
             require(dnsAdapterTag == null || (0 until inbounds.length()).none {
                 inbounds.getJSONObject(it).optString("tag") == dnsAdapterTag
             }) { "Protected DNS adapter conflicts with imported input" }
@@ -193,7 +216,7 @@ object XrayCoreManager {
             apiRuleInsertions = 1
             val apiOutboundTag = serviceTags.next("flutter-vless-stats")
             json.put("api", JSONObject().put("tag", apiOutboundTag).put("services", JSONArray().put("StatsService")))
-            config.LOCAL_API_PORT = nextFreePort(if (config.LOCAL_API_PORT == 0) 10809 else config.LOCAL_API_PORT, used)
+            config.LOCAL_API_PORT = nextFreePort(if (config.LOCAL_API_PORT == 0) 10809 else config.LOCAL_API_PORT, used, tcpAvailable)
             val apiTag = serviceTags.next("flutter-vless-stats-in")
             inbounds.put(JSONObject().put("tag", apiTag).put("port", config.LOCAL_API_PORT).put("listen", "127.0.0.1")
                 .put("protocol", "dokodemo-door").put("settings", JSONObject().put("address", "127.0.0.1")))

@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import Darwin
 
 /// Credentials belong to a native running session, never to an exported profile.
 public struct LocalProxyCredentials: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
@@ -183,21 +184,22 @@ public enum LocalProxyAccessPolicy {
 
     public static let managedTagPrefix = "flutter-vless-tun"
 
-    public static func validateVPN(configData: Data) throws {
+    public static func validateVPN(configData: Data, tcpPortAvailable: ((Int) -> Bool)? = nil) throws {
         var object = try normalizedConfig(configData: configData)
         _ = try bindListenerEnvironment(&object, environment: ProcessInfo.processInfo.environment)
-        _ = try privatePort(configuration: object)
+        _ = try privatePort(configuration: object, tcpPortAvailable: tcpPortAvailable)
     }
 
     /// Add a private authenticated adapter without changing imported listeners.
     /// Always prepare the original profile; prepared session credentials are not
     /// persisted or fed back into this function during recovery.
     @discardableResult
-    public static func applyVPN(to config: inout [String: Any], credentials: LocalProxyCredentials) throws -> Int {
+    public static func applyVPN(to config: inout [String: Any], credentials: LocalProxyCredentials,
+                                tcpPortAvailable: ((Int) -> Bool)? = nil) throws -> Int {
         try normalizeLocalFields(&config)
         _ = try bindListenerEnvironment(&config, environment: ProcessInfo.processInfo.environment)
         let imported = config["inbounds"] as? [[String: Any]] ?? []
-        let port = try privatePort(configuration: config)
+        let port = try privatePort(configuration: config, tcpPortAvailable: tcpPortAvailable)
         var tags = XrayServiceTags(configuration: config)
         let tag = tags.next(managedTagPrefix)
         let managed: [String: Any] = [
@@ -274,7 +276,26 @@ public enum LocalProxyAccessPolicy {
         return address.hasPrefix("/") || address.hasPrefix("@")
     }
 
-    private static func privatePort(configuration: [String: Any]) throws -> Int {
+    /// This is an availability check, not a retained listener or atomic handoff.
+    /// Core owns the final socket and refuses a later conflicting bind.
+    public static func isTCPPortAvailable(_ port: Int) -> Bool {
+        guard (1...65535).contains(port) else { return false }
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return false }
+        defer { close(descriptor) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(port).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        return withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+            }
+        }
+    }
+
+    private static func privatePort(configuration: [String: Any], tcpPortAvailable: ((Int) -> Bool)? = nil) throws -> Int {
         let inbounds = configuration["inbounds"] as? [[String: Any]] ?? []
         var used = XrayPortSpec.serviceListenerPorts(configuration: configuration)
         for inbound in inbounds {
@@ -287,10 +308,15 @@ public enum LocalProxyAccessPolicy {
             guard let value = inbound["port"] else { continue } // Unix/listener-free inputs.
             used.formUnion(try XrayPortSpec.reservedPorts(value))
         }
-        guard let port = (10808...65535).first(where: { !used.contains($0) }) ?? (1024..<10808).first(where: { !used.contains($0) }) else {
-            throw LocalProxyAccessError.incompatibleInbounds
+        var attempts = 0
+        let candidates = sequence(first: 10808) { $0 == 65535 ? 1024 : ($0 == 10807 ? nil : $0 + 1) }
+        for port in candidates where !used.contains(port) {
+            guard let tcpPortAvailable else { return port }
+            guard attempts < 32 else { throw LocalProxyAccessError.incompatibleInbounds }
+            attempts += 1
+            if tcpPortAvailable(port) { return port }
         }
-        return port
+        throw LocalProxyAccessError.incompatibleInbounds
     }
 
     private static func normalizeLocalFields(_ config: inout [String: Any]) throws {

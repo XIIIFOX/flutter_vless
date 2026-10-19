@@ -68,7 +68,7 @@ for mode in ['tunnel','proxy-only','delay']:
  for level in ['debug','warning','error','none']:
   assert f'MODE_PASS={mode};LEVEL={level}' in text, f'Missing mode {mode}/{level}'
 if os.environ.get('REQUIRE_VPN_ROUTING') == '1':
-    for marker in ['NATIVE_ROUTING_RUNTIME_PASS=0','NATIVE_ROUTING_RUNTIME_PASS=1','NATIVE_ROUTING_RUNTIME_DRAIN_PASS']:
+    for marker in ['NATIVE_ROUTING_RUNTIME_PASS=0','NATIVE_ROUTING_RUNTIME_PASS=1','NATIVE_ROUTING_RUNTIME_DRAIN_PASS','APPLE_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2']:
         assert marker in text, marker
 if os.environ.get('REQUIRE_CORE_PREFLIGHT') == '1':
  for generation in [0,1]:

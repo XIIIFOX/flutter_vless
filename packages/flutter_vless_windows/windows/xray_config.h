@@ -370,7 +370,8 @@ inline bool AddApi(Json& config, uint16_t api_port) {
 }
 
 inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t preferred,
-    const PortEnvironmentReader& read_environment = PortEnvironment);
+    const PortEnvironmentReader& read_environment = PortEnvironment,
+    const std::function<bool(uint16_t)>& tcp_available = {});
 
 inline bool PrepareProxy(std::string& text,
                          const std::function<bool(uint16_t)>& is_free,
@@ -687,7 +688,8 @@ inline std::set<unsigned> ApiListenerPorts(const Json& config) { return Listener
 inline std::set<unsigned> ServiceListenerPorts(const Json& config) { return ListenerPorts(config, {"api", "metrics"}); }
 
 inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t preferred,
-    const PortEnvironmentReader& read_environment) {
+    const PortEnvironmentReader& read_environment,
+    const std::function<bool(uint16_t)>& tcp_available) {
   auto occupied = ServiceListenerPorts(config);
   if (config.contains("inbounds") && config["inbounds"].is_array()) for (auto inbound : config["inbounds"]) {
     if (inbound.is_object() && !Fields(inbound, {"listen", "port"})) return std::nullopt;
@@ -701,8 +703,15 @@ inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t prefer
     if (!ports) return std::nullopt;
     occupied.insert(ports->begin(), ports->end());
   }
-  for (unsigned port = preferred; port <= 65535; ++port) if (!occupied.count(port)) return static_cast<uint16_t>(port);
-  for (unsigned port = 1024; port < preferred; ++port) if (!occupied.count(port)) return static_cast<uint16_t>(port);
+  unsigned attempts = 0;
+  for (unsigned port = preferred; port <= 65535; ++port) if (!occupied.count(port)) {
+    if (tcp_available && attempts++ >= 32) return std::nullopt;
+    if (!tcp_available || tcp_available(static_cast<uint16_t>(port))) return static_cast<uint16_t>(port);
+  }
+  for (unsigned port = 1024; port < preferred; ++port) if (!occupied.count(port)) {
+    if (tcp_available && attempts++ >= 32) return std::nullopt;
+    if (!tcp_available || tcp_available(static_cast<uint16_t>(port))) return static_cast<uint16_t>(port);
+  }
   return std::nullopt;
 }
 
@@ -1187,7 +1196,8 @@ struct VpnRoutingProvenance {
 inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
     const std::string& username, const std::string& password, const std::string& interface_name,
     const std::function<std::string(const std::string&)>& resolve,
-    VpnRoutingProvenance* provenance = nullptr) try {
+    VpnRoutingProvenance* provenance = nullptr,
+    const std::function<bool(uint16_t)>& tcp_available = {}) try {
   auto config = Parse(text);
   if (username.empty() || password.empty() || username.size() > 255 || password.size() > 255 || interface_name.empty()
       || !Normalize(config) || config.contains("fakeDns") || config.contains("fakedns")) return std::nullopt;
@@ -1199,7 +1209,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   generated.original_inbound_count = inbounds.size();
   // Keep every imported listener intact. tun2socks gets a separate loopback
   // listener with native session authentication, never a caller's public input.
-  auto port = AvailablePort(config, 10807);
+  auto port = AvailablePort(config, 10807, PortEnvironment, tcp_available);
   if (!port) return std::nullopt;
   auto managed_tag = service_tags.Next(kManagedInbound);
   generated.managed_tag = managed_tag;
@@ -1280,7 +1290,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   for (const auto& rule : routing["rules"]) rules.push_back(rule);
   routing["rules"] = rules;
   const bool owned_api = !config.contains("api");
-  const auto api_port = owned_api ? AvailablePort(config, 10086) : std::optional<uint16_t>{uint16_t{0}};
+  const auto api_port = owned_api ? AvailablePort(config, 10086, PortEnvironment, tcp_available) : std::optional<uint16_t>{uint16_t{0}};
   if (!api_port || !AddApi(config, *api_port)) return std::nullopt;
   if (owned_api) config["api"]["tag"] = service_tags.Next("flutter-vless-stats");
   if (provenance) *provenance = std::move(generated);

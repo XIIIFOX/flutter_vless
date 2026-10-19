@@ -11,6 +11,53 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class XrayCoreManagerTest {
+    @Test fun availabilityChecksSkipCallerRangesApiAndMetricsWithoutChangingTheirSource() {
+        val source = JSONObject("""{"inbounds":[{"tag":"caller","listen":"127.0.0.1","port":"10807-10808","protocol":"dokodemo-door","settings":{"address":"127.0.0.1"}}],"api":{"tag":"caller-api","listen":"127.0.0.1:10809","services":["StatsService"]},"metrics":{"tag":"caller-metrics","listen":"127.0.0.1:+10810"},"outbounds":[{"protocol":"freedom"}]}""")
+        val before = source.toString(); val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = before)
+        val checked = mutableListOf<Int>()
+        val output = XrayCoreManager.buildRuntimeConfigJson(profile, File("."), credentials,
+            tcpAvailable = { checked.add(it); it != 10811 })
+        assertEquals(listOf(10811,10812),checked)
+        assertEquals(10812,profile.LOCAL_SOCKS5_PORT);assertEquals(0,profile.LOCAL_API_PORT)
+        assertEquals(source.getJSONObject("api").toString(),output.getJSONObject("api").toString())
+        assertEquals(source.getJSONObject("metrics").toString(),output.getJSONObject("metrics").toString())
+        assertEquals(source.getJSONArray("inbounds").getJSONObject(0).toString(),output.getJSONArray("inbounds").getJSONObject(0).toString())
+        assertEquals(before,source.toString());assertEquals(before,profile.V2RAY_FULL_JSON_CONFIG)
+    }
+
+    @Test fun availabilityChecksWrapAndKeepGeneratedSocksOutOfThePrivateApiCandidates() {
+        val raw = """{"inbounds":[{"port":1024,"protocol":"dokodemo-door","settings":{"address":"127.0.0.1"}}],"outbounds":[{"protocol":"freedom"}]}"""
+        val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = raw, LOCAL_SOCKS5_PORT = 65535, LOCAL_API_PORT = 65535)
+        val checked = mutableListOf<Int>()
+        val output = XrayCoreManager.buildRuntimeConfigJson(profile, File("."), credentials,
+            tcpAvailable = { checked.add(it); it == 1025 || it == 1027 })
+        assertEquals(listOf(65535,1025,65535,1026,1027),checked)
+        assertEquals(1025,profile.LOCAL_SOCKS5_PORT);assertEquals(1027,profile.LOCAL_API_PORT)
+        val ports=(0 until output.getJSONArray("inbounds").length()).map { output.getJSONArray("inbounds").getJSONObject(it).getInt("port") }
+        assertEquals(listOf(1024,1025,1027),ports);assertEquals(raw,profile.V2RAY_FULL_JSON_CONFIG)
+    }
+
+    @Test fun availabilityChecksAreBoundedPerListenerWhileTheDefaultBuilderNeverTouchesTheKernel() {
+        val source = """{"inbounds":[{"port":"10807-10810","protocol":"dokodemo-door","settings":{"address":"127.0.0.1"}}],"metrics":{"listen":"127.0.0.1:10811"},"outbounds":[{"protocol":"freedom"}]}"""
+        val checked = mutableListOf<Int>()
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            XrayCoreManager.buildRuntimeConfigJson(XrayConfig(V2RAY_FULL_JSON_CONFIG = source), File("."), credentials,
+                tcpAvailable = { checked.add(it); false })
+        }
+        assertEquals((10812 until 10844).toList(),checked)
+        val apiChecks = mutableListOf<Int>()
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            XrayCoreManager.buildRuntimeConfigJson(XrayConfig(V2RAY_FULL_JSON_CONFIG = """{"outbounds":[{"protocol":"freedom"}]}"""), File("."), credentials,
+                tcpAvailable = { apiChecks.add(it); it == 10807 })
+        }
+        assertEquals(listOf(10807)+(10809 until 10841).toList(),apiChecks)
+        org.mockito.Mockito.mockConstruction(java.net.ServerSocket::class.java).use { sockets ->
+            val profile=XrayConfig(V2RAY_FULL_JSON_CONFIG = source)
+            XrayCoreManager.buildRuntimeConfigJson(profile,File("."),credentials)
+            assertEquals(10812,profile.LOCAL_SOCKS5_PORT);assertTrue(sockets.constructed().isEmpty())
+        }
+    }
+
     @Test fun sharedLocalhostServerTagStatesKeepCallerDnsAndOutboundsWithoutBootstrap() {
         val cases = JSONArray(requireNotNull(javaClass.getResource("/dns-default-tags.json")).readText())
         assertEquals(3, cases.length())

@@ -201,6 +201,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let credentials = try LocalProxyCredentials.generate()
         let preparation = Task {
             try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: config, credentials: credentials, routingIntent: routingIntent,
+                tcpPortAvailable: LocalProxyAccessPolicy.isTCPPortAvailable,
                 resolveIPv4: { resolveIPv4Addresses(for: $0).first })
         }
         setStartupPreparation(preparation, epoch: epoch)

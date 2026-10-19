@@ -5,6 +5,43 @@ import Darwin
 final class LocalProxyAccessPolicyTests: XCTestCase {
     private let credentials = try! LocalProxyCredentials(username: "session-user", password: "session-password")
 
+    func testManagedTCPAvailabilitySkipsDeclaredPortsBeforeBoundedChecks() throws {
+        let raw: [String: Any] = ["inbounds": [["protocol": "socks", "listen": "127.0.0.1", "port": "10808-10810"]],
+            "api": ["tag": "caller-api", "listen": "127.0.0.1:10811", "services": ["StatsService"]],
+            "metrics": ["tag": "caller-metrics", "listen": "127.0.0.1:10812"]]
+        var config = raw, attempts: [Int] = []
+        let port = try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: credentials, tcpPortAvailable: {
+            attempts.append($0); return $0 == 10814
+        })
+        XCTAssertEqual(attempts, [10813, 10814]); XCTAssertEqual(port, 10814)
+        XCTAssertEqual(config["api"] as? NSDictionary, raw["api"] as? NSDictionary)
+        XCTAssertEqual(config["metrics"] as? NSDictionary, raw["metrics"] as? NSDictionary)
+        XCTAssertEqual(Array((config["inbounds"] as! [[String: Any]]).dropFirst()) as NSArray, raw["inbounds"] as? NSArray)
+        var pure = raw
+        XCTAssertEqual(try LocalProxyAccessPolicy.applyVPN(to: &pure, credentials: credentials), 10813)
+    }
+
+    func testManagedTCPAvailabilityWrapExhaustionAndNoEligibleCandidates() throws {
+        var wrapped: [String: Any] = ["inbounds": [["protocol": "socks", "port": "10808-65535"]]]
+        var attempts: [Int] = []
+        XCTAssertEqual(try LocalProxyAccessPolicy.applyVPN(to: &wrapped, credentials: credentials, tcpPortAvailable: {
+            attempts.append($0); return true
+        }), 1024)
+        XCTAssertEqual(attempts, [1024])
+        let raw: [String: Any] = ["inbounds": [["protocol": "socks", "port": 19080]]]
+        var exhausted = raw; attempts = []
+        XCTAssertThrowsError(try LocalProxyAccessPolicy.applyVPN(to: &exhausted, credentials: credentials, tcpPortAvailable: {
+            attempts.append($0); return $0 == 10840 // The 33rd free JSON candidate is never checked.
+        }))
+        XCTAssertEqual(attempts, Array(10808...10839)); XCTAssertEqual(exhausted as NSDictionary, raw as NSDictionary)
+        var full: [String: Any] = ["inbounds": [["protocol": "socks", "port": "0-65535"]]]
+        attempts = []
+        XCTAssertThrowsError(try LocalProxyAccessPolicy.applyVPN(to: &full, credentials: credentials, tcpPortAvailable: {
+            attempts.append($0); return true
+        }))
+        XCTAssertTrue(attempts.isEmpty)
+    }
+
     func testIsolatedDelayOmitsImportedManagementListenersWithoutChangingVPNOrSource() throws {
         for (field, metricsField) in zip(["api", "API", "Api", "aPi"], ["metrics", "METRICS", "Metricſ", "metricS"]) {
             // Core's field aliases must not cause a second management listener.

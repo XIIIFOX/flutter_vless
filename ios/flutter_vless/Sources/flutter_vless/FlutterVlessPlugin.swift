@@ -608,7 +608,8 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         Task { result((try? await operation.value) ?? -1) }
     }
 
-    private func startVless(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    private func startVless(call: FlutterMethodCall, result: @escaping FlutterResult,
+                            tcpPortAvailable: @escaping (Int) -> Bool = LocalProxyAccessPolicy.isTCPPortAvailable) {
         guard let arguments = call.arguments as? [String: Any],
               let remark = arguments["remark"] as? String,
               let config = arguments["config"] as? String,
@@ -653,7 +654,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             if proxyOnly {
                 preparedProxyConfig = try ProxyOnlyRunner.prepare(configData: effectiveConfigData)
             } else {
-                try LocalProxyAccessPolicy.validateVPN(configData: effectiveConfigData)
+                try LocalProxyAccessPolicy.validateVPN(configData: effectiveConfigData, tcpPortAvailable: tcpPortAvailable)
                 preparedProxyConfig = nil
             }
         } catch is NativeRoutingSpecError {

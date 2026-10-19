@@ -163,7 +163,6 @@ public enum TunnelDNSPolicy {
             names.allSatisfy { name in object.keys.filter { XrayJSONField.matches($0, name) }.count <= 1 }
         }
         guard unambiguous(dns, ["servers", "hosts", "tag", "queryStrategy", "useSystemHosts", "script"]),
-              field(dns, "useSystemHosts") as? Bool != true,
               (field(dns, "script") as? String ?? "").isEmpty,
               !systemStrategy(field(dns, "queryStrategy")) else { return false }
         let hosts = field(dns, "hosts") as? [String: Any] ?? [:]

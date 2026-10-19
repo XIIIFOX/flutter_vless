@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve caller `useSystemHosts` for numeric remote DNS instead of rejecting the flag before Core can read the hosts file. Keep named resolver and local transport admission unchanged; add shared DNS preservation controls.
+
 * Prepare compatible FakeDNS pools without changing caller DNS or imported sniffing. Move owned IPv4/DNS addresses outside the default pool and reject native namespace conflicts before bootstrap; add shared regressions.
 * Scope proxy-only traffic to the selected inbound without retagging caller inputs. Keep missing/disabled directions unavailable internally and reset speed baselines across gaps/restarts; retain HEV VPN counters. Add shared consumer and controlled payload regressions.
 * Consume per-session VPN routing selections through host/provider admission and exact checked startup/recovery pairs. Require the optional routing ABI; published runtime pins remain unchanged.

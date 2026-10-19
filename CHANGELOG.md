@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve caller DNS hosts as data during raw JSON normalization, including names matching legacy settings. Accept remote DoH URL path/query data containing `+local` on Windows and caller `useSystemHosts` on Apple; retain local-DNS transport restrictions and TLS compatibility cleanup. Add shared preparation and targeted traffic regressions.
+
 * Preserve explicit nulls, empty objects and arrays, and null array elements when passing full Xray JSON through import, startup and delay checks. Retain raw FakeDNS engine semantics while keeping share-link cleanup separate.
 * Prepare default and custom FakeDNS profiles across native platforms without rewriting caller pools or DNS selection. Restore fake destinations on the managed input, move owned resolver/probe addresses outside Core's default pool, and reject conflicting or malformed pools before bootstrap. Add shared preparation and controlled traffic regressions.
 * Read Android/Windows and Apple proxy-only traffic from the selected session inbound. Preserve caller-disabled counters, distinguish unavailable directions internally, and reset speed baselines across gaps and restarts. Keep Apple VPN HEV counters unchanged; add shared wire and actual-consumer regressions.

@@ -1100,7 +1100,46 @@ void FakeDnsCases(const std::string& only = "") {
   Require(selected, "unknown FakeDNS case");
 }
 
+void DnsDataMapCases(const std::string& only = "") {
+  std::ifstream input("tool/fixtures/compatibility/dns-data-maps.json");
+  Require(input.good(), "shared DNS data/map corpus required");
+  Json corpus; input >> corpus;
+  Require(corpus.is_array() && corpus.size() == 5, "shared DNS data/map corpus changed");
+  auto prepare = [](const Json& profile, unsigned& calls) {
+    return PrepareProtectedVpn(profile.dump(), "session-user", "session-password", "Ethernet", [&](const std::string&) {
+      ++calls; return std::string();
+    });
+  };
+  bool selected = only.empty();
+  for (const auto& fixture : corpus) {
+    if (!only.empty() && fixture["name"] != only) continue;
+    selected = true;
+    const auto source = fixture["config"], original = source;
+    const Json* source_dns = nullptr;
+    for (auto it = source.begin(); it != source.end(); ++it) if (Fold(it.key()) == "dns") source_dns = &it.value();
+    Require(source_dns != nullptr, "shared DNS data/map profile has no DNS object");
+    unsigned calls = 0;
+    const auto prepared = prepare(source, calls);
+    Require(prepared.has_value(), "valid DNS data/map profile rejected");
+    Require(Parse(*prepared)["dns"] == *source_dns, "caller DNS keys, URL data or policy changed");
+    Require(calls == 0 && source == original, "numeric DNS data/map profile resolved or mutated source");
+  }
+  if (only.empty() || only == "refusals") {
+    selected = true;
+    for (const auto* address : {"https+local://192.0.2.53/dns-query", "h2c+local://192.0.2.53/dns-query",
+                               "tcp+local://192.0.2.53", "quic+local://192.0.2.53"}) {
+      auto source = corpus[0]["config"];
+      source["dns"]["servers"] = Json::array({address});
+      const auto original = source;
+      unsigned calls = 0;
+      Require(!prepare(source, calls) && calls == 0 && source == original, "actual local DNS scheme admitted or mutated source");
+    }
+  }
+  Require(selected, "unknown DNS data/map case");
+}
+
 int main(int argc, char** argv) try {
+  if (argc == 3 && std::string(argv[1]) == "--dns-data-maps-case") { DnsDataMapCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--fakedns-case") { FakeDnsCases(argv[2]); return 0; }
   if (argc == 5 && std::string(argv[1]) == "--bind-certificate-fixture") {
     std::ifstream input(argv[2], std::ios::binary);
@@ -1150,6 +1189,7 @@ int main(int argc, char** argv) try {
   ProtocolCompatibilityCases();
   EndpointAddressCases();
   DnsAddressCases();
+  DnsDataMapCases();
   FakeDnsCases();
   LogicalAddressCases();
   MappedDnsCases();

@@ -45,6 +45,7 @@ import (
 const dohChildSpec = "FLUTTER_VLESS_DOH_CHILD_SPEC"
 const dohAddressEnvironment = "FLUTTER_VLESS_FIXTURE_DOH_ADDRESS"
 const dohHostEnvironment = "FLUTTER_VLESS_FIXTURE_DOH_HOST"
+const dohRequestURI = "/dns-query/+local?opaque=+local"
 
 type dohOutput struct {
 	mu        sync.Mutex
@@ -135,8 +136,10 @@ func dohDocument(proxyPort int, apiAddress, resolverAddress, question string) ma
 			map[string]any{"tag": "dns-direct", "protocol": "freedom", "settings": map[string]any{"domainStrategy": "AsIs", "finalRules": []any{map[string]any{"action": "allow", "ip": []string{"127.0.0.1/32"}}, map[string]any{"action": "block"}}}},
 			map[string]any{"tag": "block", "protocol": "blackhole"},
 		},
-		"dns": map[string]any{"queryStrategy": "UseIP", "disableCache": true, "disableFallback": true,
-			"hosts":   map[string]any{"endpoint.invalid": "127.0.0.2", "resolver.invalid": "127.0.0.1", "static.invalid": "192.0.2.14"},
+		"dns": map[string]any{"queryStrategy": "UseIP", "disableCache": true, "disableFallback": true, "useSystemHosts": true,
+			"hosts": map[string]any{"endpoint.invalid": "127.0.0.2", "resolver.invalid": "127.0.0.1", "static.invalid": "192.0.2.14",
+				"allowInsecure": "192.0.2.8", "network": "MiXeD.Target.Invalid", "full:mixed.target.invalid": "192.0.2.9",
+				"xHTTPSettings": "192.0.2.10", "httpUpgradeSettings": "192.0.2.11", "splitHTTPSettings": "192.0.2.12"},
 			"servers": []any{map[string]any{"address": resolverAddress, "domains": []string{"full:" + question}, "tag": "caller-doh", "skipFallback": true, "timeoutMs": 700}, "tcp://9.9.9.9"}},
 		"routing": map[string]any{"domainStrategy": "AsIs", "rules": []any{
 			map[string]any{"type": "field", "inboundTag": []string{"caller-doh"}, "outboundTag": "dns-direct"},
@@ -222,7 +225,7 @@ func TestNativeDoHMaterialOnly(t *testing.T) {
 	if _, err := leaf.Verify(x509.VerifyOptions{Roots: foreign, DNSName: "resolver.invalid"}); err == nil {
 		t.Fatal("unrelated CA trusted the fixture")
 	}
-	data, err := json.Marshal(dohDocument(18071, "127.0.0.1:18072", "https://resolver.invalid:18073/dns-query", "tls-probe.invalid"))
+	data, err := json.Marshal(dohDocument(18071, "127.0.0.1:18072", "https://resolver.invalid:18073"+dohRequestURI, "tls-probe.invalid"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +275,7 @@ func testDoHProxyCertificatePreparation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "proxy-ca.pem"), material.ca, 0600); err != nil {
 		t.Fatal(err)
 	}
-	source := dohDocument(18071, "127.0.0.1:18072", "https://resolver.invalid:18073/dns-query", "tls-probe.invalid")
+	source := dohDocument(18071, "127.0.0.1:18072", "https://resolver.invalid:18073"+dohRequestURI, "tls-probe.invalid")
 	source["outbounds"].([]any)[0].(map[string]any)["streamSettings"] = map[string]any{
 		"security": "tls", "tlsSettings": map[string]any{
 			"serverName": "resolver.invalid", "disableSystemRoot": true,
@@ -389,7 +392,7 @@ func testNativeHTTPSDoH(t *testing.T) {
 		server := new(http2.Server)
 		server.ServeConn(secured, &http2.ServeConnOpts{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer r.Body.Close()
-			if r.TLS == nil || r.TLS.NegotiatedProtocol != "h2" || r.Method != "POST" || r.Host != authority || r.URL.RequestURI() != "/dns-query" || r.Header.Get("Content-Type") != "application/dns-message" {
+			if r.TLS == nil || r.TLS.NegotiatedProtocol != "h2" || r.Method != "POST" || r.Host != authority || r.URL.RequestURI() != dohRequestURI || r.Header.Get("Content-Type") != "application/dns-message" {
 				origin.fail(errors.New("DoH TLS/HTTP2 host/path/method changed"))
 				w.WriteHeader(400)
 				return
@@ -434,7 +437,7 @@ func testNativeHTTPSDoH(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reservation.Close()
-	source := dohDocument(proxyPort, reservation.Addr().String(), "https://"+authority+"/dns-query", question)
+	source := dohDocument(proxyPort, reservation.Addr().String(), "https://"+authority+dohRequestURI, question)
 	// A separate explicit CA keeps proxy TLS independent of the DoH negative
 	// system-root controls. The source remains portable; only effective file
 	// fields are frozen by the production native binder before Core preflight.
@@ -483,7 +486,7 @@ func testNativeHTTPSDoH(t *testing.T) {
 			// The app's environment is absent in the child which owns Core.
 			// Compare the whole prepared profile with the literal control before
 			// starting that child; URL substrings and host keys stay opaque.
-			t.Setenv(dohAddressEnvironment, "https://"+authority+"/dns-query")
+			t.Setenv(dohAddressEnvironment, "https://"+authority+dohRequestURI)
 			t.Setenv(dohHostEnvironment, "[::ffff:127.0.0.1]")
 			fullSource["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["address"] = "env:" + dohAddressEnvironment
 			hosts["full:resolver.invalid"] = "env:" + dohHostEnvironment
@@ -684,6 +687,21 @@ func TestNativeHTTPSDoHChild(t *testing.T) {
 	}
 	if record, ok := static.Answer[0].(*dns.A); !ok || record.A.String() != "192.0.2.14" {
 		t.Fatal("DoH failure changed static host value")
+	}
+	for _, host := range []struct{ name, address string }{
+		{"allowInsecure", "192.0.2.8"}, {"network", "192.0.2.9"},
+		{"xHTTPSettings", "192.0.2.10"}, {"httpUpgradeSettings", "192.0.2.11"}, {"splitHTTPSettings", "192.0.2.12"},
+	} {
+		for _, tcp := range []bool{false, true} {
+			answer := query(t, spec.Port, tcp, host.name, dns.TypeA)
+			if answer.Rcode != dns.RcodeSuccess || len(answer.Answer) != 1 {
+				t.Fatal("DoH candidate lost a caller DNS data key", host.name)
+			}
+			record, ok := answer.Answer[0].(*dns.A)
+			if !ok || record.A.String() != host.address {
+				t.Fatal("DoH candidate changed caller DNS dictionary data", host.name)
+			}
+		}
 	}
 	connection, _ := connect(t, spec.Port, 1, netip.MustParseAddrPort("0.0.0.0:80"), "remote-marker.invalid")
 	defer connection.Close()

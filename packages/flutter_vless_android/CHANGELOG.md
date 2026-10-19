@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve caller DNS hosts keys and values through runtime normalization, including names matching legacy stream settings. Retain TLS cleanup and add shared preparation and TUN DNS controls.
+
 * Preserve compatible FakeDNS engines and caller DNS in VPN preparation, restore domains only on the managed input, and move private DNS outside the default fake pool. Reject native-address pool overlaps before bootstrap; add shared and device regression coverage.
 * Select traffic counters from the actual session inbound instead of a fixed outbound name. Preserve disabled caller policy, handle zero and unavailable directions independently, and clear speed baselines across gaps/restarts. Add consumer and controlled TUN regressions.
 * Consume per-session VPN routing selections with final config/metadata checks before replacement and through recovery. Add an instrumentation-only routing preview; published runtime pins remain unchanged.

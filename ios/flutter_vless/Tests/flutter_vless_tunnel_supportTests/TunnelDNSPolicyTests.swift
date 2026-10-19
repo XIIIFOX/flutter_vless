@@ -295,11 +295,40 @@ final class TunnelDNSPolicyTests: XCTestCase {
         }
     }
 
+    func testSharedDNSDataMapsPreserveCallerConfiguration() throws {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/dns-data-maps.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/dns-data-maps.json"))) as? [[String: Any]])
+        XCTAssertEqual(cases.count, 5)
+        for item in cases {
+            let original = try XCTUnwrap(item["config"] as? [String: Any])
+            let source = try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys])
+            let dns = try XCTUnwrap(original.first { XrayJSONField.matches($0.key, "dns") }?.value as? [String: Any])
+            var calls = 0
+            let prepared = TunnelXrayConfigPreparer.prepare(jsonData: source, credentials: Self.credentials,
+                resolveIPv4: { _ in calls += 1; return nil })
+            XCTAssertNotNil(prepared, "Core-valid DNS data/map profile rejected: \(item["name"] ?? "")")
+            if let prepared {
+                let effective = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+                XCTAssertEqual(effective["dns"] as? NSDictionary, dns as NSDictionary,
+                               "DNS data keys, URL data and caller policy must remain unchanged")
+            }
+            XCTAssertEqual(calls, 0, "Numeric endpoint/DNS must not request native bootstrap")
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys]), source)
+        }
+    }
+
     func testUnsafeDNSPathsAndAmbiguityRejectWithoutMutation() {
         let unsafe: [[String: Any]] = [
-            ["servers": ["https+local://1.1.1.1/dns-query"]], ["servers": ["tcp+local://1.1.1.1"]],
+            ["servers": ["https+local://1.1.1.1/dns-query"]], ["servers": ["h2c+local://1.1.1.1/dns-query"]],
+            ["servers": ["tcp+local://1.1.1.1"]],
             ["servers": ["quic+local://1.1.1.1"]], ["servers": ["tls://1.1.1.1"]], ["servers": ["2001:db8::1"]], ["servers": ["https://[2001:db8::1]/dns-query"]],
-            ["servers": ["https://unmapped.example/dns-query"]], ["servers": ["1.1.1.1"], "useSystemHosts": true],
+            ["servers": ["https://unmapped.example/dns-query"]],
+            ["servers": ["https://unmapped.example/dns-query"], "useSystemHosts": true],
+            ["servers": ["1.1.1.1"], "useSystemHosts": true, "USESystemHOSTS": false],
             ["servers": ["1.1.1.1"], "queryStrategy": "UseSystem"], ["servers": [], "Servers": []],
             ["servers": [["address": "1.1.1.1", "Address": "9.9.9.9"]]], ["script": "caller-script"],
             ["hosts": ["doh.example": "alias.example"], "servers": ["https://doh.example/dns-query"]]

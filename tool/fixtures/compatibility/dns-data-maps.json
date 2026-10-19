@@ -1,0 +1,218 @@
+[
+  {
+    "name": "opaque_dns_hosts",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "http",
+          "settings": {
+            "address": "192.0.2.7",
+            "port": 443
+          }
+        }
+      ],
+      "dns": {
+        "tag": "caller-root-dns",
+        "queryStrategy": "UseIPv4",
+        "hosts": {
+          "allowInsecure": "192.0.2.8",
+          "network": "MiXeD.Target.Invalid",
+          "full:mixed.target.invalid": "192.0.2.9",
+          "xHTTPSettings": "192.0.2.10",
+          "httpUpgradeSettings": "192.0.2.11",
+          "splitHTTPSettings": "192.0.2.12"
+        },
+        "servers": [
+          {
+            "address": "tcp://192.0.2.53:53",
+            "tag": "caller-upstream",
+            "domains": [
+              "full:private.invalid"
+            ],
+            "skipFallback": true,
+            "timeoutMs": 800,
+            "disableCache": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "folded_opaque_dns_hosts",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "http",
+          "settings": {
+            "address": "192.0.2.7",
+            "port": 443
+          }
+        }
+      ],
+      "DNſ": {
+        "tag": "caller-root-dns",
+        "queryStrategy": "UseIPv4",
+        "Hoſts": {
+          "allowInsecure": "192.0.2.8",
+          "network": "MiXeD.Target.Invalid",
+          "full:mixed.target.invalid": "192.0.2.9",
+          "xHTTPSettings": "192.0.2.10",
+          "httpUpgradeSettings": "192.0.2.11",
+          "splitHTTPSettings": "192.0.2.12"
+        },
+        "SeRvErS": [
+          {
+            "address": "tcp://192.0.2.53:53",
+            "tag": "caller-upstream",
+            "domains": [
+              "full:private.invalid"
+            ],
+            "skipFallback": true,
+            "timeoutMs": 800,
+            "disableCache": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "https_url_data_contains_local",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "http",
+          "settings": {
+            "address": "192.0.2.7",
+            "port": 443
+          }
+        }
+      ],
+      "dns": {
+        "tag": "caller-root-dns",
+        "queryStrategy": "UseIPv4",
+        "hosts": {
+          "allowInsecure": "192.0.2.8",
+          "network": "MiXeD.Target.Invalid",
+          "full:mixed.target.invalid": "192.0.2.9",
+          "xHTTPSettings": "192.0.2.10",
+          "httpUpgradeSettings": "192.0.2.11",
+          "splitHTTPSettings": "192.0.2.12"
+        },
+        "servers": [
+          {
+            "address": "https://192.0.2.53/dns/+local?opaque=+local&mode=remote",
+            "tag": "caller-upstream",
+            "domains": [
+              "full:private.invalid"
+            ],
+            "skipFallback": true,
+            "timeoutMs": 800,
+            "disableCache": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "h2c_url_data_contains_local",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "http",
+          "settings": {
+            "address": "192.0.2.7",
+            "port": 443
+          }
+        }
+      ],
+      "dns": {
+        "tag": "caller-root-dns",
+        "queryStrategy": "UseIPv4",
+        "hosts": {
+          "allowInsecure": "192.0.2.8",
+          "network": "MiXeD.Target.Invalid",
+          "full:mixed.target.invalid": "192.0.2.9",
+          "xHTTPSettings": "192.0.2.10",
+          "httpUpgradeSettings": "192.0.2.11",
+          "splitHTTPSettings": "192.0.2.12"
+        },
+        "servers": [
+          {
+            "address": "h2c://192.0.2.53/dns/+local?opaque=+local&mode=remote",
+            "tag": "caller-upstream",
+            "domains": [
+              "full:private.invalid"
+            ],
+            "skipFallback": true,
+            "timeoutMs": 800,
+            "disableCache": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "numeric_remote_with_system_hosts",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "http",
+          "settings": {
+            "address": "192.0.2.7",
+            "port": 443
+          }
+        }
+      ],
+      "dns": {
+        "tag": "caller-root-dns",
+        "queryStrategy": "UseIPv4",
+        "hosts": {
+          "allowInsecure": "192.0.2.8",
+          "network": "MiXeD.Target.Invalid",
+          "full:mixed.target.invalid": "192.0.2.9",
+          "xHTTPSettings": "192.0.2.10",
+          "httpUpgradeSettings": "192.0.2.11",
+          "splitHTTPSettings": "192.0.2.12"
+        },
+        "servers": [
+          {
+            "address": "tcp://192.0.2.53:53",
+            "tag": "caller-upstream",
+            "domains": [
+              "full:private.invalid"
+            ],
+            "skipFallback": true,
+            "timeoutMs": 800,
+            "disableCache": true
+          }
+        ],
+        "useSystemHosts": true
+      }
+    }
+  }
+]

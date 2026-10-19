@@ -139,7 +139,13 @@ func runAppleFakeDNSRuntimeChecks() throws {
     let upstream = AppleFakeDNSUpstream()
     defer { XRayStop(); upstream.stop() }
     let credentials = try LocalProxyCredentials(username: "fake-sdk-user", password: "fake-sdk-password")
-    let dns: [String: Any] = ["queryStrategy": "UseIPv4", "servers": ["fakedns"]]
+    let hosts = ["allowInsecure": "192.0.2.8", "network": "MiXeD.Target.Invalid",
+                 "full:mixed.target.invalid": "192.0.2.9", "xHTTPSettings": "192.0.2.10"]
+    // An explicit numeric client is retained but never selected by these names.
+    let unusedResolver: [String: Any] = ["address": "tcp://127.0.0.1:9",
+        "domains": ["full:unused-numeric.invalid"], "skipFallback": true]
+    let dns: [String: Any] = ["queryStrategy": "UseIPv4", "useSystemHosts": true,
+                             "hosts": hosts, "servers": ["fakedns", unusedResolver] as [Any]]
     let imported: [String: Any] = ["tag": "fake-caller", "protocol": "socks", "listen": "127.0.0.1", "port": 18095,
         "settings": ["auth": "noauth"], "sniffing": ["enabled": true, "routeOnly": false, "destOverride": ["tls"]]]
     let raw: [String: Any] = ["dns": dns, "inbounds": [imported],
@@ -156,10 +162,24 @@ func runAppleFakeDNSRuntimeChecks() throws {
     precondition(inputs[1] as NSDictionary == imported as NSDictionary && sniff["routeOnly"] as? Bool == true)
     precondition((sniff["destOverride"] as! [String]).contains("fakedns"))
     let port = TunnelXrayConfigPreparer.parseConfig(jsonData: prepared.data)!.inboundPort
+    func verifyStaticHosts(_ generation: Int, afterFakeDNS: Bool) throws {
+        let answers: [(String, [UInt8])] = [("allowInsecure", [192, 0, 2, 8]),
+            ("network", [192, 0, 2, 9]), ("xHTTPSettings", [192, 0, 2, 10])]
+        for (index, entry) in answers.enumerated() {
+            let (name, expected) = entry
+            for udp in [false, true] {
+                let id = UInt16(0x7400 + generation * 32 + (afterFakeDNS ? 16 : 0) + index * 2 + (udp ? 1 : 0))
+                guard let answer = try queryVirtualDNS(proxyPort: port, credentials: credentials, udp: udp, id: id, name: name), answer.count >= 16 else { preconditionFailure("Static DNS hosts SDK query failed") }
+                precondition(answer.prefix(2).elementsEqual([UInt8(id >> 8), UInt8(id & 255)]) && answer[3] & 15 == 0 && answer[6...7].elementsEqual([0, 1]))
+                precondition(answer.suffix(4).elementsEqual(expected), "Static DNS hosts SDK answer mismatch")
+            }
+        }
+    }
     for generation in 0..<2 {
         upstream.begin(generation)
         var error: NSError?
         precondition(XRayStartPrivate(prepared.data, ProbeLogger(), &error))
+        try verifyStaticHosts(generation, afterFakeDNS: false)
         var fake: [UInt8] = []
         for udp in [false, true] {
             let id = UInt16(0x7300 + generation * 2 + (udp ? 1 : 0))
@@ -177,10 +197,12 @@ func runAppleFakeDNSRuntimeChecks() throws {
         close(fd)
         let datagram = appleFakeDNSPayload(generation, udp: true)
         precondition(exchangeSOCKSUDP(proxyPort: port, credentials: credentials, host: host, port: 18082, payload: datagram) == datagram)
+        try verifyStaticHosts(generation, afterFakeDNS: true)
         XRayStop(); upstream.requireIdle()
     }
     upstream.stop(); upstream.requireComplete()
     let sourceAfter = try JSONSerialization.data(withJSONObject: raw, options: [.sortedKeys])
     precondition(sourceAfter == source)
+    print("APPLE_DNS_DATA_MAPS_SDK_PASS=2")
     print("APPLE_FAKEDNS_SDK_PASS=2")
 }

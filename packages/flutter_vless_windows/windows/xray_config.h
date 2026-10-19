@@ -1293,7 +1293,9 @@ inline bool ProtectedDns(Json& config, ServiceTags& tags, const std::string& pro
       // not implemented by this pinned Core. Keep explicit remote clients as
       // supplied, rather than silently replacing an unsupported protocol.
       if (value == "fakedns") continue; // Core's private hijack enables its own FakeDNS client.
-      if (value.find("+local") != std::string::npos || value.rfind("quic:", 0) == 0
+      // ProtectedDnsAddress checks the scheme. Path/query data containing
+      // "+local" does not select a local-mode DNS client in Core.
+      if (value.rfind("quic:", 0) == 0
           || value.rfind("tls:", 0) == 0 || value.rfind("localhost", 0) == 0) return false;
       if (!ProtectedDnsAddress(address.get<std::string>(), dns.value("hosts", Json()))) return false;
     }

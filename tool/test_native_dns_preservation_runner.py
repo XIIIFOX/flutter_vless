@@ -22,6 +22,7 @@ class PreservationRunnerGuards(unittest.TestCase):
             snapshot = runner.source_snapshot()
         self.assertIn('tool/fixtures/compatibility/fakedns.json', snapshot)
         self.assertEqual(snapshot['tool/fixtures/compatibility/fakedns.json'], 'synthetic-digest')
+        self.assertEqual(snapshot['tool/fixtures/compatibility/dns-data-maps.json'], 'synthetic-digest')
 
     def test_snapshot_binds_shared_counter_wire_corpus(self):
         seen = []

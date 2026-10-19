@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Accept remote DoH URLs containing `+local` in their path or query while retaining the exact transport-scheme checks. Add shared DNS dictionary and URL preservation controls.
+
 * Prepare compatible FakeDNS profiles with managed destination restoration and unchanged caller DNS/pools. Relocate private DNS/probe addresses, reject native namespace conflicts before bootstrap, and add shared and controlled TUN regressions.
 * Select VPN/proxy traffic counters from the actual session inbound, retaining per-direction availability internally and lifecycle speed resets. Parse complete Core statistics JSON, including omitted zero values and escaped names, without summing unrelated counters. Add shared consumer and controlled payload regressions.
 * Consume per-session VPN routing selections through final preflight, recovery and tray profiles. Add explicit owned-stdin shutdown for the optional routing CLI; published runtime pins remain unchanged.

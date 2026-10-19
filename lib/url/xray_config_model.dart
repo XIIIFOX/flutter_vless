@@ -407,10 +407,31 @@ JsonMap? _immutableMap(JsonMap? value) {
 /// explicit nulls and empty containers because Core can distinguish them from
 /// omitted fields.
 dynamic sanitizeXrayJson(dynamic params, {bool preserveStructure = false}) {
+  return _sanitizeXrayJson(
+    params,
+    preserveStructure: preserveStructure,
+    root: true,
+  );
+}
+
+bool _matchesXrayField(String key, String field) =>
+    key.replaceAll('\u017f', 's').replaceAll('\u212a', 'k').toLowerCase() ==
+    field;
+
+dynamic _sanitizeXrayJson(
+  dynamic params, {
+  required bool preserveStructure,
+  bool root = false,
+  bool dnsFields = false,
+  bool dictionaryData = false,
+}) {
   if (params is XrayJsonModel) {
-    return sanitizeXrayJson(
+    return _sanitizeXrayJson(
       params.toJson(),
       preserveStructure: preserveStructure,
+      root: root,
+      dnsFields: dnsFields,
+      dictionaryData: dictionaryData,
     );
   }
   if (params is Map) {
@@ -418,14 +439,21 @@ dynamic sanitizeXrayJson(dynamic params, {bool preserveStructure = false}) {
       params.entries
           .map((entry) => MapEntry(entry.key.toString(), entry.value)),
     );
-    _normalizeStreamSettingsAliases(source);
-    source.remove('allowInsecure');
+    // DNS hosts keys and values are caller data, including names which happen
+    // to match legacy stream fields. Only schema objects need that cleanup.
+    if (!dictionaryData) {
+      _normalizeStreamSettingsAliases(source);
+      source.remove('allowInsecure');
+    }
 
     final map = <String, dynamic>{};
     source.forEach((key, value) {
-      final sanitized = sanitizeXrayJson(
+      final sanitized = _sanitizeXrayJson(
         value,
         preserveStructure: preserveStructure,
+        dnsFields: root && _matchesXrayField(key, 'dns'),
+        dictionaryData:
+            dictionaryData || (dnsFields && _matchesXrayField(key, 'hosts')),
       );
       if (preserveStructure || sanitized != null) {
         map[key] = sanitized;
@@ -436,9 +464,10 @@ dynamic sanitizeXrayJson(dynamic params, {bool preserveStructure = false}) {
   if (params is Iterable) {
     final list = <dynamic>[];
     for (final value in params) {
-      final sanitized = sanitizeXrayJson(
+      final sanitized = _sanitizeXrayJson(
         value,
         preserveStructure: preserveStructure,
+        dictionaryData: dictionaryData,
       );
       if (preserveStructure || sanitized != null) {
         list.add(sanitized);

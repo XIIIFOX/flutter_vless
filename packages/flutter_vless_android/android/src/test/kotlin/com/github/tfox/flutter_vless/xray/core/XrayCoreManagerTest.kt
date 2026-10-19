@@ -11,6 +11,69 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class XrayCoreManagerTest {
+    @Test fun sharedDnsDataMapsSurviveActualPreparationAndRuntimeNormalization() {
+        val cases = JSONArray(requireNotNull(javaClass.getResource("/dns-data-maps.json")).readText())
+        assertEquals(5, cases.length())
+        fun field(value: JSONObject, name: String) = value.keys().asSequence().single {
+            it.replace('ſ', 's').replace('K', 'k').lowercase(java.util.Locale.ROOT) == name
+        }
+        for (index in 0 until cases.length()) {
+            val item = cases.getJSONObject(index); val label = item.getString("name")
+            val source = item.getJSONObject("config"); val before = source.toString()
+            val dns = source.getJSONObject(field(source, "dns"))
+            val prepared = AndroidTunnelDnsPolicy.prepare(before, environment = { error("Unexpected DNS environment lookup") }) {
+                error("Caller DNS data must not bootstrap an endpoint")
+            }
+            val copied = JSONObject(prepared.configJson)
+            assertEquals(label, dns.toString(), copied.getJSONObject(field(copied, "dns")).toString())
+            assertTrue(prepared.bootstrapHostnames.isEmpty()); assertTrue(prepared.bootstrapAddresses.isEmpty())
+            val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = prepared.configJson)
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(profile, File("."), credentials, prepared,
+                tcpAvailable = { true })
+            val actualDns = runtime.getJSONObject("dns")
+            val hosts = actualDns.getJSONObject(field(actualDns, "hosts"))
+            assertTrue("$label lost the allowInsecure hostname", hosts.has("allowInsecure"))
+            assertEquals("$label changed a domain alias", "MiXeD.Target.Invalid", hosts.getString("network"))
+            assertTrue("$label renamed a hostname", hosts.has("xHTTPSettings"))
+            assertTrue("$label renamed a hostname", hosts.has("httpUpgradeSettings"))
+            assertTrue("$label renamed a hostname", hosts.has("splitHTTPSettings"))
+            assertEquals("$label changed caller DNS", dns.toString(), actualDns.toString())
+            assertEquals(label, before, source.toString())
+            assertEquals(label, prepared.configJson, profile.V2RAY_FULL_JSON_CONFIG)
+        }
+    }
+
+    @Test fun dnsDataBoundaryDoesNotDisableTlsOrOtherSchemaNormalization() {
+        val source = JSONObject("""{
+          "dns":{"hosts":{"control.invalid":"192.0.2.8"},"servers":["tcp://192.0.2.53:53"],
+            "unknown":{"allowInsecure":false,"network":"XHTTP"}},
+          "outbounds":[{"protocol":"http","settings":{"address":"192.0.2.7","port":443},
+            "streamSettings":{"network":"TCP","security":"tls","tlsSettings":{"allowInsecure":false,"serverName":"control.invalid"}}}],
+          "extension":{"dns":{"hosts":{"allowInsecure":"192.0.2.8","network":"MiXeD","xHTTPSettings":"opaque"}}}
+        }""")
+        val before = source.toString(); val prepared = AndroidTunnelDnsPolicy.prepare(before)
+        val runtime = XrayCoreManager.buildRuntimeConfigJson(XrayConfig(V2RAY_FULL_JSON_CONFIG = prepared.configJson),
+            File("."), credentials, prepared, tcpAvailable = { true })
+        val stream = runtime.getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
+        assertEquals("tcp", stream.getString("network"))
+        assertFalse(stream.getJSONObject("tlsSettings").has("allowInsecure"))
+        assertEquals("control.invalid", stream.getJSONObject("tlsSettings").getString("serverName"))
+        val dnsUnknown = runtime.getJSONObject("dns").getJSONObject("unknown")
+        assertFalse(dnsUnknown.has("allowInsecure")); assertEquals("xhttp", dnsUnknown.getString("network"))
+        val lookalike = runtime.getJSONObject("extension").getJSONObject("dns").getJSONObject("hosts")
+        assertFalse(lookalike.has("allowInsecure")); assertEquals("mixed", lookalike.getString("network"))
+        assertFalse(lookalike.has("xHTTPSettings")); assertEquals("opaque", lookalike.getString("xhttpSettings"))
+        assertEquals(before, source.toString())
+        for (alias in listOf("DNS", "DNſ")) {
+            val ambiguous = JSONObject().put("dns", JSONObject()).put(alias, JSONObject())
+                .put("outbounds", JSONArray().put(JSONObject().put("protocol", "freedom")))
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+                XrayCoreManager.buildRuntimeConfigJson(XrayConfig(V2RAY_FULL_JSON_CONFIG = ambiguous.toString()),
+                    File("."), credentials, tcpAvailable = { true })
+            }
+        }
+    }
+
     @Test fun sharedFakeDnsProfilesPreserveCallerInputsAndEnableOnlyPrivateRestoration() {
         val cases = JSONArray(requireNotNull(javaClass.getResource("/fakedns.json")).readText())
         assertEquals(5, cases.length())

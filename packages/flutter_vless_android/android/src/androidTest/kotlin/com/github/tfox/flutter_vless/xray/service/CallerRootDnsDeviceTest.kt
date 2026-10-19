@@ -197,7 +197,9 @@ class CallerRootDnsDeviceTest {
             val assetRoot = File(context.cacheDir, "caller-assets-$run")
             assertTrue("Owned asset fixture directory is unavailable", assetRoot.mkdir())
             val root = JSONObject().put("tag", "caller-root-dns").put("queryStrategy", "UseIPv4")
-                .put("disableCache", true).put("hosts", JSONObject().put(hosts, "10.0.2.2"))
+                .put("disableCache", true).put("useSystemHosts", true)
+                .put("hosts", JSONObject().put(hosts, "10.0.2.2").put("allowInsecure", "10.0.2.2")
+                    .put("network", "MiXeD.Target.Invalid").put("full:mixed.target.invalid", "10.0.2.2"))
                 .put("servers", JSONArray().put("tcp://127.0.0.1:${general.port}")
                     .put(JSONObject().put("address", "tcp://127.0.0.1:${perDomain.port}")
                         .put("domains", JSONArray().put("full:$caller")).put("skipFallback", true)
@@ -238,9 +240,13 @@ class CallerRootDnsDeviceTest {
                         .put("outboundTag", "blocked-default"))
                 for (index in 0 until originalRules.length()) rules.put(originalRules.get(index))
                 routing.put("rules", rules)
+                val sourceBefore = source.toString()
                 start(source, assetRoot.absolutePath)
                 val udp = name("udp"); val tcp = name("tcp"); val system = name("system")
                 assertA(query(udp, false)); assertA(query(tcp, true)); assertA(query(caller, false))
+                // These static data keys resemble configuration fields. The
+                // controlled resolver refuses both bare names if hosts are lost.
+                assertA(query("allowInsecure", false)); assertA(query("network", true))
                 assertTrue(InetAddress.getAllByName(system).any { it.hostAddress == "10.0.2.2" })
                 assertTrue(InetAddress.getAllByName(hosts).any { it.hostAddress == "10.0.2.2" })
                 http(hosts)
@@ -263,6 +269,7 @@ class CallerRootDnsDeviceTest {
                 assertNotNull("Caller StatsService did not respond", output)
                 val counters = JSONObject(output!!).optJSONArray("stat")
                 assertTrue("Caller disabled counters were enabled", counters == null || counters.length() == 0)
+                assertEquals("Caller source changed", sourceBefore, source.toString())
             } finally {
                 stop()
                 assertTrue("Owned asset fixture directory survived Stop", assetRoot.deleteRecursively())

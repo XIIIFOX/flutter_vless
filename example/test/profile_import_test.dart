@@ -1,8 +1,28 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_vless_example/profile_import.dart';
 
 void main() {
+  final dnsProfiles =
+      (jsonDecode(
+                File(
+                  '../tool/fixtures/compatibility/dns-data-maps.json',
+                ).readAsStringSync(),
+              )
+              as List<dynamic>)
+          .cast<Map<String, dynamic>>();
+  for (final profile in dnsProfiles) {
+    test('DNS data survives example import: ${profile['name']}', () {
+      final config = profile['config'] as Map<String, dynamic>;
+      final source = jsonEncode(config);
+      for (final input in [source, '[$source]']) {
+        expect(jsonDecode(importProfile(input).config), config);
+      }
+      expect(jsonEncode(config), source);
+    });
+  }
+
   test('Raw JSON retains existing remark aliases', () {
     for (final key in ['remarks', 'remark', 'ps']) {
       final input = jsonEncode({

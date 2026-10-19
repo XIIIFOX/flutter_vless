@@ -83,6 +83,26 @@ class AppleFakeDNSRuntimeWiringTest(unittest.TestCase):
         self.assertIn('host: TunnelDNSPolicy.virtualServer, port: 53, payload: query)', generated)
         self.assertIn('dnsProbeUDPHeader(host: host, port: port)', generated)
 
+    def test_sdk_fixture_preserves_and_queries_opaque_hosts_before_and_after(self):
+        for platform in ('ios', 'macos'):
+            with self.subTest(platform=platform):
+                generated = self.generated(platform, fakedns_only=True)
+                body = generated[generated.index('func runAppleFakeDNSRuntimeChecks() throws'):]
+                self.assertIn('"useSystemHosts": true', body)
+                for entry in ('"allowInsecure": "192.0.2.8"', '"network": "MiXeD.Target.Invalid"',
+                              '"full:mixed.target.invalid": "192.0.2.9"', '"xHTTPSettings": "192.0.2.10"'):
+                    self.assertIn(entry, body)
+                self.assertIn('"address": "tcp://127.0.0.1:9"', body)
+                self.assertIn('"skipFallback": true', body)
+                self.assertIn('effective["dns"] as! NSDictionary == dns as NSDictionary', body)
+                self.assertIn('for udp in [false, true]', body)
+                self.assertIn('answer.suffix(4).elementsEqual(expected)', body)
+                self.assertEqual(1, body.count('try verifyStaticHosts(generation, afterFakeDNS: false)'))
+                self.assertEqual(1, body.count('try verifyStaticHosts(generation, afterFakeDNS: true)'))
+                self.assertLess(body.index('try verifyStaticHosts(generation, afterFakeDNS: false)'), body.index('var fake:'))
+                self.assertGreater(body.index('try verifyStaticHosts(generation, afterFakeDNS: true)'), body.index('payload: datagram) == datagram'))
+                self.assertLess(body.index('upstream.requireComplete()'), body.index('print("APPLE_DNS_DATA_MAPS_SDK_PASS=2")'))
+
 
 class AppleFakeDNSOnlyModeTest(unittest.TestCase):
     root = AppleCounterRuntimeWiringTest.root
@@ -107,7 +127,7 @@ class AppleFakeDNSOnlyModeTest(unittest.TestCase):
         for platform in ('ios', 'macos'):
             script = (self.root / ('tool/test_' + platform + '_privacy_runtime.sh')).read_text()
             body = script.rsplit('python3 - "$OUT/runtime.log" <<\'PY\'\n', 1)[1].split('\nPY', 1)[0]
-            valid = 'RUNTIME=26.10.17\nAPPLE_FAKEDNS_SDK_PASS=2\n'
+            valid = 'RUNTIME=26.10.17\nAPPLE_FAKEDNS_SDK_PASS=2\nAPPLE_DNS_DATA_MAPS_SDK_PASS=2\n'
             cases = [(valid, True), ('APPLE_FAKEDNS_SDK_PASS=2\n', False),
                      (valid.replace('26.10.17', '26.10.18'), False),
                      (valid.replace('26.10.17', '26.10.170'), False),
@@ -135,6 +155,27 @@ class AppleFakeDNSOnlyModeTest(unittest.TestCase):
                         mock.patch.object(sys, 'argv', ['-', str(log)]):
                     with self.assertRaises(AssertionError):
                         exec(compile(body, 'default-full-qualifier', 'exec'), {})
+
+    def test_both_qualifier_modes_require_one_data_maps_marker_before_other_gates(self):
+        for platform in ('ios', 'macos'):
+            script = (self.root / ('tool/test_' + platform + '_privacy_runtime.sh')).read_text()
+            body = script.rsplit('python3 - "$OUT/runtime.log" <<\'PY\'\n', 1)[1].split('\nPY', 1)[0]
+            with tempfile.TemporaryDirectory() as folder:
+                log = Path(folder) / 'runtime.log'
+                for mode in ('full', 'fakedns-only'):
+                    for count in (0, 2):
+                        with self.subTest(platform=platform, mode=mode, count=count):
+                            log.write_text('RUNTIME=26.10.17\nAPPLE_FAKEDNS_SDK_PASS=2\n' + 'APPLE_DNS_DATA_MAPS_SDK_PASS=2\n' * count)
+                            failure = None
+                            with mock.patch.dict(os.environ, {'APPLE_RUNTIME_PROBE_MODE': mode}), \
+                                    mock.patch.object(sys, 'argv', ['-', str(log)]), contextlib.redirect_stdout(io.StringIO()):
+                                try:
+                                    exec(compile(body, 'data-maps-qualifier', 'exec'), {})
+                                except AssertionError as error:
+                                    failure = str(error)
+                                except SystemExit as error:
+                                    self.assertEqual(0, error.code)
+                            self.assertEqual('Missing or duplicate Apple DNS data maps SDK gate', failure)
 
     def test_shell_arguments_are_closed_before_any_compile_or_runtime(self):
         for platform in ('ios', 'macos'):

@@ -51,7 +51,7 @@ object XrayCoreManager {
         true
     } catch (_: IOException) { false }
 
-    private fun normalizeRuntimeConfig(value: Any?): Any? {
+    private fun normalizeRuntimeConfig(value: Any?, atRoot: Boolean = true, dnsRoot: Boolean = false): Any? {
         return when (value) {
             is JSONObject -> {
                 val normalized = JSONObject()
@@ -65,10 +65,19 @@ object XrayCoreManager {
                     val key = keys.next()
                     if (key == "allowInsecure") continue
 
-                    val targetKey = aliases[key] ?: key
+                    val field = key.replace('ſ', 's').replace('K', 'k').lowercase(java.util.Locale.ROOT)
+                    val isDnsRoot = atRoot && field == "dns"
+                    val targetKey = if (isDnsRoot) "dns" else aliases[key] ?: key
+                    require(!isDnsRoot || !normalized.has(targetKey)) { "Duplicate native configuration field" }
                     if (aliases.containsKey(key) && value.has(targetKey)) continue
 
-                    val normalizedValue = normalizeRuntimeConfig(value.opt(key))
+                    val child = value.opt(key)
+                    // DNS host keys and address values are caller data, not
+                    // configuration fields. Only this schema-owned dictionary
+                    // bypasses compatibility cleanup; TLS and other DNS fields
+                    // still take the ordinary normalization path.
+                    val normalizedValue = if (dnsRoot && field == "hosts" && child is JSONObject) child
+                        else normalizeRuntimeConfig(child, atRoot = false, dnsRoot = isDnsRoot)
                     if (targetKey == "network" && normalizedValue is String) {
                         normalized.put(targetKey, normalizedValue.lowercase())
                     } else {
@@ -80,7 +89,7 @@ object XrayCoreManager {
             is JSONArray -> {
                 val normalized = JSONArray()
                 for (i in 0 until value.length()) {
-                    normalized.put(normalizeRuntimeConfig(value.opt(i)))
+                    normalized.put(normalizeRuntimeConfig(value.opt(i), atRoot = false))
                 }
                 normalized
             }

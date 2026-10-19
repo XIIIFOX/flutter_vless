@@ -1204,7 +1204,59 @@ void DnsDataMapCases(const std::string& only = "") {
   Require(selected, "unknown DNS data/map case");
 }
 
+void OpaqueFieldCases() {
+  std::ifstream input("tool/fixtures/compatibility/opaque-fields.json");
+  Require(input.good(), "shared opaque-field corpus required");
+  Json corpus; input >> corpus;
+  Require(corpus.is_array() && corpus.size() == 6, "shared opaque-field corpus changed");
+  auto prepare = [](const Json& profile, unsigned& calls) {
+    return PrepareProtectedVpn(profile.dump(), "session-user", "session-password", "Ethernet", [&](const std::string&) {
+      ++calls; return std::string();
+    });
+  };
+  size_t paths = 0;
+  for (const auto& fixture : corpus) {
+    const auto source = fixture["config"], original = source;
+    unsigned calls = 0;
+    const auto prepared = prepare(source, calls);
+    Require(prepared.has_value(), "opaque metadata was treated as an active feature");
+    auto caller_view = Parse(*prepared);
+    Require(caller_view["inbounds"].size() == source["inbounds"].size() + 1, "managed inbound insertion changed");
+    caller_view["inbounds"].erase(caller_view["inbounds"].begin());
+    // Private rules are prepended; compare each imported rule at its retained
+    // caller position without confusing it with a generated guard.
+    if (source.contains("routing") && source["routing"].contains("rules")) {
+      auto& rules = caller_view["routing"]["rules"];
+      const auto count = source["routing"]["rules"].size();
+      Require(rules.size() >= count, "imported routing rules were lost");
+      rules.erase(rules.begin(), rules.end() - static_cast<Json::difference_type>(count));
+    }
+    auto expected = source;
+    for (const auto& path : fixture["opaquePaths"]) {
+      Require(DnsAddressPath(caller_view, path) == DnsAddressPath(expected, path), "opaque subtree was normalized, rebound or removed");
+      ++paths;
+    }
+    Require(calls == 0 && source == original, "numeric opaque-field profile resolved or mutated source");
+  }
+  Require(paths == 18, "shared opaque-field path coverage changed");
+  auto source = corpus[0]["config"];
+  source["outbounds"][0]["streamSettings"]["security"] = "tls";
+  source["outbounds"][0]["streamSettings"]["tlsSettings"] = {{"masterKeyLog", "private-key.log"}, {"serverName", "tls.invalid"}};
+  const auto original = source;
+  unsigned calls = 0;
+  const auto prepared = prepare(source, calls);
+  Require(prepared.has_value(), "real TLS privacy control rejected");
+  const auto output = Parse(*prepared);
+  Require(output["outbounds"][0]["streamSettings"]["tlsSettings"]["masterKeyLog"] == ""
+      && output["log"]["access"] == "none" && output["custom"] == source["custom"], "opaque preservation bypassed real privacy edits");
+  Require(source == original && calls == 0, "TLS privacy control mutated or resolved source");
+  source["dns"]["servers"] = Json::array({"quic+local://9.9.9.9"});
+  const auto unsafe = source;
+  Require(!prepare(source, calls) && calls == 0 && source == unsafe, "actual local QUIC DNS was admitted or mutated source");
+}
+
 int main(int argc, char** argv) try {
+  if (argc == 2 && std::string(argv[1]) == "--opaque-fields") { OpaqueFieldCases(); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--dns-data-maps-case") { DnsDataMapCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--fakedns-case") { FakeDnsCases(argv[2]); return 0; }
   if (argc == 5 && std::string(argv[1]) == "--bind-certificate-fixture") {
@@ -1256,6 +1308,7 @@ int main(int argc, char** argv) try {
   EndpointAddressCases();
   DnsAddressCases();
   DnsDataMapCases();
+  OpaqueFieldCases();
   FakeDnsCases();
   LogicalAddressCases();
   MappedDnsCases();

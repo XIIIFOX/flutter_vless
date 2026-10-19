@@ -54,70 +54,83 @@ object XrayCoreManager {
     private fun schemaField(key: String): String =
         key.replace('ſ', 's').replace('K', 'k').lowercase(java.util.Locale.ROOT)
 
-    /** Core treats these exact schema-owned maps as caller names and values. */
-    private fun callerDictionary(path: List<String>): Boolean {
-        if (path == listOf("dns", "hosts")) return true
-        if (path == listOf("routing", "rules", "*", "attrs")) return true
-        if (path.size < 5 || path[0] !in setOf("inbounds", "outbounds") ||
-            path[1] != "*" || path[2] != "streamsettings") return false
-        var streamStart = 3
-        while (streamStart < path.size) {
-            val tail = path.subList(streamStart, path.size)
-            if (tail.size == 2 && tail[0] in setOf("wssettings", "httpupgradesettings", "xhttpsettings", "splithttpsettings", "masquesettings") &&
-                tail[1] == "headers") return true
-            if (tail.size == 4 && tail[0] in setOf("tcpsettings", "rawsettings") && tail[1] == "header" &&
-                tail[2] in setOf("request", "response") && tail[3] == "headers") return true
-            if (tail == listOf("hysteriasettings", "masquerade", "headers")) return true
-            if (tail[0] !in setOf("xhttpsettings", "splithttpsettings")) return false
-            var field = streamStart + 1
-            if (path.getOrNull(field) == "extra") field++
-            if (path.getOrNull(field) == "headers") return field == path.lastIndex
-            if (path.getOrNull(field) != "downloadsettings") return false
-            streamStart = field + 1
-        }
-        return false
+    private fun schemaKey(value: JSONObject, name: String): String? {
+        val matches = value.keys().asSequence().filter { schemaField(it) == name }.toList()
+        require(matches.size <= 1) { "Duplicate native configuration field" }
+        return matches.singleOrNull()
     }
 
-    private fun normalizeRuntimeConfig(value: Any?, path: List<String> = emptyList()): Any? {
-        if (value is JSONObject && callerDictionary(path)) return value
-        return when (value) {
-            is JSONObject -> {
-                val normalized = JSONObject()
-                val aliases = mapOf(
-                    "xHTTPSettings" to "xhttpSettings",
-                    "httpUpgradeSettings" to "httpupgradeSettings",
-                    "splitHTTPSettings" to "splithttpSettings"
-                )
-                val keys = value.keys()
-                while (keys.hasNext()) {
-                    val key = keys.next()
-                    if (key == "allowInsecure") continue
+    private fun schemaValue(value: JSONObject, name: String): Any? = schemaKey(value, name)?.let(value::opt)
 
-                    val field = schemaField(key)
-                    val isDnsRoot = path.isEmpty() && field == "dns"
-                    val targetKey = if (isDnsRoot) "dns" else aliases[key] ?: key
-                    require(!isDnsRoot || !normalized.has(targetKey)) { "Duplicate native configuration field" }
-                    if (aliases.containsKey(key) && value.has(targetKey)) continue
+    /** StreamConfig.Build compiles only the preferred XHTTP branch and its
+     * selected extra/download, even when the parent chose another transport. */
+    private fun forEachStream(config: JSONObject, action: (JSONObject) -> Unit) {
+        fun stream(value: JSONObject) {
+            action(value)
+            val preferred = schemaValue(value, "xhttpsettings")
+            val transport = (if (preferred == null || preferred == JSONObject.NULL)
+                schemaValue(value, "splithttpsettings") else preferred) as? JSONObject ?: return
+            val extra = schemaKey(transport, "extra")
+            val effective = (if (extra == null) transport else transport.opt(extra)) as? JSONObject ?: return
+            (schemaValue(effective, "downloadsettings") as? JSONObject)?.let(::stream)
+        }
+        for (collection in listOf("inbounds", "outbounds")) {
+            val entries = schemaValue(config, collection) as? JSONArray ?: continue
+            for (index in 0 until entries.length()) {
+                val entry = entries.optJSONObject(index) ?: continue
+                (schemaValue(entry, "streamsettings") as? JSONObject)?.let(::stream)
+            }
+        }
+    }
 
-                    val child = value.opt(key)
-                    val normalizedValue = normalizeRuntimeConfig(child, path + field)
-                    if (targetKey == "network" && normalizedValue is String) {
-                        normalized.put(targetKey, normalizedValue.lowercase())
-                    } else {
-                        normalized.put(targetKey, normalizedValue)
+    private fun udpMasks(stream: JSONObject): List<JSONObject> {
+        val finalMask = schemaValue(stream, "finalmask") as? JSONObject ?: return emptyList()
+        val masks = schemaValue(finalMask, "udp") as? JSONArray ?: return emptyList()
+        return (0 until masks.length()).mapNotNull(masks::optJSONObject)
+    }
+
+    /** These are TLSConfig objects in the pinned schema. Keep legacy privacy
+     * cleanup for their fields, while leaving every unknown child untouched. */
+    private fun forEachTls(stream: JSONObject, action: (JSONObject) -> Unit) {
+        (schemaValue(stream, "tlssettings") as? JSONObject)?.let(action)
+        for (mask in udpMasks(stream)) {
+            val settings = schemaValue(mask, "settings") as? JSONObject ?: continue
+            when ((schemaValue(mask, "type") as? String)?.lowercase(java.util.Locale.ROOT)) {
+                "realm" -> (schemaValue(settings, "tlsconfig") as? JSONObject)?.let(action)
+                "xdns" -> {
+                    val resolvers = schemaValue(settings, "resolvers") as? JSONArray ?: continue
+                    for (index in 0 until resolvers.length()) {
+                        val resolver = resolvers.optJSONObject(index) ?: continue
+                        (schemaValue(resolver, "tlsconfig") as? JSONObject)?.let(action)
                     }
                 }
-                normalized
             }
-            is JSONArray -> {
-                val normalized = JSONArray()
-                for (i in 0 until value.length()) {
-                    normalized.put(normalizeRuntimeConfig(value.opt(i), path + "*"))
-                }
-                normalized
-            }
-            else -> value
         }
+    }
+
+    private fun normalizeRuntimeConfig(value: JSONObject): JSONObject {
+        val normalized = JSONObject(value.toString())
+        // This root spelling must be canonical before the local-input policy;
+        // its hosts dictionary and all other caller fields remain unchanged.
+        schemaKey(normalized, "dns")?.takeIf { it != "dns" }?.let { spelling ->
+            normalized.put("dns", normalized.remove(spelling))
+        }
+        forEachStream(normalized) { stream ->
+            for ((legacy, canonical) in mapOf("xHTTPSettings" to "xhttpSettings",
+                "httpUpgradeSettings" to "httpupgradeSettings", "splitHTTPSettings" to "splithttpSettings")) {
+                if (stream.has(legacy)) {
+                    val child = stream.remove(legacy)
+                    if (!stream.has(canonical)) stream.put(canonical, child)
+                }
+            }
+            schemaKey(stream, "network")?.let { spelling ->
+                (stream.opt(spelling) as? String)?.let { stream.put(spelling, it.lowercase(java.util.Locale.ROOT)) }
+            }
+            forEachTls(stream) { tls ->
+                tls.keys().asSequence().filter { schemaField(it) == "allowinsecure" }.toList().forEach(tls::remove)
+            }
+        }
+        return normalized
     }
 
     private fun normalizeVlessOutbounds(configJson: JSONObject) {
@@ -151,21 +164,24 @@ object XrayCoreManager {
         }
     }
 
-    /** These upstream paths open sockets outside Xray's controller interfaces. */
-    internal fun requireProtectedSocketSupport(value: Any?) = requireProtectedSocketSupport(value, emptyList())
-
-    private fun requireProtectedSocketSupport(value: Any?, path: List<String>) {
-        if (value is JSONObject && callerDictionary(path)) return
-        when (value) {
-            is JSONObject -> value.keys().forEach { key ->
-                val child = value.opt(key)
-                require(!(key.equals("type", ignoreCase = true) && child is String && child.equals("xicmp", ignoreCase = true))) {
-                    "xicmp is unavailable in protected VPN mode"
-                }
-                requireProtectedSocketSupport(child, path + schemaField(key))
+    /** Only these schema paths open sockets outside Core's controller hooks;
+     * feature-looking values in unknown metadata are not active features. */
+    internal fun requireProtectedSocketSupport(value: Any?) {
+        if (value !is JSONObject) return
+        forEachStream(value) { stream ->
+            for (mask in udpMasks(stream)) require(
+                !(schemaValue(mask, "type") as? String).equals("xicmp", ignoreCase = true)) {
+                "xicmp is unavailable in protected VPN mode"
             }
-            is JSONArray -> for (index in 0 until value.length()) requireProtectedSocketSupport(value.opt(index), path + "*")
-            is String -> require(!value.startsWith("quic+local://", ignoreCase = true)) {
+        }
+        val dns = schemaValue(value, "dns") as? JSONObject ?: return
+        val servers = schemaValue(dns, "servers") as? JSONArray ?: return
+        for (index in 0 until servers.length()) {
+            val server = servers.opt(index)
+            val address = (if (server is JSONObject) schemaValue(server, "address") else server) as? String ?: continue
+            val parsed = XrayPortSpec.coreAddressText(address)
+            val scheme = parsed.substringBefore(':', "")
+            require(!scheme.equals("quic+local", ignoreCase = true)) {
                 "quic+local DNS is unavailable in protected VPN mode; use https+local or tcp+local"
             }
         }
@@ -198,7 +214,7 @@ object XrayCoreManager {
             callerRoots[field] = imported.get(key)
             imported.remove(key)
         }
-        val json = normalizeRuntimeConfig(imported) as JSONObject
+        val json = normalizeRuntimeConfig(imported)
         LocalProxyAccessPolicy.normalizeConfigInputs(json)
         callerRoots.forEach { (key, value) -> json.put(key, value) }
         normalizeVlessOutbounds(json)

@@ -103,17 +103,21 @@ class XrayRoutingAttrsDataTest {
         assertTrue(dnsError.message.orEmpty().contains("quic+local"))
     }
 
-    @Test fun unrelatedAttrsLookalikesDoNotGainAProtectedFeatureExemption() {
+    @Test fun unrelatedAttrsLookalikesRemainUnknownMetadata() {
         val forbidden = JSONObject().put("attrs", JSONObject().put("type", "xicmp"))
         val root = controlSource().put("extension", forbidden)
-        assertThrows(IllegalArgumentException::class.java) { build(root) }
+        assertEquals(root.getJSONObject("extension").toString(), build(root).getJSONObject("extension").toString())
 
         val routing = controlSource()
         routing.getJSONObject("routing").put("attrs", JSONObject().put("type", "xicmp"))
-        assertThrows(IllegalArgumentException::class.java) { build(routing) }
+        assertEquals(routing.getJSONObject("routing").getJSONObject("attrs").toString(),
+            build(routing).getJSONObject("routing").getJSONObject("attrs").toString())
 
         val rule = controlSource()
         rules(rule).getJSONObject(0).put("extension", forbidden)
-        assertThrows(IllegalArgumentException::class.java) { build(rule) }
+        val runtime = build(rule)
+        assertEquals(rules(rule).length() + 2, rules(runtime).length())
+        assertEquals(rules(rule).getJSONObject(0).getJSONObject("extension").toString(),
+            rules(runtime).getJSONObject(2).getJSONObject("extension").toString())
     }
 }

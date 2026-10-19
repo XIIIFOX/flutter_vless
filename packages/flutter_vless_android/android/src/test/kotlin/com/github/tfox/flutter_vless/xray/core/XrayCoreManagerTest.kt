@@ -43,7 +43,7 @@ class XrayCoreManagerTest {
         }
     }
 
-    @Test fun dnsDataBoundaryDoesNotDisableTlsOrOtherSchemaNormalization() {
+    @Test fun unknownDnsFieldsRemainDataWhileRealStreamAndTlsNormalizationStillApplies() {
         val source = JSONObject("""{
           "dns":{"hosts":{"control.invalid":"192.0.2.8"},"servers":["tcp://192.0.2.53:53"],
             "unknown":{"allowInsecure":false,"network":"XHTTP"}},
@@ -59,10 +59,9 @@ class XrayCoreManagerTest {
         assertFalse(stream.getJSONObject("tlsSettings").has("allowInsecure"))
         assertEquals("control.invalid", stream.getJSONObject("tlsSettings").getString("serverName"))
         val dnsUnknown = runtime.getJSONObject("dns").getJSONObject("unknown")
-        assertFalse(dnsUnknown.has("allowInsecure")); assertEquals("xhttp", dnsUnknown.getString("network"))
+        assertEquals(source.getJSONObject("dns").getJSONObject("unknown").toString(), dnsUnknown.toString())
         val lookalike = runtime.getJSONObject("extension").getJSONObject("dns").getJSONObject("hosts")
-        assertFalse(lookalike.has("allowInsecure")); assertEquals("mixed", lookalike.getString("network"))
-        assertFalse(lookalike.has("xHTTPSettings")); assertEquals("opaque", lookalike.getString("xhttpSettings"))
+        assertEquals(source.getJSONObject("extension").getJSONObject("dns").getJSONObject("hosts").toString(), lookalike.toString())
         assertEquals(before, source.toString())
         for (alias in listOf("DNS", "DNſ")) {
             val ambiguous = JSONObject().put("dns", JSONObject()).put(alias, JSONObject())
@@ -372,7 +371,9 @@ class XrayCoreManagerTest {
             } catch (_: IllegalArgumentException) { }
         }
         for (key in listOf("type", "Type")) {
-            val value = JSONObject().put("finalmask", JSONObject().put("udp", JSONArray().put(JSONObject().put(key, "XICMP"))))
+            val value = JSONObject().put("outbounds", JSONArray().put(JSONObject().put("protocol", "freedom")
+                .put("streamSettings", JSONObject().put("finalmask", JSONObject().put("udp", JSONArray().put(
+                    JSONObject().put(key, "XICMP").put("settings", JSONObject().put("ips", JSONArray().put("192.0.2.9")))))))))
             try {
                 XrayCoreManager.requireProtectedSocketSupport(value)
                 org.junit.Assert.fail("Uncontrolled ICMP sockets must be rejected")

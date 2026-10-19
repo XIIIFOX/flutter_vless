@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve unknown full-profile JSON fields at every depth. Limit legacy transport/TLS compatibility edits to their Core schema owners, including effective XHTTP downloads and mask TLS settings. Keep opaque data separate from Android protected-feature admission; add shared native/Core and public import/start/delay regressions.
+
 * Accept Core-folded JSON schema fields through full-profile import, startup and delay without rewriting caller data. Defer string transport semantics to Core preflight so an explicit method can override a dormant empty network.
 
 * Preserve Core environment aliases for imported port lists and addresses using the pinned simple Unicode case mapping. Keep exact empty values and Core whitespace semantics; add shared public/native regressions.

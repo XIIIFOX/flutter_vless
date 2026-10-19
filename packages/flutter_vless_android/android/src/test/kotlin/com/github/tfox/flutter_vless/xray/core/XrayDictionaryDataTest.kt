@@ -126,19 +126,21 @@ class XrayDictionaryDataTest {
         assertTrue(dnsError.message.orEmpty().contains("quic+local"))
     }
 
-    @Test fun unrelatedHeaderLookalikesDoNotGainAProtectedFeatureExemption() {
+    @Test fun unrelatedHeaderLookalikesRemainUnknownMetadata() {
         val forbidden = JSONObject().put("type", "xicmp")
         val nonStreamOwner = source().put("extension", JSONObject().put("headers", forbidden))
-        assertThrows(IllegalArgumentException::class.java) { build(nonStreamOwner) }
+        assertEquals(nonStreamOwner.getJSONObject("extension").toString(), build(nonStreamOwner).getJSONObject("extension").toString())
 
         val wrongTransportPath = source()
         stream(wrongTransportPath).getJSONObject("wsSettings")
             .put("extra", JSONObject().put("headers", forbidden))
-        assertThrows(IllegalArgumentException::class.java) { build(wrongTransportPath) }
+        assertEquals(stream(wrongTransportPath).getJSONObject("wsSettings").getJSONObject("extra").toString(),
+            stream(build(wrongTransportPath)).getJSONObject("wsSettings").getJSONObject("extra").toString())
 
         val repeatedExtra = source()
         stream(repeatedExtra).put("xhttpSettings", JSONObject().put("extra", JSONObject()
             .put("extra", JSONObject().put("headers", forbidden))))
-        assertThrows(IllegalArgumentException::class.java) { build(repeatedExtra) }
+        assertEquals(stream(repeatedExtra).getJSONObject("xhttpSettings").toString(),
+            stream(build(repeatedExtra)).getJSONObject("xhttpSettings").toString())
     }
 }

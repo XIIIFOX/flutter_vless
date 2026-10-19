@@ -409,11 +409,82 @@ JsonMap? _immutableMap(JsonMap? value) {
 /// explicit nulls and empty containers because Core can distinguish them from
 /// omitted fields.
 dynamic sanitizeXrayJson(dynamic params, {bool preserveStructure = false}) {
-  return _sanitizeXrayJson(
+  final sanitized = _sanitizeXrayJson(
     params,
     preserveStructure: preserveStructure,
     root: true,
   );
+  if (preserveStructure && sanitized is JsonMap) {
+    _normalizeRawStreamFields(sanitized);
+  }
+  return sanitized;
+}
+
+JsonMap? _rawObjectField(JsonMap object, String name) {
+  final value = readXraySchemaField(object, name);
+  return value is JsonMap ? value : null;
+}
+
+void _normalizeRawTls(JsonMap? tls) {
+  if (tls == null) return;
+  // Match Core's field folding, but never treat nested user maps as TLS.
+  readXraySchemaField(tls, 'allowInsecure');
+  tls.removeWhere((key, _) => _matchesXrayField(key, 'allowinsecure'));
+}
+
+void _normalizeRawStreamFields(JsonMap config) {
+  for (final name in ['inbounds', 'outbounds']) {
+    final handlers = readXraySchemaField(config, name);
+    if (handlers is! Iterable) continue;
+    for (final handler in handlers) {
+      if (handler is! JsonMap) continue;
+      final stream = _rawObjectField(handler, 'streamSettings');
+      if (stream != null) _normalizeRawStream(stream);
+    }
+  }
+}
+
+void _normalizeRawStream(JsonMap stream) {
+  _normalizeStreamSettingsAliases(stream);
+  _normalizeRawTls(_rawObjectField(stream, 'tlsSettings'));
+
+  // These are Core's two other TLSConfig owners. A tlsConfig-looking key in
+  // another mask, or in any arbitrary metadata, remains caller data.
+  final mask = _rawObjectField(stream, 'finalmask');
+  final udp = mask == null ? null : readXraySchemaField(mask, 'udp');
+  if (udp is Iterable) {
+    for (final entry in udp) {
+      if (entry is! JsonMap) continue;
+      final type = readXraySchemaField(entry, 'type');
+      final settings = _rawObjectField(entry, 'settings');
+      if (type is! String || settings == null) continue;
+      switch (type.toLowerCase()) {
+        case 'realm':
+          _normalizeRawTls(_rawObjectField(settings, 'tlsConfig'));
+        case 'xdns':
+          final resolvers = readXraySchemaField(settings, 'resolvers');
+          if (resolvers is Iterable) {
+            for (final resolver in resolvers) {
+              if (resolver is JsonMap) {
+                _normalizeRawTls(_rawObjectField(resolver, 'tlsConfig'));
+              }
+            }
+          }
+      }
+    }
+  }
+
+  // StreamConfig Build consumes the preferred XHTTP alias even if another
+  // network is selected. Extra replaces the outer object, including null.
+  final xhttp = _rawObjectField(stream, 'xhttpSettings') ??
+      _rawObjectField(stream, 'splithttpSettings');
+  if (xhttp == null) return;
+  final extra = readXraySchemaField(xhttp, 'extra');
+  final hasExtra = xhttp.keys.any((key) => _matchesXrayField(key, 'extra'));
+  final effective = hasExtra ? (extra is JsonMap ? extra : null) : xhttp;
+  if (effective == null) return;
+  final download = _rawObjectField(effective, 'downloadSettings');
+  if (download != null) _normalizeRawStream(download);
 }
 
 String _xrayField(String key) => foldXraySchemaField(key);
@@ -491,9 +562,9 @@ dynamic _sanitizeXrayJson(
       params.entries
           .map((entry) => MapEntry(entry.key.toString(), entry.value)),
     );
-    // DNS hosts, transport headers and routing attributes contain caller data,
-    // including names matching legacy stream fields. Only schema needs cleanup.
-    if (!dictionaryData) {
+    // Typed generators keep their legacy cleanup. Raw JSON is copied intact;
+    // only the schema-owned objects visited above receive compatibility edits.
+    if (!preserveStructure && !dictionaryData) {
       _normalizeStreamSettingsAliases(source);
       source.remove('allowInsecure');
     }

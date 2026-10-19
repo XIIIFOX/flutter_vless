@@ -83,20 +83,11 @@ void main() {
     expect(sanitizeXrayJson(config, preserveStructure: true), config);
   });
 
-  test('unrelated headers objects do not gain a dictionary exemption', () {
+  test('unknown headers objects remain caller metadata', () {
     final input = {
       'metadata': {'headers': headers},
     };
-    expect(sanitizeXrayJson(input, preserveStructure: true), {
-      'metadata': {
-        'headers': {
-          'network': 'mixed-case',
-          'xhttpSettings': 'literal-alias-name',
-          'type': 'xicmp',
-          'Origin': 'quic+local://literal.invalid',
-        },
-      },
-    });
+    expect(sanitizeXrayJson(input, preserveStructure: true), input);
   });
 
   final adapters = <String, VlessPlatform Function()>{

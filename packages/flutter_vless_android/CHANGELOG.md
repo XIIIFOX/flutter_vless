@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve unknown profile data instead of recursively editing every object. Scope stream/TLS cleanup and protected-feature checks to Core schema fields, retaining XHTTP precedence and real UDP XICMP/local-QUIC DNS refusals. Add shared preparation and controlled device regressions.
+
 * Match Core environment alias casing and whitespace for ports and addresses, and pass the captured environment into private port reservation. Cover the shared corpus through the actual runtime builder with fake availability callbacks.
 
 * Preserve root routing-rule attribute dictionaries during normalization and protected-feature checks, including literal values that resemble DNS or transport settings.

@@ -196,6 +196,84 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
         XCTAssertFalse(result.logMessages.contains("Added XHTTP UDP/443 block rule to force browser TCP fallback"))
     }
 
+    func testSharedOpaqueFieldsStayDataThroughActualPreparation() throws {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/opaque-fields.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/opaque-fields.json"))) as? [[String: Any]])
+        XCTAssertEqual(corpus.count, 6)
+        var checkedPaths = 0
+        for fixture in corpus {
+            let source = try XCTUnwrap(fixture["config"] as? [String: Any])
+            let sourceData = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            let paths = try XCTUnwrap(fixture["opaquePaths"] as? [[String]])
+            var calls = 0
+            let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: sourceData, credentials: Self.credentials,
+                resolveIPv4: { _ in calls += 1; return nil }), "Opaque data became an active feature: \(fixture["name"] ?? "")")
+            var callerView = try decodedObject(prepared.data)
+            var inbounds = try XCTUnwrap(callerView["inbounds"] as? [[String: Any]])
+            let sourceInbounds = try XCTUnwrap(source["inbounds"] as? [[String: Any]])
+            XCTAssertEqual(inbounds.count, sourceInbounds.count + 1)
+            inbounds.removeFirst()
+            callerView["inbounds"] = inbounds
+            // DNS/transport guards precede the unchanged imported rule suffix.
+            if let sourceRouting = source["routing"] as? [String: Any], let sourceRules = sourceRouting["rules"] as? [Any] {
+                var routing = try XCTUnwrap(callerView["routing"] as? [String: Any])
+                let rules = try XCTUnwrap(routing["rules"] as? [Any])
+                XCTAssertGreaterThanOrEqual(rules.count, sourceRules.count)
+                routing["rules"] = Array(rules.suffix(sourceRules.count))
+                callerView["routing"] = routing
+            }
+            func subtree(_ object: Any, _ path: [String]) throws -> NSDictionary {
+                var value: Any = object
+                for component in path {
+                    if let array = value as? [Any], let index = Int(component), array.indices.contains(index) { value = array[index] }
+                    else { value = try XCTUnwrap((value as? [String: Any])?[component]) }
+                }
+                return try XCTUnwrap(value as? NSDictionary)
+            }
+            for path in paths {
+                XCTAssertEqual(try subtree(callerView, path), try subtree(source, path), "Opaque subtree changed: \(path.joined(separator: "."))")
+                checkedPaths += 1
+            }
+            XCTAssertEqual(calls, 0, "Numeric profiles must not invoke endpoint bootstrap")
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), sourceData)
+        }
+        XCTAssertEqual(checkedPaths, 18)
+    }
+
+    func testOpaqueDataDoesNotBypassRealTLSPrivacyOrLocalQUICDNSRefusal() throws {
+        let opaque: [String: Any] = ["network": "MiXeD", "allowInsecure": "metadata", "type": "xicmp", "Origin": "quic+local://literal.invalid"]
+        var source: [String: Any] = [
+            "custom": opaque,
+            "dns": ["servers": ["tcp://9.9.9.9"]],
+            "inbounds": [["protocol": "http", "port": 10807, "listen": "127.0.0.1"]],
+            "outbounds": [["tag": "proxy", "protocol": "socks", "settings": ["servers": [["address": "198.51.100.7", "port": 19090]]],
+                "streamSettings": ["network": "tcp", "security": "tls", "tlsSettings": ["serverName": "tls.invalid", "allowInsecure": true, "masterKeyLog": "private-key.log"]]]]
+        ]
+        let before = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+        var calls = 0
+        let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: before, credentials: Self.credentials,
+            resolveIPv4: { _ in calls += 1; return nil }))
+        let output = try decodedObject(prepared.data)
+        let outbound = try XCTUnwrap((output["outbounds"] as? [[String: Any]])?.first)
+        let stream = try XCTUnwrap(outbound["streamSettings"] as? [String: Any])
+        let tls = try XCTUnwrap(stream["tlsSettings"] as? [String: Any])
+        XCTAssertNil(tls["allowInsecure"])
+        XCTAssertEqual(tls["masterKeyLog"] as? String, "")
+        XCTAssertEqual(output["custom"] as? NSDictionary, opaque as NSDictionary)
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), before)
+        XCTAssertEqual(calls, 0)
+        source["dns"] = ["servers": ["quic+local://9.9.9.9"]]
+        let unsafe = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+        XCTAssertNil(TunnelXrayConfigPreparer.prepare(jsonData: unsafe, credentials: Self.credentials,
+            resolveIPv4: { _ in calls += 1; return nil }))
+        XCTAssertEqual(calls, 0)
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), unsafe)
+    }
+
     private static let vlessEncryption =
         "mlkem768x25519plus.native.1rtt.100-500-2000.75-0-100.80-0-5000.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 

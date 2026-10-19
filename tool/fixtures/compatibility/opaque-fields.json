@@ -1,0 +1,949 @@
+[
+  {
+    "name": "unknown_root_dictionary",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "inbounds": [
+        {
+          "protocol": "http",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "tag": "caller-http",
+          "settings": {}
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "198.51.100.7",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "network": "tcp"
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "custom": {
+        "network": "Case/Sensitive",
+        "xHTTPSettings": "opaque-XHTTP",
+        "httpUpgradeSettings": "opaque-Upgrade",
+        "splitHTTPSettings": "opaque-Split",
+        "allowInsecure": "metadata",
+        "type": "xicmp",
+        "Origin": "quic+local://literal.invalid",
+        "port": "env:Metadata.Port",
+        "address": "env:Metadata.Address",
+        "file": "/Case/Sensitive/key.pem",
+        "nested": [
+          null,
+          {},
+          [],
+          {
+            "allowInsecure": false,
+            "network": "MiXeD",
+            "tlsSettings": {
+              "allowInsecure": "also-metadata"
+            },
+            "downloadSettings": {
+              "network": "Opaque-Transport"
+            }
+          }
+        ]
+      }
+    },
+    "opaquePaths": [
+      [
+        "custom"
+      ]
+    ]
+  },
+  {
+    "name": "unknown_fields_in_known_sections",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ],
+        "custom": {
+          "network": "Case/Sensitive",
+          "xHTTPSettings": "opaque-XHTTP",
+          "httpUpgradeSettings": "opaque-Upgrade",
+          "splitHTTPSettings": "opaque-Split",
+          "allowInsecure": "metadata",
+          "type": "xicmp",
+          "Origin": "quic+local://literal.invalid",
+          "port": "env:Metadata.Port",
+          "address": "env:Metadata.Address",
+          "file": "/Case/Sensitive/key.pem",
+          "nested": [
+            null,
+            {},
+            [],
+            {
+              "allowInsecure": false,
+              "network": "MiXeD",
+              "tlsSettings": {
+                "allowInsecure": "also-metadata"
+              },
+              "downloadSettings": {
+                "network": "Opaque-Transport"
+              }
+            }
+          ]
+        }
+      },
+      "inbounds": [
+        {
+          "protocol": "http",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "tag": "caller-http",
+          "settings": {
+            "custom": {
+              "network": "Case/Sensitive",
+              "xHTTPSettings": "opaque-XHTTP",
+              "httpUpgradeSettings": "opaque-Upgrade",
+              "splitHTTPSettings": "opaque-Split",
+              "allowInsecure": "metadata",
+              "type": "xicmp",
+              "Origin": "quic+local://literal.invalid",
+              "port": "env:Metadata.Port",
+              "address": "env:Metadata.Address",
+              "file": "/Case/Sensitive/key.pem",
+              "nested": [
+                null,
+                {},
+                [],
+                {
+                  "allowInsecure": false,
+                  "network": "MiXeD",
+                  "tlsSettings": {
+                    "allowInsecure": "also-metadata"
+                  },
+                  "downloadSettings": {
+                    "network": "Opaque-Transport"
+                  }
+                }
+              ]
+            }
+          },
+          "custom": {
+            "network": "Case/Sensitive",
+            "xHTTPSettings": "opaque-XHTTP",
+            "httpUpgradeSettings": "opaque-Upgrade",
+            "splitHTTPSettings": "opaque-Split",
+            "allowInsecure": "metadata",
+            "type": "xicmp",
+            "Origin": "quic+local://literal.invalid",
+            "port": "env:Metadata.Port",
+            "address": "env:Metadata.Address",
+            "file": "/Case/Sensitive/key.pem",
+            "nested": [
+              null,
+              {},
+              [],
+              {
+                "allowInsecure": false,
+                "network": "MiXeD",
+                "tlsSettings": {
+                  "allowInsecure": "also-metadata"
+                },
+                "downloadSettings": {
+                  "network": "Opaque-Transport"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "198.51.100.7",
+                "port": 19090,
+                "custom": {
+                  "network": "Case/Sensitive",
+                  "xHTTPSettings": "opaque-XHTTP",
+                  "httpUpgradeSettings": "opaque-Upgrade",
+                  "splitHTTPSettings": "opaque-Split",
+                  "allowInsecure": "metadata",
+                  "type": "xicmp",
+                  "Origin": "quic+local://literal.invalid",
+                  "port": "env:Metadata.Port",
+                  "address": "env:Metadata.Address",
+                  "file": "/Case/Sensitive/key.pem",
+                  "nested": [
+                    null,
+                    {},
+                    [],
+                    {
+                      "allowInsecure": false,
+                      "network": "MiXeD",
+                      "tlsSettings": {
+                        "allowInsecure": "also-metadata"
+                      },
+                      "downloadSettings": {
+                        "network": "Opaque-Transport"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "custom": {
+              "network": "Case/Sensitive",
+              "xHTTPSettings": "opaque-XHTTP",
+              "httpUpgradeSettings": "opaque-Upgrade",
+              "splitHTTPSettings": "opaque-Split",
+              "allowInsecure": "metadata",
+              "type": "xicmp",
+              "Origin": "quic+local://literal.invalid",
+              "port": "env:Metadata.Port",
+              "address": "env:Metadata.Address",
+              "file": "/Case/Sensitive/key.pem",
+              "nested": [
+                null,
+                {},
+                [],
+                {
+                  "allowInsecure": false,
+                  "network": "MiXeD",
+                  "tlsSettings": {
+                    "allowInsecure": "also-metadata"
+                  },
+                  "downloadSettings": {
+                    "network": "Opaque-Transport"
+                  }
+                }
+              ]
+            }
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "custom": {
+              "network": "Case/Sensitive",
+              "xHTTPSettings": "opaque-XHTTP",
+              "httpUpgradeSettings": "opaque-Upgrade",
+              "splitHTTPSettings": "opaque-Split",
+              "allowInsecure": "metadata",
+              "type": "xicmp",
+              "Origin": "quic+local://literal.invalid",
+              "port": "env:Metadata.Port",
+              "address": "env:Metadata.Address",
+              "file": "/Case/Sensitive/key.pem",
+              "nested": [
+                null,
+                {},
+                [],
+                {
+                  "allowInsecure": false,
+                  "network": "MiXeD",
+                  "tlsSettings": {
+                    "allowInsecure": "also-metadata"
+                  },
+                  "downloadSettings": {
+                    "network": "Opaque-Transport"
+                  }
+                }
+              ]
+            },
+            "sockopt": {
+              "custom": {
+                "network": "Case/Sensitive",
+                "xHTTPSettings": "opaque-XHTTP",
+                "httpUpgradeSettings": "opaque-Upgrade",
+                "splitHTTPSettings": "opaque-Split",
+                "allowInsecure": "metadata",
+                "type": "xicmp",
+                "Origin": "quic+local://literal.invalid",
+                "port": "env:Metadata.Port",
+                "address": "env:Metadata.Address",
+                "file": "/Case/Sensitive/key.pem",
+                "nested": [
+                  null,
+                  {},
+                  [],
+                  {
+                    "allowInsecure": false,
+                    "network": "MiXeD",
+                    "tlsSettings": {
+                      "allowInsecure": "also-metadata"
+                    },
+                    "downloadSettings": {
+                      "network": "Opaque-Transport"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "custom": {
+            "network": "Case/Sensitive",
+            "xHTTPSettings": "opaque-XHTTP",
+            "httpUpgradeSettings": "opaque-Upgrade",
+            "splitHTTPSettings": "opaque-Split",
+            "allowInsecure": "metadata",
+            "type": "xicmp",
+            "Origin": "quic+local://literal.invalid",
+            "port": "env:Metadata.Port",
+            "address": "env:Metadata.Address",
+            "file": "/Case/Sensitive/key.pem",
+            "nested": [
+              null,
+              {},
+              [],
+              {
+                "allowInsecure": false,
+                "network": "MiXeD",
+                "tlsSettings": {
+                  "allowInsecure": "also-metadata"
+                },
+                "downloadSettings": {
+                  "network": "Opaque-Transport"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    },
+    "opaquePaths": [
+      [
+        "dns",
+        "custom"
+      ],
+      [
+        "inbounds",
+        "0",
+        "custom"
+      ],
+      [
+        "inbounds",
+        "0",
+        "settings",
+        "custom"
+      ],
+      [
+        "outbounds",
+        "0",
+        "custom"
+      ],
+      [
+        "outbounds",
+        "0",
+        "settings",
+        "custom"
+      ],
+      [
+        "outbounds",
+        "0",
+        "settings",
+        "servers",
+        "0",
+        "custom"
+      ],
+      [
+        "outbounds",
+        "0",
+        "streamSettings",
+        "custom"
+      ],
+      [
+        "outbounds",
+        "0",
+        "streamSettings",
+        "sockopt",
+        "custom"
+      ]
+    ]
+  },
+  {
+    "name": "unknown_tls_and_transport_fields",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "inbounds": [
+        {
+          "protocol": "http",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "tag": "caller-http",
+          "settings": {}
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "198.51.100.7",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "network": "ws",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "tls.invalid",
+              "custom": {
+                "network": "Case/Sensitive",
+                "xHTTPSettings": "opaque-XHTTP",
+                "httpUpgradeSettings": "opaque-Upgrade",
+                "splitHTTPSettings": "opaque-Split",
+                "allowInsecure": "metadata",
+                "type": "xicmp",
+                "Origin": "quic+local://literal.invalid",
+                "port": "env:Metadata.Port",
+                "address": "env:Metadata.Address",
+                "file": "/Case/Sensitive/key.pem",
+                "nested": [
+                  null,
+                  {},
+                  [],
+                  {
+                    "allowInsecure": false,
+                    "network": "MiXeD",
+                    "tlsSettings": {
+                      "allowInsecure": "also-metadata"
+                    },
+                    "downloadSettings": {
+                      "network": "Opaque-Transport"
+                    }
+                  }
+                ]
+              }
+            },
+            "wsSettings": {
+              "path": "/Case/Sensitive",
+              "custom": {
+                "network": "Case/Sensitive",
+                "xHTTPSettings": "opaque-XHTTP",
+                "httpUpgradeSettings": "opaque-Upgrade",
+                "splitHTTPSettings": "opaque-Split",
+                "allowInsecure": "metadata",
+                "type": "xicmp",
+                "Origin": "quic+local://literal.invalid",
+                "port": "env:Metadata.Port",
+                "address": "env:Metadata.Address",
+                "file": "/Case/Sensitive/key.pem",
+                "nested": [
+                  null,
+                  {},
+                  [],
+                  {
+                    "allowInsecure": false,
+                    "network": "MiXeD",
+                    "tlsSettings": {
+                      "allowInsecure": "also-metadata"
+                    },
+                    "downloadSettings": {
+                      "network": "Opaque-Transport"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    },
+    "opaquePaths": [
+      [
+        "outbounds",
+        "0",
+        "streamSettings",
+        "tlsSettings",
+        "custom"
+      ],
+      [
+        "outbounds",
+        "0",
+        "streamSettings",
+        "wsSettings",
+        "custom"
+      ]
+    ]
+  },
+  {
+    "name": "unknown_xhttp_download_fields",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "inbounds": [
+        {
+          "protocol": "http",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "tag": "caller-http",
+          "settings": {}
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "198.51.100.7",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "network": "xhttp",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "upload.invalid"
+            },
+            "xhttpSettings": {
+              "path": "/upload",
+              "mode": "packet-up",
+              "extra": {
+                "downloadSettings": {
+                  "address": "198.51.100.8",
+                  "port": 19091,
+                  "network": "xhttp",
+                  "security": "tls",
+                  "tlsSettings": {
+                    "serverName": "download.invalid",
+                    "custom": {
+                      "network": "Case/Sensitive",
+                      "xHTTPSettings": "opaque-XHTTP",
+                      "httpUpgradeSettings": "opaque-Upgrade",
+                      "splitHTTPSettings": "opaque-Split",
+                      "allowInsecure": "metadata",
+                      "type": "xicmp",
+                      "Origin": "quic+local://literal.invalid",
+                      "port": "env:Metadata.Port",
+                      "address": "env:Metadata.Address",
+                      "file": "/Case/Sensitive/key.pem",
+                      "nested": [
+                        null,
+                        {},
+                        [],
+                        {
+                          "allowInsecure": false,
+                          "network": "MiXeD",
+                          "tlsSettings": {
+                            "allowInsecure": "also-metadata"
+                          },
+                          "downloadSettings": {
+                            "network": "Opaque-Transport"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "xhttpSettings": {
+                    "path": "/download",
+                    "custom": {
+                      "network": "Case/Sensitive",
+                      "xHTTPSettings": "opaque-XHTTP",
+                      "httpUpgradeSettings": "opaque-Upgrade",
+                      "splitHTTPSettings": "opaque-Split",
+                      "allowInsecure": "metadata",
+                      "type": "xicmp",
+                      "Origin": "quic+local://literal.invalid",
+                      "port": "env:Metadata.Port",
+                      "address": "env:Metadata.Address",
+                      "file": "/Case/Sensitive/key.pem",
+                      "nested": [
+                        null,
+                        {},
+                        [],
+                        {
+                          "allowInsecure": false,
+                          "network": "MiXeD",
+                          "tlsSettings": {
+                            "allowInsecure": "also-metadata"
+                          },
+                          "downloadSettings": {
+                            "network": "Opaque-Transport"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "custom": {
+                    "network": "Case/Sensitive",
+                    "xHTTPSettings": "opaque-XHTTP",
+                    "httpUpgradeSettings": "opaque-Upgrade",
+                    "splitHTTPSettings": "opaque-Split",
+                    "allowInsecure": "metadata",
+                    "type": "xicmp",
+                    "Origin": "quic+local://literal.invalid",
+                    "port": "env:Metadata.Port",
+                    "address": "env:Metadata.Address",
+                    "file": "/Case/Sensitive/key.pem",
+                    "nested": [
+                      null,
+                      {},
+                      [],
+                      {
+                        "allowInsecure": false,
+                        "network": "MiXeD",
+                        "tlsSettings": {
+                          "allowInsecure": "also-metadata"
+                        },
+                        "downloadSettings": {
+                          "network": "Opaque-Transport"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "custom": {
+                  "network": "Case/Sensitive",
+                  "xHTTPSettings": "opaque-XHTTP",
+                  "httpUpgradeSettings": "opaque-Upgrade",
+                  "splitHTTPSettings": "opaque-Split",
+                  "allowInsecure": "metadata",
+                  "type": "xicmp",
+                  "Origin": "quic+local://literal.invalid",
+                  "port": "env:Metadata.Port",
+                  "address": "env:Metadata.Address",
+                  "file": "/Case/Sensitive/key.pem",
+                  "nested": [
+                    null,
+                    {},
+                    [],
+                    {
+                      "allowInsecure": false,
+                      "network": "MiXeD",
+                      "tlsSettings": {
+                        "allowInsecure": "also-metadata"
+                      },
+                      "downloadSettings": {
+                        "network": "Opaque-Transport"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    },
+    "opaquePaths": [
+      [
+        "outbounds",
+        "0",
+        "streamSettings",
+        "xhttpSettings",
+        "extra",
+        "custom"
+      ],
+      [
+        "outbounds",
+        "0",
+        "streamSettings",
+        "xhttpSettings",
+        "extra",
+        "downloadSettings",
+        "custom"
+      ],
+      [
+        "outbounds",
+        "0",
+        "streamSettings",
+        "xhttpSettings",
+        "extra",
+        "downloadSettings",
+        "tlsSettings",
+        "custom"
+      ],
+      [
+        "outbounds",
+        "0",
+        "streamSettings",
+        "xhttpSettings",
+        "extra",
+        "downloadSettings",
+        "xhttpSettings",
+        "custom"
+      ]
+    ]
+  },
+  {
+    "name": "unknown_routing_fields",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "inbounds": [
+        {
+          "protocol": "http",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "tag": "caller-http",
+          "settings": {}
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "198.51.100.7",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "network": "tcp"
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "domain": [
+              "full:route.invalid"
+            ],
+            "outboundTag": "direct",
+            "custom": {
+              "network": "Case/Sensitive",
+              "xHTTPSettings": "opaque-XHTTP",
+              "httpUpgradeSettings": "opaque-Upgrade",
+              "splitHTTPSettings": "opaque-Split",
+              "allowInsecure": "metadata",
+              "type": "xicmp",
+              "Origin": "quic+local://literal.invalid",
+              "port": "env:Metadata.Port",
+              "address": "env:Metadata.Address",
+              "file": "/Case/Sensitive/key.pem",
+              "nested": [
+                null,
+                {},
+                [],
+                {
+                  "allowInsecure": false,
+                  "network": "MiXeD",
+                  "tlsSettings": {
+                    "allowInsecure": "also-metadata"
+                  },
+                  "downloadSettings": {
+                    "network": "Opaque-Transport"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "custom": {
+          "network": "Case/Sensitive",
+          "xHTTPSettings": "opaque-XHTTP",
+          "httpUpgradeSettings": "opaque-Upgrade",
+          "splitHTTPSettings": "opaque-Split",
+          "allowInsecure": "metadata",
+          "type": "xicmp",
+          "Origin": "quic+local://literal.invalid",
+          "port": "env:Metadata.Port",
+          "address": "env:Metadata.Address",
+          "file": "/Case/Sensitive/key.pem",
+          "nested": [
+            null,
+            {},
+            [],
+            {
+              "allowInsecure": false,
+              "network": "MiXeD",
+              "tlsSettings": {
+                "allowInsecure": "also-metadata"
+              },
+              "downloadSettings": {
+                "network": "Opaque-Transport"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "opaquePaths": [
+      [
+        "routing",
+        "custom"
+      ],
+      [
+        "routing",
+        "rules",
+        "0",
+        "custom"
+      ]
+    ]
+  },
+  {
+    "name": "folded_stream_schema_opaque_data",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "inbounds": [
+        {
+          "protocol": "http",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "tag": "caller-http",
+          "settings": {}
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "198.51.100.7",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "NETWORK": "tcp",
+            "CuStOm": {
+              "network": "Case/Sensitive",
+              "xHTTPSettings": "opaque-XHTTP",
+              "httpUpgradeSettings": "opaque-Upgrade",
+              "splitHTTPSettings": "opaque-Split",
+              "allowInsecure": "metadata",
+              "type": "xicmp",
+              "Origin": "quic+local://literal.invalid",
+              "port": "env:Metadata.Port",
+              "address": "env:Metadata.Address",
+              "file": "/Case/Sensitive/key.pem",
+              "nested": [
+                null,
+                {},
+                [],
+                {
+                  "allowInsecure": false,
+                  "network": "MiXeD",
+                  "tlsSettings": {
+                    "allowInsecure": "also-metadata"
+                  },
+                  "downloadSettings": {
+                    "network": "Opaque-Transport"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ]
+    },
+    "opaquePaths": [
+      [
+        "outbounds",
+        "0",
+        "streamSettings",
+        "CuStOm"
+      ]
+    ]
+  }
+]

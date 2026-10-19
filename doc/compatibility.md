@@ -146,6 +146,7 @@ Track the small delivery gates separately from the eight full requirements:
 | Typed transport headers and XHTTP download policy | Qualified controlled increment | The ten-profile transport dictionary corpus checks 18 raw maps and effective pinned-Core headers through both native preparers, public import/start/delay on all four message adapters and Android's actual prepare/build path. This covers data preservation, not a full transport handshake matrix. |
 | Routing attribute dictionary data | Preparation qualified | Shared literal regex corpus, all four public import/start/delay adapters, Android producer and actual pinned-Core attribute matching pass. Both native preparers retain the exact compiled rule; this is separate from system-VPN traffic. |
 | Public Core schema fields and effective transport admission | Preparation qualified | The shared five-case corpus retains Go-folded fields and method precedence through all four public adapters, Android preparation and both native exporters. Core rejects the active-empty and non-string controls; ambiguous aliases remain refused. |
+| Opaque full-JSON fields | Preparation qualified; Android traffic follow-up pending | Six shared profiles retain 18 unknown subtrees through all four public adapters, actual Android preparation and both native exporters. Pinned Core compiles them identically to their metadata-free controls. Compatibility edits visit only schema-owned stream/TLS objects; Android protected-feature checks distinguish data from actual DNS and UDP mask settings. |
 | Imported API/services/stats/policy | Qualified | Shared preparation and API/traffic gates, including Windows service acceptance. |
 | Port/address syntax and explicit data/certificate roots | Qualified baseline | Shared Core/native controls and the targeted runtime cases below; OS allocation/reload and managed import lifetime remain open. |
 | Environment aliases in ports and addresses | Qualified controlled increment | Shared eight-case Core/native corpus, four public adapters, actual Android builder and both Apple port binders pass. Generated Unicode casing matches pinned Go. Actual Windows UTF-16 environment reads and existing Core traffic pass Actions at 038615d; byte-distinct canonically equivalent Apple environment keys remain open. |
@@ -180,6 +181,23 @@ read-only and limited to inspected fields; keys and dictionary values keep their
 original spelling. Conflicting aliases refuse before the native handoff. JSON,
 subscription arrays, public start/delay and the first-outbound accessor use the
 same schema interpretation. Sing-box discovery keeps its own field rules.
+
+The [opaque-field corpus](../tool/fixtures/compatibility/opaque-fields.json)
+places configuration-looking names and strings in unknown fields at the root,
+DNS, handlers, protocol settings, routing, transport, TLS and XHTTP download
+levels. Full JSON copies these subtrees intact before applying compatibility
+edits to typed stream/TLS fields. Preferred XHTTP aliases and `extra`, including
+explicit null, determine which download stream is visited. Genuine Realm and
+XDNS mask TLS fields retain the same TLS cleanup; unrelated `tlsConfig` keys
+remain data. Typed share-link generation keeps its separate legacy cleanup.
+
+Android checks actual root DNS server addresses and UDP finalmask entries for
+its unsupported local-QUIC DNS and XICMP paths. Metadata containing those strings
+does not activate either feature. The negative controls still exercise the real
+schema locations, including Core's address parsing and Go-folded field names.
+Raw and native-prepared Core protobuf comparisons prove that the opaque fields
+do not change compiled behavior; these are preparation checks, with the Android
+traffic follow-up tracked separately.
 
 Transport string semantics belong to native Core preflight. `method: "tcp"`
 can make `network: ""` inactive and valid; an active empty network still fails

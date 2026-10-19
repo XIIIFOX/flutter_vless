@@ -16,6 +16,13 @@ spec.loader.exec_module(runner)
 
 
 class PreservationRunnerGuards(unittest.TestCase):
+    def test_snapshot_binds_opaque_field_corpus(self):
+        with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
+                mock.patch.object(runner.platform, 'system', return_value='Linux'):
+            snapshot = runner.source_snapshot()
+        self.assertEqual(snapshot.get('tool/fixtures/compatibility/opaque-fields.json'), 'synthetic-digest')
+        self.assertEqual(snapshot.get('third_party/xray-mobile/native_dns_preservation/opaque_fields_test.go'), 'synthetic-digest')
+
     def test_snapshot_binds_schema_field_corpus(self):
         with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
                 mock.patch.object(runner.platform, 'system', return_value='Linux'):
@@ -165,6 +172,7 @@ class PreservationRunnerGuards(unittest.TestCase):
                         output.write('--- PASS: TestRoutingAttrsBuilds (0.01s)\n--- PASS: TestNativeRoutingAttrsPreservation (0.01s)\n')
                         output.write('--- PASS: TestPortEnvironmentAliases (0.01s)\n')
                         output.write('--- PASS: TestSchemaFieldsPreparation (0.01s)\n')
+                        output.write('--- PASS: TestOpaqueFieldsPreparation (0.01s)\n')
 
             with mock.patch.object(runner, 'EVIDENCE', evidence), mock.patch.object(runner.sys, 'argv', ['runner']), \
                     mock.patch.object(runner.platform, 'system', return_value='Linux'), \
@@ -175,7 +183,7 @@ class PreservationRunnerGuards(unittest.TestCase):
                 self.assertEqual(runner.main(), 0)
             self.assertTrue(any('test' in command and '-c' in command for command in commands))
             selections = [command[command.index('-test.run') + 1] for command in commands if '-test.run' in command]
-            self.assertEqual(selections, ['^(TestNativeProtocolPreparation|TestProtocolCorpusBuilds|TestNativeDoHMaterialOnly|TestNativeSelectorPrefixAllocation|TestNativeCertificatePaths|TestNativeRoutingContextTailCatchall|TestNativeRoutingContextLoopbackDNS|TestNativeRoutingContextCandidate|TestRoutingAttrsBuilds|TestNativeRoutingAttrsPreservation|TestPortEnvironmentAliases|TestSchemaFieldsPreparation)$'])
+            self.assertEqual(selections, ['^(TestNativeProtocolPreparation|TestProtocolCorpusBuilds|TestNativeDoHMaterialOnly|TestNativeSelectorPrefixAllocation|TestNativeCertificatePaths|TestNativeRoutingContextTailCatchall|TestNativeRoutingContextLoopbackDNS|TestNativeRoutingContextCandidate|TestRoutingAttrsBuilds|TestNativeRoutingAttrsPreservation|TestPortEnvironmentAliases|TestSchemaFieldsPreparation|TestOpaqueFieldsPreparation)$'])
             self.assertIn(['go', 'test', str(runner.ROOT / 'tool/generate_core_env_case.go'),
                            str(runner.ROOT / 'tool/generate_core_env_case_test.go')], commands)
             self.assertIn(['go', 'run', str(runner.ROOT / 'tool/generate_core_env_case.go'), '-check'], commands)

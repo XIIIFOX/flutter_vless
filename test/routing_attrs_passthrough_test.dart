@@ -82,7 +82,8 @@ void main() {
     }
   }
 
-  test('routing data exemption keeps real TLS and other cleanup active', () {
+  test('ignored routing fields stay intact while real TLS cleanup stays active',
+      () {
     expect(
       sanitizeXrayJson({
         'routing': {
@@ -102,7 +103,7 @@ void main() {
       }, preserveStructure: true),
       {
         'routing': {
-          'attrs': {'network': 'tcp'},
+          'attrs': {'allowInsecure': true, 'network': 'TCP'},
         },
         'outbounds': [
           {

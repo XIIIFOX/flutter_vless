@@ -216,7 +216,26 @@ class CallerRootDnsDeviceTest {
                 val assetDomain = asset.getString("domain")
                 general.allowOwnedName(assetDomain); perDomain.allowOwnedName(assetDomain)
                 root.getJSONObject("hosts").put(assetDomain, "10.0.2.2")
-                val source = baseSource(blockDefault = true).put("dns", root)
+                val opaqueBytes = InstrumentationRegistry.getInstrumentation().context.assets.open("opaque-fields.json")
+                    .use { it.readBytes() }
+                assertEquals("Shared opaque metadata fixture changed",
+                    "acc82a4101592b7278d9aa670d0c59968b5885c5c904b255db47f2b08bc8f216",
+                    MessageDigest.getInstance("SHA-256").digest(opaqueBytes)
+                        .joinToString("") { "%02x".format(it.toInt() and 255) })
+                val opaqueProfiles = JSONArray(opaqueBytes.toString(Charsets.UTF_8))
+                assertEquals("Shared opaque metadata corpus changed", 6, opaqueProfiles.length())
+                val opaque = (0 until opaqueProfiles.length()).map(opaqueProfiles::getJSONObject)
+                    .single { it.getString("name") == "unknown_root_dictionary" }
+                    .getJSONObject("config").getJSONObject("custom").toString()
+                fun opaqueCopy() = JSONObject(opaque)
+                root.put("custom", opaqueCopy())
+                val source = baseSource(blockDefault = true).put("dns", root).put("custom", opaqueCopy())
+                val callerDirect = source.getJSONArray("outbounds").let { outbounds ->
+                    (0 until outbounds.length()).map(outbounds::getJSONObject)
+                        .single { it.getString("tag") == "caller-direct" }
+                }
+                callerDirect.put("custom", opaqueCopy()).put("settings", JSONObject().put("custom", opaqueCopy()))
+                    .put("streamSettings", JSONObject().put("custom", opaqueCopy()))
                 val apiAddress = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1")).use {
                     "127.0.0.1:${it.localPort}"
                 }
@@ -233,7 +252,7 @@ class CallerRootDnsDeviceTest {
                         .put("ext:${asset.getString("file")}:${asset.getString("code")}"))
                         .put("outboundTag", "caller-direct"))
                     .put(JSONObject().put("type", "field").put("domain", JSONArray().put("full:$hosts"))
-                        .put("outboundTag", "caller-direct"))
+                        .put("outboundTag", "caller-direct").put("custom", opaqueCopy()))
                     // A generic numeric fixture route must not hide a missing
                     // domain match. HTTP needs one of the two rules above.
                     .put(JSONObject().put("type", "field").put("network", "tcp").put("port", "18083")
@@ -241,7 +260,24 @@ class CallerRootDnsDeviceTest {
                 for (index in 0 until originalRules.length()) rules.put(originalRules.get(index))
                 routing.put("rules", rules)
                 val sourceBefore = source.toString()
-                start(source, assetRoot.absolutePath)
+                val runtime = start(source, assetRoot.absolutePath)
+                assertEquals("Root opaque metadata changed", opaque, runtime.getJSONObject("custom").toString())
+                assertEquals("DNS opaque metadata changed", opaque, runtime.getJSONObject("dns").getJSONObject("custom").toString())
+                val runtimeDirect = runtime.getJSONArray("outbounds").let { outbounds ->
+                    (0 until outbounds.length()).map(outbounds::getJSONObject)
+                        .single { it.getString("tag") == "caller-direct" }
+                }
+                assertEquals("Outbound opaque metadata changed", opaque, runtimeDirect.getJSONObject("custom").toString())
+                for (section in listOf("settings", "streamSettings"))
+                    assertEquals("Outbound $section opaque metadata changed", opaque,
+                        runtimeDirect.getJSONObject(section).getJSONObject("custom").toString())
+                val runtimeRule = runtime.getJSONObject("routing").getJSONArray("rules").let { runtimeRules ->
+                    (0 until runtimeRules.length()).map(runtimeRules::getJSONObject).single {
+                        it.optString("outboundTag") == "caller-direct" &&
+                            it.optJSONArray("domain")?.toString() == JSONArray().put("full:$hosts").toString()
+                    }
+                }
+                assertEquals("Routing rule opaque metadata changed", opaque, runtimeRule.getJSONObject("custom").toString())
                 val udp = name("udp"); val tcp = name("tcp"); val system = name("system")
                 assertA(query(udp, false)); assertA(query(tcp, true)); assertA(query(caller, false))
                 // These static data keys resemble configuration fields. The

@@ -189,9 +189,11 @@ public enum TunnelDNSPolicy {
                 // Explicit remote caller DNS needs no selected proxy. Only the
                 // native protected default requires a qualified detour.
                 guard let selected else { return false }
+                let tagValue = field(entry, "tag")
+                guard tagValue == nil || tagValue is NSNull || tagValue is String else { return false }
                 let addressKey = entry.keys.first { XrayJSONField.matches($0, "address") } ?? "address"
                 entry[addressKey] = "tcp://1.1.1.1"
-                var tag = field(entry, "tag") as? String ?? ""
+                var tag = tagValue as? String ?? ""
                 if tag.isEmpty {
                     tag = allocator.next("flutter-vless-dns-upstream")
                     let tagKey = entry.keys.first { XrayJSONField.matches($0, "tag") } ?? "tag"

@@ -11,6 +11,33 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class XrayCoreManagerTest {
+    @Test fun sharedLocalhostServerTagStatesKeepCallerDnsAndOutboundsWithoutBootstrap() {
+        val cases = JSONArray(requireNotNull(javaClass.getResource("/dns-default-tags.json")).readText())
+        assertEquals(3, cases.length())
+        for (index in 0 until cases.length()) {
+            val item = cases.getJSONObject(index); val label = item.getString("name")
+            val source = item.getJSONObject("config"); val before = source.toString()
+            val prepared = AndroidTunnelDnsPolicy.prepare(before, "config") {
+                error("$label must not invoke a preparer bootstrap resolver")
+            }
+            assertTrue(prepared.bootstrapHostnames.isEmpty()); assertTrue(prepared.bootstrapAddresses.isEmpty())
+            val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = prepared.configJson)
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(profile, File("build/test-files/default-dns-tags"), credentials, prepared)
+            for (output in listOf(JSONObject(prepared.configJson), runtime)) {
+                assertEquals("$label/caller DNS changed", source.getJSONObject("dns").toString(), output.getJSONObject("dns").toString())
+                val originalServer = source.getJSONObject("dns").getJSONArray("servers").getJSONObject(0)
+                val actualServer = output.getJSONObject("dns").getJSONArray("servers").getJSONObject(0)
+                assertEquals("$label/tag presence changed", originalServer.has("tag"), actualServer.has("tag"))
+                if (originalServer.has("tag")) assertEquals(label, originalServer.get("tag"), actualServer.get("tag"))
+                val original = source.getJSONArray("outbounds"); val actual = output.getJSONArray("outbounds")
+                assertEquals(label, original.length() + 1, actual.length())
+                for (outbound in 0 until original.length())
+                    assertEquals("$label/caller outbound changed", original.get(outbound).toString(), actual.get(outbound).toString())
+            }
+            assertEquals(label, before, source.toString())
+        }
+    }
+
     @Test fun callerApiAndWholeStatisticsPolicyRemainUnchangedWithoutPrivateApi() {
         for (api in listOf<Any>(JSONObject.NULL, JSONObject("""{"tag":"caller-api","listen":"127.0.0.1:10807","services":["HandlerService","RoutingService","StatsService"],"unknown":{"network":"UNCHANGED","allowInsecure":true}}"""))) {
             for (policy in listOf<Any>(JSONObject.NULL, JSONObject("""{"system":{"statsOutboundUplink":false,"statsOutboundDownlink":false},"levels":{"8":{"bufferSize":3}},"unknown":{"allowInsecure":true}}"""))) {

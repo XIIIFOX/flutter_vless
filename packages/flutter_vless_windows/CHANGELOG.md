@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Accept null localhost DNS server tags as absent, matching Core and the existing native DNS default. Keep other DNS fields intact and malformed non-null tags rejected; add shared preparation regressions.
 * Accept exact lowercase `full:` hosts keys for named DNS bootstrap. Match Core domain lowercasing without schema-key folding, retain caller maps and reject mappings that cannot resolve the upstream; add shared preparation and DoH regressions.
 * Treat null outbound tags like absent tags, matching Core. Keep untagged direct defaults intact and allocate the existing private name for remote endpoints; retain strict invalid-type and chain rejection.
 * Keep private service tags outside known nonempty balancer/observatory prefixes without freezing caller selectors. Add shared allocation and round-robin TUN regression fixtures; empty wildcard selection remains open.

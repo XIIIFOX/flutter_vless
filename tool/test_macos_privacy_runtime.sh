@@ -71,7 +71,7 @@ for mode in ['tunnel','proxy-only','delay']:
 for marker in ['LOCAL_ACCESS_PROBE_DONE','BUILD_RESULT=false; ERROR=Xray startup failed: build configuration','RUNNER_SNAPSHOT_AND_DELAY_PASS','AUTH_RUNTIME_PASS=0','AUTH_RUNTIME_PASS=1','AUTH_ORIGIN_HEADERS_PRIVATE_PASS','AUTH_ROTATION_PASS','RUNNER_DEFAULTS_AND_EXPLICIT_AUTH_PASS','DOMAIN_ROUTING_PASS=0','DOMAIN_ROUTING_PASS=1']:
     assert marker in text, marker
 for proxy in ['http','socks']:
-    for generation in [0,1]:
+    for generation in [0,1,2]:
         assert f'DNS_RUNTIME_PASS={proxy};GENERATION={generation}' in text
         assert f'DNS_IPV4_ONLY_PASS={proxy};GENERATION={generation}' in text
         assert f'DNS_IMPORTED_CONTEXT_PASS={proxy};GENERATION={generation}' in text

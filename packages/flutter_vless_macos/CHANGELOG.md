@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Treat missing, null and empty localhost DNS tags consistently while rejecting malformed non-null types before modifying the profile. Preserve the other DNS fields and extend shared preparation and runtime regressions.
 * Match Core's literal `full:` hosts prefix and domain lowercasing when validating named DNS bootstrap. Preserve caller DNS and reject false static mappings; extend shared preparation and HTTPS DoH regressions.
 * Keep private service tags outside known nonempty balancer/observatory prefixes, preserving caller selectors and later outbound additions. Add shared allocation and native traffic regression fixtures; empty wildcard selection still needs Core integration.
 * Accept direct-only profiles with explicit caller DNS without inventing a proxy endpoint or changing the caller's default outbound. Retain refusal for an implicit native DNS detour without a qualified proxy; add shared preparation and runtime regression gates.

@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Match Core's missing, null and empty localhost DNS server tags on Apple and Windows. Retain other caller DNS fields and reject malformed non-null tags before preparation; add shared cross-platform regressions.
 * Accept exact `full:` DNS hosts mappings for named resolvers on Windows. Match Core's prefix and domain case rules on both Apple platforms and Windows, preserve caller DNS, and add shared preparation and HTTPS DoH regressions.
 * Accept Core-style null outbound tags on Windows. Preserve untagged direct defaults and use the existing private-name allocation for an untagged remote endpoint; retain invalid-type and chain checks, with shared preparation regressions.
 * Keep private service tags outside known nonempty balancer/observatory selector prefixes on every native platform. Preserve caller selectors and dynamic outbound additions; add shared allocation and traffic regressions. Empty wildcard selectors remain an open Core integration requirement.

@@ -201,11 +201,26 @@ func runDNSRuntimeChecks() throws {
         guard let prepared = TunnelXrayConfigPreparer.prepare(jsonData: try JSONSerialization.data(withJSONObject: raw), credentials: credentials) else {
             preconditionFailure("DNS fixture preparation failed")
         }
+        var nullTagSource = raw
+        var nullTagDNS = raw["dns"] as! [String: Any]
+        nullTagDNS["servers"] = [["address": "localhost", "tag": NSNull()]]
+        nullTagSource["dns"] = nullTagDNS
+        let nullTagInput = try JSONSerialization.data(withJSONObject: nullTagSource, options: [.sortedKeys])
+        guard let nullTagPrepared = TunnelXrayConfigPreparer.prepare(jsonData: nullTagInput, credentials: credentials) else {
+            preconditionFailure("Null-tag DNS fixture preparation failed")
+        }
+        let nullTagEffective = try JSONSerialization.jsonObject(with: nullTagPrepared.data) as! NSDictionary
+        let baselineEffective = try JSONSerialization.jsonObject(with: prepared.data) as! NSDictionary
+        precondition(nullTagEffective == baselineEffective,
+                     "Null localhost tag must have the same effective configuration as the missing tag")
+        let nullTagInputAfter = try JSONSerialization.data(withJSONObject: nullTagSource, options: [.sortedKeys])
+        precondition(nullTagInputAfter == nullTagInput)
         let managedPort = TunnelXrayConfigPreparer.parseConfig(jsonData: prepared.data)!.inboundPort
-        for generation in 0..<2 {
+        for generation in 0..<3 {
             upstream.mode(.answer)
             var error: NSError?
-            precondition(XRayStartPrivate(prepared.data, ProbeLogger(), &error))
+            let generationData = generation == 2 ? nullTagPrepared.data : prepared.data
+            precondition(XRayStartPrivate(generationData, ProbeLogger(), &error))
             defer { XRayStop() }
             let beforeImported = upstream.state().0
             let importedAnswer = try? queryVirtualDNS(proxyPort: 18098, credentials: credentials, udp: false, id: 0x4700)
@@ -256,7 +271,7 @@ func runDNSRuntimeChecks() throws {
         }
         XRayStop()
         let (count, failure) = upstream.state()
-        precondition(count == 6 && failure == nil && trap.count() == 0)
+        precondition(count == 8 && failure == nil && trap.count() == 0)
         print("DNS_ROOT_CLIENT_REFUSED_NON_IP_PASS=\(proto)")
         print("DNS_REFUSAL_NO_FALLBACK_PASS=\(proto)")
     }

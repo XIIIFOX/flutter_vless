@@ -1,0 +1,26 @@
+[
+  {
+    "name": "missing_localhost_tag",
+    "config": {
+      "log": {"loglevel": "none"}, "inbounds": [],
+      "outbounds": [{"tag": "proxy", "protocol": "http", "settings": {"address": "endpoint.invalid", "port": 443}}, {"tag": "direct", "protocol": "freedom"}],
+      "dns": {"tag": "caller-root-dns", "queryStrategy": "UseIPv4", "hosts": {"static.invalid": "192.0.2.14"}, "servers": [{"address": "localhost", "domains": ["full:private.invalid"], "queryStrategy": "UseIPv4", "skipFallback": true, "timeoutMs": 900, "disableCache": true}]}
+    }
+  },
+  {
+    "name": "null_localhost_tag",
+    "config": {
+      "log": {"loglevel": "none"}, "inbounds": [],
+      "outbounds": [{"tag": "proxy", "protocol": "http", "settings": {"address": "endpoint.invalid", "port": 443}}, {"tag": "direct", "protocol": "freedom"}],
+      "dns": {"tag": "caller-root-dns", "queryStrategy": "UseIPv4", "hosts": {"static.invalid": "192.0.2.14"}, "servers": [{"address": "localhost", "tag": null, "domains": ["full:private.invalid"], "queryStrategy": "UseIPv4", "skipFallback": true, "timeoutMs": 900, "disableCache": true}]}
+    }
+  },
+  {
+    "name": "empty_localhost_tag",
+    "config": {
+      "log": {"loglevel": "none"}, "inbounds": [],
+      "outbounds": [{"tag": "proxy", "protocol": "http", "settings": {"address": "endpoint.invalid", "port": 443}}, {"tag": "direct", "protocol": "freedom"}],
+      "dns": {"tag": "caller-root-dns", "queryStrategy": "UseIPv4", "hosts": {"static.invalid": "192.0.2.14"}, "servers": [{"address": "localhost", "tag": "", "domains": ["full:private.invalid"], "queryStrategy": "UseIPv4", "skipFallback": true, "timeoutMs": 900, "disableCache": true}]}
+    }
+  }
+]

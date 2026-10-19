@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Cover missing, null and empty localhost DNS server tags in the shared preparation corpus, retaining the caller's DNS and default protected resolution path.
 * Cover named DoH with exact `full:` hosts in the shared full-profile corpus, preserving caller hosts, URLs, tags and query strategy through native DNS preparation.
 * Allocate private service tags outside known nonempty balancer/observatory prefixes without rewriting selectors. Cover shared allocation cases and a round-robin TUN traffic regression; retain the empty-wildcard boundary explicitly.
 * Follow Core's legacy `servers`/`vnext` fallback when a flat address is null, retaining strict malformed-value rejection and the original settings. Cover Shadowsocks 2022 in the shared preparation corpus.

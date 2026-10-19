@@ -134,6 +134,36 @@ void ProtocolCompatibilityCases(const std::string& only = "") {
     throw std::runtime_error("protocol case references missing handler");
   };
   std::map<std::string, std::function<void()>> cases;
+  cases["localhost-tag-defaults"] = [&] {
+    auto profile = source;
+    profile["dns"] = {{"tag", "caller-root-dns"}, {"queryStrategy", "UseIPv4"}, {"hosts", {{"static.invalid", "192.0.2.14"}}},
+        {"servers", Json::array({{{"address", "localhost"}, {"domains", Json::array({"full:private.invalid"})},
+            {"queryStrategy", "UseIPv4"}, {"skipFallback", true}, {"timeoutMs", 900}, {"disableCache", true}}})}};
+    nlohmann::json baseline;
+    for (int variant = 0; variant < 3; ++variant) {
+      auto candidate = profile;
+      if (variant == 1) candidate["dns"]["servers"][0]["tag"] = nullptr;
+      if (variant == 2) candidate["dns"]["servers"][0]["tag"] = "";
+      const auto before = candidate.dump();
+      const auto output = prepare(candidate);
+      Require(output.has_value(), "Core-valid missing/null/empty localhost DNS tag rejected");
+      const auto effective = nlohmann::json::parse(*output);
+      auto expected_dns = candidate["dns"];
+      expected_dns["servers"][0]["address"] = "tcp://1.1.1.1";
+      expected_dns["servers"][0]["tag"] = kDnsUpstream;
+      Require(effective["dns"] == nlohmann::json::parse(expected_dns.dump()), "localhost DNS adaptation changed other caller fields");
+      if (variant == 0) baseline = effective;
+      else Require(effective == baseline, "null/empty localhost DNS tag differs from the missing-tag baseline");
+      Require(candidate.dump() == before, "localhost DNS tag adaptation mutated the caller document");
+    }
+  };
+  cases["localhost-tag-invalid"] = [&] {
+    for (const auto& value : {Json(false), Json(true), Json(0), Json(7), Json::array(), Json::object()}) {
+      auto profile = source;
+      profile["dns"]["servers"] = Json::array({{{"address", "localhost"}, {"tag", value}}});
+      Require(!prepare(profile), "invalid non-null localhost DNS tag admitted");
+    }
+  };
   cases["dns-full-host-map"] = [&] {
     for (const auto* scheme : {"https", "h2c"}) for (const auto* key : {"full:dns.example", "full:DNS.EXAMPLE"}) {
       auto profile = source;

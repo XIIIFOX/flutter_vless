@@ -158,6 +158,18 @@ On Apple and Windows missing/empty/localhost DNS uses a documented native
 default, `tcp://1.1.1.1` through the selected proxy. This is an adaptation, not
 identical OS-localhost behavior. Other fields on a localhost server entry remain.
 
+The shared [three-case DNS tag corpus](../tool/fixtures/compatibility/dns-default-tags.json)
+covers missing, null and empty tags on a localhost server. Core decodes all three
+as the same default. Native Apple/Windows preparation must produce identical
+effective configurations for them, retaining the root tag, hosts, per-domain
+selection and other server settings. Android preserves the source DNS through
+its existing protected physical-Network path. Boolean, numeric, array and object
+tags remain invalid; Apple rejects them before modifying the profile instead of
+silently replacing them with a private tag. File-only preparation is tested
+against the pinned Core; the added Apple runtime generation checks the null-tag
+form alongside the existing missing-server/restart cases. Its runtime acceptance
+is pending CI.
+
 Apple/Windows initially admit numeric UDP/TCP and remote HTTPS/h2c resolvers;
 named resolvers need an exact caller-owned IPv4 static hosts mapping. Bootstrap
 pins live in private closed routing branches, preserving logical endpoints and
@@ -279,8 +291,11 @@ prefix, then apply DNS domain lowercasing independently of JSON schema folding.
 The original hosts map, URL, server tags and query strategy remain unchanged.
 Pure checks use the pinned Core's actual inert static-host matcher, including
 wrong prefix/FQDN and Unicode controls; the existing HTTPS fixture adds a full-key
-positive child alongside its bare-key trust/name controls. Runtime acceptance
-for this new case is pending. Named resolvers without a qualifying static map
+positive child alongside its bare-key trust/name controls.
+[Core acceptance on 3188183](https://github.com/XIIIFOX/flutter_vless/actions/runs/39192554787)
+passes the full-key HTTPS case on Linux, macOS and Windows, including both native
+preparers on macOS. This does not qualify device-wide encrypted DNS.
+Named resolvers without a qualifying static map
 and broader DNS bootstrap routing remain separate work.
 
 Listener address increment: native preparation now expands only imported

@@ -251,6 +251,49 @@ final class TunnelDNSPolicyTests: XCTestCase {
         XCTAssertTrue(rules.contains { ($0["inboundTag"] as? [String]) == ["caller-local"] && ($0["ip"] as? [String]) == ["1.1.1.1/32"] && ($0["port"] as? String) == "53" })
     }
 
+    func testLocalDefaultRejectsInvalidTagTypesWithoutMutation() throws {
+        let invalid: [Any] = [false, true, 7, ["tag"], ["value": "tag"]]
+        for value in invalid {
+            let original: [String: Any] = ["dns": ["servers": [["address": "localhost", "tag": value]]],
+                "outbounds": [["tag": "proxy", "protocol": "http", "settings": ["address": "203.0.113.7", "port": 443]]]]
+            var config = original
+            XCTAssertNil(TunnelDNSPolicy.apply(to: &config, managedInboundTag: "tun", resolveIPv4: { _ in
+                XCTFail("Invalid local tag must reject before bootstrap"); return nil
+            }), "Invalid tag: \(value)")
+            XCTAssertEqual(config as NSDictionary, original as NSDictionary)
+        }
+    }
+
+    func testSharedLocalDefaultTagFormsHaveEquivalentEffectiveConfiguration() throws {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/dns-default-tags.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/dns-default-tags.json"))) as? [[String: Any]])
+        XCTAssertEqual(cases.count, 3)
+        var baseline: Data?
+        for item in cases {
+            let original = try XCTUnwrap(item["config"] as? [String: Any])
+            let source = try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys])
+            let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: source, credentials: Self.credentials, resolveIPv4: { _ in "203.0.113.7" }))
+            let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+            let effective = try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys])
+            if let baseline { XCTAssertEqual(effective, baseline, item["name"] as? String ?? "") }
+            else { baseline = effective }
+            let dns = try XCTUnwrap(output["dns"] as? [String: Any])
+            let server = try XCTUnwrap((dns["servers"] as? [[String: Any]])?.first)
+            let sourceDNS = try XCTUnwrap(original["dns"] as? [String: Any])
+            var expected = try XCTUnwrap((sourceDNS["servers"] as? [[String: Any]])?.first)
+            expected["address"] = "tcp://1.1.1.1"
+            expected["tag"] = "flutter-vless-dns-upstream"
+            XCTAssertEqual(server as NSDictionary, expected as NSDictionary)
+            XCTAssertEqual(dns["hosts"] as? NSDictionary, sourceDNS["hosts"] as? NSDictionary)
+            XCTAssertEqual(dns["tag"] as? String, "caller-root-dns")
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys]), source)
+        }
+    }
+
     func testUnsafeDNSPathsAndAmbiguityRejectWithoutMutation() {
         let unsafe: [[String: Any]] = [
             ["servers": ["https+local://1.1.1.1/dns-query"]], ["servers": ["tcp+local://1.1.1.1"]],

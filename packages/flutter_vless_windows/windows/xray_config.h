@@ -805,7 +805,7 @@ inline bool ProtectedDns(Json& config, ServiceTags& tags, const std::string& pro
         for (auto it = server.begin(); it != server.end(); ++it) if (Fold(it.key()) == "address") { it.value() = "tcp://1.1.1.1"; break; }
       }
       std::string tag;
-      if (canonical.is_object() && canonical.contains("tag")) {
+      if (canonical.is_object() && canonical.contains("tag") && !canonical["tag"].is_null()) {
         if (!canonical["tag"].is_string()) return false;
         tag = canonical["tag"].get<std::string>();
       }

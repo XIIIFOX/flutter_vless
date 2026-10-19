@@ -74,7 +74,7 @@ assert 'AUTH_ROTATION_PASS' in text
 assert 'RUNNER_DEFAULTS_AND_EXPLICIT_AUTH_PASS' in text
 assert 'DOMAIN_ROUTING_PASS=0' in text and 'DOMAIN_ROUTING_PASS=1' in text
 for proxy in ['http', 'socks']:
- for generation in [0, 1]:
+ for generation in [0, 1, 2]:
   assert f'DNS_RUNTIME_PASS={proxy};GENERATION={generation}' in text
   assert f'DNS_IPV4_ONLY_PASS={proxy};GENERATION={generation}' in text
   assert f'DNS_IMPORTED_CONTEXT_PASS={proxy};GENERATION={generation}' in text

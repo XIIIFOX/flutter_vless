@@ -14,10 +14,12 @@ int64_t FLVlessCheckCorePrivate(NSData *configuration) {
     return XRayCheckPrivate(configuration);
 }
 
-// Static libraries need definitions for absent entries. A naked weak entry
-// shares its hidden sentinel's address and tail-branches to a normal C fallback
-// with the exact gomobile ABI. Strong generated entries override only the weak
-// labels. No consumer linker flags, runtime lookup or trial Start is needed.
+// Static libraries need definitions for absent entries. Keep each weak entry
+// at a nonzero offset from its strong hidden anchor: linkers can rebind every
+// symbol sharing the overridden weak symbol's address. The alternate-entry
+// directive fixes its offset/liveness relative to the preceding anchor. Strong
+// generated entries then replace only the weak name. No consumer linker flags,
+// runtime lookup or trial Check/Start is needed.
 __attribute__((weak)) int64_t XRayRoutingCapability(void) { return 0; }
 
 __attribute__((used, noinline, visibility("hidden")))
@@ -40,22 +42,24 @@ BOOL FLVlessUnavailableRoutingStart(NSData *configuration, NSData *specification
 #if defined(__arm64__)
 #define FLVLESS_CHECK_TAIL "b _FLVlessUnavailableRoutingCheck"
 #define FLVLESS_START_TAIL "b _FLVlessUnavailableRoutingStart"
+#define FLVLESS_ROUTING_ENTRY_OFFSET 4u
 #elif defined(__x86_64__)
 #define FLVLESS_CHECK_TAIL "jmp _FLVlessUnavailableRoutingCheck"
 #define FLVLESS_START_TAIL "jmp _FLVlessUnavailableRoutingStart"
+#define FLVLESS_ROUTING_ENTRY_OFFSET 1u
 #else
 #error Unsupported Apple routing ABI architecture
 #endif
 
 __attribute__((used, naked, noinline, visibility("hidden")))
 int64_t FLVlessMissingRoutingCheck(NSData *configuration __attribute__((unused)), NSData *specification __attribute__((unused))) {
-    __asm__(".globl _XRayCheckRoutingPrivate\n.weak_definition _XRayCheckRoutingPrivate\n_XRayCheckRoutingPrivate:\n" FLVLESS_CHECK_TAIL);
+    __asm__("nop\n.globl _XRayCheckRoutingPrivate\n.weak_definition _XRayCheckRoutingPrivate\n.alt_entry _XRayCheckRoutingPrivate\n_XRayCheckRoutingPrivate:\n" FLVLESS_CHECK_TAIL);
 }
 
 __attribute__((used, naked, noinline, visibility("hidden")))
 BOOL FLVlessMissingRoutingStart(NSData *configuration __attribute__((unused)), NSData *specification __attribute__((unused)),
                                id<XRayLogger> logger __attribute__((unused)), NSError **error __attribute__((unused))) {
-    __asm__(".globl _XRayStartRoutingPrivate\n.weak_definition _XRayStartRoutingPrivate\n_XRayStartRoutingPrivate:\n" FLVLESS_START_TAIL);
+    __asm__("nop\n.globl _XRayStartRoutingPrivate\n.weak_definition _XRayStartRoutingPrivate\n.alt_entry _XRayStartRoutingPrivate\n_XRayStartRoutingPrivate:\n" FLVLESS_START_TAIL);
 }
 #undef FLVLESS_CHECK_TAIL
 #undef FLVLESS_START_TAIL
@@ -65,13 +69,14 @@ extern BOOL XRayStartRoutingPrivate(NSData * _Nullable configuration, NSData * _
                                    id<XRayLogger> _Nullable logger, NSError * _Nullable * _Nullable error);
 
 int64_t FLVlessCoreRoutingCapability(void) {
-    // Volatile loads prevent assuming distinct external function identities:
-    // absent weak labels intentionally share the local sentinel entry address.
+    // Volatile loads prevent assuming distinct external function identities.
+    // Compare the weak entry to anchor+offset, never to a same-address alias.
     int64_t (*volatile check)(NSData *, NSData *) = XRayCheckRoutingPrivate;
     int64_t (*volatile missingCheck)(NSData *, NSData *) = FLVlessMissingRoutingCheck;
     BOOL (*volatile start)(NSData *, NSData *, id<XRayLogger>, NSError **) = XRayStartRoutingPrivate;
     BOOL (*volatile missingStart)(NSData *, NSData *, id<XRayLogger>, NSError **) = FLVlessMissingRoutingStart;
-    if (check == missingCheck || start == missingStart) { return 0; }
+    if ((uintptr_t)check == (uintptr_t)missingCheck + FLVLESS_ROUTING_ENTRY_OFFSET ||
+        (uintptr_t)start == (uintptr_t)missingStart + FLVLESS_ROUTING_ENTRY_OFFSET) { return 0; }
     return XRayRoutingCapability() == 1 ? 1 : 0;
 }
 
@@ -86,8 +91,8 @@ void FLVlessTestCoreRoutingDiagnostics(int *checkMissing, int *startMissing, int
     BOOL (*volatile start)(NSData *, NSData *, id<XRayLogger>, NSError **) = XRayStartRoutingPrivate;
     BOOL (*volatile missingStart)(NSData *, NSData *, id<XRayLogger>, NSError **) = FLVlessMissingRoutingStart;
     int64_t (*volatile capability)(void) = XRayRoutingCapability;
-    *checkMissing = check == missingCheck;
-    *startMissing = start == missingStart;
+    *checkMissing = (uintptr_t)check == (uintptr_t)missingCheck + FLVLESS_ROUTING_ENTRY_OFFSET;
+    *startMissing = (uintptr_t)start == (uintptr_t)missingStart + FLVLESS_ROUTING_ENTRY_OFFSET;
     *rawCapability = capability();
 }
 #endif

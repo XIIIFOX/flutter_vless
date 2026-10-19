@@ -385,8 +385,10 @@ decode/build Check controls, plus fake-backend cancellation/Stop tests. These
 safe CLI checks construct no Core; all three Core runners pass them at
 [8cf9ef8](https://github.com/XIIIFOX/flutter_vless/actions/runs/39222171801).
 Foreground CLI traffic and native launcher adoption remain separate. The Apple
-static archive fixtures pass locally on arm64/x86_64; the capable archive's
-capability assertion fails on the CI Apple linker and remains under investigation.
+static archive fixtures pass locally on arm64/x86_64. CI exposed a same-address
+weak-entry alias being rebound with the strong runtime symbol. The fallback
+anchors now use distinct alternate-entry offsets; local ABI/shape checks pass,
+while qualification with the CI Apple linker remains pending.
 Capability probing does not trial Start or Check, and unsupported Start returns
 a fixed error.
 

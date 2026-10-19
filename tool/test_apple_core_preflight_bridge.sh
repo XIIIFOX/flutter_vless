@@ -123,6 +123,30 @@ run_bridge_probe() {
 for ARCH in arm64 x86_64; do
     CAN_RUN=0
     if /usr/bin/arch "-$ARCH" /usr/bin/true 2>/dev/null; then CAN_RUN=1; fi
+    ENTRY_OFFSET=1
+    if [[ "$ARCH" == arm64 ]]; then ENTRY_OFFSET=4; fi
+    # This object is inspected only, never linked into the baseline probes.
+    # Distinct symbol addresses plus N_ALT_ENTRY prevent the old same-address
+    # sentinel atom shape, but the archive matrix below must still pass.
+    xcrun clang -arch "$ARCH" -O2 -fobjc-arc -Wall -Wextra -Werror -c "$SOURCE/FlutterVlessCoreCompat.m" -o "$OUT/$ARCH-anchor.o"
+    xcrun nm -m "$OUT/$ARCH-anchor.o" > "$OUT/$ARCH-anchor-symbols"
+    python3 - "$OUT/$ARCH-anchor-symbols" "$ENTRY_OFFSET" <<'PY'
+from pathlib import Path
+import sys
+lines = Path(sys.argv[1]).read_text().splitlines()
+offset = int(sys.argv[2])
+def symbol(name):
+    found = [line for line in lines if line.split()[-1:] == [name]]
+    assert len(found) == 1, name
+    return int(found[0].split()[0], 16), found[0]
+for suffix in ("Check", "Start"):
+    anchor, anchor_line = symbol("_FLVlessMissingRouting" + suffix)
+    entry, entry_line = symbol("_XRay" + suffix + "RoutingPrivate")
+    assert "private external" in anchor_line, anchor_line
+    assert "weak external" in entry_line and "[alt entry]" in entry_line, entry_line
+    assert entry == anchor + offset, (suffix, anchor, entry, offset)
+PY
+    printf 'BRIDGE_ANCHOR_SHAPE arch=%s offset=%s\n' "$ARCH" "$ENTRY_OFFSET"
 for variant in legacy current routing cap0 unknown missing-cap missing-check missing-start; do
     FLAGS=(-DLEGACY_RUNTIME)
     case "$variant" in

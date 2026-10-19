@@ -68,6 +68,8 @@ def source_snapshot():
     paths.extend(sources)
     if platform.system() == 'Darwin':
         paths.append(ROOT / 'tool/fixtures/native_dns_preparer.swift')
+        paths.append(ROOT / 'tool/test_apple_address_binding.sh')
+        paths.append(ROOT / 'tool/fixtures/apple_address_binding.swift')
         paths.extend(sorted((SWIFT / 'Sources').rglob('*.swift')))
         paths.extend(sorted((SWIFT / 'Tests').rglob('*.swift')))
     return {str(path.relative_to(ROOT)).replace(os.sep, '/'): digest(path) for path in paths}

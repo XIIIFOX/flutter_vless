@@ -595,7 +595,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         let effectiveConfigData: Data
         do {
             let listenerBound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: configData)
-            effectiveConfigData = try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: listenerBound)
+            effectiveConfigData = try XrayAddressEnvironment.bind(configData: listenerBound)
             if proxyOnly {
                 _ = try ProxyOnlyRunner.buildProxyOnlyConfigData(configData: effectiveConfigData)
             } else {

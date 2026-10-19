@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Share Apple address preparation through the existing privacy module so both containing apps can freeze saved profiles without a tunnel-support dependency. Add a real module-boundary regression and verify unsigned iOS/macOS example builds.
+* Make the controlled logical DNS origin complete one framed exchange per connection; retain exact payload and drained request counts. Add memory-only malformed-frame controls and bounded Windows direct-only failure diagnostics without retries.
 * Freeze effective DNS outbound and imported `dokodemo-door`/`tunnel` destination addresses before profile handoff on every native backend. Match Core's `address`/`rewriteAddress` precedence, preserve dormant aliases and caller routing, and add shared build/preparation and controlled HTTP/DNS regressions.
 * Freeze typed root DNS `env:` addresses for saved Apple/Windows profiles and Android's caller DNS mode. Preserve server options, ECS overrides, hosts aliases and opaque strings; add shared Core-equivalence controls and a controlled DoH handoff regression. Compile the actual Apple preparation helpers in the profile transaction fixture.
 * Bind selected server and active XHTTP download `env:` addresses before protected preparation on Apple and Windows, and in Android's explicit proxy DNS mode. Preserve raw values and caller DNS, freeze Apple sessions before persistence, and add shared Core-equivalence and cross-process traffic regressions.

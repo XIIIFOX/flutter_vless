@@ -238,7 +238,9 @@ jobs:
       - name: Install root dependencies
         run: flutter pub get
       - name: Test PacketTunnel Swift helper
-        run: tool/test_ios_tunnel_support.sh
+        run: |
+          bash tool/test_apple_address_binding.sh
+          tool/test_ios_tunnel_support.sh
       - uses: actions/setup-go@v6
         with:
           go-version-file: third_party/xray-mobile/go.mod

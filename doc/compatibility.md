@@ -614,10 +614,27 @@ runtime document. The CI-only runtime owns one HTTP and one DNS origin and start
 Core in a bounded child with changed environment values: both imported input
 aliases must echo 32 KiB, and both DNS address aliases must deliver the expected
 wire question and answer. Final origin counts are checked after callback drain.
-New-head traffic acceptance remains pending until its exact CI artifacts are
-verified. Other typed Address roles and XDRIVE fronting/lifecycle remain open;
+At [fa882a2](https://github.com/XIIIFOX/flutter_vless/actions/runs/39202974762),
+ordinary Core on Linux/macOS passes these payload checks; Android passes 181 JVM,
+37 native emulator and three Flutter checks. The Windows Core run transfers all
+four expected payloads but fails when the test DNS origin reads another frame
+after its completed exchange. The fixture now serves exactly one framed query
+per connection, retaining strict answers, request counts and post-drain errors;
+new memory-only controls cover complete, malformed and truncated frames.
+Acceptance of that correction remains pending. A separate Windows 2022 TUN run
+also fails a required positive HTTP request after a blocked request; its cause
+is open, with bounded stage/process/origin diagnostics added without retries.
+Other typed Address roles and XDRIVE fronting/lifecycle remain open;
 there is no claim of universal environment expansion or a complete transport
 matrix.
+
+Apple's address binder now belongs to the existing privacy module shared by the
+containing app and tunnel support. This fixes the unsigned example build failure
+caused by referencing a helper unavailable in the app's module. The regression
+links the actual app call against privacy alone and runs ten shared cases plus
+a rejected recursive reference for each Apple namespace. Both unsigned example
+builds pass locally without launching an app, Core or VPN; network acceptance
+remains a separate gate.
 
 Core preflight is now wired into both Apple app entry points and into the final
 provider configuration before route installation. The additive Go bridge decodes

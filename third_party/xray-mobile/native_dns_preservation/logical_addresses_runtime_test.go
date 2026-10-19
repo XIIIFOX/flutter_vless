@@ -74,6 +74,37 @@ func logicalRuntimeBindings() []dnsAddressBinding {
 	return []dnsAddressBinding{{[]string{"inbounds", "0", "settings", "address"}, "127.0.0.1"}, {[]string{"inbounds", "1", "settings", "rewriteAddress"}, "127.0.0.1"}, {[]string{"outbounds", "1", "settings", "address"}, "127.0.0.1"}, {[]string{"outbounds", "2", "settings", "rewriteAddress"}, "127.0.0.1"}}
 }
 
+// Logical raw-forwarding exercises one request per owned connection. This
+// helper uses io only so its finite exchange contract can be tested offline.
+func logicalDNSExchange(connection io.ReadWriter, observed *fixture) error {
+	var size uint16
+	if err := binary.Read(connection, binary.BigEndian, &size); err != nil {
+		return err
+	}
+	if size == 0 || size > 4096 {
+		return errors.New("unbounded logical DNS frame")
+	}
+	packet := make([]byte, size)
+	if _, err := io.ReadFull(connection, packet); err != nil {
+		return err
+	}
+	answer, err := reply(observed, packet, "logical-query.invalid", "192.0.2.81")
+	if err != nil {
+		return err
+	}
+	if err := binary.Write(connection, binary.BigEndian, uint16(len(answer))); err != nil {
+		return err
+	}
+	n, err := connection.Write(answer)
+	if err != nil {
+		return err
+	}
+	if n != len(answer) {
+		return io.ErrShortWrite
+	}
+	return nil
+}
+
 // Origins stay in the parent; the only Core instance belongs to the bounded
 // child. The two inbound and two DNS alias forms share the same owned targets.
 func testNativeLogicalAddresses(t *testing.T) {
@@ -110,7 +141,8 @@ func testNativeLogicalAddresses(t *testing.T) {
 		}
 		origin.fail(err)
 	})
-	dnsPort := tcpResolver(t, resolver, "logical-query.invalid", "192.0.2.81")
+	dnsOrigin := listener(t, func(connection net.Conn) { resolver.fail(logicalDNSExchange(connection, resolver)) })
+	dnsPort := dnsOrigin.Addr().(*net.TCPAddr).Port
 	httpPort := httpOrigin.Addr().(*net.TCPAddr).Port
 	var reservations []net.Listener
 	var ports []int

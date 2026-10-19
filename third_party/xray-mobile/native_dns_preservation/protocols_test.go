@@ -98,6 +98,7 @@ func TestProtocolCorpusBuilds(t *testing.T) {
 	testEndpointAddresses(t, false)
 	testDNSAddresses(t, false)
 	testLogicalAddresses(t, false)
+	testLogicalDNSFixtureIO(t)
 }
 
 // File-only native preparation and Core Build. No core.Instance is created,

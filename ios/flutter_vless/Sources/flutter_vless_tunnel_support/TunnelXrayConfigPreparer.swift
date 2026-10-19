@@ -63,15 +63,11 @@ public enum TunnelXrayConfigPreparer {
         throw StartupError.endpointUnavailable
     }
 
-    /// Resolve typed endpoint references before persisting a session for a
+    /// Resolve typed Address references before persisting a session for a
     /// separate provider process. Keep the editor's original JSON separately.
     public static func bindingEndpointEnvironment(configData: Data,
         environment: [String: String] = ProcessInfo.processInfo.environment) throws -> Data {
-        guard var config = try JSONSerialization.jsonObject(with: configData) as? [String: Any] else {
-            throw LocalProxyAccessError.malformedConfiguration
-        }
-        guard try TunnelDNSPolicy.bindEndpointEnvironment(to: &config, environment: environment) else { return configData }
-        return try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+        try XrayAddressEnvironment.bind(configData: configData, environment: environment)
     }
 
     public static func parseConfig(jsonData: Data) -> TunnelParsedConfig? {

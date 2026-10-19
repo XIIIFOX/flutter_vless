@@ -1032,6 +1032,14 @@ void ProtocolCompatibilityCases(const std::string& only = "") {
   } else for (const auto& item : cases) item.second();
 }
 int main(int argc, char** argv) try {
+  if (argc == 5 && std::string(argv[1]) == "--bind-certificate-fixture") {
+    std::ifstream input(argv[2], std::ios::binary);
+    if (!input.good()) return 4;
+    std::string text{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    if (!BindCertificatePaths(text, std::filesystem::u8path(argv[4]))) return 3;
+    std::ofstream output(argv[3], std::ios::binary); output << text;
+    return output.good() ? 0 : 4;
+  }
   if (argc == 4 && std::string(argv[1]) == "--allocate-service-tags-fixture") {
     std::ifstream file(argv[2], std::ios::binary);
     if (!file.good()) return 2;

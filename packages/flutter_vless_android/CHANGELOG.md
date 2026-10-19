@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Add per-start/profile-delay `certificateAssetsDirectory`. Freeze relative Core TLS certificate/key paths before preflight and recovery, keeping caller-owned files, inline material and certificate reload settings intact.
 * Add bounded HTTP fixture connection/relay stages and response-length diagnostics for protected DNS acceptance. Preserve failures without retries or response changes; cover failure paths with fake sockets.
 * Extend the shared protocol corpus with penetrating XHTTP download settings. Verify parent/child socket options remain independent in JSON until Core applies its runtime inheritance, preserving caller DNS in config mode.
 * Cover missing, null and empty localhost DNS server tags in the shared preparation corpus, retaining the caller's DNS and default protected resolution path.

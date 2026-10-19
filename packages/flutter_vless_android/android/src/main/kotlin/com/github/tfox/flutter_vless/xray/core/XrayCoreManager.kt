@@ -122,7 +122,7 @@ object XrayCoreManager {
             }
             requireNotNull(protectedDns?.managedInboundTag) { "Protected DNS adapter identity is unavailable" }
         } else null
-        val imported = JSONObject(config.V2RAY_FULL_JSON_CONFIG)
+        val imported = XrayCertificateAssets.prepare(config.V2RAY_FULL_JSON_CONFIG, config.CERTIFICATE_ASSETS_DIRECTORY)
         // Service and policy subtrees belong to the caller. Keep them outside
         // the compatibility normalizer, including explicit null and unknown
         // fields, and reject ambiguous Go-decoder aliases before choosing one.
@@ -203,6 +203,7 @@ object XrayCoreManager {
     /** Pure preliminary validation in the application process; service repeats before mutation. */
     fun validateConfiguration(config: XrayConfig) {
         Utilities.validateAssetsDirectory(config.GEO_ASSETS_DIRECTORY)
+        XrayCertificateAssets.validateDirectory(config.CERTIFICATE_ASSETS_DIRECTORY)
         require(config.ANDROID_DNS_POLICY in setOf("config", "proxy")) { "Unsupported Android DNS policy" }
         require(!(config.PROXY_ONLY && config.ANDROID_DNS_POLICY == "proxy")) { "Proxy DNS requires VPN mode" }
         require(config.ANDROID_DNS_PROXY_OUTBOUND_TAG == null || config.ANDROID_DNS_POLICY == "proxy") {
@@ -216,7 +217,7 @@ object XrayCoreManager {
     }
 
     internal fun buildDelayConfigJson(configJson: String, proxyPort: Int, filesDir: File,
-        credentials: LocalProxyCredentials): Pair<JSONObject, Int> {
+        credentials: LocalProxyCredentials, certificateAssetsDirectory: String? = null): Pair<JSONObject, Int> {
         // A standalone measurement owns its temporary inputs. Caller API and
         // metrics listeners may already be bound by the active session. Remove
         // the whole services: clearing listen changes Core's outbound semantics.
@@ -235,7 +236,8 @@ object XrayCoreManager {
             json.remove(key)
         }
         json.put("inbounds", JSONArray())
-        val config = XrayConfig(V2RAY_FULL_JSON_CONFIG = json.toString(), LOCAL_SOCKS5_PORT = proxyPort, LOCAL_API_PORT = proxyPort + 1)
+        val config = XrayConfig(V2RAY_FULL_JSON_CONFIG = json.toString(), LOCAL_SOCKS5_PORT = proxyPort, LOCAL_API_PORT = proxyPort + 1,
+            CERTIFICATE_ASSETS_DIRECTORY = certificateAssetsDirectory)
         return buildRuntimeConfigJson(config, filesDir, credentials) to config.LOCAL_SOCKS5_PORT
     }
 
@@ -344,7 +346,8 @@ object XrayCoreManager {
         } catch (_: Exception) { longArrayOf(0, 0, 0, 0) }
     }
 
-    fun getServerDelay(context: Context, configJson: String, url: String, geoAssetsDirectory: String? = null): Long {
+    fun getServerDelay(context: Context, configJson: String, url: String, geoAssetsDirectory: String? = null,
+        certificateAssetsDirectory: String? = null): Long {
         var process: Process? = null
         val file = File(context.noBackupFilesDir, "delay-${UUID.randomUUID()}.json")
         fun event(event: XrayDiagnosticsStore.Event, value: Long? = null) =
@@ -355,7 +358,8 @@ object XrayCoreManager {
             var socksPort = 0
             val builder = DelayProbePortAllocator.reserve().use { ports ->
                 event(XrayDiagnosticsStore.Event.DELAY_PORTS_RESERVED)
-                val (json, selectedPort) = buildDelayConfigJson(configJson, ports.socksPort, context.noBackupFilesDir, credentials)
+                val (json, selectedPort) = buildDelayConfigJson(configJson, ports.socksPort, context.noBackupFilesDir, credentials,
+                    certificateAssetsDirectory)
                 socksPort = selectedPort
                 file.writeText(json.toString())
                 ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,

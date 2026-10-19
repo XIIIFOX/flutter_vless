@@ -43,6 +43,16 @@ separate certificate location; this argument does not relocate certificates.
 Android and Apple profile-delay calls accept the same directory. Windows
 standalone profile delay remains unsupported.
 
+For relative TLS `certificateFile` and `keyFile`, use the editor's **Certificate
+files** field, or pass `certificateAssetsDirectory` to `startVless` and
+`getServerDelay`. For example, `certificateFile: "ca.pem"` resolves inside the
+selected directory. It is independent of `geoAssetsDirectory`. Absolute paths,
+inline certificates and reload settings remain intact. The directory is a path
+resolution base, not a sandbox; `..` has Core's normal meaning. Files remain
+caller-owned and must stay readable until Stop, including background recovery
+and reload. Use App Group storage for Apple VPN; no files are copied for you.
+An older native backend rejects this explicit option instead of ignoring it.
+
 ## Android
 
 Run on a device:

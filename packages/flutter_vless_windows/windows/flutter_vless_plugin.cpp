@@ -357,7 +357,10 @@ FlutterVlessPlugin::~FlutterVlessPlugin() {
 void FlutterVlessPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue> &method_call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
-  if (method_call.method_name() == "getCapabilities") {
+  if (method_call.method_name() == "getSecurityCapabilities") {
+    result->Success(flutter::EncodableValue(flutter::EncodableMap{
+      {flutter::EncodableValue("certificateAssetsDirectory"), flutter::EncodableValue(true)}}));
+  } else if (method_call.method_name() == "getCapabilities") {
     result->Success(flutter::EncodableValue(flutter::EncodableMap{
       {flutter::EncodableValue("optionsVersion"), flutter::EncodableValue(1)},
       {flutter::EncodableValue("quickAccessSurfaces"), flutter::EncodableValue(flutter::EncodableList{flutter::EncodableValue("systemTray")})},
@@ -407,6 +410,14 @@ void FlutterVlessPlugin::HandleMethodCall(
           const auto wide = value ? flutter_vless::native::Wide(*value) : std::wstring();
           if (!value || wide.empty()) { result->Error("INVALID_ARGUMENTS", "geoAssetsDirectory must be an existing absolute directory"); return; }
           assets = fs::path(wide);
+        }
+        const auto certificates_it = arguments->find(flutter::EncodableValue("certificate_assets_directory"));
+        if (certificates_it != arguments->end() && !certificates_it->second.IsNull()) {
+          const auto* value = std::get_if<std::string>(&certificates_it->second);
+          const auto wide = value ? flutter_vless::native::Wide(*value) : std::wstring();
+          if (!value || wide.empty() || !flutter_vless::xray_config::BindCertificatePaths(config, fs::path(wide))) {
+            result->Error("INVALID_ARGUMENTS", "Invalid certificate asset directory or TLS file configuration"); return;
+          }
         }
         
         if (proxy_only_it != arguments->end()) {
@@ -509,6 +520,14 @@ void FlutterVlessPlugin::HandleMethodCall(
       if (config_it != arguments->end() && url_it != arguments->end()) {
         std::string config = std::get<std::string>(config_it->second);
         std::string url = std::get<std::string>(url_it->second);
+        const auto certificates_it = arguments->find(flutter::EncodableValue("certificate_assets_directory"));
+        if (certificates_it != arguments->end() && !certificates_it->second.IsNull()) {
+          const auto* value = std::get_if<std::string>(&certificates_it->second);
+          const auto wide = value ? flutter_vless::native::Wide(*value) : std::wstring();
+          if (!value || wide.empty() || !flutter_vless::xray_config::BindCertificatePaths(config, fs::path(wide))) {
+            result->Error("INVALID_ARGUMENTS", "Invalid certificate asset directory or TLS file configuration"); return;
+          }
+        }
         
         std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> shared_result = std::move(result);
         operations_.Submit([this, config, url, shared_result]() {

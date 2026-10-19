@@ -9,6 +9,89 @@ using namespace flutter_vless::xray_config;
 void Check(bool ok, const char* message) {
   if (!ok) throw std::runtime_error(message);
 }
+void CertificatePathCases() {
+  namespace fs = std::filesystem;
+  const auto root = fs::temp_directory_path() / ("vless-certificates-" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  fs::create_directory(root);
+  struct Cleanup { fs::path path; ~Cleanup() { std::error_code error; fs::remove_all(path, error); } } cleanup{root};
+  std::ifstream input("tool/fixtures/compatibility/certificate-paths.json");
+  Check(input.good(), "shared certificate corpus required");
+  Json cases; input >> cases;
+  Check(cases.size() == 6, "shared certificate cases changed");
+  for (const auto& item : cases) {
+    auto expected = item["config"];
+    for (const auto& pointer : item["bind"]) {
+      Json* value = &expected;
+      const auto path = pointer.get<std::string>();
+      size_t offset = 1;
+      while (offset <= path.size()) {
+        const auto end = path.find('/', offset);
+        const auto key = path.substr(offset, end == std::string::npos ? end : end - offset);
+        value = value->is_array() ? &value->at(static_cast<size_t>(std::stoul(key))) : &value->at(key);
+        if (end == std::string::npos) break;
+        offset = end + 1;
+      }
+      *value = (root / fs::u8path(value->get<std::string>())).lexically_normal().u8string();
+    }
+    auto source = item["config"].dump();
+    const auto original = source;
+    Check(BindCertificatePaths(source, root), "certificate path binding failed");
+    Check(Parse(source) == expected, "certificate binding changed unrelated fields or missed a Core build branch");
+    const auto frozen = source;
+    Check(BindCertificatePaths(source, root / "missing") == false && source == frozen,
+        "invalid certificate root changed candidate");
+    Check(BindCertificatePaths(source, root) && source == frozen, "certificate paths not idempotent");
+    auto legacy = original;
+    Check(BindCertificatePaths(legacy, std::nullopt) && legacy == original,
+        "omitted certificate directory changed legacy behavior");
+  }
+  auto absolute = Parse(R"({"outbounds":[{"protocol":"freedom","streamSettings":{"Security":"TLS","TLSSettings":{"Certificates":[{"CertificateFile":"relative.pem","KeyFile":"../key.pem"}]}}}]})");
+  const auto absolute_file = (root / "existing" / ".." / "ca.pem").u8string();
+  absolute["outbounds"][0]["streamSettings"]["TLSSettings"]["Certificates"][0]["CertificateFile"] = absolute_file;
+  auto text = absolute.dump();
+  Check(BindCertificatePaths(text, root), "folded schema or relative parent path rejected");
+  auto expected = absolute;
+  expected["outbounds"][0]["streamSettings"]["TLSSettings"]["Certificates"][0]["KeyFile"] =
+      (root / ".." / "key.pem").lexically_normal().u8string();
+  Check(Parse(text) == expected, "absolute path spelling changed or schema fields were renamed");
+#ifdef _WIN32
+  // Go filepath.IsAbs requires a volume as well as a root separator. These
+  // rooted-relative spellings are joined beneath CertLocation, not drive C:\.
+  const auto relative_profile = Parse(R"({"outbounds":[{"protocol":"freedom","streamSettings":{"security":"tls","tlsSettings":{"certificates":[{"certificateFile":"fixture.pem"}]}}}]})");
+  bool rooted_relative_matches = true;
+  for (const auto* raw : {"\\fixture.pem", "/fixture.pem"}) {
+    auto profile = relative_profile;
+    auto& file = profile["outbounds"][0]["streamSettings"]["tlsSettings"]["certificates"][0]["certificateFile"];
+    file = raw;
+    auto candidate = profile.dump();
+    Check(BindCertificatePaths(candidate, root), "Windows rooted-relative certificate rejected");
+    file = (root / "fixture.pem").lexically_normal().u8string();
+    const bool matches = Parse(candidate) == profile;
+    std::cout << "ROOTED_CERTIFICATE_PATH_MATCH=" << (matches ? 1 : 0) << '\n';
+    rooted_relative_matches = rooted_relative_matches && matches;
+  }
+  Check(rooted_relative_matches, "Windows rooted-relative certificate escaped its Core resolution base");
+  // A drive-relative spelling is also not absolute. Keep Go's joined form;
+  // preflight decides whether that file is readable, never another drive/CWD.
+  auto drive_relative = relative_profile;
+  auto& drive_file = drive_relative["outbounds"][0]["streamSettings"]["tlsSettings"]["certificates"][0]["certificateFile"];
+  drive_file = "Q:fixture.pem";
+  text = drive_relative.dump();
+  Check(BindCertificatePaths(text, root), "drive-relative certificate binding failed");
+  drive_file = fs::path(root.native() + L"\\Q:fixture.pem").lexically_normal().u8string();
+  Check(Parse(text) == drive_relative, "drive-relative certificate was redirected outside its Core resolution base");
+#endif
+  for (const auto& value : {Json(12), Json(true), Json(std::string("bad\0path", 8))}) {
+    auto bad = cases[0]["config"];
+    bad["outbounds"][0]["streamSettings"]["tlsSettings"]["certificates"][0]["certificateFile"] = value;
+    auto rejected = bad.dump(); const auto before = rejected;
+    Check(!BindCertificatePaths(rejected, root) && rejected == before,
+        "invalid file field partially changed source");
+  }
+  text = cases[0]["config"].dump();
+  Check(!BindCertificatePaths(text, fs::path("relative")), "relative certificate root accepted");
+}
 void CallerServicePreservationCases() {
   std::ifstream input("tool/fixtures/compatibility/full-config.json");
   Check(input.good(), "shared full-config corpus is required");
@@ -206,6 +289,20 @@ void AssetLocationCases() {
   Check(entries(assets::ChildEnvironment({}, L"", std::nullopt)).empty(), "empty environment block is not valid");
 }
 int main(int argc, char** argv) {
+  if (argc == 2 && std::string(argv[1]) == "--certificate-paths") {
+    try { CertificatePathCases(); return 0; }
+    catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+  }
+  // File-only exporter: no process, listener, resolver or platform VPN call.
+  if (argc == 5 && std::string(argv[1]) == "--bind-certificate-fixture") {
+    std::ifstream input(argv[2], std::ios::binary);
+    if (!input) return 4;
+    std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    if (!BindCertificatePaths(text, std::filesystem::u8path(argv[4]))) return 3;
+    std::ofstream output(argv[3], std::ios::binary);
+    output << text;
+    return output.good() ? 0 : 4;
+  }
   if (argc == 2 && std::string(argv[1]) == "--caller-services") { CallerServicePreservationCases(); return 0; }
   if (argc == 2 && std::string(argv[1]) == "--owned-api") { OwnedApiPortCases(); return 0; }
   if (argc == 2 && std::string(argv[1]) == "--unix-inputs") { UnixInputProxyPreparationCases(); return 0; }
@@ -216,6 +313,7 @@ int main(int argc, char** argv) {
   UnixInputProxyPreparationCases();
   ListenAddressCases();
   AssetLocationCases();
+  CertificatePathCases();
   std::ifstream api_input("tool/fixtures/compatibility/api-listeners.json");
   Check(api_input.good(), "shared API listener corpus is required");
   Json api_cases; api_input >> api_cases;

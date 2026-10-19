@@ -66,6 +66,8 @@ abstract class VlessPlatform extends PlatformInterface {
   ///
   /// [geoAssetsDirectory] selects an existing absolute directory for data files
   /// referenced by this session. Apple VPN extensions require shared access.
+  /// [certificateAssetsDirectory] separately resolves relative TLS certificate
+  /// and key files; the files must remain readable throughout the session.
   Future<void> startVless({
     required String remark,
     required String config,
@@ -74,6 +76,7 @@ abstract class VlessPlatform extends PlatformInterface {
     List<String>? bypassSubnets,
     bool proxyOnly = false,
     String? geoAssetsDirectory,
+    String? certificateAssetsDirectory,
     AndroidDnsPolicy androidDnsPolicy = AndroidDnsPolicy.config,
     String? androidDnsProxyOutboundTag,
   }) {
@@ -93,6 +96,7 @@ abstract class VlessPlatform extends PlatformInterface {
     required String config,
     required String url,
     String? geoAssetsDirectory,
+    String? certificateAssetsDirectory,
   }) {
     throw UnimplementedError('getServerDelay() has not been implemented.');
   }

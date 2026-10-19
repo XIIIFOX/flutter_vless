@@ -318,6 +318,13 @@ traffic after rejected replacement and disabled caller counters unchanged.
 This increment does not implement source-inbound context selection, explicit
 VPN default selection. Nonempty prefix isolation is described below.
 
+The inert pinned-Core Router regressions explain why those two options need a
+runtime seam: an appended default rule prevents `IPIfNonMatch` from reaching its
+DNS/IP matching pass, and Core's loopback changes `SkipDNSResolve`. Neither is
+an equivalent transfer of the original inbound context. The tests exercise the
+actual Router and a test-only context/default model, including live API rule
+changes. They do not enable a public routing option or claim packet acceptance.
+
 The fifth case adds an explicit null tag on the default direct outbound. Core
 decodes this as untagged; Windows previously rejected it before preflight.
 Windows now skips null tags during named-chain validation and treats a null
@@ -383,10 +390,34 @@ selecting a directory. Core validates the data actually referenced by the
 configuration, including custom `ext:` GeoSite files. An empty directory is
 valid for an asset-free profile. Apple VPN providers still require an
 extension-readable App Group path; callers must retain data until Stop completes.
-Certificate/key lookup uses Core's independent certificate root. Relative
-certificate portability and a managed asset-import/copy lifecycle remain open.
+Certificate/key lookup uses Core's independent certificate root. Managed
+asset-import/copy lifecycle remains open.
 Custom-only Apple roots require the rebuilt unpublished Core preview; published
 framework URLs and checksums remain unchanged during this acceptance phase.
+
+`certificateAssetsDirectory` is a separate optional per-start/per-profile-delay
+resolution base for TLS `certificateFile` and `keyFile`. Every backend binds
+relative references before native preflight and preserves the resulting paths
+for runtime/recovery/quick access. It follows Core's effective TLS and recursive
+XHTTP download Build branches, including alias and `extra: null` precedence.
+Absolute paths, inline material, file-over-inline precedence and reload flags
+remain intact; an omitted option retains existing lookup. Native capability
+negotiation prevents an older backend from ignoring the option.
+
+The directory must already exist and be absolute. It is not a sandbox: relative
+`..` retains Core's normal path semantics. Files stay caller-owned and must
+remain readable through Stop, including background reload; Apple VPN needs App
+Group access. Core preflight checks referenced files before replacing a session.
+No global certificate root, trust store or file-copy lifecycle is changed. This
+increment covers StreamConfig TLS file fields; certificate references in other
+specialized features remain separate work.
+
+The [six-case shared certificate corpus](../tool/fixtures/compatibility/certificate-paths.json)
+checks complete JSON preservation and pinned Core protobuf equivalence, with
+missing-root/file controls and source immutability. The controlled DoH runtime
+also uses a TLS-wrapped caller proxy whose explicit CA file is bound through the
+native helper; DoH trust/name rejection remains independent. New runtime
+acceptance is pending CI and does not establish physical iOS certificate reload.
 
 The shared [synthetic custom GeoSite fixture](../tool/fixtures/compatibility/asset-files.json)
 contains one full domain and no standard GeoDAT files. File-only native
@@ -910,7 +941,7 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | 3. Protocol/transport matrix | Partial; controlled XHTTP increment qualified | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP and null legacy-endpoint preparation fixes pass a nine-case pinned Core build corpus with native preparation, including shared XHTTP upload/download socket policy. At cdc5b94, ordinary Core on all three desktop systems carries actual XHTTP HTTP/1.1 packet-up payloads with and without a caller SOCKS chain; both Apple and Windows preparers pass on macOS. Further protocol handshakes, XHTTP TLS/HTTP3/QUIC, physical iOS packets and the full matrix remain open. |
 | 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes pass shared component, ordinary Core and native platform traffic gates at a475374. Source-inbound context, explicit VPN default selection, wildcard isolation and exact adapter counters remain open. |
 | 5. Ports/addresses | Partial | Shared 20-case port, 12-case exact service-tag, nine-case selector-prefix, 21-case numeric API and 36-case service-listener fixtures cover allocation. Real Android/iPhone list/range/env/Unix and tag-collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. OS port checks, service-name resolution, wildcard isolation, bind retries and broader proxy-only parity remain open. |
-| 6. Assets/import syntax | Partial; data-root increment qualified | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit roots propagate across native backends; custom GeoSite traffic passes Android TUN, both Apple preview runtimes and Windows 2022/2025. Relative certificate portability, managed asset import/lifetime and explicit multi-document merging remain open. |
+| 6. Assets/import syntax | Partial; data-root increment qualified | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit roots propagate across native backends; custom GeoSite traffic passes Android TUN, both Apple preview runtimes and Windows 2022/2025. Explicit TLS certificate/key directory binding is implemented with shared native/Core regressions; its new TLS traffic acceptance is pending CI. Managed asset import/lifetime, specialized certificate features and explicit multi-document merging remain open. |
 | 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |
 | 8. Runtime corpus | Partial | Shared port/syntax fixtures and platform/device HTTP, DNS, routing and recovery checks exist. The complete ECH/DoH/QUIC/protocol corpus and remaining physical options acceptance are not complete. |
 

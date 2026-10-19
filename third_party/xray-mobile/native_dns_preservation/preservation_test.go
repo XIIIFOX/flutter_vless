@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -242,7 +243,19 @@ func h2cResolver(t *testing.T, f *fixture) int {
 }
 
 func socksMarker(t *testing.T, f *fixture) int {
+	return socksMarkerWithTLS(t, f, nil)
+}
+
+func socksMarkerWithTLS(t *testing.T, f *fixture, security *tls.Config) int {
 	l := listener(t, func(c net.Conn) {
+		if security != nil {
+			secured := tls.Server(c, security)
+			if err := secured.Handshake(); err != nil {
+				f.fail(err)
+				return
+			}
+			c = secured
+		}
 		reader := bufio.NewReader(c)
 		var header [2]byte
 		if _, err := io.ReadFull(reader, header[:]); err != nil {

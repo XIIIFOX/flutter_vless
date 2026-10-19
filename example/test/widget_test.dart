@@ -19,6 +19,9 @@ void main() {
       var reject = false;
       messenger.setMockMethodCallHandler(channel, (call) async {
         if (call.method == 'getCoreVersion') return '26.10.17';
+        if (call.method == 'getSecurityCapabilities') {
+          return {'certificateAssetsDirectory': true};
+        }
         if (call.method == 'getServerDelay') {
           calls.add(call);
           if (reject) throw PlatformException(code: 'probe_failed');
@@ -44,10 +47,17 @@ void main() {
         'metrics': {'tag': 'fixture-metrics', 'listen': '127.0.0.1:10810'},
       };
       await tester.enterText(find.byType(TextField).first, jsonEncode(profile));
+      await tester.ensureVisible(find.text('Certificate files'));
+      await tester.tap(find.text('Certificate files'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.widgetWithText(TextField,
+          'Certificate directory (optional)'), '/private/app-group/certificates');
       await tester.ensureVisible(find.text('Profile delay'));
       await tester.tap(find.text('Profile delay'));
       await tester.pumpAndSettle();
       expect(calls, hasLength(1));
+      expect((calls.single.arguments as Map)['certificate_assets_directory'],
+          '/private/app-group/certificates');
       expect(
         jsonDecode((calls.single.arguments as Map)['config'] as String),
         profile,

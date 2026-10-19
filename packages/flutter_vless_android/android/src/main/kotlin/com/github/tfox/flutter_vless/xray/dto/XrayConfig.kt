@@ -41,6 +41,9 @@ data class XrayConfig(
 
     /** Optional existing geodata directory, retained by recovery/quick-access snapshots. */
     var GEO_ASSETS_DIRECTORY: String? = null,
+
+    /** Caller-owned certificate/key directory; referenced files must outlive the session. */
+    var CERTIFICATE_ASSETS_DIRECTORY: String? = null,
     
     /** Whether to enable traffic statistics collection. */
     var ENABLE_TRAFFIC_STATICS: Boolean = false,

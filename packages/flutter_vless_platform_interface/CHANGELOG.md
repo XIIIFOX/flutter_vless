@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Add optional `certificateAssetsDirectory` to start and profile-delay calls. Require the native capability before forwarding the directory so older implementations cannot silently ignore it.
 * Add validated `VlessOptions.fromMap` for application-owned settings persistence.
 * Preserve the active status listener when native option reconfiguration is rejected.
 * Add all five typed Options blocks, quick-action/protection enums, validation, wire versioning and backward-compatible optional initialization.

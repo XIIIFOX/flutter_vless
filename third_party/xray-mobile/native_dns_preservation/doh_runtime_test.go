@@ -247,6 +247,7 @@ func testNativeHTTPSDoH(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	material := makeDoHMaterial(t)
+	proxyMaterial := makeDoHMaterial(t)
 	directory := t.TempDir()
 	write := func(name string, data []byte) string {
 		path := filepath.Join(directory, name)
@@ -256,6 +257,7 @@ func testNativeHTTPSDoH(t *testing.T) {
 		return path
 	}
 	caPath, wrongCAPath := write("ca.pem", material.ca), write("unrelated-ca.pem", material.foreignCA)
+	write("proxy-ca.pem", proxyMaterial.ca)
 	for name, certificate := range map[string]*tls.Certificate{"server": &material.good, "wrong-name": &material.wrong} {
 		key, err := x509.MarshalPKCS8PrivateKey(certificate.PrivateKey)
 		if err != nil {
@@ -275,7 +277,7 @@ func testNativeHTTPSDoH(t *testing.T) {
 	}
 	var mu sync.Mutex
 	mode := "good"
-	hellos, requests := map[string]int{}, map[string]int{}
+	hellos, requests, proxyTLS := map[string]int{}, map[string]int{}, map[string]int{}
 	origin := new(fixture)
 	completed := false
 	// Registered before listeners: include late owned callbacks after drain.
@@ -294,7 +296,18 @@ func testNativeHTTPSDoH(t *testing.T) {
 			t.Error("DoH source proxy/bootstrap marker failed", seen, failures)
 		}
 	})
-	proxyPort := socksMarker(t, origin)
+	proxyPort := socksMarkerWithTLS(t, origin, &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if hello.ServerName != "resolver.invalid" {
+				return nil, errors.New("certificate-asset proxy SNI changed")
+			}
+			proxyTLS[mode]++
+			return &proxyMaterial.good, nil
+		},
+	})
 	var nonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		t.Fatal(err)
@@ -367,7 +380,28 @@ func testNativeHTTPSDoH(t *testing.T) {
 	}
 	defer reservation.Close()
 	source := dohDocument(proxyPort, reservation.Addr().String(), "https://"+authority+"/dns-query", question)
-	prepared, port := prepare(t, source)
+	// A separate explicit CA keeps proxy TLS independent of the DoH negative
+	// system-root controls. The source remains portable; only effective file
+	// fields are frozen by the production native binder before Core preflight.
+	source["outbounds"].([]any)[0].(map[string]any)["streamSettings"] = map[string]any{
+		"security": "tls", "tlsSettings": map[string]any{
+			"serverName": "resolver.invalid", "disableSystemRoot": true,
+			"certificates": []any{map[string]any{"certificateFile": "proxy-ca.pem", "usage": "verify", "oneTimeLoading": true}},
+		},
+	}
+	prepareFiles := func(input map[string]any) ([]byte, int) {
+		document, err := json.Marshal(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bound := bindCertificateFixture(t, document, directory)
+		var candidate map[string]any
+		if err := json.Unmarshal(bound, &candidate); err != nil {
+			t.Fatal(err)
+		}
+		return prepare(t, candidate)
+	}
+	prepared, port := prepareFiles(source)
 	sourceJSON, err := json.Marshal(source)
 	if err != nil {
 		t.Fatal(err)
@@ -386,7 +420,7 @@ func testNativeHTTPSDoH(t *testing.T) {
 			// Core folds only the exact IPv4-mapped prefix to an IPv4 address.
 			// Keep this raw caller spelling through native admission and handoff.
 			hosts["full:resolver.invalid"] = "[::ffff:127.0.0.1]"
-			fullPrepared, fullPort := prepare(t, fullSource)
+			fullPrepared, fullPort := prepareFiles(fullSource)
 			fullJSON, err := json.Marshal(fullSource)
 			if err != nil {
 				t.Fatal(err)
@@ -402,7 +436,7 @@ func testNativeHTTPSDoH(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			frozen := prepareEndpointAddress(t, environmentJSON)
+			frozen := prepareEndpointAddress(t, bindCertificateFixture(t, environmentJSON, directory))
 			var literal map[string]any
 			if json.Unmarshal(fullPrepared, &literal) != nil || !reflect.DeepEqual(literal, frozen) {
 				t.Fatal("DoH environment preparation differs from literal control")
@@ -445,12 +479,13 @@ func testNativeHTTPSDoH(t *testing.T) {
 			t.Fatalf("bounded DoH child %s failed: %v: %s", variant, err, output)
 		}
 		mu.Lock()
-		h, r := hellos[variant], requests[variant]
+		h, r, p := hellos[variant], requests[variant], proxyTLS[variant]
 		mu.Unlock()
 		positive := variant == "good" || variant == "good-full-hosts"
-		if h == 0 || positive && r != 4 || !positive && r != 0 {
+		if h == 0 || p == 0 || positive && r != 4 || !positive && r != 0 {
 			t.Fatal("DoH handshake/request causal control failed", variant, h, r)
 		}
+		t.Log("TLS_CERTIFICATE_ASSET_BYTES_PASS=" + variant)
 		if variant == "good-full-hosts" {
 			t.Log("DNS_ADDRESS_DOH_ENVIRONMENT_FROZEN_PASS")
 			t.Log("DNS_IPV4_MAPPED_DOH_PASS")
@@ -500,6 +535,15 @@ func TestNativeHTTPSDoHChild(t *testing.T) {
 	assertCallerServiceRoots(t, source, effective)
 	if !reflect.DeepEqual(source["dns"], effective["dns"]) || !reflect.DeepEqual(source["outbounds"].([]any)[0].(map[string]any)["settings"], effective["outbounds"].([]any)[0].(map[string]any)["settings"]) {
 		t.Fatal("DoH source DNS/proxy settings changed")
+	}
+	sourceTLS := source["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)["tlsSettings"].(map[string]any)
+	effectiveTLS := effective["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)["tlsSettings"].(map[string]any)
+	if sourceTLS["certificates"].([]any)[0].(map[string]any)["certificateFile"] != "proxy-ca.pem" {
+		t.Fatal("source certificate path was not retained")
+	}
+	sourceTLS["certificates"].([]any)[0].(map[string]any)["certificateFile"] = filepath.Join(filepath.Dir(spec.Prepared), "proxy-ca.pem")
+	if !reflect.DeepEqual(sourceTLS, effectiveTLS) {
+		t.Fatal("effective TLS fields differ beyond the selected certificate path")
 	}
 	configuration, err := serial.DecodeJSONConfig(bytes.NewReader(prepared))
 	if err != nil {

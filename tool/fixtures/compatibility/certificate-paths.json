@@ -1,0 +1,37 @@
+[
+  {
+    "name": "inbound_and_outbound_tls",
+    "config": {
+      "inbounds": [{"protocol": "http", "port": 18680, "streamSettings": {"security": "TLS", "tlsSettings": {"certificates": [{"certificateFile": "fixture.pem", "keyFile": "fixture.key", "oneTimeLoading": false, "ocspStapling": 120, "buildChain": true}]}}}],
+      "outbounds": [{"protocol": "freedom", "streamSettings": {"security": "tls", "tlsSettings": {"certificates": [{"certificateFile": "fixture.pem", "usage": "verify", "certificate": ["ignored because file wins"]}]}}}],
+      "remarks": "fixture.pem",
+      "other": {"certificateFile": "fixture.pem", "keyFile": "fixture.key"}
+    },
+    "bind": ["/inbounds/0/streamSettings/tlsSettings/certificates/0/certificateFile", "/inbounds/0/streamSettings/tlsSettings/certificates/0/keyFile", "/outbounds/0/streamSettings/tlsSettings/certificates/0/certificateFile"]
+  },
+  {
+    "name": "download_build_is_independent_of_parent_network",
+    "config": {"outbounds": [{"protocol": "freedom", "streamSettings": {"network": "tcp", "xhttpSettings": {"downloadSettings": {"security": "tls", "tlsSettings": {"certificates": [{"certificateFile": "fixture.pem", "keyFile": "fixture.key"}]}}}}}]},
+    "bind": ["/outbounds/0/streamSettings/xhttpSettings/downloadSettings/tlsSettings/certificates/0/certificateFile", "/outbounds/0/streamSettings/xhttpSettings/downloadSettings/tlsSettings/certificates/0/keyFile"]
+  },
+  {
+    "name": "preferred_alias_and_extra_override",
+    "config": {"outbounds": [{"protocol": "freedom", "streamSettings": {"xhttpSettings": {"downloadSettings": {"security": "tls", "tlsSettings": {"certificates": [{"certificateFile": "missing-outer.pem"}]}}, "extra": {"downloadSettings": {"security": "tls", "tlsSettings": {"certificates": [{"certificateFile": "fixture.pem"}]}, "splithttpSettings": {"downloadSettings": {"security": "tls", "tlsSettings": {"certificates": [{"certificateFile": "fixture.pem", "keyFile": "fixture.key"}]}}}}}}, "splithttpSettings": {"downloadSettings": {"security": "tls", "tlsSettings": {"certificates": [{"certificateFile": "missing-alias.pem"}]}}}}}]},
+    "bind": ["/outbounds/0/streamSettings/xhttpSettings/extra/downloadSettings/tlsSettings/certificates/0/certificateFile", "/outbounds/0/streamSettings/xhttpSettings/extra/downloadSettings/splithttpSettings/downloadSettings/tlsSettings/certificates/0/certificateFile", "/outbounds/0/streamSettings/xhttpSettings/extra/downloadSettings/splithttpSettings/downloadSettings/tlsSettings/certificates/0/keyFile"]
+  },
+  {
+    "name": "explicit_null_extra_suppresses_outer_download",
+    "config": {"outbounds": [{"protocol": "freedom", "streamSettings": {"xhttpSettings": {"extra": null, "downloadSettings": {"security": "tls", "tlsSettings": {"certificates": [{"certificateFile": "missing-null-extra.pem"}]}}}}}]},
+    "bind": []
+  },
+  {
+    "name": "inactive_tls_and_null_preferred_alias",
+    "config": {"outbounds": [{"protocol": "freedom", "streamSettings": {"security": "none", "tlsSettings": {"certificates": [{"certificateFile": "missing-inactive.pem"}]}, "xhttpSettings": null, "splithttpSettings": {"downloadSettings": {"security": "TLS", "tlsSettings": {"certificates": [{"certificateFile": "fixture.pem"}]}}}}}]},
+    "bind": ["/outbounds/0/streamSettings/splithttpSettings/downloadSettings/tlsSettings/certificates/0/certificateFile"]
+  },
+  {
+    "name": "inline_and_null_paths_are_unchanged",
+    "config": {"outbounds": [{"protocol": "freedom", "streamSettings": {"security": "tls", "tlsSettings": {"certificates": [{"certificateFile": null, "keyFile": "", "certificate": ["INLINE_CERTIFICATE"], "key": ["INLINE_KEY"]}]}}}]},
+    "bind": []
+  }
+]

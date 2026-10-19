@@ -264,7 +264,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         if controlCenterAvailable { surfaces.append("controlCenter") }
         return ["optionsVersion": 1, "quickAccessSurfaces": surfaces, "requestAddQuickTile": false,
             "controlCenterExtensionConfigured": controlsConfigured, "customReconnectBackoff": true,
-            "onDemand": true, "alwaysOn": false, "alwaysOnEnabled": false, "lockdownEnabled": false, "killSwitch": true]
+            "onDemand": true, "alwaysOn": false, "alwaysOnEnabled": false, "lockdownEnabled": false, "killSwitch": true, "certificateAssetsDirectory": true]
     }
 
 
@@ -453,7 +453,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         case "requestAddQuickTile":
             result("unsupported")
         case "getSecurityCapabilities":
-            result(["iosKeychainReference": true, "androidProxyDns": false])
+            result(["iosKeychainReference": true, "androidProxyDns": false, "certificateAssetsDirectory": true])
         case "requestPermission":
             requestPermission(result: result)
         case "initializeVless":
@@ -561,12 +561,23 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             result(FlutterError(code: "INVALID_ARGUMENTS", message: "Invalid arguments for getServerDelay.", details: nil))
             return
         }
+        let certificateArgument = arguments["certificate_assets_directory"]
+        guard certificateArgument == nil || certificateArgument is NSNull || certificateArgument is String else {
+            result(FlutterError(code: "INVALID_ARGUMENTS", message: "Invalid certificate assets directory.", details: nil)); return
+        }
+        let effectiveConfig: String
+        do {
+            effectiveConfig = String(decoding: try XrayCertificatePaths.bind(configData: Data(config.utf8),
+                directory: certificateArgument as? String), as: UTF8.self)
+        } catch {
+            result(FlutterError(code: "CERTIFICATE_ASSETS_ERROR", message: "Unable to prepare certificate file paths.", details: nil)); return
+        }
         let operation = commands.submit {
             // The app-process Xray is a singleton; a temporary probe must not
             // replace an intentionally running proxy-only runtime.
             guard !self.proxyOnlyRunner.isRunning else { return Int64(-1) }
             return await self.serverDelayRunner.measure(
-                config: config,
+                config: effectiveConfig,
                 url: url,
                 geoAssetsDirectory: arguments["geo_assets_directory"] as? String
             )
@@ -587,6 +598,11 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         let bypassSubnets = bypassArgument as? [String]
         let hasBypassArgument = bypassArgument != nil && !(bypassArgument is NSNull)
         let geoAssetsDirectory = arguments["geo_assets_directory"] as? String
+        let certificateArgument = arguments["certificate_assets_directory"]
+        guard certificateArgument == nil || certificateArgument is NSNull || certificateArgument is String else {
+            result(FlutterError(code: "INVALID_ARGUMENTS", message: "Invalid certificate assets directory.", details: nil)); return
+        }
+        let certificateAssetsDirectory = certificateArgument as? String
         guard proxyOnly || !hasBypassArgument || bypassSubnets?.isEmpty == true else {
             result(FlutterError(code: "INCOMPATIBLE_ROUTING",
                 message: "iOS VPN requires traffic protection and cannot exclude system routes. Use Xray direct routing rules.", details: nil))
@@ -594,13 +610,16 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
         let effectiveConfigData: Data
         do {
-            let listenerBound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: configData)
+            let certificateBound = try XrayCertificatePaths.bind(configData: configData, directory: certificateAssetsDirectory)
+            let listenerBound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: certificateBound)
             effectiveConfigData = try XrayAddressEnvironment.bind(configData: listenerBound)
             if proxyOnly {
                 _ = try ProxyOnlyRunner.buildProxyOnlyConfigData(configData: effectiveConfigData)
             } else {
                 try LocalProxyAccessPolicy.validateVPN(configData: effectiveConfigData)
             }
+        } catch is XrayCertificatePaths.Failure {
+            result(FlutterError(code: "CERTIFICATE_ASSETS_ERROR", message: "Unable to prepare certificate file paths.", details: nil)); return
         } catch LocalProxyAccessError.portEnvironment(let index) {
             result(FlutterError(code: "PORT_ENVIRONMENT_ERROR",
                 message: LocalProxyAccessError.portEnvironment(index).localizedDescription,
@@ -639,6 +658,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 manager.bypassSubnets = bypassSubnets ?? []
                 manager.proxyOnly = false
                 manager.geoAssetsDirectory = geoAssetsDirectory
+                manager.certificateAssetsDirectory = certificateAssetsDirectory
                 try await manager.start()
             }
         }
@@ -771,6 +791,7 @@ final class PacketTunnelManager: ObservableObject {
     var bypassSubnets: [String] = []
     var proxyOnly: Bool = false
     var geoAssetsDirectory: String?
+    var certificateAssetsDirectory: String?
     var statusDidChange: ((NEVPNStatus?) -> Void)?
     private(set) var forwardingReady = false
 
@@ -929,6 +950,9 @@ final class PacketTunnelManager: ObservableObject {
         result["options"] = old == nil ? nativeOptions.dictionary : ((try? VlessNativeOptions(old?["options"] as? [String: Any]))?.dictionary ?? nativeOptions.dictionary)
         if let directory = old?["geoAssetsDirectory"] as? String ?? geoAssetsDirectory {
             result["geoAssetsDirectory"] = directory
+        }
+        if let directory = old?["certificateAssetsDirectory"] as? String ?? certificateAssetsDirectory {
+            result["certificateAssetsDirectory"] = directory
         }
         return result
     }
@@ -1132,7 +1156,8 @@ final class PacketTunnelManager: ObservableObject {
               let stored = try? TunnelSecretProfile.load(metadata, providerBundleIdentifier: providerBundleIdentifier ?? "", client: keychainClient),
               let options = try? VlessNativeOptions(metadata["options"] as? [String: Any]) else { return false }
         return stored == xrayConfig && (metadata["bypassSubnets"] as? [String] ?? []) == bypassSubnets
-            && (metadata["geoAssetsDirectory"] as? String) == geoAssetsDirectory && !proxyOnly
+            && (metadata["geoAssetsDirectory"] as? String) == geoAssetsDirectory
+            && (metadata["certificateAssetsDirectory"] as? String) == certificateAssetsDirectory && !proxyOnly
             && NSDictionary(dictionary: options.dictionary).isEqual(to: nativeOptions.dictionary)
     }
 

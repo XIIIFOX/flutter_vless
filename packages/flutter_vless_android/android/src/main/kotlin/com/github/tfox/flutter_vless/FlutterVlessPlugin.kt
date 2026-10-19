@@ -111,8 +111,14 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                 try { context.startService(intent) }
                 catch (_: Exception) { result.error("QUICK_ACCESS_UNAVAILABLE","Cannot clear the retained profile in the background",null) }
             }
-            "getSecurityCapabilities" -> result.success(mapOf("androidProxyDns" to true, "iosKeychainReference" to false))
+            "getSecurityCapabilities" -> result.success(mapOf("androidProxyDns" to true, "iosKeychainReference" to false,
+                "certificateAssetsDirectory" to true))
             "startVless" -> {
+                val certificateArgument = call.argument<Any>("certificate_assets_directory")
+                if (certificateArgument != null && certificateArgument !is String) {
+                    result.error("INVALID_CONFIG", "Certificate asset directory must be a string", null)
+                    return
+                }
                 // 1. Parse configuration from Flutter
                 val config = XrayConfig()
                 config.PLUGIN_OPTIONS_JSON = Gson().toJson(NativeOptionsStore(context).read())
@@ -122,6 +128,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                 config.PROXY_ONLY = call.argument<Boolean>("proxy_only") == true
                 config.V2RAY_FULL_JSON_CONFIG = call.argument("config") ?: ""
                 config.GEO_ASSETS_DIRECTORY = call.argument("geo_assets_directory")
+                config.CERTIFICATE_ASSETS_DIRECTORY = certificateArgument as? String
                 config.BLOCKED_APPS = call.argument<ArrayList<String>>("blocked_apps") ?: ArrayList()
                 config.BYPASS_SUBNETS = call.argument<ArrayList<String>>("bypass_subnets") ?: ArrayList()
                 config.NOTIFICATION_DISCONNECT_BUTTON_NAME = call.argument("notificationDisconnectButtonName") ?: "Disconnect"
@@ -234,11 +241,17 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                 result.success(null)
             }
             "getServerDelay" -> {
+                val certificateArgument = call.argument<Any>("certificate_assets_directory")
+                if (certificateArgument != null && certificateArgument !is String) {
+                    result.error("INVALID_CONFIG", "Certificate asset directory must be a string", null)
+                    return
+                }
                 // Measures delay (ping) to a target URL using a specific config (without connecting)
                 android.util.Log.d("FlutterVlessPlugin", "getServerDelay called")
                 val configJson = call.argument<String>("config")
                 val url = call.argument<String>("url") ?: "https://www.google.com"
                 val geoAssetsDirectory = call.argument<String>("geo_assets_directory")
+                val certificateAssetsDirectory = certificateArgument as? String
                 
                 if (configJson == null) {
                     result.error("INVALID_CONFIG", "Config is null", null)
@@ -252,7 +265,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                 }
                 
                 executor.execute {
-                    val delay = XrayCoreManager.getServerDelay(currentActivity, configJson, url, geoAssetsDirectory)
+                    val delay = XrayCoreManager.getServerDelay(currentActivity, configJson, url, geoAssetsDirectory, certificateAssetsDirectory)
                     currentActivity.runOnUiThread {
                         result.success(delay)
                     }

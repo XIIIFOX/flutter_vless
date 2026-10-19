@@ -49,6 +49,58 @@ void main() {
     expect(calls, isEmpty);
   });
 
+  test('certificate assets require native support and reach start and delay',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'getSecurityCapabilities') {
+        return {'certificateAssetsDirectory': true};
+      }
+      return call.method == 'getServerDelay' ? 77 : null;
+    });
+    final plugin = FlutterVless(onStatusChanged: (_) {});
+    await plugin.startVless(
+      remark: 'Files',
+      config: validConfig,
+      geoAssetsDirectory: '/private/app-group/geodata',
+      certificateAssetsDirectory: '/private/app-group/certificates',
+    );
+    expect(calls.map((call) => call.method),
+        ['getSecurityCapabilities', 'startVless']);
+    expect(calls.last.arguments['certificate_assets_directory'],
+        '/private/app-group/certificates');
+    expect(calls.last.arguments['geo_assets_directory'],
+        '/private/app-group/geodata');
+    expect(
+        await plugin.getServerDelay(
+            config: validConfig,
+            url: 'https://example.invalid/',
+            certificateAssetsDirectory: '/private/app-group/certificates'),
+        77);
+    expect(calls.last.arguments['certificate_assets_directory'],
+        '/private/app-group/certificates');
+  });
+
+  test('older native backends cannot silently ignore certificate assets',
+      () async {
+    final plugin = FlutterVless(onStatusChanged: (_) {});
+    await expectLater(
+        plugin.startVless(
+            remark: 'Files',
+            config: validConfig,
+            certificateAssetsDirectory: '/private/certificates'),
+        throwsUnsupportedError);
+    await expectLater(
+        plugin.getServerDelay(
+            config: validConfig,
+            url: 'https://example.invalid/',
+            certificateAssetsDirectory: '/private/certificates'),
+        throwsUnsupportedError);
+    expect(calls.map((call) => call.method),
+        ['getSecurityCapabilities', 'getSecurityCapabilities']);
+  });
+
   test('P0 startVless validates Xray config shape before native layer',
       () async {
     final plugin = FlutterVless(onStatusChanged: (_) {});

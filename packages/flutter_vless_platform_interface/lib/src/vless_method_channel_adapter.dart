@@ -134,6 +134,7 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     List<String>? bypassSubnets,
     bool proxyOnly = false,
     String? geoAssetsDirectory,
+    String? certificateAssetsDirectory,
     AndroidDnsPolicy androidDnsPolicy = AndroidDnsPolicy.config,
     String? androidDnsProxyOutboundTag,
   }) async {
@@ -149,6 +150,9 @@ class VlessMethodChannelAdapter extends VlessPlatform {
       }
       await _requireSecurityCapability('androidProxyDns');
     }
+    if (certificateAssetsDirectory != null) {
+      await _requireSecurityCapability('certificateAssetsDirectory');
+    }
     final arguments = <String, Object?>{
       'remark': remark,
       'config': config,
@@ -163,6 +167,9 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     };
     if (geoAssetsDirectory != null) {
       arguments['geo_assets_directory'] = geoAssetsDirectory;
+    }
+    if (certificateAssetsDirectory != null) {
+      arguments['certificate_assets_directory'] = certificateAssetsDirectory;
     }
     await methodChannel.invokeMethod('startVless', arguments);
   }
@@ -188,13 +195,20 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     required String config,
     required String url,
     String? geoAssetsDirectory,
+    String? certificateAssetsDirectory,
   }) async {
+    if (certificateAssetsDirectory != null) {
+      await _requireSecurityCapability('certificateAssetsDirectory');
+    }
     final arguments = <String, Object?>{
       'config': config,
       'url': url,
     };
     if (geoAssetsDirectory != null) {
       arguments['geo_assets_directory'] = geoAssetsDirectory;
+    }
+    if (certificateAssetsDirectory != null) {
+      arguments['certificate_assets_directory'] = certificateAssetsDirectory;
     }
     return await methodChannel.invokeMethod('getServerDelay', arguments);
   }

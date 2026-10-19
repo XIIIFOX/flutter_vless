@@ -48,7 +48,7 @@ def source_snapshot():
     paths = [Path(__file__).resolve(), ROOT / 'tool/test_native_dns_preservation_runner.py', ROOT / 'tool/test_native_dns_context_runtime.py',
              ROOT / 'third_party/xray-native-dns/pin-manifest.json', MOBILE / 'go.mod', MOBILE / 'go.sum',
              WINDOWS / 'xray_config.h', WINDOWS / 'desktop_security_test.cpp',
-             WINDOWS / 'xray_config_test.cpp', WINDOWS / 'third_party/nlohmann/json.hpp']
+             WINDOWS / 'xray_config_test.cpp', WINDOWS / 'asset_location.h', WINDOWS / 'third_party/nlohmann/json.hpp']
     paths.append(ROOT / 'tool/fixtures/compatibility/protocols.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/full-config.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/direct-only.json')
@@ -62,6 +62,7 @@ def source_snapshot():
     paths.append(ROOT / 'tool/fixtures/compatibility/transport-none.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/logical-addresses.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/asset-files.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/certificate-paths.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/ipv6-payload.json')
     fixture = MOBILE / 'native_dns_preservation'
     sources = sorted(fixture.rglob('*.go'))
@@ -184,7 +185,9 @@ def main():
         report['acceptance_sha256'] = digest(binary)
         # Decode/build, file-only preparers, a static-host matcher and an inert
         # selector manager: no Core instance, listener, resolver or engine.
-        pure_tests = [PROTOCOL_TEST, 'TestProtocolCorpusBuilds', MATERIAL_TEST, 'TestNativeSelectorPrefixAllocation']
+        pure_tests = [PROTOCOL_TEST, 'TestProtocolCorpusBuilds', MATERIAL_TEST, 'TestNativeSelectorPrefixAllocation',
+                      'TestNativeCertificatePaths', 'TestNativeRoutingContextTailCatchall',
+                      'TestNativeRoutingContextLoopbackDNS', 'TestNativeRoutingContextCandidate']
         checked('protocol-preparation-pure', [str(binary), '-test.run', '^(' + '|'.join(pure_tests) + ')$',
                 '-test.v', '-test.timeout=60s'], 75, MOBILE, runtime_environment)
         output = (EVIDENCE / 'protocol-preparation-pure.log').read_text(encoding='utf-8')

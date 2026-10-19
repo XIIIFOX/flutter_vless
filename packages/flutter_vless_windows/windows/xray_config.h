@@ -12,6 +12,7 @@
 #include <map>
 #include <vector>
 #include "third_party/nlohmann/json.hpp"
+#include "asset_location.h"
 
 namespace flutter_vless::xray_config {
 using Json = nlohmann::ordered_json;
@@ -58,6 +59,92 @@ inline bool Fields(Json& object, std::initializer_list<const char*> names) {
 inline bool Object(Json& parent, const char* key) {
   if (!parent.contains(key) || parent[key].is_null()) parent[key] = Json::object();
   return parent[key].is_object();
+}
+
+// Freeze only file fields actually consumed by Core's StreamConfig.Build.
+// The explicit root is a resolution base, not a filesystem sandbox. Referenced
+// files and their contents are validated by Core before session replacement.
+inline bool BindCertificatePaths(std::string& text, const asset_location::Root& directory) {
+  if (!directory) return true;
+  if (!asset_location::Valid(directory)) return false;
+  auto config = Parse(text);
+  if (!config.is_object()) return false;
+  const auto field = [](Json& object, const char* name, Json*& result) {
+    if (!object.is_object()) return false;
+    result = nullptr;
+    for (auto it = object.begin(); it != object.end(); ++it) {
+      if (Fold(it.key()) != Fold(name)) continue;
+      if (result) return false;
+      result = &it.value();
+    }
+    return true;
+  };
+  std::function<bool(Json&)> stream;
+  stream = [&](Json& value) {
+    Json *security = nullptr, *tls = nullptr;
+    if (!field(value, "security", security)) return false;
+    if (security && !security->is_null() && !security->is_string()) return false;
+    if (security && security->is_string() && Fold(security->get<std::string>()) == "tls") {
+      if (!field(value, "tlsSettings", tls)) return false;
+      if (tls && !tls->is_null()) {
+        Json* certificates = nullptr;
+        if (!field(*tls, "certificates", certificates)) return false;
+        if (certificates && !certificates->is_null()) {
+          if (!certificates->is_array()) return false;
+          for (auto& certificate : *certificates) {
+            for (const auto* name : {"certificateFile", "keyFile"}) {
+              Json* path = nullptr;
+              if (!field(certificate, name, path)) return false;
+              if (!path || path->is_null()) continue;
+              if (!path->is_string()) return false;
+              const auto raw = path->get<std::string>();
+              if (raw.find('\0') != std::string::npos) return false;
+              if (raw.empty()) continue;
+              const auto file = std::filesystem::u8path(raw);
+              if (!file.is_absolute()) {
+                // Go Join appends nonabsolute file text before Clean. On
+                // Windows operator/ would replace the base for \file.pem
+                // or another drive-relative root name instead.
+                auto joined = *directory;
+                joined += std::filesystem::path::preferred_separator;
+                joined += file.native();
+                *path = joined.lexically_normal().u8string();
+              }
+            }
+          }
+        }
+      }
+    }
+    Json *preferred = nullptr, *legacy = nullptr;
+    if (!field(value, "xhttpSettings", preferred) || !field(value, "splithttpSettings", legacy)) return false;
+    Json* transport = preferred && !preferred->is_null() ? preferred : legacy;
+    if (!transport || transport->is_null()) return true;
+    Json* extra = nullptr;
+    if (!field(*transport, "extra", extra)) return false;
+    // A present extra, even JSON null, replaces the outer download settings.
+    Json* effective = extra ? extra : transport;
+    if (effective->is_null()) return true;
+    Json* download = nullptr;
+    if (!field(*effective, "downloadSettings", download)) return false;
+    return !download || download->is_null() || stream(*download);
+  };
+  try {
+    for (const auto* direction : {"inbounds", "outbounds"}) {
+      Json* entries = nullptr;
+      if (!field(config, direction, entries)) return false;
+      if (!entries || entries->is_null()) continue;
+      if (!entries->is_array()) return false;
+      for (auto& entry : *entries) {
+        Json* settings = nullptr;
+        if (!field(entry, "streamSettings", settings)) return false;
+        if (settings && !settings->is_null() && !stream(*settings)) return false;
+      }
+    }
+    text = config.dump();
+    return true;
+  } catch (const std::exception&) {
+    return false;
+  }
 }
 inline bool PrivateStream(Json& stream) {
   if (!Fields(stream, {"tlsSettings", "realitySettings", "xhttpSettings", "splithttpSettings", "finalmask"})) return false;

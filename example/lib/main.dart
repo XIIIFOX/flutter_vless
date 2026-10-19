@@ -57,6 +57,7 @@ class _HomePageState extends State<HomePage> {
   );
 
   final TextEditingController config = TextEditingController(text: '{}');
+  final TextEditingController certificateDirectory = TextEditingController();
   bool proxyOnly = false;
   List<String> bypassSubnets = [];
   List<String> blockedApps = [];
@@ -121,6 +122,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     config.dispose();
+    certificateDirectory.dispose();
     vlessStatus.dispose();
     super.dispose();
   }
@@ -148,6 +150,9 @@ class _HomePageState extends State<HomePage> {
       proxyOnly: proxyOnly,
       bypassSubnets: bypassSubnets,
       blockedApps: blockedApps,
+      certificateAssetsDirectory: certificateDirectory.text.isEmpty
+          ? null
+          : certificateDirectory.text,
     );
   }
 
@@ -160,7 +165,11 @@ class _HomePageState extends State<HomePage> {
       final connected = vlessStatus.value.state.toUpperCase() == 'CONNECTED';
       final delay = connected && !isolatedProfile
           ? await flutterVless.getConnectedServerDelay()
-          : await flutterVless.getServerDelay(config: config.text);
+          : await flutterVless.getServerDelay(
+              config: config.text,
+              certificateAssetsDirectory: certificateDirectory.text.isEmpty
+                  ? null
+                  : certificateDirectory.text);
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -440,6 +449,20 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
             const SizedBox(height: 8),
+            ExpansionTile(
+              title: const Text('Certificate files'),
+              children: [
+                TextField(
+                  controller: certificateDirectory,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  decoration: const InputDecoration(
+                    labelText: 'Certificate directory (optional)',
+                    helperText: 'Absolute path; Apple VPN needs App Group access.',
+                  ),
+                ),
+              ],
+            ),
             Wrap(
               spacing: 8,
               children: [

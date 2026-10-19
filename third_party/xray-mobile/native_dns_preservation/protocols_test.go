@@ -91,6 +91,7 @@ func TestProtocolCorpusBuilds(t *testing.T) {
 	}
 	testListenAddresses(t, false)
 	testAssetFiles(t, false)
+	testCertificatePaths(t, false)
 	testIPv6PayloadPreparation(t, false)
 	testIPv6RuntimeDocumentsBuild(t)
 	testSelectorTrafficPreparation(t, false)

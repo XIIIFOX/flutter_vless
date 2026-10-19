@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Add per-start/profile-delay `certificateAssetsDirectory` with typed TLS/XHTTP file binding before preflight and profile persistence. Keep absolute/inline material and reload options; caller files must stay accessible to the provider.
 * Admit XHTTP download settings with parent `sockopt.penetrate` using one closed upload/download pin scope. Preserve caller chains and inactive child socket settings; retain exact endpoint and active ECH checks, with shared preparation and payload regressions.
 * Treat missing, null and empty localhost DNS tags consistently while rejecting malformed non-null types before modifying the profile. Preserve the other DNS fields and extend shared preparation and runtime regressions.
 * Match Core's literal `full:` hosts prefix and domain lowercasing when validating named DNS bootstrap. Preserve caller DNS and reject false static mappings; extend shared preparation and HTTPS DoH regressions.

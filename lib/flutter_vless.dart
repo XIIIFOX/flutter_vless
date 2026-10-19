@@ -146,7 +146,12 @@ class FlutterVless {
   /// custom `ext:` rules; standard geodata files are optional when unused.
   /// Apple VPN extensions need a readable App Group directory. Keep the files
   /// available until Stop completes. Omit it for bundled/default lookup.
-  /// Certificate/key lookup has a separate Core root.
+  ///
+  /// [certificateAssetsDirectory] resolves relative TLS `certificateFile` and
+  /// `keyFile` paths against an existing absolute directory, independently of
+  /// geodata. Absolute paths and inline material keep their meaning. Files must
+  /// remain readable through Stop, including certificate reload and recovery.
+  /// Apple VPN files need App Group access. Omit it for Core's default lookup.
   ///
   /// [notificationDisconnectButtonName] controls the Android foreground
   /// notification disconnect action label.
@@ -160,6 +165,7 @@ class FlutterVless {
     List<String>? bypassSubnets,
     bool proxyOnly = false,
     String? geoAssetsDirectory,
+    String? certificateAssetsDirectory,
     AndroidDnsPolicy androidDnsPolicy = AndroidDnsPolicy.config,
     String? androidDnsProxyOutboundTag,
     String? notificationDisconnectButtonName,
@@ -173,6 +179,7 @@ class FlutterVless {
       proxyOnly: proxyOnly,
       bypassSubnets: bypassSubnets,
       geoAssetsDirectory: geoAssetsDirectory,
+      certificateAssetsDirectory: certificateAssetsDirectory,
       androidDnsPolicy: androidDnsPolicy,
       androidDnsProxyOutboundTag: androidDnsProxyOutboundTag,
       notificationDisconnectButtonName:
@@ -212,15 +219,18 @@ class FlutterVless {
   ///
   /// Apple and Android use [geoAssetsDirectory] as on [startVless]. Windows
   /// standalone profile delay remains unsupported and returns `-1`.
+  /// [certificateAssetsDirectory] resolves TLS files as on [startVless].
   Future<int> getServerDelay(
       {required String config,
       String url = 'https://google.com/generate_204',
-      String? geoAssetsDirectory}) async {
+      String? geoAssetsDirectory,
+      String? certificateAssetsDirectory}) async {
     final normalizedConfig = _normalizeConfigString(config);
     return await VlessPlatform.instance.getServerDelay(
       config: normalizedConfig,
       url: url,
       geoAssetsDirectory: geoAssetsDirectory,
+      certificateAssetsDirectory: certificateAssetsDirectory,
     );
   }
 

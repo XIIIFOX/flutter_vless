@@ -2,13 +2,26 @@ import Foundation
 import Darwin
 #if os(macOS)
 import flutter_vless_macos_tunnel_support
+import flutter_vless_macos_privacy
 #else
 import flutter_vless_tunnel_support
+import flutter_vless_privacy
 #endif
 
 // File-only acceptance adapter for the production JSON preparer. No Core,
 // resolver, socket, NetworkExtension, or route API is started here.
 let arguments = CommandLine.arguments
+if arguments.count == 5 && arguments[1] == "--bind-certificate-fixture" {
+    do {
+        let data = try Data(contentsOf: URL(fileURLWithPath: arguments[2]))
+        let bound = try XrayCertificatePaths.bind(configData: data, directory: arguments[4])
+        try bound.write(to: URL(fileURLWithPath: arguments[3]), options: .atomic)
+        exit(0)
+    } catch {
+        fputs("native certificate fixture rejected\n", stderr)
+        exit(3)
+    }
+}
 if arguments.count == 4 && arguments[1] == "--allocate-service-tags-fixture" {
     do {
         let data = try Data(contentsOf: URL(fileURLWithPath: arguments[2]))

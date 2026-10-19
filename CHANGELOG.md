@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Ignore Android network events queued by an earlier VPN session before a replacement or Stop. Keep current-session recovery active and cover the registered availability/loss callbacks with native unit regressions.
+
 * Freeze Apple port, listener and endpoint environment values using byte-exact native names before validation, persistence and startup retries. Preserve canonically distinct Unicode keys, exact empty values and Core alias precedence; add isolated reader and actual host-admission regressions.
 
 * Preserve unknown full-profile JSON fields at every depth. Limit legacy transport/TLS compatibility edits to their Core schema owners, including effective XHTTP downloads and mask TLS settings. Keep opaque data separate from Android protected-feature admission; add shared native/Core and public import/start/delay regressions.

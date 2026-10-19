@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Bind queued physical-network callbacks to their VPN session generation, preventing an earlier session's event from restarting its replacement. Cover availability, loss, current recovery and stopped-session behavior through the registered service callback.
+
 * Preserve unknown profile data instead of recursively editing every object. Scope stream/TLS cleanup and protected-feature checks to Core schema fields, retaining XHTTP precedence and real UDP XICMP/local-QUIC DNS refusals. Add shared preparation and controlled device regressions.
 
 * Match Core environment alias casing and whitespace for ports and addresses, and pass the captured environment into private port reservation. Cover the shared corpus through the actual runtime builder with fake availability callbacks.

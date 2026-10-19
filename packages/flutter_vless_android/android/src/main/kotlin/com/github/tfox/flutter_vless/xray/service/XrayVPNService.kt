@@ -71,8 +71,10 @@ class XrayVPNService : VpnService() {
             override fun onAvailable(network: Network) = physicalLinkChanged()
             override fun onLost(network: Network) = physicalLinkChanged()
             private fun physicalLinkChanged() {
+                // A queued physical-link event belongs to the session that received it.
+                val owner = recovery.generation
                 worker.execute {
-                    if (recovery.authorized && config != null && AppConfigs.V2RAY_STATE == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED) recover(Event.RECOVERING)
+                    if (recovery.owns(owner) && config != null && AppConfigs.V2RAY_STATE == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED) recover(Event.RECOVERING)
                 }
             }
         }

@@ -576,9 +576,14 @@ inline std::string EffectiveStreamNetwork(const Json& stream) {
 inline bool EffectiveBootstrapChains(Json stream, std::vector<std::string>& chains) {
   if (stream.is_null()) return true;
   if (!Fields(stream, {"sockopt", "network", "method", "xhttpSettings", "splithttpSettings"})) return false;
+  bool penetrate = false;
   if (stream.contains("sockopt") && !stream["sockopt"].is_null()) {
     auto options = stream["sockopt"];
-    if (!Fields(options, {"dialerProxy"})) return false;
+    if (!Fields(options, {"dialerProxy", "penetrate"})) return false;
+    if (options.contains("penetrate") && !options["penetrate"].is_null()) {
+      if (!options["penetrate"].is_boolean()) return false;
+      penetrate = options["penetrate"].get<bool>();
+    }
     if (options.contains("dialerProxy") && !options["dialerProxy"].is_null()) {
       if (!options["dialerProxy"].is_string()) return false;
       if (!options["dialerProxy"].get<std::string>().empty()) chains.push_back(options["dialerProxy"].get<std::string>());
@@ -593,7 +598,9 @@ inline bool EffectiveBootstrapChains(Json stream, std::vector<std::string>& chai
     // it still suppresses the outer download settings.
     auto effective = settings.contains("extra") ? (settings["extra"].is_null() ? Json::object() : settings["extra"]) : settings;
     if (!Fields(effective, {"downloadSettings"})) return false;
-    if (effective.contains("downloadSettings") && !effective["downloadSettings"].is_null())
+    // Core replaces this immediate child's entire socket policy with the
+    // parent object. A dormant child chain must not become a dependency.
+    if (effective.contains("downloadSettings") && !effective["downloadSettings"].is_null() && !penetrate)
       return EffectiveBootstrapChains(effective["downloadSettings"], chains);
   }
   return true;
@@ -639,6 +646,8 @@ inline bool BootstrapStream(Json& stream, const std::vector<BootstrapEndpoint>& 
   auto& options = stream["sockopt"];
   if (!Fields(options, {"interface", "domainStrategy", "addressPortStrategy", "dialerProxy", "penetrate"})) return false;
   if (options.contains("addressPortStrategy") && options["addressPortStrategy"] != "none") return false;
+  if (options.contains("penetrate") && !options["penetrate"].is_null() && !options["penetrate"].is_boolean()) return false;
+  const bool penetrate = options.contains("penetrate") && options["penetrate"].is_boolean() && options["penetrate"].get<bool>();
   options["domainStrategy"] = "ForceIPv4";
   // Bind every dialer to the selected underlay; no endpoint /32 route can expose
   // unrelated application traffic to the same server address.
@@ -653,6 +662,38 @@ inline bool BootstrapStream(Json& stream, const std::vector<BootstrapEndpoint>& 
   }
   if (options.contains("dialerProxy") && !options["dialerProxy"].is_null() && !options["dialerProxy"].is_string()) return false;
   const bool chained = options.contains("dialerProxy") && !options["dialerProxy"].is_null() && !options["dialerProxy"].get<std::string>().empty();
+  // Discover the effective immediate download before allocating a pin graph:
+  // penetrate makes both HTTP clients use the same parent SocketSettings.
+  Json* download = nullptr;
+  Json null_extra = Json::object();
+  const auto* key = stream.contains("xhttpSettings") && !stream["xhttpSettings"].is_null() ? "xhttpSettings" : "splithttpSettings";
+  if ((network == "xhttp" || network == "splithttp") && stream.contains(key) && !stream[key].is_null()) {
+    auto& settings = stream[key];
+    if (!Fields(settings, {"extra", "downloadSettings"})) return false;
+    auto* container = &settings;
+    if (settings.contains("extra")) container = settings["extra"].is_null() ? &null_extra : &settings["extra"];
+    if (!Fields(*container, {"downloadSettings"})) return false;
+    if (container->contains("downloadSettings") && !(*container)["downloadSettings"].is_null()) download = &(*container)["downloadSettings"];
+  }
+  if (download && penetrate) {
+    auto child = *download;
+    if (!Fields(child, {"address", "port", "network", "method", "tlsSettings"})) return false;
+    const auto child_network = EffectiveStreamNetwork(child);
+    const auto port = Port(child);
+    // Core casts the download's ProtocolSettings directly to XHTTP Config.
+    if ((child_network != "xhttp" && child_network != "splithttp") || !child.contains("address")
+        || !child["address"].is_string() || child["address"].get<std::string>().empty() || !port) return false;
+    if (child.contains("tlsSettings") && !child["tlsSettings"].is_null()) {
+      auto tls = child["tlsSettings"];
+      if (!Fields(tls, {"echConfigList"})) return false;
+      const auto ech = tls.value("echConfigList", Json());
+      if (!ech.is_null() && (!ech.is_string() || ech.get<std::string>().find("://") != std::string::npos)) return false;
+    }
+    // A dynamic freedom/DNS upload has no finite closed endpoint set. Do not
+    // accidentally replace it with a graph containing only the download.
+    if (!chained && physical.empty()) return false;
+    physical.push_back({child["address"].get<std::string>(), *port});
+  }
   if (chained) {
     // A chained endpoint is a logical target of that handler. Its physical
     // transport is prepared separately; never bootstrap the logical target.
@@ -699,25 +740,10 @@ inline bool BootstrapStream(Json& stream, const std::vector<BootstrapEndpoint>& 
       options["dialerProxy"] = loopback;
     }
   }
-  // Core prefers xhttpSettings over its legacy alias and extra replaces the
-  // typed settings. Only the effective download stream may create dialers.
-  const auto* key = stream.contains("xhttpSettings") && !stream["xhttpSettings"].is_null() ? "xhttpSettings" : "splithttpSettings";
-  if ((Fold(network) == "xhttp" || Fold(network) == "splithttp") && stream.contains(key) && !stream[key].is_null()) {
-    auto& settings = stream[key];
-    if (!Fields(settings, {"extra", "downloadSettings"})) return false;
-    auto* container = &settings;
-    Json null_extra = Json::object();
-    if (settings.contains("extra")) container = settings["extra"].is_null() ? &null_extra : &settings["extra"];
-    if (!Fields(*container, {"downloadSettings"})) return false;
-    if (container->contains("downloadSettings") && !(*container)["downloadSettings"].is_null()) {
-      // Penetrate overwrites download sockopt with the upload socket object.
-      // It needs a separately qualified combined pin scope, not two graphs.
-      if (options.value("penetrate", false)) return false;
-      auto& download = (*container)["downloadSettings"];
-      if (!download.is_object() || !download.contains("address")
-          || !BootstrapStream(download, {}, interface_name, resolve, tags, reject_tag, graph, send_through, true)) return false;
-    }
-  }
+  // The penetrating child's sockopt and nested download settings stay intact:
+  // getHTTPClient consumes this immediate client without another XHTTP Dial.
+  if (download && !penetrate && (!download->is_object() || !download->contains("address")
+      || !BootstrapStream(*download, {}, interface_name, resolve, tags, reject_tag, graph, send_through, true))) return false;
   return true;
 }
 

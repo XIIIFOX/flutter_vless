@@ -19,7 +19,7 @@ type protocolCase struct {
 }
 
 func protocolCorpus(t *testing.T) []protocolCase {
-	return preparationCorpus(t, "protocols.json", 8)
+	return preparationCorpus(t, "protocols.json", 9)
 }
 
 func fullConfigCorpus(t *testing.T) []protocolCase {
@@ -125,6 +125,9 @@ func testNativeProtocolPreparation(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertCallerServiceRoots(t, tc.Config, effective)
+			if tc.Name == "vless_xhttp_penetrating_download" {
+				assertPenetratingXHTTPGraph(t, tc.Config, effective)
+			}
 			original := tc.Config["outbounds"].([]any)
 			actual := effective["outbounds"].([]any)
 			for index, value := range original {

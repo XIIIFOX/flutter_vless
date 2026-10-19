@@ -221,10 +221,12 @@ preferred alias and extra/download branch, including explicit null values.
 An unused primary stream address must not trigger bootstrap; an independent
 download address still does.
 
-The shared [eight-config corpus](../tool/fixtures/compatibility/protocols.json)
+The shared [nine-config corpus](../tool/fixtures/compatibility/protocols.json)
 covers MASQUE/TLS, VLESS with WS/gRPC/HTTPUpgrade, two XHTTP precedence cases
 and HTTP alongside internal handlers/role aliases, plus Shadowsocks 2022 with
-an explicit null flat address and a valid legacy server. Android checks this same
+an explicit null flat address and a valid legacy server. The ninth case adds
+XHTTP with parent `sockopt.penetrate` and a separate download port, including an
+inactive child socket chain. Android checks this same
 corpus in JVM tests. Production C++/Apple export plus pinned Core decode/build
 passes locally without a Core instance or listeners. This proves preparation,
 not MASQUE/WS/gRPC/HTTPUpgrade/Shadowsocks 2022 server handshakes.
@@ -239,10 +241,19 @@ after cleanup. The macOS job exercises both production C++ and Apple preparers.
 
 The pinned Core keeps download socket settings independent unless the parent's
 `sockopt.penetrate` is true; only then does it replace the download's settings
-with the parent object. Apple/Windows currently reject that combined path until
-its shared pin scope is qualified. Missing/null download socket settings must
-not acquire a caller chain merely because the upload has one. WG/XDRIVE and the
-exhaustive protocol matrix remain unqualified.
+with the parent object. Apple/Windows now prepare an explicit XHTTP/SplitHTTP
+download in one parent context containing exact upload and download host/port
+pins followed by unconditional denial. A caller parent chain carries both
+logical destinations instead; only that carrier's physical endpoint is pinned.
+The child JSON remains intact and its overwritten socket chain is inactive.
+Active download TLS/ECH admission still applies. Dynamic uploads without a
+finite endpoint set and non-XHTTP downloads retain the existing refusal.
+Missing/null download socket settings on a nonpenetrating parent remain
+independent. Controlled CI acceptance adds actual XHTTP/VLESS payloads through
+separate HTTP fronts, including a parent SOCKS carrier, with distinct HTTP
+authority/path checks and zero OS-resolver attempts. This runtime gate is
+pending; it does not qualify additional XHTTP TLS/HTTP3/QUIC server handshakes.
+WG/XDRIVE and the exhaustive protocol matrix remain unqualified.
 Pinned Core requires one receiver/user in the relevant `servers`/`vnext` arrays;
 multiple independent outbounds with a balancer are a different supported shape.
 

@@ -230,15 +230,29 @@ public enum TunnelDNSPolicy {
         let network = effectiveTransport(in: stream)
         // XDRIVE has a separate fronting destination, not the protocol endpoint.
         guard network != "xdrive" else { return false }
+        let penetrating = sockopt["penetrate"] as? Bool == true
+        var physicalTargets = endpoints
+        if penetrating, let download = effectiveDownload(in: stream) {
+            // Core replaces the child's entire socket policy with this parent
+            // and dials its immediate XHTTP destination without child recursion.
+            guard ["xhttp", "splithttp"].contains(effectiveTransport(in: download)),
+                  let host = download["address"] as? String, !host.isEmpty,
+                  let p = port(download["port"]) else { return false }
+            if let tls = download["tlsSettings"] as? [String: Any],
+               tls.keys.contains(where: { XrayJSONField.matches($0, "echConfigList") && (tls[$0] as? String ?? "").contains("://") }) { return false }
+            if !physicalTargets.contains(where: { $0.host == host && $0.port == p }) {
+                physicalTargets.append(Endpoint(host: host, port: p))
+            }
+        }
         let chained = !(sockopt["dialerProxy"] as? String ?? "").isEmpty
         sockopt["domainStrategy"] = "AsIs"
         if !chained {
             var pins: [(Endpoint, String)] = []
-            for target in endpoints {
+            for target in physicalTargets {
                 guard let ip = pin(target.host, resolved: &resolved, addresses: &addresses, resolver: resolver) else { return false }
                 pins.append((target, ip))
             }
-            if endpoints.contains(where: { !isLiteral($0.host) }) {
+            if physicalTargets.contains(where: { !isLiteral($0.host) }) {
                 let loop = allocator.next("flutter-vless-bootstrap-loop")
                 let scope = allocator.next("flutter-vless-bootstrap-input")
                 sockopt["dialerProxy"] = loop
@@ -261,6 +275,9 @@ public enum TunnelDNSPolicy {
             }
         }
         stream["sockopt"] = sockopt
+        // The child keeps its source JSON. Core applies this prepared parent
+        // policy to it at runtime, including the union's closed private context.
+        if penetrating { return true }
         // Only the effective XHTTP settings participate. A supplied extra
         // replaces outer downloadSettings; dormant data must not bootstrap.
         let key = stream["xhttpSettings"] is [String: Any] ? "xhttpSettings" : "splithttpSettings"
@@ -268,8 +285,7 @@ public enum TunnelDNSPolicy {
             if let extraValue = settings["extra"] {
                 var extra = extraValue as? [String: Any] ?? [:]
                 if var download = extra["downloadSettings"] as? [String: Any] {
-                    guard sockopt["penetrate"] as? Bool != true,
-                          let host = download["address"] as? String, let p = port(download["port"]),
+                    guard let host = download["address"] as? String, let p = port(download["port"]),
                           prepareStream(&download, endpoints: [Endpoint(host: host, port: p)], sendThrough: sendThrough, allocator: &allocator,
                                         denied: denied, generated: &generated, rules: &rules, resolved: &resolved,
                                         addresses: &addresses, resolver: resolver) else { return false }
@@ -277,8 +293,7 @@ public enum TunnelDNSPolicy {
                     settings["extra"] = extra
                 }
             } else if var download = settings["downloadSettings"] as? [String: Any] {
-                guard sockopt["penetrate"] as? Bool != true,
-                          let host = download["address"] as? String, let p = port(download["port"]),
+                guard let host = download["address"] as? String, let p = port(download["port"]),
                       prepareStream(&download, endpoints: [Endpoint(host: host, port: p)], sendThrough: sendThrough, allocator: &allocator,
                                     denied: denied, generated: &generated, rules: &rules, resolved: &resolved,
                                     addresses: &addresses, resolver: resolver) else { return false }
@@ -292,13 +307,16 @@ public enum TunnelDNSPolicy {
     private static func streamChains(_ stream: [String: Any]) -> [String] {
         var result: [String] = []
         if let tag = (stream["sockopt"] as? [String: Any])?["dialerProxy"] as? String, !tag.isEmpty { result.append(tag) }
-        let network = effectiveTransport(in: stream)
-        if ["xhttp", "splithttp"].contains(network),
-           let settings = (stream["xhttpSettings"] as? [String: Any]) ?? (stream["splithttpSettings"] as? [String: Any]) {
-            let effective = settings["extra"] != nil ? (settings["extra"] as? [String: Any] ?? [:]) : settings
-            if let download = effective["downloadSettings"] as? [String: Any] { result += streamChains(download) }
-        }
+        if (stream["sockopt"] as? [String: Any])?["penetrate"] as? Bool != true,
+           let download = effectiveDownload(in: stream) { result += streamChains(download) }
         return result
+    }
+
+    private static func effectiveDownload(in stream: [String: Any]) -> [String: Any]? {
+        guard ["xhttp", "splithttp"].contains(effectiveTransport(in: stream)),
+              let settings = (stream["xhttpSettings"] as? [String: Any]) ?? (stream["splithttpSettings"] as? [String: Any]) else { return nil }
+        let effective = settings["extra"] != nil ? (settings["extra"] as? [String: Any] ?? [:]) : settings
+        return effective["downloadSettings"] as? [String: Any]
     }
 
     private static func pin(_ host: String, resolved: inout [String: String], addresses: inout Set<String>,

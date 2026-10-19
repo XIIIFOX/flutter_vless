@@ -498,6 +498,7 @@ func TestNativeDNSPreservation(t *testing.T) {
 	t.Run("WindowsDirectOnly", testNativeDirectOnly)
 	t.Run("WindowsPrefixBalancer", func(t *testing.T) { runNativeDirectOnly(t, selectorTrafficProfile(t)) })
 	t.Run("WindowsNullDirectTag", testNativeNullDirectTag)
+	t.Run("WindowsXHTTPPenetrate", testNativeXHTTPPenetrate)
 	if apple := os.Getenv("NATIVE_DNS_PREPARER_APPLE"); apple != "" {
 		t.Run("ApplePreparer", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeDNSPreservation(t) })
 		t.Run("AppleIPv6Payload", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeIPv6Payload(t) })
@@ -510,6 +511,10 @@ func TestNativeDNSPreservation(t *testing.T) {
 		t.Run("AppleNullDirectTag", func(t *testing.T) {
 			t.Setenv("NATIVE_DNS_PREPARER", apple)
 			testNativeNullDirectTag(t)
+		})
+		t.Run("AppleXHTTPPenetrate", func(t *testing.T) {
+			t.Setenv("NATIVE_DNS_PREPARER", apple)
+			testNativeXHTTPPenetrate(t)
 		})
 	}
 }

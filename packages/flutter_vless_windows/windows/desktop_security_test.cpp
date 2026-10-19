@@ -133,7 +133,139 @@ void ProtocolCompatibilityCases(const std::string& only = "") {
     for (const auto& outbound : config["outbounds"]) if (outbound.value("tag", "") == tag) return outbound;
     throw std::runtime_error("protocol case references missing handler");
   };
+  auto penetrating = [&] {
+    auto profile = source;
+    profile["outbounds"][0]["sendThrough"] = "192.0.2.25";
+    profile["outbounds"][0]["streamSettings"] = {
+        {"network", "xhttp"}, {"sockopt", {{"penetrate", true}, {"tcpKeepAliveIdle", 30}, {"mark", 7}}},
+        {"security", "tls"}, {"tlsSettings", {{"serverName", "upload.invalid"}}},
+        {"xhttpSettings", {{"host", "upload-http.invalid"}, {"path", "/upload"}, {"extra", {{"downloadSettings", {
+            {"address", "endpoint.invalid"}, {"port", 8443}, {"network", "xhttp"},
+            {"sockopt", {{"tcpKeepAliveIdle", 7}}}, {"security", "tls"},
+            {"tlsSettings", {{"serverName", "download.invalid"}, {"masterKeyLog", "private-download.log"}}},
+            {"xhttpSettings", {{"host", "download-http.invalid"}, {"path", "/download"}}}}}}}}}};
+    return profile;
+  };
+  auto download = [](Json& profile) -> Json& { return profile["outbounds"][0]["streamSettings"]["xhttpSettings"]["extra"]["downloadSettings"]; };
+  auto scoped_rules = [&](const Json& config) {
+    const auto loop = config["outbounds"][0]["streamSettings"]["sockopt"]["dialerProxy"].get<std::string>();
+    const auto scope = tagged(config, loop)["settings"]["inboundTag"];
+    auto rules = Json::array();
+    for (const auto& rule : config["routing"]["rules"])
+      if (rule.value("inboundTag", Json::array()) == Json::array({scope})) rules.push_back(rule);
+    return rules;
+  };
+  auto loop_count = [](const Json& config) { return std::count_if(config["outbounds"].begin(), config["outbounds"].end(),
+      [](const Json& outbound) { return outbound.value("protocol", "") == "loopback"; }); };
   std::map<std::string, std::function<void()>> cases;
+  cases["xhttp-penetrate-union"] = [&] {
+    auto profile = penetrating(); std::vector<std::string> calls;
+    const auto output = PrepareProtectedVpn(profile.dump(), "session-user", "session-password", "Ethernet", [&](const std::string& host) {
+      calls.push_back(host); return host == "endpoint.invalid" ? "192.0.2.5" : "";
+    });
+    Require(output.has_value(), "valid XHTTP penetrating download rejected");
+    auto config = Parse(*output); const auto& parent = config["outbounds"][0]["streamSettings"];
+    Require(calls == std::vector<std::string>{"endpoint.invalid"} && loop_count(config) == 1,
+        "penetrating download did not share one resolved parent context");
+    const auto rules = scoped_rules(config); Require(rules.size() == 3, "upload/download ports lost their separate exact pins");
+    std::set<std::string> ports;
+    for (size_t index = 0; index < 2; ++index) {
+      const auto& rule = rules[index]; ports.insert(rule["port"].get<std::string>());
+      Require(rule["domain"] == Json::array({"full:endpoint.invalid"}) && (!rule.contains("network") || rule["network"] == "tcp,udp"),
+          "penetrating pin changed host identity or excluded HTTP/3 UDP");
+      const auto& leaf = tagged(config, rule["outboundTag"].get<std::string>());
+      const auto& options = leaf["streamSettings"]["sockopt"];
+      Require(leaf["settings"]["redirect"] == "192.0.2.5:0" && leaf["sendThrough"] == "192.0.2.25"
+          && options["tcpKeepAliveIdle"] == 30 && options["mark"] == 7 && options["interface"] == "Ethernet"
+          && options["domainStrategy"] == "ForceIPv4" && !options.contains("dialerProxy"), "download leaf used child options or lost physical binding");
+    }
+    Require(ports == std::set<std::string>{"443", "8443"} && rules.back().size() == 3
+        && rules.back()["outboundTag"] == kIpv6Block && !rules.back().contains("port"), "shared pin context is not closed after exact ports");
+    Require(parent["sockopt"]["penetrate"] == true && parent["sockopt"]["domainStrategy"] == "AsIs"
+        && parent["tlsSettings"]["serverName"] == "upload.invalid" && parent["xhttpSettings"]["host"] == "upload-http.invalid",
+        "parent transport identity or pre-redirect DNS policy changed");
+    const auto& child = download(config);
+    Require(child["sockopt"] == download(profile)["sockopt"] && child["tlsSettings"]["serverName"] == "download.invalid"
+        && child["tlsSettings"]["masterKeyLog"] == "" && child["xhttpSettings"] == download(profile)["xhttpSettings"]
+        && config["dns"] == profile["dns"] && config["outbounds"][0]["settings"] == profile["outbounds"][0]["settings"],
+        "penetrating adaptation changed ignored child sockopt, logical metadata, privacy or caller DNS");
+  };
+  cases["xhttp-penetrate-endpoint-sets"] = [&] {
+    for (int variant = 0; variant < 5; ++variant) {
+      auto profile = penetrating();
+      if (variant == 0) download(profile)["port"] = 443;
+      if (variant == 1) download(profile)["address"] = "download-endpoint.invalid";
+      if (variant == 2) download(profile)["address"] = "203.0.113.8";
+      if (variant >= 3) profile["outbounds"][0]["settings"]["servers"][0]["address"] = "192.0.2.5";
+      if (variant == 4) download(profile)["address"] = "203.0.113.8";
+      std::vector<std::string> calls;
+      const auto output = PrepareProtectedVpn(profile.dump(), "session-user", "session-password", "Ethernet", [&](const std::string& host) {
+        calls.push_back(host); return host == "endpoint.invalid" ? "192.0.2.5" : host == "download-endpoint.invalid" ? "203.0.113.8" : "";
+      });
+      Require(output.has_value(), "valid penetrating endpoint union rejected"); auto config = Parse(*output);
+      Require(calls.size() == (variant == 1 ? 2u : variant == 4 ? 0u : 1u), "endpoint cache resolved numeric addresses or repeated a same-host pin");
+      if (variant == 4) Require(loop_count(config) == 0 && config["outbounds"][0]["streamSettings"]["sockopt"]["domainStrategy"] == "ForceIPv4", "numeric endpoints unnecessarily gained a redirect");
+      else {
+        const auto rules = scoped_rules(config);
+        Require(loop_count(config) == 1 && rules.size() == (variant == 0 ? 2u : 3u), "exact pair deduplication or union scope is wrong");
+        bool child_pin = false;
+        for (const auto& rule : rules) if (rule.value("port", "") == "8443") {
+          const auto& target = download(profile)["address"];
+          child_pin = target == "203.0.113.8" ? rule.value("ip", Json()) == Json::array({"203.0.113.8/32"})
+              : rule.value("domain", Json()) == Json::array({"full:" + target.get<std::string>()});
+        }
+        Require(variant == 0 || child_pin, "download endpoint missing from the parent closed graph");
+      }
+    }
+  };
+  cases["xhttp-penetrate-ignored-child"] = [&] {
+    auto profile = penetrating();
+    download(profile)["sockopt"] = {{"dialerProxy", "dormant-download-handler"}, {"addressPortStrategy", "srv"},
+        {"domainStrategy", "ForceIPv6"}, {"interface", "unused-interface"}, {"tcpKeepAliveIdle", 7}};
+    auto output = prepare(profile); Require(output.has_value(), "overwritten child socket policy incorrectly constrained parent transport");
+    auto config = Parse(*output); Require(download(config)["sockopt"] == download(profile)["sockopt"], "ignored child socket policy was rewritten");
+    profile["outbounds"][0]["streamSettings"]["sockopt"]["penetrate"] = false;
+    Require(!prepare(profile), "independent active child chain or address strategy stopped being checked");
+  };
+  cases["xhttp-penetrate-parent-chain"] = [&] {
+    auto profile = penetrating();
+    profile["outbounds"][0]["settings"]["servers"][0]["address"] = "logical-upload.invalid";
+    profile["outbounds"][0]["streamSettings"]["sockopt"]["dialerProxy"] = "front";
+    download(profile)["address"] = "logical-download.invalid";
+    download(profile)["sockopt"]["dialerProxy"] = "dormant-child";
+    profile["outbounds"].push_back({{"tag", "front"}, {"protocol", "socks"}, {"settings", {{"servers", Json::array({{{"address", "endpoint.invalid"}, {"port", 10443}}})}}}});
+    std::vector<std::string> calls;
+    const auto output = PrepareProtectedVpn(profile.dump(), "session-user", "session-password", "Ethernet", [&](const std::string& host) { calls.push_back(host); return host == "endpoint.invalid" ? "192.0.2.5" : ""; });
+    Require(output.has_value() && calls == std::vector<std::string>{"endpoint.invalid"}, "caller chain bootstrapped upload/download logical targets");
+    auto config = Parse(*output);
+    Require(config["outbounds"][0]["streamSettings"]["sockopt"]["dialerProxy"] == "front"
+        && config["outbounds"][0]["streamSettings"]["sockopt"]["domainStrategy"] == "AsIs"
+        && download(config)["sockopt"] == download(profile)["sockopt"] && loop_count(config) == 1, "parent chain was not inherited by both targets");
+    for (const auto* target : {"missing-front", "proxy"}) {
+      auto invalid = profile; invalid["outbounds"][0]["streamSettings"]["sockopt"]["dialerProxy"] = target;
+      Require(!prepare(invalid), "missing/self parent transport chain admitted");
+    }
+    profile["outbounds"][3]["streamSettings"] = {{"sockopt", {{"dialerProxy", "proxy"}}}};
+    Require(!prepare(profile), "cyclic parent transport chain admitted");
+  };
+  cases["xhttp-penetrate-boundaries"] = [&] {
+    auto profile = penetrating(); download(profile)["address"] = "unresolved.invalid";
+    Require(!prepare(profile), "unresolved penetrating download gained fallback resolution");
+    profile = penetrating(); download(profile)["network"] = "tcp";
+    Require(!prepare(profile), "non-XHTTP download reached Core's XHTTP config cast");
+    profile = penetrating(); download(profile)["tlsSettings"]["echConfigList"] = "https://ech.invalid/config";
+    Require(!prepare(profile), "active download ECH resolver escaped its endpoint pin scope");
+    profile = penetrating(); profile["outbounds"][0] = {{"tag", "dynamic"}, {"protocol", "freedom"}, {"streamSettings", profile["outbounds"][0]["streamSettings"]}};
+    Require(!prepare(profile), "dynamic upload gained a download-only closed graph");
+    profile = penetrating(); profile["outbounds"][0]["streamSettings"]["sockopt"]["penetrate"] = false;
+    const auto output = prepare(profile); Require(output.has_value(), "independent download regressed"); auto config = Parse(*output);
+    Require(loop_count(config) == 2 && download(config)["sockopt"]["dialerProxy"] != config["outbounds"][0]["streamSettings"]["sockopt"]["dialerProxy"], "nonpenetrating socket policies were combined");
+    const auto loop = tagged(config, download(config)["sockopt"]["dialerProxy"].get<std::string>());
+    bool independent = false;
+    for (const auto& rule : config["routing"]["rules"]) if (rule.value("inboundTag", Json::array()) == Json::array({loop["settings"]["inboundTag"]}) && rule.contains("port"))
+      independent = tagged(config, rule["outboundTag"].get<std::string>())["streamSettings"]["sockopt"]["tcpKeepAliveIdle"] == 7;
+    Require(independent, "nonpenetrating download lost its own socket options");
+  };
   cases["localhost-tag-defaults"] = [&] {
     auto profile = source;
     profile["dns"] = {{"tag", "caller-root-dns"}, {"queryStrategy", "UseIPv4"}, {"hosts", {{"static.invalid", "192.0.2.14"}}},
@@ -546,7 +678,9 @@ int main(int argc, char** argv) try {
   broken_download_chain["outbounds"][0]["streamSettings"]["xhttpSettings"]["extra"]["downloadSettings"]["sockopt"] = {{"dialerProxy", "missing-download-handler"}};
   Require(!prepare(broken_download_chain), "effective XHTTP download references a missing handler");
   downloads["outbounds"][0]["streamSettings"]["sockopt"] = {{"penetrate", true}};
-  Require(!prepare(downloads), "download sockopt overwrite bypassed isolated pin scope");
+  Require(!prepare(downloads), "non-XHTTP penetrating download admitted");
+  downloads["outbounds"][0]["streamSettings"]["xhttpSettings"]["extra"]["downloadSettings"]["network"] = "xhttp";
+  Require(prepare(downloads).has_value(), "explicit XHTTP penetrating download rejected");
   auto tag_collision = source;
   tag_collision["dns"]["tag"] = kManagedInbound;
   tag_collision["dns"]["servers"][0]["tag"] = "flutter-vless-bootstrap-input";

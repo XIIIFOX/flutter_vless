@@ -15,7 +15,10 @@
     "transport/internet/udp/dispatcher.go": "76bdf02b75c5c71c424bc177c4f6284d15b4b23c271b2b5653de0ced61b86dfe",
     "proxy/socks/protocol.go": "3b6723cb8c358da8ca26c7f4672b578a3e9de5bd30c291e7ee5da30df5195cbd",
     "proxy/socks/server.go": "6247a63dc3d4d14f7e0d0cd52582692e9507bb85970ae3bdb67dd89537e1c363",
-    "proxy/socks/temp_udp_listen.go": "14ce91f83c617fce7c35b6cb668c2443a544c8b760bafb3b13a336caff06b34f"
+    "proxy/socks/temp_udp_listen.go": "14ce91f83c617fce7c35b6cb668c2443a544c8b760bafb3b13a336caff06b34f",
+    "transport/internet/splithttp/dialer.go": "ed4ec0d02b7f4bed517f1326c534186e7648af81fe0c974f601a1e933666d0cd",
+    "transport/internet/memory_settings.go": "333dad0111e0d215460aa2b1f376a032f79c2f12837b40911077662a7e35edcb",
+    "infra/conf/transport_sockopt.go": "9fba6eab1f52d0dac18c26b12f828a04762dfe44f08c123218da53faf45b32e3"
   },
   "module": "github.com/xtls/xray-core",
   "module_version": "v1.260327.1-0.20261017152356-92ccc939aaf4",

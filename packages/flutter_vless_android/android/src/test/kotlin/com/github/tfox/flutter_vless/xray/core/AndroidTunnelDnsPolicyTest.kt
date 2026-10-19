@@ -440,7 +440,7 @@ class AndroidTunnelDnsPolicyTest {
 
     @Test fun sharedPinnedCoreProtocolCorpusPreservesCallerOutboundsAndTransportFields() {
         val cases = JSONArray(requireNotNull(javaClass.getResource("/protocols.json")).readText())
-        assertEquals("Expected the complete shared protocol corpus", 8, cases.length())
+        assertEquals("Expected the complete shared protocol corpus", 9, cases.length())
         fun retained(label: String, expected: Any?, actual: Any?) {
             when (expected) {
                 is JSONObject -> {
@@ -485,6 +485,32 @@ class AndroidTunnelDnsPolicyTest {
                 val xhttp = stream.optJSONObject("xhttpSettings")
                 if (xhttp != null && xhttp.has("extra") && xhttp.isNull("extra"))
                     assertEquals(label, xhttp.toString(), output.getJSONObject("streamSettings").getJSONObject("xhttpSettings").toString())
+            }
+            if (label == "vless_xhttp_penetrating_download") {
+                assertEquals(label, setOf("endpoint.invalid"), prepared.bootstrapHostnames)
+                assertEquals(label, setOf("192.0.2.17"), prepared.bootstrapAddresses)
+                val stream = actual.getJSONObject(0).getJSONObject("streamSettings")
+                val parent = stream.getJSONObject("sockopt")
+                val child = stream.getJSONObject("xhttpSettings").getJSONObject("extra")
+                    .getJSONObject("downloadSettings").getJSONObject("sockopt")
+                assertTrue(label, parent.getBoolean("penetrate"))
+                assertEquals(label, 30, parent.getInt("tcpKeepAliveIdle"))
+                assertFalse("Parent policy must not be copied into the source child", child.has("penetrate"))
+                assertEquals(label, "dormant-download-handler", child.getString("dialerProxy"))
+                assertEquals(label, 7, child.getInt("tcpKeepAliveIdle"))
+                // Config mode preserves the caller DNS root; the explicit proxy
+                // mode above intentionally owns its DNS override and bootstrap.
+                val callerRoot = AndroidTunnelDnsPolicy.prepare(before, "config") {
+                    fail("Config mode must not bootstrap XHTTP endpoints")
+                    emptyList()
+                }
+                val callerOutput = JSONObject(callerRoot.configJson)
+                assertEquals(label, input.getJSONObject("dns").toString(), callerOutput.getJSONObject("dns").toString())
+                for (outboundIndex in 0 until expected.length())
+                    assertEquals(label, expected.get(outboundIndex).toString(),
+                        callerOutput.getJSONArray("outbounds").get(outboundIndex).toString())
+                assertTrue(label, callerRoot.bootstrapHostnames.isEmpty())
+                assertTrue(label, callerRoot.bootstrapAddresses.isEmpty())
             }
             assertEquals(label, before, input.toString())
         }

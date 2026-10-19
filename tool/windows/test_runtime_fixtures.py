@@ -22,6 +22,69 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    def test_actual_main_closes_partial_server_setup_without_shutdown_on_unstarted_owner(self):
+        for failure_stage in ("datagram_constructor", "second_constructor", "second_thread_start", "shutdown_failure"):
+            with self.subTest(stage=failure_stage), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary); owners = []; thread_starts = []
+                primary = RuntimeError("synthetic server setup failure")
+                illegal_shutdown = RuntimeError("shutdown called before serve_forever started")
+                class Owner:
+                    def __init__(self, address):
+                        self.server_address = (address[0], address[1] or 19000 + len(owners))
+                        self.socket = Mock(); self.started = False; self.shutdowns = 0; self.closes = 0
+                        owners.append(self)
+                    def serve_forever(self): raise AssertionError("Real server loop is forbidden")
+                    def shutdown(self):
+                        self.shutdowns += 1
+                        if not self.started: raise illegal_shutdown
+                        if failure_stage == "shutdown_failure": raise OSError("synthetic shutdown failure")
+                    def server_close(self): self.closes += 1
+                def stream_server(address, handler):
+                    if failure_stage == "second_constructor" and len(owners) == 1: raise primary
+                    return Owner(address)
+                def datagram_server(address, handler):
+                    if failure_stage == "datagram_constructor": raise primary
+                    return Owner(address)
+                def thread(*, target, daemon):
+                    owner = target.__self__
+                    def start():
+                        thread_starts.append(owner)
+                        if len(thread_starts) == 2: raise primary
+                        owner.started = True  # Inert successful start: never invoke target.
+                    return SimpleNamespace(start=start)
+                socket_owner = Mock(); socket_owner.__enter__ = Mock(return_value=socket_owner)
+                socket_owner.__exit__ = Mock(return_value=False)
+                socket_owner.getsockname.return_value = ("192.0.2.10", 45600)
+                adapter = Mock(); adapter.wait.return_value = 0
+                with runtime.ExitStack() as patches:
+                    for owner, name, value in [
+                        (runtime, "os", SimpleNamespace(name="nt", environ={"GITHUB_ACTIONS": "true"})),
+                        (runtime.sys, "argv", ["runtime_smoke.py", "--directory", str(directory), "--vpn"]),
+                        (runtime, "PROBE", None), (runtime, "REAL_DNS", False)]:
+                        patches.enter_context(patch.object(owner, name, value))
+                    patches.enter_context(patch.dict(runtime.PORTS))
+                    patches.enter_context(patch.object(runtime.socket, "socket", return_value=socket_owner))
+                    patches.enter_context(patch.object(runtime.socket, "gethostbyname", return_value="203.0.113.1"))
+                    patches.enter_context(patch.object(runtime, "external_http", return_value="HTTP 200"))
+                    patches.enter_context(patch.object(runtime.subprocess, "run", return_value=SimpleNamespace(stdout="inert", stderr="", returncode=0)))
+                    child = patches.enter_context(patch.object(runtime.subprocess, "Popen", side_effect=AssertionError("Real child forbidden")))
+                    patches.enter_context(patch.object(runtime, "start_adapter", return_value=(adapter, directory / "adapter.stop")))
+                    patches.enter_context(patch.object(runtime, "adapter_datagram", return_value="inert observed"))
+                    patches.enter_context(patch.object(runtime, "DirectOrigin", side_effect=stream_server))
+                    patches.enter_context(patch.object(runtime, "Server", side_effect=stream_server))
+                    patches.enter_context(patch.object(runtime, "ThreadingHTTPServer", side_effect=stream_server))
+                    patches.enter_context(patch.object(runtime, "DatagramServer", side_effect=datagram_server))
+                    patches.enter_context(patch.object(runtime.threading, "Thread", side_effect=thread))
+                    with self.assertRaises(RuntimeError) as raised: runtime.main()
+                    self.assertIs(primary, raised.exception, "Partial setup cleanup hid the original failure")
+                    child.assert_not_called()
+                self.assertTrue(owners)
+                for owner in owners:
+                    self.assertEqual(1, owner.closes, "Constructed server ownership was lost")
+                    self.assertEqual(int(owner.started), owner.shutdowns, "Only actually started workers may be shut down")
+                adapter.wait.assert_called_once_with(timeout=10)
+                self.assertTrue((directory / "vpn-results.json").is_file())
+
     def test_actual_rejection_publisher_is_invisible_until_closed_and_complete(self):
         # Execute the actual main() publication expression, with a synchronous
         # reader interleaved after open and each partial write (no child/thread).

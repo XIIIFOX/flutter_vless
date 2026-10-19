@@ -1039,6 +1039,7 @@ def main():
     probe = directory / "runtime_probe.exe"
     PROBE = probe
     servers = []
+    started_servers = []
     adapters = []
     asset_roots = []
     ipv6_payload = None
@@ -1067,8 +1068,8 @@ def main():
                 results.append(dict(check="IPv6 adapter baseline" if ipv6 else "IPv4 adapter baseline", actual=actual, passed=True))
         # A VPN freedom socket is pinned to the underlay; use a local target
         # on that interface, not a loopback-only target on another interface.
-        servers = [DirectOrigin((direct_address, 0), Direct),
-                   Server((direct_address, 0), Socks)]
+        servers.append(DirectOrigin((direct_address, 0), Direct))
+        servers.append(Server((direct_address, 0), Socks))
         servers[0].daemon_threads = False  # Join bounded HTTP callbacks before final direct-only observations.
         PORTS["direct"] = servers[0].server_address[1]
         PORTS["proxy"] = servers[1].server_address[1]
@@ -1078,21 +1079,22 @@ def main():
             # UDP and TCP intentionally share the same fixed numeric IPv4
             # relay endpoint, keeping Xray's exact transport pin closed.
             relay = DatagramServer((direct_address, PORTS["proxy"]), IPv6PayloadDatagram)
+            servers.append(relay)
             relay.socket.settimeout(1)
             relay.ipv6_payload = ipv6_payload
             assert relay.server_address == servers[1].server_address, "IPv6 proxy UDP relay changed endpoint"
-            servers.append(relay)
             servers.append(ThreadingHTTPServer(("127.0.0.1", PORTS["direct"]), Direct))
             direct_dns = Server((direct_address, 0), DirectDns)
+            servers.append(direct_dns)
             direct_dns.daemon_threads = False  # server_close joins the bounded, owned DNS callbacks.
             direct_dns.questions, direct_dns.questions_lock = [], threading.Lock()
-            servers.append(direct_dns)
             if args.native_routing:
                 # The selected default accepts ordinary traffic. It must not
                 # share the prior IPv6 scenario's strict one-shot nonce state.
                 servers.append(native_routing_proxy(direct_address))
         for server in servers:
             threading.Thread(target=server.serve_forever, daemon=True).start()
+            started_servers.append(server)
         with socket.socket() as candidate:
             candidate.bind(("127.0.0.1", 0))
             PORTS["extra"] = candidate.getsockname()[1]
@@ -1357,6 +1359,8 @@ def main():
                     native_routing_gate(probe, directory, direct_address, direct_dns, servers[0], results)
                 print("WINDOWS_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2", flush=True)
     finally:
+        primary = sys.exc_info()[1]
+        server_cleanup_error = None
         for process, stop in adapters:
             stop.touch()
             try:
@@ -1370,8 +1374,17 @@ def main():
             except (AssertionError, OSError):
                 results.append(dict(check="IPv6 SOCKS control cleanup", passed=False))
         for server in servers:
-            server.shutdown()
-            server.server_close()
+            # BaseServer.shutdown waits for serve_forever; calling it on a
+            # constructed owner whose worker never started waits forever.
+            if server in started_servers:
+                try: server.shutdown()
+                except BaseException as error:
+                    if server_cleanup_error is None: server_cleanup_error = error
+            try: server.server_close()
+            except BaseException as error:
+                if server_cleanup_error is None: server_cleanup_error = error
+        if server_cleanup_error is not None:
+            results.append(dict(check="owned server shutdown and close", passed=False))
         if servers and hasattr(servers[0], "direct_only_lock"):
             with servers[0].direct_only_lock:
                 clean = servers[0].direct_only_observed.count("direct-only.invalid") == 6 \
@@ -1391,6 +1404,8 @@ def main():
             except OSError:
                 results.append(dict(check="owned asset directory cleanup", passed=False))
         (directory / ("vpn-results.json" if args.vpn else "proxy-results.json")).write_text(json.dumps(results, indent=2))
+        if server_cleanup_error is not None and primary is None:
+            raise server_cleanup_error
     if not results or not all(row["passed"] for row in results):
         raise SystemExit(1)
 

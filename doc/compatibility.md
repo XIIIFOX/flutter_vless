@@ -1176,6 +1176,10 @@ without retaining the child exit status. Atomic command publication and bounded
 exit diagnostics address a demonstrated fixture ordering gap; that gap is not
 established as the cause of this CI failure. Apple VPN health checks connect to
 the existing adapter and do not own an analogous TCP listener.
+The 2025 Windows job reaches its 15-minute limit before retaining VPN-profile
+logs. File-only regressions also ensure partial fixture setup closes every
+constructed server and avoids shutdown before its worker starts. They fix a
+demonstrated cleanup hang without identifying the cause of that earlier timeout.
 Standalone delay allocation, Core handoff races, recovery relocation and broader
 proxy-only allocation remain separate work under item 5.
 

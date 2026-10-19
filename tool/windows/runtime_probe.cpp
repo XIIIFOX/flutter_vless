@@ -239,9 +239,15 @@ int main(int argc,char** argv) {
       if (!rejected) { manager.Stop(); return 28; }
     }
     if (!state_file.empty()) {
+      const auto traffic = manager.GetTrafficSample();
       std::ofstream state(state_file);
       state << "{\"running\":" << (manager.IsRunning()?"true":"false")
-            << ",\"protecting\":" << (manager.IsProtecting()?"true":"false") << "}";
+            << ",\"protecting\":" << (manager.IsProtecting()?"true":"false")
+            << ",\"tick\":" << i + 1
+            << ",\"upload\":" << traffic.upload.value_or(0)
+            << ",\"download\":" << traffic.download.value_or(0)
+            << ",\"upload_available\":" << (traffic.upload.has_value()?"true":"false")
+            << ",\"download_available\":" << (traffic.download.has_value()?"true":"false") << "}";
     }
     std::cout<<"RUNNING="<<manager.IsRunning()<<" SECOND="<<i+1<<std::endl;
     std::this_thread::sleep_for(std::chrono::seconds(1));

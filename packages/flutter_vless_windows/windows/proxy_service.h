@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <condition_variable>
 #include "asset_location.h"
+#include "traffic_counters.h"
 
 namespace fs = std::filesystem;
 
@@ -63,6 +64,7 @@ class ProxyService {
    * @brief Gets current traffic statistics.
    */
   void GetTrafficStats(int64_t& upload, int64_t& download);
+  flutter_vless::traffic::Sample GetTrafficSample();
 
   /**
    * @brief Measures delay to a target URL.
@@ -123,10 +125,7 @@ class ProxyService {
   
   // Traffic statistics
   std::mutex stats_mutex_;
-  int64_t total_upload_ = 0;
-  int64_t total_download_ = 0;
-  int64_t upload_speed_ = 0;
-  int64_t download_speed_ = 0;
+  flutter_vless::traffic::Sample traffic_sample_;
   
   // Process management
   std::unique_ptr<ProcessHandle> xray_process_;
@@ -164,7 +163,7 @@ struct ApiClient {
   std::string api_address_;
   int api_port_ = 0;
   
-  bool GetStats(std::map<std::string, int64_t>& stats);
+  bool GetStats(flutter_vless::traffic::Stats& stats);
   int MeasureDelay(const std::string& url);
   std::string GetVersion();
   

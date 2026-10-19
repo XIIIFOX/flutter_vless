@@ -160,10 +160,7 @@ void ProxyService::Stop() {
   asset_directory_.reset();
 
   std::lock_guard<std::mutex> lock(stats_mutex_);
-  total_upload_ = 0;
-  total_download_ = 0;
-  upload_speed_ = 0;
-  download_speed_ = 0;
+  traffic_sample_ = {};
 }
 
 bool ProxyService::IsRunning() const {
@@ -254,34 +251,20 @@ bool ProxyService::InitializeApiClient() {
 }
 
 void ProxyService::UpdateTrafficStats() {
-  if (!api_client_) return;
-  
-  std::map<std::string, int64_t> stats;
-  if (!api_client_->GetStats(stats)) return;
-  
-  std::lock_guard<std::mutex> lock(stats_mutex_);
-  
-  int64_t new_upload = 0;
-  int64_t new_download = 0;
-  
-  for (const auto& [key, value] : stats) {
-    if (key.find("uplink") != std::string::npos) {
-      new_upload += value;
-    } else if (key.find("downlink") != std::string::npos) {
-      new_download += value;
-    }
-  }
-  
-  upload_speed_ = new_upload - total_upload_;
-  download_speed_ = new_download - total_download_;
-  total_upload_ = new_upload;
-  total_download_ = new_download;
+  flutter_vless::traffic::Sample sample;
+  const auto tag = flutter_vless::traffic::ProxyTag(current_config_);
+  flutter_vless::traffic::Stats stats;
+  if (api_client_ && !tag.empty() && api_client_->GetStats(stats))
+    sample = flutter_vless::traffic::Select(stats, tag);
+  std::lock_guard<std::mutex> lock(stats_mutex_); traffic_sample_ = sample;
 }
-
-void ProxyService::GetTrafficStats(int64_t& upload, int64_t& download) {
+flutter_vless::traffic::Sample ProxyService::GetTrafficSample() {
   std::lock_guard<std::mutex> lock(stats_mutex_);
-  upload = total_upload_;
-  download = total_download_;
+  return ready_.load() ? traffic_sample_ : flutter_vless::traffic::Sample{};
+}
+void ProxyService::GetTrafficStats(int64_t& upload, int64_t& download) {
+  const auto sample = GetTrafficSample();
+  upload = sample.upload.value_or(0); download = sample.download.value_or(0);
 }
 
 int ProxyService::GetServerDelay(const std::string& url) {
@@ -522,89 +505,19 @@ std::optional<std::string> ProxyService::DetectApiAddressInConfig(const fs::path
  * Xray returns statistics in format:
  * "inbound>>>tag>>>traffic>>>uplink" and "inbound>>>tag>>>traffic>>>downlink"
  * 
- * The function parses these and aggregates upload/download totals.
+ * The function preserves exact decoded names and direction-local availability.
  * 
  * @warning CRITICAL: This function relies on the specific JSON output format of
  *          `xray api statsquery`. If Xray changes its output format, this parser
- *          may need to be updated. The parser manually extracts "name" and "value"
- *          fields to avoid heavy JSON library dependencies.
+ *          may need to be updated. A unique record with an omitted value is the
+ *          Core's serialized zero; malformed or duplicated records are unavailable.
  */
-bool ApiClient::GetStats(std::map<std::string, int64_t>& stats) {
-  // std::cerr << "GetStats: entry" << std::endl;
-  if (!service_) {
-    // std::cerr << "GetStats: service is null" << std::endl;
-    return false;
-  }
-
+bool ApiClient::GetStats(flutter_vless::traffic::Stats& stats) {
+  stats.clear();
+  if (!service_) return false;
   std::string output;
-  // Use "api statsquery" to get all stats. 
-  // -s specifies the API server address.
-  // -pattern "" matches everything.
-  std::string args = "api statsquery -s " + api_address_ + ":" + std::to_string(api_port_) + " -pattern \"\"";
-  
-  // std::cerr << "GetStats: calling RunXrayApiCommand" << std::endl;
-  if (!RunXrayApiCommand(args, output)) {
-    // std::cerr << "GetStats: RunXrayApiCommand failed" << std::endl;
-    return false;
-  }
-
-  // Log raw stats for debugging as requested
-  // std::cerr << "Raw stats output:\n" << output << std::endl;
-
-  // Parse JSON output line by line
-  std::istringstream iss(output);
-  std::string line;
-  std::string current_name;
-  int64_t current_value = 0;
-  
-  while (std::getline(iss, line)) {
-    // Look for "name": "..."
-    size_t name_pos = line.find("\"name\"");
-    if (name_pos != std::string::npos) {
-      size_t colon = line.find(':', name_pos);
-      if (colon != std::string::npos) {
-        size_t start_quote = line.find('"', colon + 1);
-        if (start_quote != std::string::npos) {
-           size_t end_quote = line.find('"', start_quote + 1);
-           if (end_quote != std::string::npos) {
-             current_name = line.substr(start_quote + 1, end_quote - start_quote - 1);
-             current_value = 0; // Reset value for new entry
-           }
-        }
-      }
-    }
-    
-    // Look for "value": ...
-    size_t value_pos = line.find("\"value\"");
-    if (value_pos != std::string::npos) {
-      size_t colon = line.find(':', value_pos);
-      if (colon != std::string::npos) {
-        std::string val_str = line.substr(colon + 1);
-        // Remove trailing comma if present
-        size_t comma = val_str.find(',');
-        if (comma != std::string::npos) {
-          val_str = val_str.substr(0, comma);
-        }
-        try {
-          current_value = std::stoll(val_str);
-        } catch (...) {
-          current_value = 0;
-        }
-      }
-    }
-    
-    // Look for closing brace of an object
-    if (line.find('}') != std::string::npos) {
-      if (!current_name.empty()) {
-        stats[current_name] = current_value;
-        current_name.clear();
-        current_value = 0;
-      }
-    }
-  }
-  
-  // std::cerr << "Parsed stats count: " << stats.size() << std::endl;
-  return true;
+  const std::string args = "api statsquery -s " + api_address_ + ":" + std::to_string(api_port_) + " -pattern \"\"";
+  return RunXrayApiCommand(args, output) && flutter_vless::traffic::ParseStats(output, stats);
 }
 
 int ApiClient::MeasureDelay(const std::string& url) {

@@ -78,6 +78,9 @@ jobs:
           if ($log -notmatch 'WINDOWS_PRIVATE_PORT_AVAILABILITY_PASS=2') { throw 'Occupied TCP listener availability was not tested' }
           if ($log -notmatch 'WINDOWS_PACKET_PROBE_SOURCE_GUARD_PASS=4') { throw 'Actual packet-probe allocation source was not tested' }
           if ($log -notmatch 'WINDOWS_PACKET_PROBE_EXCLUSION_PURE_PASS=8') { throw 'Packet-probe listener exclusion and cleanup were not tested' }
+          if ($log -notmatch 'WINDOWS_TRAFFIC_SOURCE_GUARD_PASS=4') { throw 'Actual traffic consumer wiring was not tested' }
+          if ($log -notmatch 'WINDOWS_TRAFFIC_WIRE_PASS=11') { throw 'Shared Core counter wire cases were not tested' }
+          if ($log -notmatch 'WINDOWS_TRAFFIC_CONSUMER_PASS=12') { throw 'Owned counter selection and status lifecycle were not tested' }
       - name: Verify gateway selection through Windows APIs
         shell: pwsh
         run: |
@@ -86,7 +89,12 @@ jobs:
           $expected = (Find-NetRoute -RemoteIPAddress 8.8.8.8 | Where-Object { $_.DestinationPrefix }).NextHop
           if ($gateway.Trim() -notin $expected) { throw 'Native gateway differs from Windows routing API' }
       - name: Exercise real Xray domain routing and reverse controls
-        run: python tool/windows/runtime_smoke.py --directory build/windows-runtime
+        shell: pwsh
+        run: |
+          python tool/windows/runtime_smoke.py --directory build/windows-runtime 2>&1 | Tee-Object -FilePath build/windows-runtime/proxy-traffic-runtime.log
+          if ($LASTEXITCODE) { throw 'Proxy runtime acceptance failed' }
+          $log = Get-Content build/windows-runtime/proxy-traffic-runtime.log -Raw
+          if ([regex]::Matches($log, '(?m)^WINDOWS_TRAFFIC_COUNTER_RUNTIME_PASS=2\r?$').Count -ne 1) { throw 'Proxy owned-counter acceptance is incomplete' }
       - name: Exercise portable nested runtime and a Unicode path
         shell: pwsh
         run: |
@@ -94,8 +102,10 @@ jobs:
           New-Item -ItemType Directory -Force "$portable/xray" | Out-Null
           Copy-Item build/windows-runtime/runtime_probe.exe $portable
           Copy-Item build/windows-runtime/xray.exe,build/windows-runtime/geoip.dat,build/windows-runtime/geosite.dat,build/windows-runtime/tun2socks.exe,build/windows-runtime/wintun.dll "$portable/xray"
-          python tool/windows/runtime_smoke.py --directory $portable
+          python tool/windows/runtime_smoke.py --directory $portable 2>&1 | Tee-Object -FilePath build/windows-runtime/portable-traffic-runtime.log
           if ($LASTEXITCODE) { throw 'Portable routing failed' }
+          $log = Get-Content build/windows-runtime/portable-traffic-runtime.log -Raw
+          if ([regex]::Matches($log, '(?m)^WINDOWS_TRAFFIC_COUNTER_RUNTIME_PASS=2\r?$').Count -ne 1) { throw 'Portable owned-counter acceptance is incomplete' }
           Copy-Item "$portable/proxy-results.json" build/windows-runtime/portable-results.json
       - uses: actions/upload-artifact@v4
         if: always()
@@ -205,6 +215,7 @@ jobs:
           $log = Get-Content build/windows-runtime/native-routing-runtime.log -Raw
           if ($log -notmatch 'WINDOWS_NATIVE_ROUTING_TRAFFIC_PASS=2') { throw 'Native routing traffic proof is incomplete' }
           if ($log -notmatch 'WINDOWS_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2') { throw 'VPN traffic with occupied preferred TCP ports was not tested' }
+          if ([regex]::Matches($log, '(?m)^WINDOWS_TRAFFIC_COUNTER_RUNTIME_PASS=4\r?$').Count -ne 1) { throw 'VPN owned-counter acceptance is incomplete' }
       - name: Restore the disposable runner after any failure
         if: always()
         shell: pwsh

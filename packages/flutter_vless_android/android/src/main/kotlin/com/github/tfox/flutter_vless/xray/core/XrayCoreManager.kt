@@ -12,6 +12,7 @@ import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import com.github.tfox.flutter_vless.xray.utils.Utilities
 import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
 import java.io.File
 import java.io.IOException
 import java.net.InetAddress
@@ -24,8 +25,8 @@ import java.util.concurrent.TimeUnit
 object XrayCoreManager {
     @Volatile private var xrayProcess: Process? = null
     private var runtimeInputs: NativeRuntimeConfig.Inputs? = null
-    private var lastProxyUplink = 0L
-    private var lastProxyDownlink = 0L
+    private var lastProxyUplink: Long? = null
+    private var lastProxyDownlink: Long? = null
     private fun nextFreePort(preferredPort: Int, usedPorts: Set<Int>, tcpAvailable: ((Int) -> Boolean)?): Int {
         require(preferredPort in 1..65535) { "Invalid private listener port" }
         var attempts = 0
@@ -140,6 +141,7 @@ object XrayCoreManager {
         routingPrepared: ((NativeRoutingPreparation) -> Unit)? = null,
         tcpAvailable: ((Int) -> Boolean)? = null,
         environment: (String) -> String? = System::getenv): JSONObject {
+        config.runtimeTrafficInboundTag = null
         // The DNS preparer chooses the adapter identity before adding its rule.
         // Accept it only with the exact native-prepared document, including on
         // recovery; guessing a tag from caller JSON could scope another input.
@@ -174,6 +176,7 @@ object XrayCoreManager {
         val serviceTags = XrayServiceTags(json)
         val used = XrayPortSpec.serviceListenerPorts(json).toMutableSet()
         var hasSocks = false
+        var managedInput: JSONObject? = null
         for (i in 0 until inbounds.length()) {
             val inbound = inbounds.getJSONObject(i)
             val port = inbound.optInt("port", -1)
@@ -197,6 +200,7 @@ object XrayCoreManager {
                 .put("settings", JSONObject().put("auth", "noauth").put("udp", true))
                 .put("sniffing", JSONObject().put("enabled", true).put("routeOnly", true)
                     .put("destOverride", JSONArray().put("http").put("tls").put("quic"))))
+            managedInput = inbounds.getJSONObject(inbounds.length() - 1)
             used.add(config.LOCAL_SOCKS5_PORT)
         }
         if (!config.PROXY_ONLY) {
@@ -207,7 +211,8 @@ object XrayCoreManager {
         }
         if (!json.has("stats")) json.put("stats", JSONObject())
         if (!json.has("policy")) json.put("policy", JSONObject().put("system", JSONObject()
-            .put("statsOutboundUplink", true).put("statsOutboundDownlink", true)))
+            .put("statsOutboundUplink", true).put("statsOutboundDownlink", true)
+            .put("statsInboundUplink", true).put("statsInboundDownlink", true)))
         if (json.has("api")) {
             // Zero means no library-owned API. Never query an arbitrary caller
             // service, including when the caller intentionally supplied null.
@@ -232,6 +237,17 @@ object XrayCoreManager {
             routingPrepared?.invoke(NativeRoutingPreparation(intent, originalInboundCount, managed.getString("tag"),
                 intent.sourceInboundIndex, // Imported inputs retain original order; private inputs are appended.
                 protectedDns?.guardRuleIndices.orEmpty().map { it+apiRuleInsertions }))
+        }
+        // Match the already selected local SOCKS input. Imported duplicate or
+        // untagged proxy listeners have no unambiguous counter identity.
+        val selected = if (!config.PROXY_ONLY) managedInput else
+            (0 until inbounds.length()).map(inbounds::getJSONObject).filter {
+                !XrayPortSpec.isUnixListen(it.optString("listen")) &&
+                    it.optString("protocol").lowercase() == "socks" && it.optInt("port") == config.LOCAL_SOCKS5_PORT
+            }.singleOrNull()
+        val selectedTag = selected?.opt("tag") as? String
+        config.runtimeTrafficInboundTag = selectedTag?.takeIf { tag ->
+            tag.isNotEmpty() && (0 until inbounds.length()).count { inbounds.getJSONObject(it).opt("tag") == tag } == 1
         }
         return json
     }
@@ -328,7 +344,7 @@ object XrayCoreManager {
             if (protector != null && !protector.awaitVerified()) { stopWorkers(); return false }
             if (!process.isAlive) { stopWorkers(); return false }
             AppConfigs.V2RAY_CONFIG = config
-            lastProxyUplink = 0; lastProxyDownlink = 0
+            clearTrafficBaselines()
             true
         } catch (_: Exception) { stopWorkers(); false }
     }
@@ -339,6 +355,7 @@ object XrayCoreManager {
     internal fun ownsCoreProcess(candidate: Process): Boolean = xrayProcess === candidate && candidate.isAlive
 
     @Synchronized internal fun stopWorkers(): Boolean {
+        clearTrafficBaselines()
         val process = xrayProcess
         xrayProcess = null // Invalidate callbacks before signaling the old process.
         if (process != null) {
@@ -357,8 +374,8 @@ object XrayCoreManager {
         val changed = AppConfigs.V2RAY_STATE != state
         AppConfigs.V2RAY_STATE = state
         if (changed) com.github.tfox.flutter_vless.NativeQuickAccess.refresh(context)
-        val traffic = if (state == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED && statsQueryPort(AppConfigs.V2RAY_CONFIG) != null)
-            getV2rayTraffic(context) else longArrayOf(0, 0, 0, 0)
+        val traffic = if (state == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED) getV2rayTraffic(context)
+            else { clearTrafficBaselines(); longArrayOf(0, 0, 0, 0) }
         context.sendBroadcast(Intent(AppConfigs.V2RAY_CONNECTION_INFO).setPackage(context.packageName)
             .putExtra("STATE", state).putExtra("DURATION", seconds.toString())
             .putExtra("UPLOAD_SPEED", traffic[0]).putExtra("DOWNLOAD_SPEED", traffic[1])
@@ -367,29 +384,50 @@ object XrayCoreManager {
 
     internal fun statsQueryPort(config: XrayConfig?): Int? = config?.LOCAL_API_PORT?.takeIf { it in 1..65535 }
 
-    fun getV2rayTraffic(context: Context): LongArray {
-        val apiPort = statsQueryPort(AppConfigs.V2RAY_CONFIG) ?: return longArrayOf(0, 0, 0, 0)
-        if (xrayProcess?.isAlive != true) return longArrayOf(0, 0, 0, 0)
+    internal data class TrafficSample(val uplink: Long? = null, val downlink: Long? = null)
+
+    private fun clearTrafficBaselines() { lastProxyUplink = null; lastProxyDownlink = null }
+
+    internal fun readTraffic(context: Context): TrafficSample {
+        val config = AppConfigs.V2RAY_CONFIG ?: return TrafficSample()
+        val apiPort = statsQueryPort(config) ?: return TrafficSample()
+        val tag = config.runtimeTrafficInboundTag ?: return TrafficSample()
+        val owner = xrayProcess?.takeIf { it.isAlive } ?: return TrafficSample()
         return try {
             val process = ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
-                "api", "statsquery", "--server=127.0.0.1:$apiPort", "--pattern", "outbound>>>proxy>>>")
+                "api", "statsquery", "--server=127.0.0.1:$apiPort", "--pattern", "inbound>>>$tag>>>traffic>>>")
                 .redirectErrorStream(true).start()
             // Stats are bounded and parsed locally; never included in diagnostics.
             val output = BoundedCoreCommand.capture(process)?.toString(Charsets.UTF_8)
-                ?: return longArrayOf(0, 0, 0, 0)
-            val stats = JSONObject(output).optJSONArray("stat") ?: JSONArray()
-            var up = 0L; var down = 0L
-            for (i in 0 until stats.length()) {
-                val stat = stats.getJSONObject(i)
-                when (stat.optString("name")) {
-                    "outbound>>>proxy>>>traffic>>>uplink" -> up = stat.optLong("value")
-                    "outbound>>>proxy>>>traffic>>>downlink" -> down = stat.optLong("value")
-                }
+                ?: return TrafficSample()
+            if (xrayProcess !== owner || !owner.isAlive || AppConfigs.V2RAY_CONFIG !== config) return TrafficSample()
+            val decoder = JSONTokener(output)
+            val root = decoder.nextValue()
+            if (root !is JSONObject || decoder.nextClean() != '\u0000') return TrafficSample()
+            val stats = root.optJSONArray("stat") ?: return TrafficSample()
+            fun direction(name: String): Long? {
+                val matches = (0 until stats.length()).mapNotNull(stats::optJSONObject)
+                    .filter { it.opt("name") == "inbound>>>$tag>>>traffic>>>$name" }
+                val stat = matches.singleOrNull() ?: return null
+                // The pinned CLI omits proto int64 value at zero. The named
+                // counter still exists; a missing row means unavailable.
+                if (!stat.has("value")) return 0
+                val value = stat.opt("value") as? Number ?: return null
+                return value.toString().toLongOrNull()?.takeIf { it >= 0 }
             }
-            val result = longArrayOf((up - lastProxyUplink).coerceAtLeast(0), (down - lastProxyDownlink).coerceAtLeast(0), up, down)
-            lastProxyUplink = up; lastProxyDownlink = down
-            result
-        } catch (_: Exception) { longArrayOf(0, 0, 0, 0) }
+            TrafficSample(direction("uplink"), direction("downlink"))
+        } catch (_: Exception) { TrafficSample() }
+    }
+
+    fun getV2rayTraffic(context: Context): LongArray {
+        val sample = readTraffic(context)
+        fun delta(current: Long?, previous: Long?): Long =
+            if (current != null && previous != null && current >= previous) current - previous else 0
+        return longArrayOf(delta(sample.uplink, lastProxyUplink), delta(sample.downlink, lastProxyDownlink),
+            sample.uplink ?: 0, sample.downlink ?: 0).also {
+            lastProxyUplink = sample.uplink
+            lastProxyDownlink = sample.downlink
+        }
     }
 
     fun getServerDelay(context: Context, configJson: String, url: String, geoAssetsDirectory: String? = null,

@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Read Android/Windows and Apple proxy-only traffic from the selected session inbound. Preserve caller-disabled counters, distinguish unavailable directions internally, and reset speed baselines across gaps and restarts. Keep Apple VPN HEV counters unchanged; add shared wire and actual-consumer regressions.
 * Add per-session `VpnRoutingOptions` for an original inbound's tag context and an explicit default outbound on Android, iOS, macOS and Windows. Wire native admission, exact final config/metadata preflight, recovery and saved quick profiles; expose example controls. Factory-capable binaries remain unpublished previews pending runtime/device acceptance.
 * Validate frozen native configurations before replacing working sessions on every backend, retaining the exact checked bytes through startup and recovery.
 * Add static Apple routing ABI negotiation that refuses cached, incomplete and unknown runtimes before forwarding. Add an unpublished shared CLI entry for private capability/check/start lifecycle; preserve stock command logging. Keep native launcher adoption separate.

@@ -217,24 +217,13 @@ std::string V2rayManager::GetProviderDebugSnapshot() {
  * @note CRITICAL FIX: This method used to only query ProxyService, causing zero stats
  * in VPN mode. Now it correctly checks the mode and queries the appropriate service.
  */
+flutter_vless::traffic::Sample V2rayManager::GetTrafficSample() {
+  return proxy_only_ ? (proxy_service_ ? proxy_service_->GetTrafficSample() : flutter_vless::traffic::Sample{})
+      : (vpn_service_ ? vpn_service_->GetTrafficSample() : flutter_vless::traffic::Sample{});
+}
 void V2rayManager::GetTrafficStats(int64_t& upload, int64_t& download) {
-  if (proxy_only_) {
-    // Proxy Mode: Get stats from ProxyService
-    if (proxy_service_) {
-      proxy_service_->GetTrafficStats(upload, download);
-    } else {
-      upload = 0;
-      download = 0;
-    }
-  } else {
-    // VPN Mode: Get stats from VpnService
-    if (vpn_service_) {
-      vpn_service_->GetTrafficStats(upload, download);
-    } else {
-      upload = 0;
-      download = 0;
-    }
-  }
+  const auto sample = GetTrafficSample();
+  upload = sample.upload.value_or(0); download = sample.download.value_or(0);
 }
 
 bool V2rayManager::ValidateConfig(const std::string& config, bool proxy_only, const flutter_vless::asset_location::Root& assets) {

@@ -31,6 +31,12 @@ cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX build\windows-runtime\pack
 if errorlevel 1 exit /b 1
 build\windows-runtime\packet_probe_start_test.exe
 if errorlevel 1 exit /b 1
+python tool\test_windows_traffic.py --generate build\windows-runtime\traffic_consumer_test.cpp
+if errorlevel 1 exit /b 1
+cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX /I%S% build\windows-runtime\traffic_consumer_test.cpp /Fe:build\windows-runtime\traffic_consumer_test.exe /Fo:build\windows-runtime\traffic_consumer_test.obj
+if errorlevel 1 exit /b 1
+build\windows-runtime\traffic_consumer_test.exe tool\fixtures\compatibility\traffic-counters.json
+if errorlevel 1 exit /b 1
 cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX %S%\native_routing_adoption_test.cpp %S%\native_routing_spec.cpp /Fe:build\windows-runtime\native_routing_adoption_test.exe /Fo:build\windows-runtime\ /link bcrypt.lib
 if errorlevel 1 exit /b 1
 build\windows-runtime\native_routing_adoption_test.exe

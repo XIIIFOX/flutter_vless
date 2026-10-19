@@ -3,17 +3,20 @@ func runMacCounterChecks() async throws {
     let origin = LocalProbeOrigin(port: 18096)
     defer { origin.stop() }
     let raw: [String: Any] = [
-        "inbounds": [["protocol": "socks", "listen": "127.0.0.1", "port": 18095]],
+        "inbounds": [["tag": "counter-primary", "protocol": "socks", "listen": "127.0.0.1", "port": 18095]],
         "outbounds": [["protocol": "freedom", "tag": "direct", "settings": ["redirect": "127.0.0.1:18096"]]],
         "API": ["tag": "fixture-management-api", "listen": "127.0.0.1:18081", "services": ["HandlerService", "RoutingService"]]
     ]
     let runner = ProxyOnlyRunner()
     try runner.start(configData: JSONSerialization.data(withJSONObject: raw), geoAssetsDirectory: nil)
     defer { runner.stop() }
-    let fd = try LocalSOCKS5Client.openConnection(proxyPort: 18095, credentials: nil, host: "probe.invalid", port: 80)
-    _ = LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("GET / HTTP/1.1\r\nHost: probe.invalid\r\nConnection: close\r\n\r\n".utf8))
-    precondition(String(decoding: LocalSOCKS5Client.receiveExactly(fd: fd, count: 12) ?? [], as: UTF8.self).contains("204"))
-    close(fd)
+    func payload() throws {
+        let fd = try LocalSOCKS5Client.openConnection(proxyPort: 18095, credentials: nil, host: "probe.invalid", port: 80)
+        defer { close(fd) }
+        precondition(LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("GET / HTTP/1.1\r\nHost: probe.invalid\r\nConnection: close\r\n\r\n".utf8)))
+        precondition(String(decoding: LocalSOCKS5Client.receiveExactly(fd: fd, count: 12) ?? [], as: UTF8.self).contains("204"))
+    }
+    try payload()
     var transferred = false
     for _ in 0..<10 {
         let stats = runner.queryTrafficStats()
@@ -28,4 +31,26 @@ func runMacCounterChecks() async throws {
     precondition(frame.count == 9 && frame[3] == 4 && frame.suffix(4).allSatisfy { $0 == 0 },
                  "Imported management API must remain available alongside native counters")
     print("MACOS_COUNTERS_AND_API_PASSTHROUGH_PASS")
+    runner.stop()
+
+    // A real payload does not make unavailable input counters available.
+    // Preserve the caller's untagged input and explicit disabled policy.
+    for disabled in [false, true] {
+        var negative = raw
+        if disabled {
+            negative["policy"] = ["system": ["statsInboundUplink": false, "statsInboundDownlink": false,
+                                             "statsOutboundUplink": false, "statsOutboundDownlink": false]]
+        } else {
+            negative["inbounds"] = [["protocol": "socks", "listen": "127.0.0.1", "port": 18095]]
+        }
+        try runner.start(configData: JSONSerialization.data(withJSONObject: negative), geoAssetsDirectory: nil)
+        try payload()
+        let stats = runner.queryTrafficStats()
+        precondition(stats.upload == 0 && stats.download == 0 && stats.uploadSpeed == 0 && stats.downloadSpeed == 0)
+        runner.stop()
+        print(disabled ? "MACOS_COUNTERS_DISABLED_UNAVAILABLE_PASS" : "MACOS_COUNTERS_UNTAGGED_UNAVAILABLE_PASS")
+    }
+    origin.stop()
+    let observed = origin.state()
+    precondition(observed.0 == 3 && !observed.1 && origin.connections() == 3)
 }

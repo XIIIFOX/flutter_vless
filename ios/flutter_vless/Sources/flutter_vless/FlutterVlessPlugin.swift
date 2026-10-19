@@ -149,11 +149,23 @@ private final class ProxyOnlyRunner {
     struct Prepared {
         let data: Data
         fileprivate let endpoint: (protocolName: String, port: Int, credentials: LocalProxyCredentials?)?
+        fileprivate let counterTag: String?
     }
 
     fileprivate static func prepare(configData: Data) throws -> Prepared {
         let data = try buildProxyOnlyConfigData(configData: configData)
-        return Prepared(data: data, endpoint: try findDelayEndpoint(data))
+        let endpoint = try findDelayEndpoint(data)
+        var counterTag: String?
+        if let endpoint, let json = try? LocalProxyAccessPolicy.normalizedConfig(configData: data),
+           let inputs = json["inbounds"] as? [[String: Any]] {
+            let selected = inputs.filter { ($0["protocol"] as? String) == endpoint.protocolName && ($0["port"] as? Int) == endpoint.port }
+            if selected.count == 1, let tag = selected[0]["tag"] as? String, !tag.isEmpty,
+               !tag.utf8.contains(10), !tag.utf8.contains(13),
+               inputs.filter({ ($0["tag"] as? String)?.utf8.elementsEqual(tag.utf8) == true }).count == 1 {
+                counterTag = tag
+            }
+        }
+        return Prepared(data: data, endpoint: endpoint, counterTag: counterTag)
     }
 
     // Direct callers share the host admission order: finalize and check before
@@ -176,6 +188,7 @@ private final class ProxyOnlyRunner {
             stop()
         }
 
+        clearProxyCounterSession()
         logger.reset()
         do {
             XRaySetMemoryLimit()
@@ -186,6 +199,7 @@ private final class ProxyOnlyRunner {
                 throw startError ?? NSError(domain: "FlutterVless", code: 10, userInfo: [NSLocalizedDescriptionKey: "Failed to start XRay proxy-only mode"])
             }
 
+            adoptProxyCounterTag(prepared.counterTag)
             isRunning = true
             delayEndpoint = endpoint
             connectedDate = Date()
@@ -197,6 +211,7 @@ private final class ProxyOnlyRunner {
     }
 
     func stop() {
+        clearProxyCounterSession()
         guard isRunning else {
             return
         }
@@ -241,6 +256,69 @@ private final class ProxyOnlyRunner {
         return nil
     }
 
+    private(set) var totalUpload: Int64 = 0
+    private(set) var totalDownload: Int64 = 0
+    private(set) var uploadSpeed: Int64 = 0
+    private(set) var downloadSpeed: Int64 = 0
+    private var activeCounterTag: String?
+    private var previousUpload: Int64?
+    private var previousDownload: Int64?
+    private let proxyCounterLock = NSLock()
+
+    private func clearProxyCounterSession() {
+        proxyCounterLock.lock(); defer { proxyCounterLock.unlock() }
+        activeCounterTag = nil
+        resetProxyCounters()
+    }
+
+    private func adoptProxyCounterTag(_ tag: String?) {
+        proxyCounterLock.lock(); defer { proxyCounterLock.unlock() }
+        activeCounterTag = tag
+        resetProxyCounters()
+    }
+
+    private func resetProxyCounters() {
+        totalUpload = 0; totalDownload = 0
+        uploadSpeed = 0; downloadSpeed = 0
+        previousUpload = nil; previousDownload = nil
+    }
+
+    private static func counterValue(_ raw: String, name: String) -> Int64? {
+        let prefix = Array((name + ">>>").utf8)
+        var seen = false, invalid = false
+        var value: Int64?
+        for line in raw.utf8.split(separator: 10, omittingEmptySubsequences: false) where line.starts(with: prefix) {
+            if seen { invalid = true }
+            seen = true
+            let digits = line.dropFirst(prefix.count)
+            if !digits.isEmpty, digits.allSatisfy({ (48...57).contains($0) }),
+               let parsed = Int64(String(decoding: digits, as: UTF8.self)) {
+                value = parsed
+            } else { invalid = true }
+        }
+        return seen && !invalid ? value : nil
+    }
+
+    func queryTrafficStats() -> (upload: Int64, download: Int64, uploadSpeed: Int64, downloadSpeed: Int64) {
+        proxyCounterLock.lock(); defer { proxyCounterLock.unlock() }
+        guard let tag = activeCounterTag else {
+            resetProxyCounters()
+            return (0, 0, 0, 0)
+        }
+        let raw = XRayQueryStats("")
+        let up = Self.counterValue(raw, name: "inbound>>>\(tag)>>>traffic>>>uplink")
+        let down = Self.counterValue(raw, name: "inbound>>>\(tag)>>>traffic>>>downlink")
+        if let up {
+            uploadSpeed = previousUpload.map { up >= $0 ? up - $0 : 0 } ?? 0
+            totalUpload = up
+        } else { totalUpload = 0; uploadSpeed = 0 }
+        if let down {
+            downloadSpeed = previousDownload.map { down >= $0 ? down - $0 : 0 } ?? 0
+            totalDownload = down
+        } else { totalDownload = 0; downloadSpeed = 0 }
+        previousUpload = up; previousDownload = down
+        return (totalUpload, totalDownload, uploadSpeed, downloadSpeed)
+    }
     func debugSnapshot() -> String {
         logger.snapshot()
     }
@@ -348,6 +426,11 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             if self.proxyOnlyRunner.isRunning {
                 let elapsed = Date().timeIntervalSince(self.proxyOnlyRunner.connectedDate ?? Date())
                 let seconds = Int(elapsed)
+                let stats = self.proxyOnlyRunner.queryTrafficStats()
+                self.totalUpload = Int(stats.upload)
+                self.totalDownload = Int(stats.download)
+                self.uploadSpeed = Int(stats.uploadSpeed)
+                self.downloadSpeed = Int(stats.downloadSpeed)
                 self.emitStatus(duration: seconds, state: "CONNECTED", reason: "timer-proxy")
                 return
             }

@@ -18,6 +18,7 @@
 #include "packet_path_probe.h"
 #include "vpn_worker_candidate.h"
 #include "native_routing_spec.h"
+#include "traffic_counters.h"
 #include "proxy_service.h" // For ProcessHandle and helper functions
 
 namespace fs = std::filesystem;
@@ -87,6 +88,7 @@ class VpnService {
    * @note Thread-safe.
    */
   void GetTrafficStats(int64_t& upload, int64_t& download);
+  flutter_vless::traffic::Sample GetTrafficSample();
 
  private:
   void RunVpn();
@@ -133,7 +135,7 @@ class VpnService {
   std::vector<MIB_IPFORWARD_ROW2> capture_routes_;
   std::optional<MIB_UNICASTIPADDRESS_ROW> ipv6_address_;
   std::mutex stats_mutex_;
-  int64_t total_upload_ = 0, total_download_ = 0;
+  flutter_vless::traffic::Sample traffic_sample_;
  public:
   bool IsProtecting() const { return protection_.Active(); }
 };

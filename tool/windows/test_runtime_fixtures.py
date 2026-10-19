@@ -22,6 +22,120 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    @staticmethod
+    def traffic_state(**changes):
+        state = dict(running=True, protecting=True, tick=1, upload=37, download=61,
+                     upload_available=True, download_available=True)
+        state.update(changes)
+        return state
+
+    def test_traffic_state_reader_is_bounded_typed_and_discards_unknown_fields(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "state.json"
+            expected = self.traffic_state()
+            path.write_text(json.dumps(dict(expected, secret="STATE_CANARY")))
+            self.assertEqual(expected, runtime.read_traffic_state(path))
+            for invalid in ("{" + " " * 4096, "[]", "not JSON"):
+                path.write_text(invalid)
+                self.assertIsNone(runtime.read_traffic_state(path))
+            for field, value in (("running", 1), ("protecting", "true"), ("tick", True),
+                                 ("tick", 0), ("upload", True), ("upload", -1),
+                                 ("download", 9223372036854775808), ("upload_available", 1)):
+                path.write_text(json.dumps(self.traffic_state(**{field: value})))
+                self.assertIsNone(runtime.read_traffic_state(path), field)
+            path.unlink()
+            self.assertIsNone(runtime.read_traffic_state(path))
+
+    def test_traffic_counter_gate_waits_for_fresh_increase_in_both_directions(self):
+        before = self.traffic_state()
+        samples = iter([before, self.traffic_state(tick=2),
+                        self.traffic_state(tick=3, upload=38, download_available=False),
+                        self.traffic_state(tick=4, upload=38, download=62)])
+        clock = [0.0]
+        def sleep(delay): clock[0] += delay
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(runtime, "read_traffic_state", side_effect=lambda path: next(samples)), \
+             patch.object(runtime.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(runtime.time, "sleep", side_effect=sleep):
+            result = runtime.await_traffic_counters(Path(temporary) / "state.json", before, True, True)
+        self.assertEqual(4, result["tick"])
+        self.assertGreater(result["upload"], before["upload"])
+        self.assertGreater(result["download"], before["download"])
+
+    def test_traffic_counter_gate_failure_is_fresh_bounded_and_redacted(self):
+        before = self.traffic_state()
+        for defect in (dict(tick=1, upload=38, download=62), dict(tick=2, upload=38),
+                       dict(tick=2, upload=38, download=62, running=False),
+                       dict(tick=2, upload=38, download=62, protecting=False),
+                       dict(tick=2, upload=38, download=62, download_available=False)):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "state.json"
+                path.write_text(json.dumps(dict(self.traffic_state(**defect), secret="STATE_CANARY")))
+                clock = [0.0]
+                def sleep(delay): clock[0] += delay
+                with patch.object(runtime.time, "monotonic", side_effect=lambda: clock[0]), \
+                     patch.object(runtime.time, "sleep", side_effect=sleep):
+                    with self.assertRaisesRegex(AssertionError, "Owned traffic counter"):
+                        runtime.await_traffic_counters(path, before, True, True)
+                self.assertLessEqual(clock[0], 5.001)
+                evidence = Path(str(path) + ".traffic.evidence.log").read_bytes()
+                self.assertLessEqual(len(evidence), 4096)
+                self.assertNotIn(b"STATE_CANARY", evidence)
+                self.assertEqual("owned_traffic_counters", json.loads(evidence)["stage"])
+
+    def test_traffic_counter_disabled_requires_fresh_unavailable_zero(self):
+        before = self.traffic_state(upload_available=False, download_available=False, upload=0, download=0)
+        for defect in (None, dict(tick=1), dict(upload_available=True), dict(download=1)):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "state.json"
+                current = dict(before, tick=2, protecting=False)
+                if defect: current.update(defect)
+                path.write_text(json.dumps(current))
+                clock = [0.0]
+                def sleep(delay): clock[0] += delay
+                with patch.object(runtime.time, "monotonic", side_effect=lambda: clock[0]), \
+                     patch.object(runtime.time, "sleep", side_effect=sleep):
+                    if defect:
+                        with self.assertRaises(AssertionError): runtime.await_traffic_counters(path, before, False, False)
+                    else:
+                        self.assertEqual(current, runtime.await_traffic_counters(path, before, False, False))
+
+    def test_traffic_counter_missing_or_partial_baseline_cannot_qualify_startup_totals(self):
+        for before in (None, self.traffic_state(upload_available=False), self.traffic_state(download_available=False)):
+            with self.subTest(before=before), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "state.json"
+                path.write_text(json.dumps(self.traffic_state(tick=2, upload=38, download=62)))
+                with self.assertRaisesRegex(AssertionError, "Owned traffic counter baseline"):
+                    runtime.await_traffic_counters(path, before, True, True)
+
+    def test_traffic_baseline_waits_for_owned_available_sample_and_accepts_zero(self):
+        available_zero = self.traffic_state(upload=0, download=0)
+        samples = iter([None, self.traffic_state(upload_available=False),
+                        self.traffic_state(running=False), self.traffic_state(protecting=False), available_zero])
+        clock = [0.0]
+        def sleep(delay): clock[0] += delay
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(runtime, "read_traffic_state", side_effect=lambda path: next(samples)), \
+             patch.object(runtime.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(runtime.time, "sleep", side_effect=sleep):
+            self.assertEqual(available_zero, runtime.await_traffic_baseline(Path(temporary) / "state.json", True))
+
+    def test_traffic_baseline_unavailable_refuses_within_budget(self):
+        clock = [0.0]
+        def sleep(delay): clock[0] += delay
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "state.json"
+            path.write_text(json.dumps(dict(self.traffic_state(upload_available=False), secret="BASELINE_CANARY")))
+            with patch.object(runtime.time, "monotonic", side_effect=lambda: clock[0]), \
+                 patch.object(runtime.time, "sleep", side_effect=sleep):
+                with self.assertRaisesRegex(AssertionError, "Owned traffic counter baseline"):
+                    runtime.await_traffic_baseline(path, True)
+            self.assertLessEqual(clock[0], 5.001)
+            evidence = Path(str(path) + ".traffic.evidence.log").read_bytes()
+            self.assertLessEqual(len(evidence), 4096)
+            self.assertNotIn(b"BASELINE_CANARY", evidence)
+            self.assertEqual("owned_traffic_baseline", json.loads(evidence)["stage"])
+
     def test_actual_main_closes_partial_server_setup_without_shutdown_on_unstarted_owner(self):
         for failure_stage in ("datagram_constructor", "second_constructor", "second_thread_start", "shutdown_failure"):
             with self.subTest(stage=failure_stage), tempfile.TemporaryDirectory() as temporary:
@@ -298,13 +412,19 @@ class RuntimeFixtureTest(unittest.TestCase):
                      patch.object(runtime, "direct_only_dns") as dns, \
                      patch.object(runtime, "kill_worker") as kill, \
                      patch.object(runtime, "await_state") as state, \
+                     patch.object(runtime, "await_traffic_baseline", return_value=self.traffic_state()) as traffic_before, \
+                     patch.object(runtime, "await_traffic_counters", return_value=self.traffic_state(tick=2, upload=38, download=62)) as traffic_after, \
                      patch.object(runtime.time, "sleep"), patch("builtins.print") as printed:
                     rows = []
                     args = (directory / "runtime_probe.exe", directory, "192.0.2.10",
                             SimpleNamespace(server_address=("192.0.2.10", 15353)), origin, rows)
                     if defect is None:
                         runtime.native_routing_gate(*args)
-                        self.assertEqual(8, len(rows)); self.assertTrue(all(row["passed"] for row in rows))
+                        self.assertEqual(10, len(rows)); self.assertTrue(all(row["passed"] for row in rows))
+                        self.assertEqual(2, traffic_before.call_count)
+                        self.assertEqual(2, traffic_after.call_count)
+                        self.assertTrue(all(call.args[1:] == (self.traffic_state(), True, True)
+                                            for call in traffic_after.call_args_list))
                         self.assertEqual(["alias.invalid", "fallback.invalid"] * 4, payloads)
                         self.assertEqual(5, dns.call_count)
                         kill.assert_called_once_with(400, "xray.exe")
@@ -333,6 +453,7 @@ class RuntimeFixtureTest(unittest.TestCase):
                 return child
             with patch.object(runtime.subprocess, "Popen", side_effect=launch), \
                  patch.object(runtime, "native", side_effect=OSError("synthetic cleanup failure")), \
+                 patch.object(runtime, "await_traffic_baseline", return_value=self.traffic_state()), \
                  patch.object(runtime, "request", side_effect=failure), patch("builtins.print") as printed:
                 with self.assertRaises(RuntimeError) as raised:
                     runtime.native_routing_gate(directory / "runtime_probe.exe", directory, "192.0.2.10",

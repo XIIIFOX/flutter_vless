@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Select traffic counters from the actual session inbound instead of a fixed outbound name. Preserve disabled caller policy, handle zero and unavailable directions independently, and clear speed baselines across gaps/restarts. Add consumer and controlled TUN regressions.
 * Consume per-session VPN routing selections with final config/metadata checks before replacement and through recovery. Add an instrumentation-only routing preview; published runtime pins remain unchanged.
 * Add per-start/profile-delay `certificateAssetsDirectory`. Freeze relative Core TLS certificate/key paths before preflight and recovery, keeping caller-owned files, inline material and certificate reload settings intact.
 * Add bounded HTTP fixture connection/relay stages and response-length diagnostics for protected DNS acceptance. Preserve failures without retries or response changes; cover failure paths with fake sockets.

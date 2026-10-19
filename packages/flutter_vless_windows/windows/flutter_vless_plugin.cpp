@@ -120,6 +120,7 @@ class FlutterVlessPlugin : public flutter::Plugin {
   int64_t total_download_ = 0;   ///< Cumulative bytes downloaded
   int64_t upload_speed_ = 0;     ///< Current upload speed (bytes/second)
   int64_t download_speed_ = 0;   ///< Current download speed (bytes/second)
+  flutter_vless::traffic::Baseline upload_baseline_, download_baseline_;
   
   // Platform-thread callback dispatcher for status, method results and controls
   HWND main_window_handle_ = nullptr;  ///< Main window handle for PostMessage
@@ -594,6 +595,7 @@ void FlutterVlessPlugin::HandleMethodCall(
 }
 
 void FlutterVlessPlugin::StartStatusTimer() {
+  { std::lock_guard<std::mutex> lock(status_mutex_); upload_baseline_.Reset(); download_baseline_.Reset(); }
   should_stop_ = false;
   status_thread_ = std::thread([this]() {
     while (!should_stop_ && is_running_) {
@@ -608,6 +610,7 @@ void FlutterVlessPlugin::StopStatusTimer() {
   if (status_thread_.joinable()) {
     status_thread_.join();
   }
+  std::lock_guard<std::mutex> lock(status_mutex_); upload_baseline_.Reset(); download_baseline_.Reset();
 }
 
 
@@ -636,7 +639,7 @@ void FlutterVlessPlugin::StopStatusTimer() {
  * [5] = "CONNECTED" (connection status string)
  * 
  * @warning DO NOT MODIFY:
- * The status format and calculation logic must remain unchanged. The Flutter
+ * The six-field status format must remain unchanged. The Flutter
  * UI expects this exact format. Changing the order or format of status elements
  * will break UI updates.
  * 
@@ -663,14 +666,11 @@ void FlutterVlessPlugin::UpdateStatus() {
       now - start_time_).count();
 
   // Get traffic stats from v2ray manager
-  int64_t current_upload = 0;
-  int64_t current_download = 0;
-  V2rayManager::GetInstance().GetTrafficStats(current_upload, current_download);
-
-  upload_speed_ = current_upload - total_upload_;
-  download_speed_ = current_download - total_download_;
-  total_upload_ = current_upload;
-  total_download_ = current_download;
+  const auto sample = V2rayManager::GetInstance().GetTrafficSample();
+  upload_speed_ = upload_baseline_.Advance(sample.upload);
+  download_speed_ = download_baseline_.Advance(sample.download);
+  total_upload_ = sample.upload.value_or(0);
+  total_download_ = sample.download.value_or(0);
 
   flutter::EncodableList status;
   status.push_back(flutter::EncodableValue(std::to_string(duration)));

@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Scope proxy-only traffic to the selected inbound without retagging caller inputs. Keep missing/disabled directions unavailable internally and reset speed baselines across gaps/restarts; retain HEV VPN counters. Add shared consumer and controlled payload regressions.
 * Consume per-session VPN routing selections through host/provider admission and exact checked startup/recovery pairs. Require the optional routing ABI; published runtime pins remain unchanged.
 * Refuse nonempty root `env` before in-process Core preflight, including cached older checker calls. Expose a redacted `environment-policy` error while preserving the working session and original profile; scoped environment support remains open.
 * Add per-start/profile-delay `certificateAssetsDirectory` with typed TLS/XHTTP file binding before preflight and profile persistence. Keep absolute/inline material and reload options; caller files must stay accessible to the provider.

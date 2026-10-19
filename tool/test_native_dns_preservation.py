@@ -51,6 +51,7 @@ def source_snapshot():
              WINDOWS / 'xray_config_test.cpp', WINDOWS / 'asset_location.h', WINDOWS / 'third_party/nlohmann/json.hpp']
     paths.append(ROOT / 'tool/fixtures/compatibility/protocols.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/full-config.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/traffic-counters.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/direct-only.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/dns-default-tags.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/selector-prefixes.json')

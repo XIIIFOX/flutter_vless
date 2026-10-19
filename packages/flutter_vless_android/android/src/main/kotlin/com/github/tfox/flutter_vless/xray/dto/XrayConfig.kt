@@ -78,4 +78,7 @@ data class XrayConfig(
     var PLUGIN_OPTIONS_JSON: String? = null,
     /** Per-start native-validated selection only; never a capability or frozen private runtime pair. */
     var VPN_ROUTING_SELECTION_JSON: String? = null
-) : Serializable
+) : Serializable {
+    /** Producer-owned runtime identity. Never accepted from JSON or persisted in profiles/copies. */
+    @Transient internal var runtimeTrafficInboundTag: String? = null
+}

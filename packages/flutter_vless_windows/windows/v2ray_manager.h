@@ -33,6 +33,7 @@ class V2rayManager {
 
   // Stats
   void GetTrafficStats(int64_t& upload, int64_t& download);
+  flutter_vless::traffic::Sample GetTrafficSample();
   
   // Delay measurement
   std::future<int> GetServerDelayAsync(const std::string& config, const std::string& url);

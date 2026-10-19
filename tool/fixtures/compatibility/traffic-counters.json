@@ -1,0 +1,603 @@
+[
+  {
+    "name": "exact_owned_with_namespace_noise",
+    "tag": "owned-uplink-downlink",
+    "counters": [
+      {
+        "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink",
+        "value": 37
+      },
+      {
+        "name": "inbound>>>owned-uplink-downlink>>>traffic>>>downlink",
+        "value": 61
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>uplink",
+        "value": 300
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>downlink",
+        "value": 500
+      },
+      {
+        "name": "outbound>>>edge-live>>>traffic>>>uplink",
+        "value": 901
+      },
+      {
+        "name": "outbound>>>edge-live>>>traffic>>>downlink",
+        "value": 1201
+      },
+      {
+        "name": "user>>>caller>>>traffic>>>uplink",
+        "value": 1601
+      },
+      {
+        "name": "user>>>caller>>>traffic>>>downlink",
+        "value": 1901
+      }
+    ],
+    "wire": {
+      "stat": [
+        {
+          "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink",
+          "value": 37
+        },
+        {
+          "name": "inbound>>>owned-uplink-downlink>>>traffic>>>downlink",
+          "value": 61
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>uplink",
+          "value": 300
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>downlink",
+          "value": 500
+        },
+        {
+          "name": "outbound>>>edge-live>>>traffic>>>uplink",
+          "value": 901
+        },
+        {
+          "name": "outbound>>>edge-live>>>traffic>>>downlink",
+          "value": 1201
+        },
+        {
+          "name": "user>>>caller>>>traffic>>>uplink",
+          "value": 1601
+        },
+        {
+          "name": "user>>>caller>>>traffic>>>downlink",
+          "value": 1901
+        }
+      ]
+    },
+    "expected": {
+      "uplink": 37,
+      "downlink": 61
+    }
+  },
+  {
+    "name": "zero_is_present_with_omitted_values",
+    "tag": "owned-uplink-downlink",
+    "counters": [
+      {
+        "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink",
+        "value": 0
+      },
+      {
+        "name": "inbound>>>owned-uplink-downlink>>>traffic>>>downlink",
+        "value": 0
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>uplink",
+        "value": 300
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>downlink",
+        "value": 500
+      },
+      {
+        "name": "outbound>>>edge-live>>>traffic>>>uplink",
+        "value": 901
+      },
+      {
+        "name": "outbound>>>edge-live>>>traffic>>>downlink",
+        "value": 1201
+      },
+      {
+        "name": "user>>>caller>>>traffic>>>uplink",
+        "value": 1601
+      },
+      {
+        "name": "user>>>caller>>>traffic>>>downlink",
+        "value": 1901
+      }
+    ],
+    "wire": {
+      "stat": [
+        {
+          "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink"
+        },
+        {
+          "name": "inbound>>>owned-uplink-downlink>>>traffic>>>downlink"
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>uplink",
+          "value": 300
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>downlink",
+          "value": 500
+        },
+        {
+          "name": "outbound>>>edge-live>>>traffic>>>uplink",
+          "value": 901
+        },
+        {
+          "name": "outbound>>>edge-live>>>traffic>>>downlink",
+          "value": 1201
+        },
+        {
+          "name": "user>>>caller>>>traffic>>>uplink",
+          "value": 1601
+        },
+        {
+          "name": "user>>>caller>>>traffic>>>downlink",
+          "value": 1901
+        }
+      ]
+    },
+    "expected": {
+      "uplink": 0,
+      "downlink": 0
+    }
+  },
+  {
+    "name": "only_uplink_enabled",
+    "tag": "owned-uplink-downlink",
+    "counters": [
+      {
+        "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink",
+        "value": 37
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>uplink",
+        "value": 37
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>downlink",
+        "value": 61
+      }
+    ],
+    "wire": {
+      "stat": [
+        {
+          "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink",
+          "value": 37
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>uplink",
+          "value": 37
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>downlink",
+          "value": 61
+        }
+      ]
+    },
+    "expected": {
+      "uplink": 37,
+      "downlink": null
+    }
+  },
+  {
+    "name": "only_zero_uplink_enabled",
+    "tag": "owned-uplink-downlink",
+    "counters": [
+      {
+        "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink",
+        "value": 0
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>uplink",
+        "value": 37
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>downlink",
+        "value": 61
+      }
+    ],
+    "wire": {
+      "stat": [
+        {
+          "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink"
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>uplink",
+          "value": 37
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>downlink",
+          "value": 61
+        }
+      ]
+    },
+    "expected": {
+      "uplink": 0,
+      "downlink": null
+    }
+  },
+  {
+    "name": "owned_directions_absent",
+    "tag": "owned-uplink-downlink",
+    "counters": [
+      {
+        "name": "inbound>>>imported>>>traffic>>>uplink",
+        "value": 37
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>downlink",
+        "value": 61
+      }
+    ],
+    "wire": {
+      "stat": [
+        {
+          "name": "inbound>>>imported>>>traffic>>>uplink",
+          "value": 37
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>downlink",
+          "value": 61
+        }
+      ]
+    },
+    "expected": {
+      "uplink": null,
+      "downlink": null
+    }
+  },
+  {
+    "name": "signed_64_bit_maximum",
+    "tag": "owned-uplink-downlink",
+    "counters": [
+      {
+        "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink",
+        "value": 9223372036854775807
+      },
+      {
+        "name": "inbound>>>owned-uplink-downlink>>>traffic>>>downlink",
+        "value": 1
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>uplink",
+        "value": 300
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>downlink",
+        "value": 500
+      },
+      {
+        "name": "outbound>>>edge-live>>>traffic>>>uplink",
+        "value": 901
+      },
+      {
+        "name": "outbound>>>edge-live>>>traffic>>>downlink",
+        "value": 1201
+      },
+      {
+        "name": "user>>>caller>>>traffic>>>uplink",
+        "value": 1601
+      },
+      {
+        "name": "user>>>caller>>>traffic>>>downlink",
+        "value": 1901
+      }
+    ],
+    "wire": {
+      "stat": [
+        {
+          "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink",
+          "value": 9223372036854775807
+        },
+        {
+          "name": "inbound>>>owned-uplink-downlink>>>traffic>>>downlink",
+          "value": 1
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>uplink",
+          "value": 300
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>downlink",
+          "value": 500
+        },
+        {
+          "name": "outbound>>>edge-live>>>traffic>>>uplink",
+          "value": 901
+        },
+        {
+          "name": "outbound>>>edge-live>>>traffic>>>downlink",
+          "value": 1201
+        },
+        {
+          "name": "user>>>caller>>>traffic>>>uplink",
+          "value": 1601
+        },
+        {
+          "name": "user>>>caller>>>traffic>>>downlink",
+          "value": 1901
+        }
+      ]
+    },
+    "expected": {
+      "uplink": 9223372036854775807,
+      "downlink": 1
+    }
+  },
+  {
+    "name": "invalid_negative_is_direction_local",
+    "tag": "owned-uplink-downlink",
+    "counters": [
+      {
+        "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink",
+        "value": -1
+      },
+      {
+        "name": "inbound>>>owned-uplink-downlink>>>traffic>>>downlink",
+        "value": 61
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>uplink",
+        "value": 300
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>downlink",
+        "value": 500
+      },
+      {
+        "name": "outbound>>>edge-live>>>traffic>>>uplink",
+        "value": 901
+      },
+      {
+        "name": "outbound>>>edge-live>>>traffic>>>downlink",
+        "value": 1201
+      },
+      {
+        "name": "user>>>caller>>>traffic>>>uplink",
+        "value": 1601
+      },
+      {
+        "name": "user>>>caller>>>traffic>>>downlink",
+        "value": 1901
+      }
+    ],
+    "wire": {
+      "stat": [
+        {
+          "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink",
+          "value": -1
+        },
+        {
+          "name": "inbound>>>owned-uplink-downlink>>>traffic>>>downlink",
+          "value": 61
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>uplink",
+          "value": 300
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>downlink",
+          "value": 500
+        },
+        {
+          "name": "outbound>>>edge-live>>>traffic>>>uplink",
+          "value": 901
+        },
+        {
+          "name": "outbound>>>edge-live>>>traffic>>>downlink",
+          "value": 1201
+        },
+        {
+          "name": "user>>>caller>>>traffic>>>uplink",
+          "value": 1601
+        },
+        {
+          "name": "user>>>caller>>>traffic>>>downlink",
+          "value": 1901
+        }
+      ]
+    },
+    "expected": {
+      "uplink": null,
+      "downlink": 61
+    }
+  },
+  {
+    "name": "escaped_primary_tag",
+    "tag": "edge\"\\up-down",
+    "counters": [
+      {
+        "name": "inbound>>>edge\"\\up-down>>>traffic>>>uplink",
+        "value": 37
+      },
+      {
+        "name": "inbound>>>edge\"\\up-down>>>traffic>>>downlink",
+        "value": 61
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>uplink",
+        "value": 300
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>downlink",
+        "value": 500
+      },
+      {
+        "name": "outbound>>>edge-live>>>traffic>>>uplink",
+        "value": 901
+      },
+      {
+        "name": "outbound>>>edge-live>>>traffic>>>downlink",
+        "value": 1201
+      },
+      {
+        "name": "user>>>caller>>>traffic>>>uplink",
+        "value": 1601
+      },
+      {
+        "name": "user>>>caller>>>traffic>>>downlink",
+        "value": 1901
+      }
+    ],
+    "wire": {
+      "stat": [
+        {
+          "name": "inbound>>>edge\"\\up-down>>>traffic>>>uplink",
+          "value": 37
+        },
+        {
+          "name": "inbound>>>edge\"\\up-down>>>traffic>>>downlink",
+          "value": 61
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>uplink",
+          "value": 300
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>downlink",
+          "value": 500
+        },
+        {
+          "name": "outbound>>>edge-live>>>traffic>>>uplink",
+          "value": 901
+        },
+        {
+          "name": "outbound>>>edge-live>>>traffic>>>downlink",
+          "value": 1201
+        },
+        {
+          "name": "user>>>caller>>>traffic>>>uplink",
+          "value": 1601
+        },
+        {
+          "name": "user>>>caller>>>traffic>>>downlink",
+          "value": 1901
+        }
+      ]
+    },
+    "expected": {
+      "uplink": 37,
+      "downlink": 61
+    }
+  },
+  {
+    "name": "duplicate_owned_uplink_is_direction_local",
+    "tag": "owned-uplink-downlink",
+    "counters": [
+      {
+        "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink",
+        "value": 37
+      },
+      {
+        "name": "inbound>>>owned-uplink-downlink>>>traffic>>>downlink",
+        "value": 61
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>uplink",
+        "value": 300
+      },
+      {
+        "name": "inbound>>>imported>>>traffic>>>downlink",
+        "value": 500
+      },
+      {
+        "name": "outbound>>>edge-live>>>traffic>>>uplink",
+        "value": 901
+      },
+      {
+        "name": "outbound>>>edge-live>>>traffic>>>downlink",
+        "value": 1201
+      },
+      {
+        "name": "user>>>caller>>>traffic>>>uplink",
+        "value": 1601
+      },
+      {
+        "name": "user>>>caller>>>traffic>>>downlink",
+        "value": 1901
+      },
+      {
+        "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink",
+        "value": 41
+      }
+    ],
+    "wire": {
+      "stat": [
+        {
+          "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink",
+          "value": 37
+        },
+        {
+          "name": "inbound>>>owned-uplink-downlink>>>traffic>>>downlink",
+          "value": 61
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>uplink",
+          "value": 300
+        },
+        {
+          "name": "inbound>>>imported>>>traffic>>>downlink",
+          "value": 500
+        },
+        {
+          "name": "outbound>>>edge-live>>>traffic>>>uplink",
+          "value": 901
+        },
+        {
+          "name": "outbound>>>edge-live>>>traffic>>>downlink",
+          "value": 1201
+        },
+        {
+          "name": "user>>>caller>>>traffic>>>uplink",
+          "value": 1601
+        },
+        {
+          "name": "user>>>caller>>>traffic>>>downlink",
+          "value": 1901
+        },
+        {
+          "name": "inbound>>>owned-uplink-downlink>>>traffic>>>uplink",
+          "value": 41
+        }
+      ]
+    },
+    "expected": {
+      "uplink": null,
+      "downlink": 61
+    }
+  },
+  {
+    "name": "nil_stats_omitted",
+    "tag": "owned-uplink-downlink",
+    "counters": null,
+    "wire": {},
+    "expected": {
+      "uplink": null,
+      "downlink": null
+    }
+  },
+  {
+    "name": "empty_stats_array",
+    "tag": "owned-uplink-downlink",
+    "counters": [],
+    "wire": {
+      "stat": []
+    },
+    "expected": {
+      "uplink": null,
+      "downlink": null
+    }
+  }
+]

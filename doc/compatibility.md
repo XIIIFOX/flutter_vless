@@ -143,8 +143,9 @@ Track the small delivery gates separately from the eight full requirements:
 | Protocol/transport preparation and controlled XHTTP | Qualified | Shared pinned-Core corpus and controlled payloads; the exhaustive external-server matrix is deferred. |
 | Imported API/services/stats/policy | Qualified | Shared preparation and API/traffic gates, including Windows service acceptance. |
 | Port/address syntax and explicit data/certificate roots | Qualified baseline | Shared Core/native controls and the targeted runtime cases below; OS allocation/reload and managed import lifetime remain open. |
-| Source inbound and explicit VPN default | In progress | Shared Core, Android TUN, Windows 2022/2025 and both enabled Apple SDK runtimes pass controlled source/default selection. The current Windows probe follow-up and physical/system-VPN acceptance remain separately tracked. |
-| Occupied private TCP listeners | In progress | Bounded selection and held-port traffic pass Android TUN, Windows 2022/2025 and both enabled Apple SDK runtimes. The Windows probe follow-up, ownership transfer and reload remain separate. |
+| Source inbound and explicit VPN default | Qualified controlled baseline | Shared Core, Android TUN, Windows 2022/2025 and both enabled Apple SDK runtimes pass controlled source/default selection. Physical/system-VPN acceptance remains separately tracked. |
+| Occupied private TCP listeners | Qualified controlled baseline | Bounded selection, held-port traffic and Android/Windows probe exclusions pass the targeted runtime gates below. Atomic ownership transfer and reload remain separate. |
+| Session-owned traffic counters | Implemented; runtime pending | Actual-consumer regressions pass across Android, Apple proxy-only and Windows; new controlled payload gates must still qualify the implementation. Apple VPN keeps HEV accounting. |
 
 Each qualified row refers to the specific checks recorded below. It does not
 mark an entire long-term requirement complete.
@@ -317,8 +318,9 @@ Android/Windows create and query a private statistics endpoint only when the
 source has no API section. They do not query an imported API, even if it has
 StatsService and a loopback listener. An explicit API/null or caller policy
 may therefore leave the example's counters at zero; this does not prevent VPN
-startup. Exact per-adapter accounting and a public availability signal remain
-separate work. Apple uses its existing in-process reader.
+startup. The session-owned counter increment below replaces broad accounting;
+a public availability signal remains separate work. Apple uses its existing
+in-process reader.
 
 The shared [six-case full-config corpus](../tool/fixtures/compatibility/full-config.json)
 checks these source sections after native preparation and against pinned Core
@@ -332,6 +334,41 @@ traffic after rejected replacement and disabled caller counters unchanged.
 This baseline did not qualify source-inbound context selection or an explicit
 VPN default. Their subsequent implementation and acceptance are described below,
 alongside nonempty prefix isolation.
+
+The next increment reads Android and Windows VPN/proxy counters by the exact
+inbound selected for that session, rather than a literal outbound name or a
+sum of all caller inputs. Apple proxy-only uses the same identity rule through
+its in-process reader; Apple VPN continues to report HEV packet counters.
+Untagged or ambiguous proxy inputs remain unchanged and have unavailable
+statistics. Apple text-format counters also reject a CR/LF-bearing tag as
+unavailable because its line representation is ambiguous.
+
+Uplink and downlink availability are independent internally. A present Core
+JSON counter with an omitted `value` is zero; a missing record is unavailable.
+Invalid, duplicate, negative or overflowing values invalidate only their
+direction. Baselines clear on Start, Stop, unavailable samples and counter
+resets, so the first speed sample after a gap is zero. The six-field public
+status remains compatible and represents unavailable totals numerically as
+zero. Adapter stream bytes can include SOCKS framing and are not promised to
+equal application or TUN payload bytes.
+
+Caller API/stats/policy sections, including explicit null, false and levels-only
+policy, remain intact. Only an absent policy root receives inbound counter
+defaults alongside the existing outbound defaults. Android/Windows query only
+their own API; Apple queries Core directly. No caller counters are enabled to
+fill a display.
+
+The [shared eleven-case wire corpus](../tool/fixtures/compatibility/traffic-counters.json)
+matches the pinned Core CLI encoder without starting a Core instance. Local
+actual-consumer checks pass 15 Android tests, 92 checks per Apple platform and
+Windows source/wire/consumer gates of 4/11/12, plus 47 Windows fixture tests.
+These are inert checks and compile/link evidence. New remote runtime gates
+require Android enabled/disabled TUN payload sessions, three macOS proxy
+payload cases and Windows counter samples after the existing proxy, portable
+and VPN HTTP requests. Windows enabled cases require an available snapshot
+before the requests and a fresh increase in both directions afterwards; the
+observation window can also include managed health probes, so it does not
+claim exact HTTP-only byte attribution. Runtime qualification is still pending.
 
 The inert pinned-Core Router regressions explain why those two options need a
 runtime seam: an appended default rule prevents `IPIfNonMatch` from reaching its
@@ -1170,8 +1207,8 @@ the final Core configuration, including numeric API/metrics ports and imported
 ranges. They close rejected port-zero allocations and try at most 32 times
 before starting a worker, retaining the accepted socket for the probe lifetime.
 Pure/fake regressions cover exclusion, exhaustion, cleanup and admission refusal;
-Android runtime acceptance passes at 2f74f13. Windows follow-up remains pending:
-its 2022 run fails an ordinary replacement check before the new routing cases,
+Android runtime acceptance passes at 2f74f13. The earlier Windows 2022 run
+fails an ordinary replacement check before the new routing cases,
 without retaining the child exit status. Atomic command publication and bounded
 exit diagnostics address a demonstrated fixture ordering gap; that gap is not
 established as the cause of this CI failure. Apple VPN health checks connect to
@@ -1180,6 +1217,12 @@ The 2025 Windows job reaches its 15-minute limit before retaining VPN-profile
 logs. File-only regressions also ensure partial fixture setup closes every
 constructed server and avoids shutdown before its worker starts. They fix a
 demonstrated cleanup hang without identifying the cause of that earlier timeout.
+[Subsequent Windows acceptance at fb2eb75](https://github.com/XIIIFOX/flutter_vless/actions/runs/39249923372)
+passes all six jobs and all 426 proxy/portable/VPN result rows on Windows
+2022/2025. Both systems also pass the four probe source guards, eight allocator
+controls, held-port traffic and final IPv6 cleanup. This qualifies that
+controlled baseline; it does not establish the earlier failures' causes or
+qualify the new counter increment above.
 Standalone delay allocation, Core handoff races, recovery relocation and broader
 proxy-only allocation remain separate work under item 5.
 
@@ -1190,8 +1233,8 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private address queries. Caller AAAA, bare/full resolver hosts and encrypted DoH trust/name controls pass ordinary Core on all three desktop systems. Missing/null/empty localhost server tags pass shared preparation and native Apple DNS generations. Direct-only traffic passes shared Core, Android TUN, native Apple and Windows TUN gates. Additional DNS paths and full FakeDNS semantics remain open. |
 | 2. IPv6 | Partial; physical iOS packet gate pending | IPv6 TCP/UDP with preserved AAAA policy passes ordinary Core on all three desktop systems, actual Android TUN and Windows 2022/2025 TUN/recovery/physical-interface controls. Actual shipped macOS HEV packet controls pass remotely; iOS simulator HEV is a verified link-only stub and physical iOS remains pending. Full macOS system-VPN acceptance, IPv6-only endpoints, NAT64, cross-family handover and broader physical bypass qualification remain open. |
 | 3. Protocol/transport matrix | Partial; controlled XHTTP increment qualified | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP and null legacy-endpoint preparation fixes pass a nine-case pinned Core build corpus with native preparation, including shared XHTTP upload/download socket policy. At cdc5b94, ordinary Core on all three desktop systems carries actual XHTTP HTTP/1.1 packet-up payloads with and without a caller SOCKS chain; both Apple and Windows preparers pass on macOS. Further protocol handshakes, XHTTP TLS/HTTP3/QUIC, physical iOS packets and the full matrix remain open. |
-| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes pass shared component, ordinary Core and native platform traffic gates at a475374. Per-session source/default selection passes Android TUN at 2f74f13 and Windows 2022/2025 and both enabled Apple SDK runtimes at e5f9fc6. The current Windows probe follow-up and physical/system-VPN acceptance remain pending. Wildcard isolation and exact adapter counters remain open. |
-| 5. Ports/addresses | Partial | Shared port/service/tag fixtures and Android/iPhone list/range/env/Unix and collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. Bounded OS-aware generated TCP admission passes Android TUN at 2f74f13 and Windows 2022/2025 and both enabled Apple SDK held-port traffic at e5f9fc6. Android held probe exclusion passes; the Windows runtime follow-up remains pending. Recovery relocation, service-name resolution, wildcard isolation, bind races and broader proxy-only parity remain open. |
+| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes pass shared component, ordinary Core and native platform traffic gates at a475374. Per-session source/default selection passes Android TUN at 2f74f13, both enabled Apple SDK runtimes at e5f9fc6 and Windows 2022/2025 at fb2eb75. Session-owned counters are implemented with inert regressions; their new runtime gates remain pending. Wildcard isolation and physical/system-VPN acceptance remain open. |
+| 5. Ports/addresses | Partial | Shared port/service/tag fixtures and Android/iPhone list/range/env/Unix and collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. Bounded OS-aware generated TCP admission passes Android TUN at 2f74f13, both enabled Apple SDK held-port runtimes at e5f9fc6 and Windows 2022/2025 at fb2eb75. Android/Windows probe exclusion passes targeted runtime acceptance. Recovery relocation, service-name resolution, wildcard isolation, bind races and broader proxy-only parity remain open. |
 | 6. Assets/import syntax | Partial; data-root increment qualified | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit roots propagate across native backends; custom GeoSite traffic passes Android TUN, both Apple preview runtimes and Windows 2022/2025. Explicit TLS certificate/key directory binding passes shared native/Core regressions; controlled CA-file TLS traffic passes ordinary Core on all three desktop systems at ca96891 (four variants per preparer, 16 markers). Physical Apple access/reload, managed asset import/lifetime, specialized certificate features and explicit multi-document merging remain open. |
 | 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |
 | 8. Runtime corpus | Partial | Shared port/syntax fixtures and platform/device HTTP, DNS, routing and recovery checks exist. The complete ECH/DoH/QUIC/protocol corpus and remaining physical options acceptance are not complete. |
@@ -1225,10 +1268,10 @@ contracts; this does not implement Core multi-file override/merge semantics.
    into the private adapter; retaining the original rules alone does not make
    input-specific rules apply to that new adapter. Test profiles whose first
    outbound is not the intended VPN default. Preserve user fields outside the documented privacy
-   overrides for logs and native protection. Private traffic counters need an
-   exact, session-owned adapter source: the current Android literal `proxy`
-   lookup misses other egress tags, and Windows aggregation can include caller
-   inputs or count both inbound and outbound bytes. Distinguish adapter stream
+   overrides for logs and native protection. Qualify the new exact,
+   session-owned adapter counter source on every backend, retaining unavailable
+   directions internally instead of summing unrelated caller counters.
+   Distinguish adapter stream
    bytes (which can include SOCKS framing) from TUN/application payload, and do
    not enable caller-disabled policy counters merely to fill plugin totals.
 5. **Unify port/address handling.** Accept upstream string port lists, ranges,

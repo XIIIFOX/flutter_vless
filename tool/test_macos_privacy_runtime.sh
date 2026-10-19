@@ -53,6 +53,8 @@ import os, sys
 text=Path(sys.argv[1]).read_text()
 assert "RUNTIME=26.10.17" in text, "Unexpected embedded Xray version"
 assert 'MACOS_COUNTERS_AND_API_PASSTHROUGH_PASS' in text
+for marker in ['MACOS_COUNTERS_UNTAGGED_UNAVAILABLE_PASS', 'MACOS_COUNTERS_DISABLED_UNAVAILABLE_PASS']:
+    assert text.splitlines().count(marker) == 1, marker
 assert 'ASSET_CUSTOM_ROOT_RUNTIME_PASS' in text
 assert 'DIRECT_ONLY_RUNTIME_PASS=0' in text and 'DIRECT_ONLY_RUNTIME_PASS=1' in text and 'DIRECT_ONLY_RUNTIME_PASS=2' in text
 assert 'SERVICE_TAG_RUNTIME_PASS=0' in text and 'SERVICE_TAG_RUNTIME_PASS=1' in text

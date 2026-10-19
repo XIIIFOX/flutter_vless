@@ -756,6 +756,86 @@ def await_state(path, running, timeout=30):
     raise AssertionError(f"Protected readiness did not become {running}")
 
 
+def read_traffic_state(path):
+    # The probe publishes only numeric counters and readiness. Do not retain
+    # unknown fields or include a partially written state in diagnostics.
+    try:
+        with path.open("rb") as source:
+            data = source.read(4097)
+        if len(data) > 4096:
+            return None
+        state = json.loads(data)
+        if not isinstance(state, dict):
+            return None
+        for field in ("running", "protecting", "upload_available", "download_available"):
+            if type(state.get(field)) is not bool:
+                return None
+        for field in ("tick", "upload", "download"):
+            value = state.get(field)
+            if type(value) is not int or not (0 <= value <= 9223372036854775807):
+                return None
+        if state["tick"] == 0:
+            return None
+        return {field: state[field] for field in ("running", "protecting", "tick", "upload", "download",
+                                                  "upload_available", "download_available")}
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        return None
+
+
+def traffic_counter_evidence(path, stage, before, latest, enabled, protecting):
+    evidence = dict(stage=stage, enabled=enabled, expected_protecting=protecting, before=before, latest=latest)
+    try:
+        # Both snapshots have a fixed numeric/boolean schema, bounded above.
+        encoded = json.dumps(evidence, separators=(",", ":")).encode("ascii")
+        assert len(encoded) <= 4096
+        Path(str(path) + ".traffic.evidence.log").write_bytes(encoded)
+    except OSError:
+        pass
+
+
+def await_traffic_baseline(path, protecting):
+    deadline = time.monotonic() + 5
+    latest = None
+    while time.monotonic() < deadline:
+        latest = read_traffic_state(path)
+        if latest is not None and latest["running"] and latest["protecting"] == protecting \
+                and latest["upload_available"] and latest["download_available"]:
+            return latest
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.1, remaining))
+    traffic_counter_evidence(path, "owned_traffic_baseline", None, latest, True, protecting)
+    raise AssertionError("Owned traffic counter baseline did not become available")
+
+
+def await_traffic_counters(path, before, enabled, protecting):
+    # Observe a new sample after the existing HTTP payloads, without starting
+    # another session or retrying a request. A positive startup health counter
+    # cannot satisfy an available direction's required increase.
+    if enabled and (before is None or not before["running"] or before["protecting"] != protecting
+                    or not before["upload_available"] or not before["download_available"]):
+        raise AssertionError("Owned traffic counter baseline is unavailable")
+    deadline = time.monotonic() + 5
+    latest = None
+    while time.monotonic() < deadline:
+        latest = read_traffic_state(path)
+        if latest is not None and latest["running"] and latest["protecting"] == protecting \
+                and latest["tick"] > (before["tick"] if before is not None else 0):
+            if enabled:
+                valid = all(latest[direction + "_available"] and latest[direction] > before[direction]
+                            for direction in ("upload", "download"))
+            else:
+                valid = all(not latest[direction + "_available"] and latest[direction] == 0
+                            for direction in ("upload", "download"))
+            if valid:
+                return latest
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.1, remaining))
+    traffic_counter_evidence(path, "owned_traffic_counters", before, latest, enabled, protecting)
+    raise AssertionError("Owned traffic counter sample did not satisfy the payload gate")
+
+
 def kill_worker(pid, name):
     # Match this probe's child PID and image, never arbitrary user processes.
     command = f"$p = Get-CimInstance Win32_Process | Where-Object {{ $_.ParentProcessId -eq {pid} -and $_.Name -eq '{name}' }}; if (!$p) {{ throw 'Owned worker absent' }}; $p | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
@@ -964,8 +1044,11 @@ def native_routing_gate(probe, directory, address, dns, origin, results):
                 def payloads():
                     assert request("alias.invalid", True) == "DIRECT-FIXTURE", "Source-inbound alias did not match its caller rule"
                     assert request("fallback.invalid", True) == "PROXY-FIXTURE", "Explicit non-first default did not receive unmatched traffic"
+                traffic_before = await_traffic_baseline(state, True)
                 payloads()
                 results.append(dict(mode=label, check="native source alias and explicit non-first fallback", passed=True))
+                counters = await_traffic_counters(state, traffic_before, True, True)
+                results.append(dict(mode=label, check="owned traffic counter sample", actual=counters, passed=True))
                 for tcp in (False, True):
                     direct_only_dns(dns, tcp)
                 results.append(dict(mode=label, check="private DNS and readiness probe survive source alias", passed=True))
@@ -1187,6 +1270,7 @@ def main():
                     results.append(dict(mode=label, check="Core-invalid replacement preserves live workers", passed=True))
                     if assets is not None:
                         results.append(dict(mode=label, check="invalid asset root preserves live workers", passed=True))
+                    traffic_before = (read_traffic_state(state_file) if reverse else await_traffic_baseline(state_file, args.vpn)) if ending == "stop" else None
                     for host in ("2ip.ru", "2ip.io", "myip.com"):
                         expected = "DIRECT-FIXTURE" if ((host == "myip.com") == reverse) else "PROXY-FIXTURE"
                         try:
@@ -1196,6 +1280,9 @@ def main():
                         row = dict(mode=label, host=host, expected=expected, actual=actual, passed=actual == expected)
                         results.append(row)
                         print(json.dumps(row), flush=True)
+                    if ending == "stop":
+                        counters = await_traffic_counters(state_file, traffic_before, not reverse, args.vpn)
+                        results.append(dict(mode=label, check="owned traffic counter sample", actual=counters, passed=True))
                     if asset_fixture is not None:
                         actual = request(asset_fixture["domain"], args.vpn)
                         results.append(dict(mode=label, check="explicit custom asset root routes ext GeoSite before blocking fallback",
@@ -1408,6 +1495,9 @@ def main():
             raise server_cleanup_error
     if not results or not all(row["passed"] for row in results):
         raise SystemExit(1)
+    counter_gates = sum(row.get("check") == "owned traffic counter sample" for row in results)
+    assert counter_gates == 2 + (2 if args.native_routing else 0), "Owned traffic counter gate count changed"
+    print("WINDOWS_TRAFFIC_COUNTER_RUNTIME_PASS=" + str(counter_gates), flush=True)
 
 
 if __name__ == "__main__":

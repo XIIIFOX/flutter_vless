@@ -217,21 +217,49 @@ for index, path in enumerate(sources):
  a=source.index('private final class ProxyOnlyRunner {')
  b=source.index('\n    func stop()',a)
  runner=source[a:b].replace('private final class ProxyOnlyRunner {', 'private final class ActualProxyRunner {')
+ helper_start=source.index('    fileprivate static func buildProxyOnlyConfigData', a)
+ helper_end=source.index('\n    }\n', helper_start)+6
+ prepare=source[helper_start:helper_end].replace('buildProxyOnlyConfigData', 'fixtureRealProxyPreparation', 1)
+ endpoint_start=source.index('    private static func findDelayEndpoint', a)
+ endpoint_end=source.index('\n    }\n', endpoint_start)+6
+ endpoint=source[endpoint_start:endpoint_end].replace('findDelayEndpoint', 'fixtureRealDelayEndpoint', 1)
+ runner+='\n'+prepare+'\n'+endpoint+'\n'
+ counter_start=source.index('    private(set) var totalUpload: Int64', a)
+ counter_end=source.index('    func forceCleanup()' if index == 1 else '    func debugSnapshot()', counter_start)
+ runner+='\n'+source[counter_start:counter_end]
+ stop_start=source.index('    func stop()', a)
+ stop_end=source.index('\n    }\n', stop_start)+6
+ runner+='\n'+source[stop_start:stop_end]
  runner+='''
     func fixtureSetRunning() { isRunning = true }
-    func stop() { events.append("actual-stop"); isRunning = false; XRayStop() }
+    func fixtureCounterDirections() -> (Int64?, Int64?) {
+        proxyCounterLock.lock(); defer { proxyCounterLock.unlock() }
+        return (previousUpload, previousDownload)
+    }
     fileprivate static func buildProxyOnlyConfigData(configData: Data) throws -> Data {
         prepareCount += 1
-        return Data("prepared-new".utf8)
+        // Preserve admission sentinels; JSON counter cases use real preparation.
+        if configData == Data("new".utf8) { return Data("prepared-new".utf8) }
+        return try fixtureRealProxyPreparation(configData: configData)
     }
-    private static func findDelayEndpoint(_ data: Data) throws -> (protocolName: String, port: Int, credentials: LocalProxyCredentials?)? { nil }
+    private static func findDelayEndpoint(_ data: Data) throws -> (protocolName: String, port: Int, credentials: LocalProxyCredentials?)? {
+        if data == Data("prepared-new".utf8) { return nil }
+        return try fixtureRealDelayEndpoint(data)
+    }
 }
 '''
  (out/f'transaction-{index}.swift').write_text(fixture.replace('// PREFLIGHT_TRANSACTION_SOURCE is replaced by the production operation body.',probe).replace('// PROXY_RUNNER_START_SOURCE is replaced by the production runner methods.',runner))
 PY
 for PLATFORM in 0 1; do
-    xcrun swiftc -O -parse-as-library "$IOS" "$ROOT/ios/flutter_vless/Sources/flutter_vless/NativeOperationQueue.swift" "$OUT/transaction-$PLATFORM.swift" -o "$OUT/transaction-$PLATFORM"
-    "$OUT/transaction-$PLATFORM"
+    PRIVACY="$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy"
+    COUNTER_FLAGS=(-DAPPLE_PROXY_COUNTER_TEST)
+    if [[ "$PLATFORM" == 1 ]]; then
+        PRIVACY="$ROOT/packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_privacy"
+    fi
+    xcrun swiftc -O -parse-as-library "${COUNTER_FLAGS[@]}" "$IOS" \
+        "$PRIVACY/LocalProxyAccessPolicy.swift" "$PRIVACY/XrayPrivacyConfig.swift" "$PRIVACY/XrayServiceTags.swift" \
+        "$ROOT/ios/flutter_vless/Sources/flutter_vless/NativeOperationQueue.swift" "$OUT/transaction-$PLATFORM.swift" -o "$OUT/transaction-$PLATFORM"
+    APPLE_TRAFFIC_COUNTER_FIXTURE="$ROOT/tool/fixtures/compatibility/traffic-counters.json" "$OUT/transaction-$PLATFORM"
 done
 
 # Execute the real provider final admission/start branches against inert APIs.

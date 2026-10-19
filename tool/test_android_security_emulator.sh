@@ -572,6 +572,7 @@ instrument caller-root-dns "$CLASS_PREFIX.CallerRootDnsDeviceTest" 4 0
 HOST_CLASS="$CLASS_PREFIX.ProtectedHostTrafficTest"
 instrument protected-host "$HOST_CLASS#hostUIDTCPAndUDPTraverseProxy,$HOST_CLASS#explicitHostExclusionAndProxyOnlyRemainExplicit,$HOST_CLASS#refusedProtectionStopsRuntimeBeforeVPN" 3 0
 instrument controlled-domain-routing "$CLASS_PREFIX.ControlledDomainRoutingTest#sniffedDomainRulesSelectDirectAndProxyAndSurviveRecovery" 1 0
+instrument owned-input-traffic "$CLASS_PREFIX.ControlledDomainRoutingTest#publicOwnedInputTrafficSurvivesCustomDefaultTagAndDisabledCallerPolicy" 1 0
 instrument network-handover "$HOST_CLASS#hostTrafficSurvivesWifiToCellularAndBack" 1 1
 
 PHASE=capture-start

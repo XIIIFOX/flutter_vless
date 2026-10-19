@@ -16,6 +16,18 @@ spec.loader.exec_module(runner)
 
 
 class PreservationRunnerGuards(unittest.TestCase):
+    def test_snapshot_binds_shared_counter_wire_corpus(self):
+        seen = []
+        def record(path):
+            seen.append(path)
+            return 'synthetic-digest'
+        with mock.patch.object(runner, 'digest', side_effect=record), \
+                mock.patch.object(runner.platform, 'system', return_value='Linux'):
+            snapshot = runner.source_snapshot()
+        name = 'tool/fixtures/compatibility/traffic-counters.json'
+        self.assertIn(runner.ROOT / name, seen)
+        self.assertEqual(snapshot[name], 'synthetic-digest')
+
     def test_child_environment_disables_core_init_listener_without_parent_mutation(self):
         source = {'PATH': 'keep-toolchain', 'CI': 'true', 'xray.browser.dialer': 'must-not-listen',
                   'XRAY_BROWSER_DIALER': 'must-not-listen', 'Xray_Location_Cert': 'caller-location'}

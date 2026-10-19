@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 private var events: [String] = []
 private var available = true
@@ -34,7 +35,6 @@ private struct Log {
     func info(_ text: FixtureLogMessage) {}
 }
 private let pluginLog = Log()
-private struct LocalProxyCredentials {}
 private struct NativeRoutingIntent {}
 private final class PluginXRayLogger {
     func reset() {}
@@ -52,6 +52,10 @@ private func XRayStartPrivate(_ data: Data, _ logger: PluginXRayLogger,
     events.append("core-start"); startedData.append(data); return true
 }
 private func XRayStop() { events.append("core-stop") }
+#if APPLE_PROXY_COUNTER_TEST
+private var counterReply = ""
+private func XRayQueryStats(_ tag: String?) -> String { counterReply }
+#endif
 private enum SystemProxyHelper {
     static func setSystemProxy(config: String) throws { events.append("system-proxy") }
     static func clearSystemProxy() { events.append("clear-system-proxy") }
@@ -165,5 +169,138 @@ private final class Manager {
         precondition(prepareCount == 1 && checkedData.isEmpty && startedData == [Data("prepared-new".utf8)])
         print("PASS: production Apple start transaction checks before stop/profile replacement; active sessions and asset failures preserved")
         print("PASS: exact prepared proxy bytes admitted before stop and reused by actual runner; legacy admission preserved")
+#if APPLE_PROXY_COUNTER_TEST
+        try counterChecks()
+#endif
     }
+
+#if APPLE_PROXY_COUNTER_TEST
+    static func counterChecks() throws {
+        var failures = 0
+        let enabled = ["statsInboundUplink": true, "statsInboundDownlink": true,
+                       "statsOutboundUplink": true, "statsOutboundDownlink": true]
+        func check(_ name: String, _ ok: Bool, actual: (Int64, Int64)? = nil) {
+            print("APPLE_PROXY_COUNTER_CASE=\(name);PASS=\(ok)" +
+                  (actual.map { ";UP=\($0.0);DOWN=\($0.1)" } ?? ""))
+            if !ok { failures += 1 }
+        }
+        func sample(_ name: String, tag: String? = "selected-primary", policy: Any? = nil,
+                    extraInputs: [[String: Any]] = [], reply: (String) -> String,
+                    expected: (Int64?, Int64?), after: ((ActualProxyRunner, String) -> Void)? = nil) throws {
+            var primary: [String: Any] = ["listen": "127.0.0.1", "port": 18095, "protocol": "socks"]
+            if let tag { primary["tag"] = tag }
+            var source: [String: Any] = [
+                "inbounds": [primary,
+                             ["tag": "unrelated-uplink", "listen": "127.0.0.1", "port": 18096, "protocol": "socks"]] + extraInputs,
+                "outbounds": [["tag": "edge-live", "protocol": "freedom"]]]
+            if let policy { source["policy"] = policy }
+            let sourceData = try JSONSerialization.data(withJSONObject: source)
+            events = []; checkedData = []; startedData = []; prepareCount = 0
+            available = true; coreCode = 0; assetFailure = false; rejectPreparedCheck = false
+            let subject = ActualProxyRunner()
+            try subject.start(configData: sourceData, geoAssetsDirectory: nil)
+            defer { subject.stop() }
+            precondition(prepareCount == 1 && startedData.count == 1 && checkedData == startedData)
+            let prepared = try JSONSerialization.jsonObject(with: startedData[0]) as! [String: Any]
+            let inputs = prepared["inbounds"] as! [[String: Any]]
+            let selected = inputs.first { ["socks", "http"].contains($0["protocol"] as? String ?? "") }!
+            let selectedTag = selected["tag"] as? String
+            precondition(selectedTag == tag && inputs as NSArray == source["inbounds"] as! NSArray)
+            if let policy {
+                precondition(NSDictionary(dictionary: ["value": prepared["policy"]!]) == NSDictionary(dictionary: ["value": policy]))
+            } else {
+                let system = (prepared["policy"] as! [String: Any])["system"] as! [String: Any]
+                check("absent-policy-inbound-default", system["statsInboundUplink"] as? Bool == true && system["statsInboundDownlink"] as? Bool == true)
+            }
+            counterReply = reply(selectedTag ?? "")
+            let actual = subject.queryTrafficStats()
+            let optional = subject.fixtureCounterDirections()
+            check(name, actual.upload == (expected.0 ?? 0) && actual.download == (expected.1 ?? 0) &&
+                  optional.0 == expected.0 && optional.1 == expected.1 &&
+                  actual.uploadSpeed == 0 && actual.downloadSpeed == 0, actual: (actual.upload, actual.download))
+            // QueryStats is cumulative and non-resetting; repeat the same reply.
+            let again = subject.queryTrafficStats()
+            check(name + "-repeat", again.upload == (expected.0 ?? 0) && again.download == (expected.1 ?? 0) &&
+                  again.uploadSpeed == 0 && again.downloadSpeed == 0, actual: (again.upload, again.download))
+            after?(subject, selectedTag ?? "")
+            subject.stop()
+            let stopped = subject.queryTrafficStats()
+            let absent = subject.fixtureCounterDirections()
+            check(name + "-stop", absent.0 == nil && absent.1 == nil && stopped.upload == 0 && stopped.download == 0 &&
+                  stopped.uploadSpeed == 0 && stopped.downloadSpeed == 0)
+        }
+        func owned(_ tag: String, _ up: Int64, _ down: Int64) -> String {
+            "inbound>>>\(tag)>>>traffic>>>uplink>>>\(up)\ninbound>>>\(tag)>>>traffic>>>downlink>>>\(down)\n"
+        }
+        let noise = "inbound>>>unrelated-uplink>>>traffic>>>uplink>>>100\n" +
+                    "outbound>>>edge-live>>>traffic>>>downlink>>>200\nuser>>>unrelated>>>traffic>>>uplink>>>300\n"
+        try sample("owned-exact", policy: ["system": enabled], reply: { owned($0, 11, 22) + noise }, expected: (11, 22))
+        try sample("available-zero", policy: ["system": enabled], reply: { owned($0, 0, 0) + noise }, expected: (0, 0))
+        try sample("missing-owned", policy: ["system": enabled], reply: { _ in noise }, expected: (nil, nil))
+        try sample("direction-word-tag", tag: "selected-downlink-uplink", policy: ["system": enabled], reply: { owned($0, 11, 22) }, expected: (11, 22))
+        try sample("partial-direction", policy: ["system": ["statsInboundUplink": true, "statsInboundDownlink": false]],
+                   reply: { "inbound>>>\($0)>>>traffic>>>uplink>>>11\n" + noise }, expected: (11, nil))
+        try sample("line-ambiguous-tag", tag: "selected\r\nprimary", policy: ["system": enabled], reply: { owned($0, 11, 22) }, expected: (nil, nil))
+        try sample("untagged-primary", tag: nil, policy: ["system": enabled], reply: { _ in noise }, expected: (nil, nil))
+        try sample("duplicate-tag", policy: ["system": enabled],
+                   extraInputs: [["tag": "selected-primary", "protocol": "socks", "port": 18097]],
+                   reply: { owned($0, 11, 22) }, expected: (nil, nil))
+        try sample("ambiguous-endpoint", policy: ["system": enabled],
+                   extraInputs: [["tag": "second", "protocol": "socks", "port": 18095]],
+                   reply: { owned($0, 11, 22) }, expected: (nil, nil))
+        try sample("disabled-policy", policy: ["system": enabled.mapValues { _ in false }], reply: { _ in "" }, expected: (nil, nil))
+        try sample("null-policy", policy: NSNull(), reply: { _ in "" }, expected: (nil, nil))
+        try sample("levels-only-policy", policy: ["levels": ["0": ["bufferSize": 3]]], reply: { _ in "" }, expected: (nil, nil))
+        try sample("default-policy", reply: { _ in "" }, expected: (nil, nil))
+        for invalid in ["", "-1", "not-a-number", "9223372036854775808"] {
+            try sample("invalid-up-\(invalid)", policy: ["system": enabled],
+                       reply: { "inbound>>>\($0)>>>traffic>>>uplink>>>\(invalid)\n" +
+                                "inbound>>>\($0)>>>traffic>>>downlink>>>22\n" }, expected: (nil, 22))
+        }
+        try sample("baseline-gaps-reset", policy: ["system": enabled], reply: { owned($0, 0, 0) }, expected: (0, 0)) { subject, tag in
+            counterReply = owned(tag, 5, 7)
+            let increased = subject.queryTrafficStats()
+            check("zero-is-available-baseline", increased.uploadSpeed == 5 && increased.downloadSpeed == 7)
+            counterReply = "inbound>>>\(tag)>>>traffic>>>downlink>>>9\n"
+            let partial = subject.queryTrafficStats()
+            check("gap-direction-local", partial.uploadSpeed == 0 && partial.downloadSpeed == 2)
+            counterReply = owned(tag, 8, 1)
+            let resumed = subject.queryTrafficStats()
+            check("gap-and-reset-first-speed-zero", resumed.uploadSpeed == 0 && resumed.downloadSpeed == 0)
+            subject.stop()
+            try! subject.start(configData: startedData[0], geoAssetsDirectory: nil)
+            let restarted = subject.queryTrafficStats()
+            check("restart-clears-baselines", restarted.upload == 8 && restarted.download == 1 &&
+                  restarted.uploadSpeed == 0 && restarted.downloadSpeed == 0)
+        }
+
+        // The shared CLI corpus contains exact int64 values. Reconstruct the
+        // mobile text wire (including explicit zero); do not round via Double.
+        func integer(_ value: Any) -> Int64 {
+            guard let number = value as? NSNumber,
+                  ["c", "s", "i", "l", "q", "C", "S", "I", "L", "Q"].contains(String(cString: number.objCType)),
+                  CFGetTypeID(number) != CFBooleanGetTypeID(), let result = Int64(number.stringValue) else {
+                preconditionFailure("Shared counter fixture must contain signed int64 values")
+            }
+            return result
+        }
+        let fixturePath = ProcessInfo.processInfo.environment["APPLE_TRAFFIC_COUNTER_FIXTURE"]!
+        let corpus = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: fixturePath))) as! [[String: Any]]
+        precondition(corpus.count == 11)
+        for item in corpus {
+            let expected = item["expected"] as! [String: Any]
+            let up = expected["uplink"] is NSNull ? nil : integer(expected["uplink"]!)
+            let down = expected["downlink"] is NSNull ? nil : integer(expected["downlink"]!)
+            let text = (item["counters"] as? [[String: Any]] ?? []).map {
+                ($0["name"] as! String) + ">>>" + String(integer($0["value"]!)) + "\n"
+            }.joined()
+            try sample("shared-" + (item["name"] as! String), tag: item["tag"] as? String,
+                       policy: ["system": enabled], reply: { _ in text }, expected: (up, down))
+        }
+        print("APPLE_PROXY_COUNTER_SHARED_CASES=\(corpus.count)")
+        precondition(!events.contains("system-proxy") || events.contains("core-start"))
+        print("APPLE_PROXY_COUNTER_FAILURES=\(failures)")
+        if failures != 0 { exit(7) }
+    }
+#endif
 }

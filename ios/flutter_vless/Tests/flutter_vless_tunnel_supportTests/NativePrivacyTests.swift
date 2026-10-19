@@ -40,7 +40,8 @@ final class NativePrivacyTests: XCTestCase {
         XCTAssertTrue(XrayPrivacyConfig.apply(to: &missing))
         XCTAssertEqual(missing["stats"] as? NSDictionary, [:] as NSDictionary)
         let system = try XCTUnwrap((missing["policy"] as? [String: Any])?["system"] as? [String: Any])
-        XCTAssertEqual(system as NSDictionary, ["statsOutboundUplink": true, "statsOutboundDownlink": true] as NSDictionary)
+        XCTAssertEqual(system as NSDictionary, ["statsInboundUplink": true, "statsInboundDownlink": true,
+                                               "statsOutboundUplink": true, "statsOutboundDownlink": true] as NSDictionary)
         var explicitNull: [String: Any] = ["stats": NSNull(), "policy": NSNull()]
         XCTAssertTrue(XrayPrivacyConfig.apply(to: &explicitNull))
         XCTAssertTrue(explicitNull["stats"] is NSNull)

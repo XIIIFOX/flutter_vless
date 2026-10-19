@@ -165,7 +165,7 @@ void VpnService::StopSession(bool release) {
   routing_intent_.reset(); routing_provenance_ = {};
   asset_directory_.reset();
   if (release) bootstrap_cache_.clear();
-  std::lock_guard<std::mutex> lock(stats_mutex_); total_upload_ = 0; total_download_ = 0;
+  std::lock_guard<std::mutex> lock(stats_mutex_); traffic_sample_ = {};
 }
 void VpnService::Stop() { StopSession(true); }
 void VpnService::Shutdown() { StopSession(false); }
@@ -367,6 +367,7 @@ bool VpnService::StartWorkers() {
   return fail("Private packet-path challenge did not complete");
 }
 void VpnService::StopWorkers() {
+  { std::lock_guard<std::mutex> lock(stats_mutex_); traffic_sample_ = {}; }
   // The separate WFP barrier remains installed, including during route removal.
   for (const auto& route : capture_routes_) DeleteIpForwardEntry2(&route);
   capture_routes_.clear();
@@ -386,23 +387,20 @@ bool VpnService::RetireIPv6Address() {
   });
 }
 void VpnService::UpdateTrafficStats() {
-  if (!api_port_) return;
+  flutter_vless::traffic::Sample sample;
+  flutter_vless::traffic::Stats stats;
   std::string output;
-  if (!flutter_vless::native::Command(xray_executable_path_, {L"api", L"statsquery", L"-server=127.0.0.1:" + std::to_wstring(api_port_)}, output)) return;
-  auto stats = flutter_vless::xray_config::Parse(output);
-  if (!stats.is_object() || !stats.contains("stat") || !stats["stat"].is_array()) return;
-  int64_t up = 0, down = 0;
-  for (const auto& entry : stats["stat"]) {
-    if (!entry.is_object() || !entry.contains("name") || !entry["name"].is_string()) continue;
-    const auto name = entry["name"].get<std::string>();
-    if (name.rfind("inbound>>>", 0) != 0 || !entry.contains("value") || !entry["value"].is_number_integer()) continue;
-    const auto value = entry["value"].get<int64_t>();
-    if (value < 0) continue;
-    if (name.find(">>>traffic>>>uplink") != std::string::npos && value <= INT64_MAX - up) up += value;
-    if (name.find(">>>traffic>>>downlink") != std::string::npos && value <= INT64_MAX - down) down += value;
-  }
-  std::lock_guard<std::mutex> lock(stats_mutex_); total_upload_ = up; total_download_ = down;
+  if (api_port_ && !routing_provenance_.managed_tag.empty()
+      && flutter_vless::native::Command(xray_executable_path_, {L"api", L"statsquery", L"-server=127.0.0.1:" + std::to_wstring(api_port_)}, output)
+      && flutter_vless::traffic::ParseStats(output, stats))
+    sample = flutter_vless::traffic::Select(stats, routing_provenance_.managed_tag);
+  std::lock_guard<std::mutex> lock(stats_mutex_); traffic_sample_ = sample;
+}
+flutter_vless::traffic::Sample VpnService::GetTrafficSample() {
+  std::lock_guard<std::mutex> lock(stats_mutex_);
+  return ready_.load() ? traffic_sample_ : flutter_vless::traffic::Sample{};
 }
 void VpnService::GetTrafficStats(int64_t& upload, int64_t& download) {
-  std::lock_guard<std::mutex> lock(stats_mutex_); upload = total_upload_; download = total_download_;
+  const auto sample = GetTrafficSample();
+  upload = sample.upload.value_or(0); download = sample.download.value_or(0);
 }

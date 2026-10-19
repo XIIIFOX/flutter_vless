@@ -9,7 +9,8 @@ public enum XrayPrivacyConfig {
         // remain caller decisions; unavailable counters can report zero.
         if config["stats"] == nil { config["stats"] = [String: Any]() }
         if config["policy"] == nil {
-            config["policy"] = ["system": ["statsOutboundUplink": true, "statsOutboundDownlink": true]]
+            config["policy"] = ["system": ["statsInboundUplink": true, "statsInboundDownlink": true,
+                                            "statsOutboundUplink": true, "statsOutboundDownlink": true]]
         }
         guard config["log"] == nil || config["log"] is NSNull || config["log"] is [String: Any] else { return false }
         var log = config["log"] as? [String: Any] ?? [:]

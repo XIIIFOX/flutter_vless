@@ -13,6 +13,13 @@ on:
           - apple-runtime
           - core-dns-context
           - native-listeners
+      apple_runner:
+        description: Apple runner for manual validation
+        type: choice
+        default: macos-latest
+        options:
+          - macos-latest
+          - macos-15-intel
   pull_request:
   push:
     branches:
@@ -295,7 +302,7 @@ jobs:
   ios:
     if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'apple-runtime'
     name: iOS Swift and Xcode build
-    runs-on: macos-latest
+    runs-on: ${{ inputs.apple_runner || 'macos-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4

@@ -102,10 +102,10 @@ class FlutterVlessPlugin { public:
   std::mutex status_mutex_, sink_mutex_; std::chrono::steady_clock::time_point start_time_ = std::chrono::steady_clock::now();
   int64_t total_upload_ = 0, total_download_ = 0, upload_speed_ = 0, download_speed_ = 0;
   flutter_vless::traffic::Baseline upload_baseline_, download_baseline_;
-  flutter::EncodableList status;
+  flutter::EncodableList emitted_status;
   void UpdateStatus(); void RefreshTray() {}
   void RunOnUIThread(const std::function<void()>& action) { action(); } // no OS/UI thread
-  void SendStatusToUI(const flutter::EncodableList& value) { status = value; }
+  void SendStatusToUI(const flutter::EncodableList& value) { emitted_status = value; }
   void LogMessage(const std::string&) {}
 };
 '''
@@ -124,8 +124,8 @@ void Same(flutter_vless::traffic::Sample sample, const Json& expected) {
 }
 void Public(FlutterVlessPlugin& plugin, int64_t up, int64_t down, int64_t us = 0, int64_t ds = 0) {
   plugin.UpdateStatus();
-  Require(plugin.status.size() == 6 && plugin.status[1] == std::to_string(us) && plugin.status[2] == std::to_string(ds)
-      && plugin.status[3] == std::to_string(up) && plugin.status[4] == std::to_string(down) && plugin.status[5] == "CONNECTED",
+  Require(plugin.emitted_status.size() == 6 && plugin.emitted_status[1] == std::to_string(us) && plugin.emitted_status[2] == std::to_string(ds)
+      && plugin.emitted_status[3] == std::to_string(up) && plugin.emitted_status[4] == std::to_string(down) && plugin.emitted_status[5] == "CONNECTED",
       "public6 fields changed or unavailable/gap/reset produced fabricated speed");
 }
 int main(int argc, char** argv) try {
@@ -210,6 +210,8 @@ class Guards(unittest.TestCase):
     def test_actual_consumers_and_public_shape(self):
         body = extracted(sources())
         self.assertEqual(body.count("status.push_back("), 6)
+        self.assertIn("flutter::EncodableList emitted_status;", HEADER)
+        self.assertNotIn("flutter::EncodableList status;", HEADER)
         self.assertIn("ApiClient::GetStats", body)
         self.assertIn("routing_provenance_.managed_tag", body)
 

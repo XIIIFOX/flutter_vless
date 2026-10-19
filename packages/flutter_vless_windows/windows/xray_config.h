@@ -20,6 +20,7 @@ inline std::optional<std::string> PortEnvironment(const std::string& name);
 inline std::string PortTrimSpace(std::string text);
 inline std::optional<std::string> ResolveInboundListen(const std::string& text, const PortEnvironmentReader& read_environment);
 inline bool UnixInboundListen(std::string resolved);
+inline bool BindDnsAddresses(Json& config, const PortEnvironmentReader& read_environment);
 
 inline Json Parse(const std::string& text) {
   bool duplicate = false;
@@ -118,6 +119,7 @@ inline bool Normalize(Json& config, const PortEnvironmentReader& read_environmen
       if (entry.contains("streamSettings") && !entry["streamSettings"].is_null() && !PrivateStream(entry["streamSettings"])) return false;
     }
   }
+  if (!BindDnsAddresses(config, read_environment)) return false;
   // No imported filenames, core stdout, DNS questions, TLS keys or Reality dumps.
   config["log"] = {{"access", "none"}, {"error", "none"}, {"loglevel", "none"}, {"dnsLog", false}};
   return true;
@@ -424,6 +426,59 @@ inline std::string ParsedAddressText(std::string text) {
   // separate from the raw expanded Address frozen in the candidate document.
   if (text.size() >= 2 && text.front() == '[' && text.back() == ']') text = text.substr(1, text.size() - 2);
   return PortTrimSpace(text);
+}
+// Only these root-DNS values are conf.Address fields. Keep caller matcher
+// keys, case, alias/array order, URLs and non-Address strings exactly as supplied.
+inline bool BindDnsAddresses(Json& config, const PortEnvironmentReader& read_environment) {
+  if (!config.contains("dns") || config["dns"].is_null()) return true;
+  auto dns = config["dns"];
+  if (!dns.is_object()) return false;
+  std::map<std::string, std::optional<std::string>> environment;
+  const PortEnvironmentReader snapshot = [&](const std::string& name) {
+    auto found = environment.find(name);
+    if (found == environment.end()) found = environment.emplace(name, read_environment(name)).first;
+    return found->second;
+  };
+  auto field = [](Json& object, const char* name, Json*& result) {
+    result = nullptr;
+    if (!object.is_object()) return false;
+    for (auto it = object.begin(); it != object.end(); ++it) if (Fold(it.key()) == Fold(name)) {
+      if (result) return false;
+      result = &it.value();
+    }
+    return true;
+  };
+  auto bind = [&](Json& address) {
+    if (address.is_null()) return true;
+    if (!address.is_string()) return false;
+    const auto expanded = ResolveAddress(address.get<std::string>(), snapshot);
+    if (!expanded) return false;
+    address = *expanded;
+    return true;
+  };
+  Json *client = nullptr, *servers = nullptr, *hosts = nullptr;
+  if (!field(dns, "clientIp", client) || !field(dns, "servers", servers) || !field(dns, "hosts", hosts)) return false;
+  if (client && !bind(*client)) return false;
+  if (servers && !servers->is_null()) {
+    if (!servers->is_array()) return false;
+    for (auto& server : *servers) {
+      if (!server.is_object()) { if (!bind(server)) return false; continue; }
+      Json *address = nullptr, *ecs = nullptr;
+      if (!field(server, "address", address) || !field(server, "clientIp", ecs)) return false;
+      if ((address && !bind(*address)) || (ecs && !bind(*ecs))) return false;
+    }
+  }
+  if (hosts && !hosts->is_null()) {
+    if (!hosts->is_object()) return false;
+    for (auto& value : *hosts) {
+      if (value.is_array()) { for (auto& address : value) if (!bind(address)) return false; }
+      else if (!bind(value)) return false;
+    }
+  }
+  // Commit only after every inspected field has passed; never leave a partial
+  // binding in a candidate rejected for an ambiguous field or nested env value.
+  config["dns"] = std::move(dns);
+  return true;
 }
 inline bool UnixInboundListen(std::string resolved) {
   // Match ParseAddress's bracket-removal-before-trim order for classification;
@@ -836,7 +891,7 @@ inline std::string DnsDomainLower(std::string value) {
 }
 
 inline bool ProtectedDnsAddress(const std::string& address, const Json& hosts) {
-  auto host = address;
+  auto host = ParsedAddressText(address);
   const auto scheme = host.find("://");
   if (scheme != std::string::npos) {
     const auto protocol = Fold(host.substr(0, scheme));
@@ -866,10 +921,10 @@ inline bool ProtectedDnsAddress(const std::string& address, const Json& hosts) {
     if (domain.rfind("full:", 0) == 0) domain.erase(0, 5);
     if (DnsDomainLower(domain) != host) continue;
     found = true;
-    if (it->is_string()) { if (!Literal4(it->get<std::string>())) return false; }
+    if (it->is_string()) { if (!Literal4(ParsedAddressText(it->get<std::string>()))) return false; }
     else {
       if (!it->is_array() || it->empty()) return false;
-      for (const auto& entry : *it) if (!entry.is_string() || !Literal4(entry.get<std::string>())) return false;
+      for (const auto& entry : *it) if (!entry.is_string() || !Literal4(ParsedAddressText(entry.get<std::string>()))) return false;
     }
   }
   return found;
@@ -899,7 +954,7 @@ inline bool ProtectedDns(Json& config, ServiceTags& tags, const std::string& pro
     if (server.is_object() && !strategy(canonical)) return false;
     auto address = server.is_string() ? server : canonical.value("address", Json());
     if (!address.is_string()) return false;
-    const auto value = Fold(address.get<std::string>());
+    const auto value = Fold(ParsedAddressText(address.get<std::string>()));
     if (value == "localhost") {
       if (proxy.empty()) return false; // No implicit direct/default selection for a native DNS replacement.
       if (server.is_string()) server = {{"address", "tcp://1.1.1.1"}};

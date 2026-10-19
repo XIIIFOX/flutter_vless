@@ -54,7 +54,7 @@ internal object AndroidTunnelDnsPolicy {
                                 environment: (String) -> String?): Prepared {
         require(policy == "config" || policy == "proxy") { "Unsupported Android DNS policy" }
         require(proxyOutboundTag == null || policy == "proxy") { "DNS proxy outbound tag requires proxy DNS policy" }
-        if (policy == "config") return prepareCallerRoot(configJson, excludedRoutes)
+        if (policy == "config") return prepareCallerRoot(configJson, excludedRoutes, environment)
         require(allowsRouteExclusions(excludedRoutes)) { "Excluded route conflicts with virtual system DNS" }
 
         val config = JSONObject(configJson)
@@ -174,15 +174,17 @@ internal object AndroidTunnelDnsPolicy {
     }
 
     /**
-     * Keep the imported root DNS client intact. The private TUN input sends only
+     * Keep the imported root DNS client semantics, freezing typed env Addresses
+     * in the copied document. The private TUN input sends only
      * its virtual resolver traffic here; imported inputs and DNS routing tags
      * retain their original meaning. Missing/empty/localhost DNS uses the
      * official protected Core resolver's D broker on an Android physical Network.
      * This does not pin transport endpoints into caller hosts or select a proxy.
      */
-    private fun prepareCallerRoot(configJson: String, excludedRoutes: List<String>): Prepared {
+    private fun prepareCallerRoot(configJson: String, excludedRoutes: List<String>, environment: (String) -> String?): Prepared {
         require(allowsRouteExclusions(excludedRoutes)) { "Excluded route conflicts with virtual system DNS" }
         val config = JSONObject(configJson)
+        bindRootDnsAddresses(config, environment)
         requireNoFakeDns(config)
         canonicalize(config, "outbounds", "inbounds", "routing")
         val outbounds = objects(config, "outbounds", required = true)
@@ -219,22 +221,59 @@ internal object AndroidTunnelDnsPolicy {
         return Prepared(config.toString(), listOf(VIRTUAL_SERVER), managedInboundTag = managedInboundTag)
     }
 
+    private fun schemaFold(value: String) = value.replace('\u017f', 's').replace('\u212a', 'k').lowercase(Locale.ROOT)
+
+    private fun schemaKey(value: JSONObject, name: String): String? {
+        val keys = value.keys().asSequence().filter { schemaFold(it) == name }.toList()
+        require(keys.size <= 1) { "Conflicting case-insensitive configuration keys" }
+        return keys.singleOrNull()
+    }
+
+    private fun schemaField(value: JSONObject, name: String): Any? = schemaKey(value, name)?.let(value::opt)
+
+    /** Address values only: hosts dictionary keys, tags, URLs containing env:
+     * and arbitrary nested caller objects never become environment references. */
+    private fun bindRootDnsAddresses(config: JSONObject, environment: (String) -> String?) {
+        val dns = schemaField(config, "dns") as? JSONObject ?: return
+        fun bindField(owner: JSONObject, name: String) {
+            val key = schemaKey(owner, name) ?: return
+            val raw = owner.opt(key) as? String ?: return
+            owner.put(key, XrayPortSpec.bindAddressEnvironment(raw, environment))
+        }
+        bindField(dns, "clientip")
+        (schemaField(dns, "servers") as? JSONArray)?.let { servers ->
+            for (index in 0 until servers.length()) {
+                when (val server = servers.opt(index)) {
+                    is String -> servers.put(index, XrayPortSpec.bindAddressEnvironment(server, environment))
+                    is JSONObject -> {
+                        bindField(server, "address")
+                        bindField(server, "clientip")
+                    }
+                }
+            }
+        }
+        val hosts = schemaField(dns, "hosts") as? JSONObject ?: return
+        for (key in hosts.keys().asSequence().toList()) {
+            when (val value = hosts.opt(key)) {
+                is String -> hosts.put(key, XrayPortSpec.bindAddressEnvironment(value, environment))
+                is JSONArray -> for (index in 0 until value.length()) {
+                    val raw = value.opt(index) as? String ?: continue
+                    value.put(index, XrayPortSpec.bindAddressEnvironment(raw, environment))
+                }
+            }
+        }
+    }
+
     /** Match only Core's engine/server fields, not arbitrary caller host names. */
     private fun requireNoFakeDns(config: JSONObject) {
-        fun fold(value: String) = value.replace('\u017f', 's').replace('\u212a', 'k').lowercase(Locale.ROOT)
-        fun field(value: JSONObject, name: String): Any? {
-            val keys = value.keys().asSequence().filter { fold(it) == name }.toList()
-            require(keys.size <= 1) { "Conflicting case-insensitive configuration keys" }
-            return keys.singleOrNull()?.let(value::opt)
-        }
-        val engine = field(config, "fakedns")
+        val engine = schemaField(config, "fakedns")
         require(engine == null || engine == JSONObject.NULL) { "FakeDNS is unavailable in the VPN DNS bridge" }
-        val dns = field(config, "dns") as? JSONObject ?: return
-        val servers = field(dns, "servers") as? JSONArray ?: return
+        val dns = schemaField(config, "dns") as? JSONObject ?: return
+        val servers = schemaField(dns, "servers") as? JSONArray ?: return
         for (index in 0 until servers.length()) {
             val server = servers.opt(index)
-            val address = if (server is JSONObject) field(server, "address") else server
-            require(address !is String || fold(address) != "fakedns") {
+            val address = if (server is JSONObject) schemaField(server, "address") else server
+            require(address !is String || schemaFold(XrayPortSpec.coreAddressText(address)) != "fakedns") {
                 "FakeDNS is unavailable in the VPN DNS bridge"
             }
         }

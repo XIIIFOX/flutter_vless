@@ -41,6 +41,162 @@ Json& EndpointPath(Json& value, const std::string& path) {
   }
   return *current;
 }
+Json& DnsAddressPath(Json& value, const Json& path) {
+  auto* current = &value;
+  for (const auto& component : path) {
+    const auto key = component.get<std::string>();
+    current = current->is_array() ? &current->at(std::stoul(key)) : &current->at(key);
+  }
+  return *current;
+}
+void DnsAddressCases(const std::string& only = "") {
+  std::ifstream input("tool/fixtures/compatibility/dns-addresses.json");
+  Require(input.good(), "shared root DNS Address corpus is required");
+  Json fixtures; input >> fixtures; Require(fixtures.size() == 3, "shared root DNS Address corpus changed");
+  auto prepare = [](const Json& profile, std::vector<std::string>& calls) {
+    return PrepareProtectedVpn(profile.dump(), "session-user", "session-password", "Ethernet", [&](const std::string& host) {
+      calls.push_back(host); return host == "endpoint.invalid" ? "192.0.2.5" : "";
+    });
+  };
+  bool selected = only.empty();
+  for (const auto& fixture : fixtures) {
+    const auto name = fixture["name"].get<std::string>();
+    if (!only.empty() && only != name) continue;
+    selected = true;
+    const auto source = fixture["config"]; const auto original = source.dump();
+    EndpointEnvironment environment(fixture["environment"]);
+    std::vector<std::string> calls;
+    const auto result = prepare(source, calls);
+    auto literal = source;
+    for (const auto& binding : fixture["bindings"]) DnsAddressPath(literal, binding["path"]) = binding["value"];
+    std::vector<std::string> literal_calls;
+    const auto expected = prepare(literal, literal_calls);
+    Require(expected.has_value(), "literal root DNS Address control rejected");
+    Require(result && Parse(*result) == Parse(*expected), "root DNS env Address differs from the literal candidate");
+    Require(calls.empty() && literal_calls.empty(), "root DNS Address reached physical bootstrap");
+    Require(Parse(*result)["dns"] == literal["dns"], "caller DNS fields, host aliases or array order changed");
+    Require(source.dump() == original, "root DNS Address preparation mutated caller source");
+  }
+  if (only.empty() || only == "before-bootstrap") {
+    selected = true;
+    auto profile = fixtures[1]["config"];
+    profile["outbounds"].insert(profile["outbounds"].begin(), Json{{"tag", "proxy"}, {"protocol", "vless"},
+        {"settings", {{"address", "endpoint.invalid"}, {"port", 443}}}});
+    EndpointEnvironment environment(fixtures[1]["environment"]);
+    std::vector<std::string> calls;
+    const auto result = PrepareProtectedVpn(profile.dump(), "session-user", "session-password", "Ethernet", [&](const std::string& host) {
+      calls.push_back(host);
+#ifdef _WIN32
+      Require(_putenv_s("FLUTTER_VLESS_FIXTURE_DNS_ROOT_ECS", "203.0.113.99") == 0
+          && _putenv_s("FLUTTER_VLESS_FIXTURE_DNS_SERVER_ECS", "203.0.113.98") == 0, "cannot change DNS environment");
+#else
+      Require(setenv("FLUTTER_VLESS_FIXTURE_DNS_ROOT_ECS", "203.0.113.99", 1) == 0
+          && setenv("FLUTTER_VLESS_FIXTURE_DNS_SERVER_ECS", "203.0.113.98", 1) == 0, "cannot change DNS environment");
+#endif
+      return host == "endpoint.invalid" ? "192.0.2.5" : "";
+    });
+    auto literal = profile;
+    for (const auto& binding : fixtures[1]["bindings"]) DnsAddressPath(literal, binding["path"]) = binding["value"];
+    std::vector<std::string> literal_calls; const auto expected = prepare(literal, literal_calls);
+    Require(result && expected && Parse(*result) == Parse(*expected) && calls == std::vector<std::string>{"endpoint.invalid"},
+        "root DNS env was not bound before physical bootstrap");
+  }
+  if (only.empty() || only == "schema-scope") {
+    selected = true;
+    auto source = fixtures[1]["config"];
+    source["dns"] = {{"ClientIP", "env:root.ecs"}, {"SERVERS", Json::array({
+        {{"Address", "env:server.address"}, {"CLIENTIP", "env:server.ecs"}, {"tag", "env:opaque"}}})},
+        {"HOSTS", {{"full:Mixed.Key.invalid", Json::array({"127.0.0.7", "env:alias", "env:last", "second.invalid"})},
+                   {"full:mixed.key.invalid", "127.0.0.9"}}}, {"opaque", {{"address", "env:opaque"}}}};
+    auto literal = source;
+    literal["dns"]["ClientIP"] = "198.51.100.1";
+    literal["dns"]["SERVERS"][0]["Address"] = "tcp://127.0.0.1:5353";
+    literal["dns"]["SERVERS"][0]["CLIENTIP"] = "203.0.113.1";
+    literal["dns"]["HOSTS"]["full:Mixed.Key.invalid"][1] = "first.invalid";
+    literal["dns"]["HOSTS"]["full:Mixed.Key.invalid"][2] = "127.0.0.8";
+    const std::map<std::string, std::string> values{{"root.ecs", "198.51.100.1"}, {"server.address", "tcp://127.0.0.1:5353"},
+        {"server.ecs", "203.0.113.1"}, {"alias", "first.invalid"}, {"last", "127.0.0.8"}};
+    std::vector<std::string> reads;
+    Require(Normalize(source, [&](const std::string& name) -> std::optional<std::string> {
+      reads.push_back(name); const auto found = values.find(name); return found == values.end() ? std::nullopt : std::optional<std::string>{found->second};
+    }) && Normalize(literal) && source == literal, "root DNS schema binding changed casing, aliases, order or opaque fields");
+    Require(reads == std::vector<std::string>{"root.ecs", "server.address", "server.ecs", "alias", "last"}, "root DNS Address binding inspected a non-Address field");
+    auto repeated = fixtures[1]["config"];
+    repeated["dns"]["clientIp"] = "env:same"; repeated["dns"]["servers"][1]["clientIp"] = "env:same";
+    unsigned count = 0;
+    Require(Normalize(repeated, [&](const std::string&) -> std::optional<std::string> { return ++count == 1 ? "198.51.100.2" : "203.0.113.99"; })
+        && count == 1 && repeated["dns"]["clientIp"] == "198.51.100.2" && repeated["dns"]["servers"][1]["clientIp"] == "198.51.100.2",
+        "one preparation re-read a shared DNS Address environment variable");
+  }
+  if (only.empty() || only == "parsed-view") {
+    selected = true;
+    auto profile = fixtures[0]["config"];
+    profile["dns"]["servers"] = Json::array({"env:FLUTTER_VLESS_FIXTURE_DNS_PARSED"});
+    for (const auto& raw : {"[ tcp://127.0.0.1:5353 ]", "\xc2\xa0" "https://dns.example/dns-query\xe3\x80\x80"}) {
+      EndpointEnvironment environment({{"FLUTTER_VLESS_FIXTURE_DNS_PARSED", raw}});
+      profile["dns"]["hosts"] = {{"full:dns.example", Json::array({"[ 127.0.0.1 ]", "\xc2\xa0" "127.0.0.2\xe3\x80\x80"})}};
+      std::vector<std::string> calls;
+      const auto result = prepare(profile, calls);
+      Require(result && calls.empty() && Parse(*result)["dns"]["servers"][0] == raw
+          && Parse(*result)["dns"]["hosts"] == profile["dns"]["hosts"], "root DNS parsed Address view changed raw JSON or refused Core-equivalent numeric/static remote DNS");
+    }
+    for (const auto& raw : {"[ fakedns ]", "[ quic://127.0.0.1 ]", "[ https+local://127.0.0.1/dns-query ]", "[ tls://127.0.0.1 ]"}) {
+      EndpointEnvironment environment({{"FLUTTER_VLESS_FIXTURE_DNS_PARSED", raw}});
+      std::vector<std::string> calls;
+      Require(!prepare(profile, calls), "parsed env DNS Address bypassed unsupported-client refusal");
+    }
+    profile["dns"]["servers"] = Json::array({"https://dns.example/dns-query"});
+    profile["dns"]["hosts"] = {{"full:dns.example", Json::array({"127.0.0.1", "[ ::1 ]"})}};
+    std::vector<std::string> calls;
+    Require(!prepare(profile, calls), "parsed mixed IPv6 static DNS mapping was admitted");
+  }
+  if (only.empty() || only == "localhost-and-refusal") {
+    selected = true;
+    auto profile = fixtures[0]["config"];
+    profile["outbounds"].insert(profile["outbounds"].begin(), Json{{"tag", "proxy"}, {"protocol", "vless"},
+        {"settings", {{"address", "endpoint.invalid"}, {"port", 443}}}});
+    profile["dns"]["servers"] = Json::array({{{"address", "env:FLUTTER_VLESS_FIXTURE_DNS_DEFAULT"}, {"tag", nullptr}, {"domains", Json::array({"full:chosen.invalid"})}}});
+    EndpointEnvironment environment({{"FLUTTER_VLESS_FIXTURE_DNS_DEFAULT", "localhost"}});
+    auto literal = profile; literal["dns"]["servers"][0]["address"] = "localhost";
+    std::vector<std::string> calls, literal_calls;
+    const auto result = prepare(profile, calls), expected = prepare(literal, literal_calls);
+    Require(result && expected && Parse(*result) == Parse(*expected), "env localhost did not use the protected native DNS replacement");
+    for (const auto& unsafe : {"fakedns", "env:OTHER"}) {
+      EndpointEnvironment changed({{"FLUTTER_VLESS_FIXTURE_DNS_DEFAULT", unsafe}});
+      calls.clear(); Require(!prepare(profile, calls), "env default DNS bypassed unsupported/nested Address refusal");
+    }
+  }
+  if (only.empty() || only == "empty-and-invalid") {
+    selected = true;
+    auto source = fixtures[2]["config"];
+    source["dns"]["hosts"]["full:scalar.invalid"] = "env: exact.name ";
+    std::vector<std::string> reads;
+    Require(Normalize(source, [&](const std::string& name) -> std::optional<std::string> {
+      reads.push_back(name); if (name == " exact.name ") return ""; return "127.0.0.99";
+    }) && source["dns"]["hosts"]["full:scalar.invalid"] == "" && reads.front() == " exact.name "
+        && std::find(reads.begin(), reads.end(), "EXACT_NAME") == reads.end(), "exact empty DNS Address did not win over alias lookup");
+    for (const auto& location : {"root", "server", "hosts"}) {
+      auto nested = fixtures[1]["config"];
+      if (std::string(location) == "root") nested["dns"]["clientIp"] = "env:BAD";
+      else if (std::string(location) == "server") nested["dns"]["servers"][0] = "env:BAD";
+      else nested["dns"]["hosts"] = {{"full:alias.invalid", Json::array({"127.0.0.1", "env:BAD"})}};
+      const auto original = nested.dump();
+      EndpointEnvironment bad({{"BAD", "env:SECOND"}, {"SECOND", "127.0.0.1"}});
+      std::vector<std::string> calls;
+      Require(!prepare(nested, calls) && nested.dump() == original, "nested root DNS Address was re-decoded or source mutated");
+    }
+    for (const auto& duplicate : {"root-client", "root-servers", "root-hosts", "server-address", "server-client"}) {
+      auto invalid = fixtures[1]["config"];
+      if (std::string(duplicate) == "root-client") invalid["dns"]["CLIENTIP"] = "127.0.0.1";
+      else if (std::string(duplicate) == "root-servers") invalid["dns"]["SERVERS"] = Json::array({"tcp://127.0.0.1"});
+      else if (std::string(duplicate) == "root-hosts") { invalid["dns"]["hosts"] = Json::object(); invalid["dns"]["HOSTS"] = Json::object(); }
+      else if (std::string(duplicate) == "server-address") invalid["dns"]["servers"][1]["ADDRESS"] = "tcp://127.0.0.1";
+      else invalid["dns"]["servers"][1]["CLIENTIP"] = "127.0.0.1";
+      Require(!Normalize(invalid), "duplicate inspected root DNS schema field was accepted");
+    }
+  }
+  Require(selected, "unknown root DNS Address case");
+}
 void EndpointAddressCases(const std::string& only = "") {
   std::ifstream input("tool/fixtures/compatibility/endpoint-addresses.json");
   Require(input.good(), "shared endpoint Address corpus is required");
@@ -672,6 +828,7 @@ int main(int argc, char** argv) try {
   if (argc == 3 && std::string(argv[1]) == "--direct-only-case") { DirectOnlyCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--ipv6-case") { IPv6PayloadCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--protocol-case") { ProtocolCompatibilityCases(argv[2]); return 0; }
+  if (argc == 3 && std::string(argv[1]) == "--dns-address-case") { DnsAddressCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--endpoint-address-case") { EndpointAddressCases(argv[2]); return 0; }
   if (argc != 1) {
     if (argc != 7 || std::string(argv[1]) != "--prepare-dns-fixture") return 2;
@@ -690,6 +847,7 @@ int main(int argc, char** argv) try {
   DirectOnlyCases();
   ProtocolCompatibilityCases();
   EndpointAddressCases();
+  DnsAddressCases();
   const auto source = Parse(R"({
     "log":{"access":"private-canary.log","error":"secret.log","loglevel":"debug","dnsLog":true},
     "inbounds":[{"protocol":"socks","listen":"127.0.0.1","port":18580,"tag":"socks-in","settings":{"auth":"noauth"},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":false}}],

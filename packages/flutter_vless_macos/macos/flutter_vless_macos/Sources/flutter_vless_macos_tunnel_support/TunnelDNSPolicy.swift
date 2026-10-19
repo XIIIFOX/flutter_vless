@@ -32,13 +32,57 @@ public enum TunnelDNSPolicy {
         ((stream["method"] as? String) ?? (stream["network"] as? String) ?? "tcp").lowercased()
     }
 
-    /// Bind only schema-selected typed endpoint addresses. Caller DNS and
-    /// opaque maps are not Address fields; a failure never publishes a partial edit.
+    /// Bind schema-selected typed endpoint and caller DNS Address values.
+    /// Keep user-map keys and opaque strings; never publish a partial edit.
     @discardableResult
     static func bindEndpointEnvironment(to config: inout [String: Any], environment: [String: String]) throws -> Bool {
         guard var output = TunnelConfigKeys.normalize(config) else { throw LocalProxyAccessError.malformedConfiguration }
-        guard var outbounds = output["outbounds"] as? [[String: Any]] else { return false }
         var changed = false
+        func bindValue(_ value: Any) throws -> Any {
+            guard let raw = value as? String, raw.hasPrefix("env:") else { return value }
+            let bound = try LocalProxyAccessPolicy.bindingAddressEnvironment(raw, environment: environment)
+            changed = true
+            return bound
+        }
+        func fieldKey(_ object: [String: Any], _ name: String) throws -> String? {
+            let keys = object.keys.filter { XrayJSONField.matches($0, name) }
+            guard keys.count <= 1 else { throw LocalProxyAccessError.malformedConfiguration }
+            return keys.first
+        }
+        func bindField(_ object: inout [String: Any], _ name: String) throws {
+            if let key = try fieldKey(object, name), let value = object[key] {
+                object[key] = try bindValue(value)
+            }
+        }
+        if var dns = output["dns"] as? [String: Any] {
+            try bindField(&dns, "clientIp")
+            if let key = try fieldKey(dns, "servers"), var servers = dns[key] as? [Any] {
+                for index in servers.indices {
+                    if var server = servers[index] as? [String: Any] {
+                        try bindField(&server, "address")
+                        try bindField(&server, "clientIp")
+                        servers[index] = server
+                    } else { servers[index] = try bindValue(servers[index]) }
+                }
+                dns[key] = servers
+            }
+            if let key = try fieldKey(dns, "hosts"), var hosts = dns[key] as? [String: Any] {
+                // Every array element is an Address. Core itself selects the
+                // first domain alias over all IPs; preserve that order intact.
+                for host in Array(hosts.keys) {
+                    if var values = hosts[host] as? [Any] {
+                        for index in values.indices { values[index] = try bindValue(values[index]) }
+                        hosts[host] = values
+                    } else if let value = hosts[host] { hosts[host] = try bindValue(value) }
+                }
+                dns[key] = hosts
+            }
+            output["dns"] = dns
+        }
+        guard var outbounds = output["outbounds"] as? [[String: Any]] else {
+            if changed { config = output }
+            return changed
+        }
         func bind(_ object: inout [String: Any]) throws {
             guard let raw = object["address"] as? String, raw.hasPrefix("env:") else { return }
             object["address"] = try LocalProxyAccessPolicy.bindingAddressEnvironment(raw, environment: environment)
@@ -220,8 +264,10 @@ public enum TunnelDNSPolicy {
                 return folded == hostKey(host)
             }
             guard keys.count == 1, let value = hosts[keys[0]] else { return false }
-            if let ip = value as? String { return isIPv4(ip) }
-            if let ips = value as? [String] { return !ips.isEmpty && ips.allSatisfy(isIPv4) }
+            if let ip = value as? String { return isIPv4(LocalProxyAccessPolicy.coreAddressText(ip)) }
+            if let ips = value as? [String] {
+                return !ips.isEmpty && ips.allSatisfy { isIPv4(LocalProxyAccessPolicy.coreAddressText($0)) }
+            }
             return false
         }
         let serverKeys = dns.keys.filter { XrayJSONField.matches($0, "servers") }
@@ -233,13 +279,16 @@ public enum TunnelDNSPolicy {
         for index in servers.indices {
             let originalEntry = servers[index]
             var entry: [String: Any]
-            let address: String
-            if let string = originalEntry as? String { entry = [:]; address = string }
+            let rawAddress: String
+            if let string = originalEntry as? String { entry = [:]; rawAddress = string }
             else if let object = originalEntry as? [String: Any],
                     unambiguous(object, ["address", "tag", "queryStrategy"]),
-                    let value = field(object, "address") as? String { entry = object; address = value }
+                    let value = field(object, "address") as? String { entry = object; rawAddress = value }
             else { return false }
-            guard !systemStrategy(field(entry, "queryStrategy")) else { return false }
+            // Address.UnmarshalJSON parses the whole value before DNS mode
+            // selection. Keep its raw text in JSON, using this view for admission.
+            let address = LocalProxyAccessPolicy.coreAddressText(rawAddress)
+            guard !systemStrategy(field(entry, "queryStrategy")), address.lowercased() != "fakedns" else { return false }
             if address.lowercased() == "localhost" || address.isEmpty {
                 // Explicit remote caller DNS needs no selected proxy. Only the
                 // native protected default requires a qualified detour.
@@ -258,11 +307,15 @@ public enum TunnelDNSPolicy {
                               "port": "53", "network": "tcp", "outboundTag": selected])
                 servers[index] = entry
                 changed = true
-            } else if isIPv4(address) {
+            } else if isLiteral(address) {
+                guard isIPv4(address) else { return false }
                 continue
-            } else if let url = URLComponents(string: address),
-                      ["tcp", "https", "h2c"].contains(url.scheme?.lowercased() ?? ""),
-                      let host = url.host, isIPv4(host) || staticIPv4(host) {
+            } else if let url = URLComponents(string: address), let scheme = url.scheme {
+                // A special/unsupported DNS URL cannot become a bare-host
+                // admission merely because a hosts key happens to match it.
+                guard ["tcp", "https", "h2c"].contains(scheme.lowercased()), let rawHost = url.host else { return false }
+                let host = LocalProxyAccessPolicy.coreAddressText(rawHost)
+                guard isIPv4(host) || (!isLiteral(host) && staticIPv4(host)) else { return false }
                 continue
             } else if staticIPv4(address) {
                 continue

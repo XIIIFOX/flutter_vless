@@ -43,6 +43,8 @@ import (
 )
 
 const dohChildSpec = "FLUTTER_VLESS_DOH_CHILD_SPEC"
+const dohAddressEnvironment = "FLUTTER_VLESS_FIXTURE_DOH_ADDRESS"
+const dohHostEnvironment = "FLUTTER_VLESS_FIXTURE_DOH_HOST"
 
 type dohOutput struct {
 	mu        sync.Mutex
@@ -387,6 +389,26 @@ func testNativeHTTPSDoH(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// The app's environment is absent in the child which owns Core.
+			// Compare the whole prepared profile with the literal control before
+			// starting that child; URL substrings and host keys stay opaque.
+			t.Setenv(dohAddressEnvironment, "https://"+authority+"/dns-query")
+			t.Setenv(dohHostEnvironment, "127.0.0.1")
+			fullSource["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["address"] = "env:" + dohAddressEnvironment
+			hosts["full:resolver.invalid"] = "env:" + dohHostEnvironment
+			environmentJSON, err := json.Marshal(fullSource)
+			if err != nil {
+				t.Fatal(err)
+			}
+			frozen := prepareEndpointAddress(t, environmentJSON)
+			var literal map[string]any
+			if json.Unmarshal(fullPrepared, &literal) != nil || !reflect.DeepEqual(literal, frozen) {
+				t.Fatal("DoH environment preparation differs from literal control")
+			}
+			fullPrepared, err = json.Marshal(frozen)
+			if err != nil {
+				t.Fatal(err)
+			}
 			childPrepared, childSource, childPort = write("effective-full.json", fullPrepared), write("source-full.json", fullJSON), fullPort
 		}
 		mu.Lock()
@@ -402,7 +424,7 @@ func testNativeHTTPSDoH(t *testing.T) {
 		command.WaitDelay = time.Second
 		for _, entry := range os.Environ() {
 			key := strings.ToUpper(strings.SplitN(entry, "=", 2)[0])
-			if key != "SSL_CERT_FILE" && key != "SSL_CERT_DIR" && key != "GODEBUG" && key != dohChildSpec && !strings.HasPrefix(key, "XRAY_") && !strings.HasPrefix(key, "XRAY.") {
+			if key != "SSL_CERT_FILE" && key != "SSL_CERT_DIR" && key != "GODEBUG" && key != dohChildSpec && key != dohAddressEnvironment && key != dohHostEnvironment && !strings.HasPrefix(key, "XRAY_") && !strings.HasPrefix(key, "XRAY.") {
 				command.Env = append(command.Env, entry)
 			}
 		}
@@ -410,7 +432,8 @@ func testNativeHTTPSDoH(t *testing.T) {
 		if variant == "bad-ca" {
 			trust = wrongCAPath
 		}
-		command.Env = append(command.Env, "SSL_CERT_FILE="+trust, "SSL_CERT_DIR="+emptyRoots, "GODEBUG=x509sslcertoverrideplatform=1", dohChildSpec+"="+path)
+		command.Env = append(command.Env, "SSL_CERT_FILE="+trust, "SSL_CERT_DIR="+emptyRoots, "GODEBUG=x509sslcertoverrideplatform=1", dohChildSpec+"="+path,
+			dohAddressEnvironment+"=https://unreachable.invalid/dns-query", dohHostEnvironment+"=127.0.0.2")
 		capture := new(dohOutput)
 		command.Stdout, command.Stderr = capture, capture
 		err = command.Run()
@@ -425,6 +448,9 @@ func testNativeHTTPSDoH(t *testing.T) {
 		positive := variant == "good" || variant == "good-full-hosts"
 		if h == 0 || positive && r != 4 || !positive && r != 0 {
 			t.Fatal("DoH handshake/request causal control failed", variant, h, r)
+		}
+		if variant == "good-full-hosts" {
+			t.Log("DNS_ADDRESS_DOH_ENVIRONMENT_FROZEN_PASS")
 		}
 	}
 	completed = true

@@ -1,0 +1,220 @@
+[
+  {
+    "name": "dns_servers",
+    "environment": {
+      "FLUTTER_VLESS_FIXTURE_DNS_SCALAR_SERVER": "tcp://127.0.0.1:5353",
+      "FLUTTER_VLESS_FIXTURE_DNS_OBJECT_SERVER": "https://127.0.0.1/dns-query?opaque=env:FLUTTER_VLESS_FIXTURE_DNS_OPAQUE",
+      "FLUTTER_VLESS_FIXTURE_DNS_OPAQUE": "must-remain-opaque"
+    },
+    "bindings": [
+      {
+        "path": [
+          "dns",
+          "servers",
+          "0"
+        ],
+        "value": "tcp://127.0.0.1:5353"
+      },
+      {
+        "path": [
+          "dns",
+          "servers",
+          "1",
+          "address"
+        ],
+        "value": "https://127.0.0.1/dns-query?opaque=env:FLUTTER_VLESS_FIXTURE_DNS_OPAQUE"
+      }
+    ],
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "rules": []
+      },
+      "remarks": "env:FLUTTER_VLESS_FIXTURE_DNS_OPAQUE",
+      "custom": {
+        "address": "env:FLUTTER_VLESS_FIXTURE_DNS_OPAQUE"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "tag": "env:FLUTTER_VLESS_FIXTURE_DNS_OPAQUE",
+        "servers": [
+          "env:FLUTTER_VLESS_FIXTURE_DNS_SCALAR_SERVER",
+          {
+            "address": "env:FLUTTER_VLESS_FIXTURE_DNS_OBJECT_SERVER",
+            "port": 5353,
+            "tag": "caller-object",
+            "domains": [
+              "full:chosen.invalid"
+            ],
+            "queryStrategy": "UseIPv4",
+            "skipFallback": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "dns_client_ips",
+    "environment": {
+      "FLUTTER_VLESS_FIXTURE_DNS_ROOT_ECS": "198.51.100.10",
+      "FLUTTER_VLESS_FIXTURE_DNS_SERVER_ECS": "203.0.113.10",
+      "FLUTTER_VLESS_FIXTURE_DNS_OPAQUE": "must-remain-opaque"
+    },
+    "bindings": [
+      {
+        "path": [
+          "dns",
+          "clientIp"
+        ],
+        "value": "198.51.100.10"
+      },
+      {
+        "path": [
+          "dns",
+          "servers",
+          "1",
+          "clientIp"
+        ],
+        "value": "203.0.113.10"
+      }
+    ],
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "rules": []
+      },
+      "remarks": "env:FLUTTER_VLESS_FIXTURE_DNS_OPAQUE",
+      "custom": {
+        "address": "env:FLUTTER_VLESS_FIXTURE_DNS_OPAQUE"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "clientIp": "env:FLUTTER_VLESS_FIXTURE_DNS_ROOT_ECS",
+        "servers": [
+          "tcp://127.0.0.1:5353",
+          {
+            "address": "tcp://127.0.0.1:5354",
+            "clientIp": "env:FLUTTER_VLESS_FIXTURE_DNS_SERVER_ECS",
+            "domains": [
+              "full:chosen.invalid"
+            ],
+            "tag": "caller-ecs"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "dns_hosts",
+    "environment": {
+      "FLUTTER_VLESS_FIXTURE_DNS_HOST_SCALAR": "127.0.0.1",
+      "FLUTTER_VLESS_FIXTURE_DNS_HOST_ARRAY": "127.0.0.3",
+      "FLUTTER_VLESS_FIXTURE_DNS_HOST_ALIAS": "alias-target-a.invalid",
+      "FLUTTER_VLESS_FIXTURE_DNS_HOST_LAST": "127.0.0.8",
+      "FLUTTER_VLESS_FIXTURE_DNS_OPAQUE": "must-remain-opaque"
+    },
+    "bindings": [
+      {
+        "path": [
+          "dns",
+          "hosts",
+          "full:scalar.invalid"
+        ],
+        "value": "127.0.0.1"
+      },
+      {
+        "path": [
+          "dns",
+          "hosts",
+          "full:array.invalid",
+          "0"
+        ],
+        "value": "127.0.0.3"
+      },
+      {
+        "path": [
+          "dns",
+          "hosts",
+          "full:alias.invalid"
+        ],
+        "value": "alias-target-a.invalid"
+      },
+      {
+        "path": [
+          "dns",
+          "hosts",
+          "full:mixed.invalid",
+          "1"
+        ],
+        "value": "alias-target-a.invalid"
+      },
+      {
+        "path": [
+          "dns",
+          "hosts",
+          "full:mixed.invalid",
+          "2"
+        ],
+        "value": "127.0.0.8"
+      }
+    ],
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "rules": []
+      },
+      "remarks": "env:FLUTTER_VLESS_FIXTURE_DNS_OPAQUE",
+      "custom": {
+        "address": "env:FLUTTER_VLESS_FIXTURE_DNS_OPAQUE"
+      },
+      "dns": {
+        "queryStrategy": "UseIP",
+        "tag": "env:FLUTTER_VLESS_FIXTURE_DNS_OPAQUE",
+        "servers": [
+          "tcp://127.0.0.1:5353"
+        ],
+        "hosts": {
+          "full:scalar.invalid": "env:FLUTTER_VLESS_FIXTURE_DNS_HOST_SCALAR",
+          "full:array.invalid": [
+            "env:FLUTTER_VLESS_FIXTURE_DNS_HOST_ARRAY",
+            "127.0.0.9"
+          ],
+          "full:alias.invalid": "env:FLUTTER_VLESS_FIXTURE_DNS_HOST_ALIAS",
+          "full:mixed.invalid": [
+            "127.0.0.7",
+            "env:FLUTTER_VLESS_FIXTURE_DNS_HOST_ALIAS",
+            "env:FLUTTER_VLESS_FIXTURE_DNS_HOST_LAST",
+            "second-alias.invalid"
+          ]
+        }
+      }
+    }
+  }
+]

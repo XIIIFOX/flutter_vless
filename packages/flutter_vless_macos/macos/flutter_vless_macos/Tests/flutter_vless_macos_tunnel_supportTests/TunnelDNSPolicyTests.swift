@@ -511,6 +511,101 @@ final class TunnelDNSPolicyTests: XCTestCase {
         }
     }
 
+    func testRootDNSEnvironmentBindsOnlyTypedValuesAndRejectsPartialPublication() throws {
+        let source: [String: Any] = ["DNS": ["SeRvErS": ["env:SERVER", ["AdDrEsS": "env:OBJECT", "ClIeNtIp": "env:ECS", "tag": "env:OPAQUE", "domains": ["full:env:OPAQUE.invalid"]]] as [Any],
+            "cLiEnTiP": "env:ECS", "HoStS": ["env:KEY": "env:ALIAS", "full:array.invalid": ["127.0.0.7", "env:ALIAS", "env:IP", "second.invalid"]]],
+            "custom": ["address": "env:OPAQUE"]]
+        let input = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+        let environment = ["SERVER": "tcp://127.0.0.1", "OBJECT": "https://127.0.0.1/env:OPAQUE", "ECS": "198.51.100.1", "ALIAS": "alias.invalid", "IP": "127.0.0.8", "OPAQUE": "wrong"]
+        let frozen = try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: input, environment: environment)
+        let output = try XCTUnwrap(JSONSerialization.jsonObject(with: frozen) as? [String: Any])
+        let dns = try XCTUnwrap(output["dns"] as? [String: Any])
+        let servers = try XCTUnwrap(dns["SeRvErS"] as? [Any])
+        XCTAssertEqual(servers[0] as? String, "tcp://127.0.0.1")
+        XCTAssertEqual(servers[1] as? NSDictionary, ["AdDrEsS": "https://127.0.0.1/env:OPAQUE", "ClIeNtIp": "198.51.100.1", "tag": "env:OPAQUE", "domains": ["full:env:OPAQUE.invalid"]] as NSDictionary)
+        XCTAssertEqual(dns["cLiEnTiP"] as? String, "198.51.100.1")
+        XCTAssertEqual(dns["HoStS"] as? NSDictionary, ["env:KEY": "alias.invalid", "full:array.invalid": ["127.0.0.7", "alias.invalid", "127.0.0.8", "second.invalid"]] as NSDictionary)
+        XCTAssertEqual(output["custom"] as? NSDictionary, source["custom"] as? NSDictionary)
+        XCTAssertNil(output["outbounds"], "DNS binding must not insert an absent outbound list")
+        var transaction = source
+        let before = transaction as NSDictionary
+        var nested = environment; nested["IP"] = "env:SECOND"
+        XCTAssertThrowsError(try TunnelDNSPolicy.bindEndpointEnvironment(to: &transaction, environment: nested))
+        XCTAssertEqual(transaction as NSDictionary, before)
+        let duplicate: [String: Any] = ["dns": ["servers": ["tcp://127.0.0.1"], "clientIp": "env:ECS", "CLIENTIP": "env:ECS"]]
+        XCTAssertThrowsError(try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: JSONSerialization.data(withJSONObject: duplicate), environment: environment))
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), input)
+    }
+
+    func testRootDNSAdmissionUsesCoreParsedAddressWithoutLosingRawExpandedValue() throws {
+        for (server, hosts) in [
+            ("[ 127.0.0.1 ]", [String: Any]()),
+            ("https://resolver.invalid/dns-query?opaque=env:UNCHANGED", ["full:resolver.invalid": ["[ 127.0.0.1 ]", "127.0.0.9"]] as [String: Any])
+        ] {
+            let source: [String: Any] = ["dns": ["servers": ["env:SERVER"], "hosts": hosts], "outbounds": [["tag": "direct", "protocol": "freedom"]]]
+            let frozen = try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: JSONSerialization.data(withJSONObject: source), environment: ["SERVER": server])
+            let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: frozen, credentials: Self.credentials,
+                resolveIPv4: { _ in XCTFail("Caller DNS is not endpoint bootstrap"); return nil }))
+            let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+            XCTAssertEqual((output["dns"] as? [String: Any])?["servers"] as? [String], [server])
+            XCTAssertEqual((output["dns"] as? [String: Any])?["hosts"] as? NSDictionary, hosts as NSDictionary)
+        }
+        for server in ["fakedns", "[ fakedns ]", "tcp+local://1.1.1.1", "https+local://1.1.1.1/dns-query", "[ ::1 ]"] {
+            let parsed = LocalProxyAccessPolicy.coreAddressText(server)
+            let source: [String: Any] = ["dns": ["servers": [server], "hosts": [parsed: "127.0.0.1"]], "outbounds": [["tag": "direct", "protocol": "freedom"]]]
+            XCTAssertNil(TunnelXrayConfigPreparer.prepare(jsonData: try JSONSerialization.data(withJSONObject: source), credentials: Self.credentials), "Static hosts cannot qualify a special mode or IPv6 DNS underlay")
+        }
+    }
+
+    func testSharedRootDNSEnvironmentMatchesLiteralControlAndFreezesAcrossProcesses() throws {
+        func replace(_ object: Any, path: ArraySlice<String>, value: String) -> Any {
+            guard let head = path.first else { return value }
+            if var map = object as? [String: Any], let child = map[head] {
+                map[head] = replace(child, path: path.dropFirst(), value: value); return map
+            }
+            var list = object as! [Any]; let index = Int(head)!
+            list[index] = replace(list[index], path: path.dropFirst(), value: value); return list
+        }
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/dns-addresses.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/dns-addresses.json"))) as? [[String: Any]])
+        XCTAssertEqual(cases.count, 3)
+        for item in cases {
+            let original = try XCTUnwrap(item["config"] as? [String: Any])
+            let environment = try XCTUnwrap(item["environment"] as? [String: String])
+            let previous = environment.keys.map { ($0, getenv($0).map { String(cString: $0) }) }
+            for (key, value) in environment { setenv(key, value, 1) }
+            defer { for (key, value) in previous { if let value { setenv(key, value, 1) } else { unsetenv(key) } } }
+            let input = try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys])
+            var literal: Any = original
+            for binding in try XCTUnwrap(item["bindings"] as? [[String: Any]]) {
+                let path = try XCTUnwrap(binding["path"] as? [String])
+                literal = replace(literal, path: ArraySlice(path), value: try XCTUnwrap(binding["value"] as? String))
+            }
+            let expected = try XCTUnwrap(literal as? [String: Any])
+            let control = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: JSONSerialization.data(withJSONObject: expected), credentials: Self.credentials,
+                resolveIPv4: { _ in XCTFail("Explicit numeric caller DNS requires no endpoint bootstrap"); return nil }))
+            let frozen = try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: input, environment: environment)
+            XCTAssertEqual(try JSONSerialization.jsonObject(with: frozen) as? NSDictionary, expected as NSDictionary, "Typed DNS references must bind before profile persistence")
+            let prepared = TunnelXrayConfigPreparer.prepare(jsonData: input, credentials: Self.credentials,
+                resolveIPv4: { _ in XCTFail("Caller DNS must remain independent from transport bootstrap"); return nil })
+            XCTAssertNotNil(prepared, "Core-valid DNS environment rejected: \(item["name"] ?? "")")
+            if let prepared {
+                XCTAssertEqual(try JSONSerialization.jsonObject(with: prepared.data) as? NSDictionary, try JSONSerialization.jsonObject(with: control.data) as? NSDictionary)
+            }
+            let changed = environment.mapValues { _ in "different.invalid" }
+            for (key, value) in changed { setenv(key, value, 1) }
+            XCTAssertEqual(try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: frozen, environment: changed), frozen)
+            if let provider = TunnelXrayConfigPreparer.prepare(jsonData: frozen, credentials: Self.credentials) {
+                XCTAssertEqual(try JSONSerialization.jsonObject(with: provider.data) as? NSDictionary, try JSONSerialization.jsonObject(with: control.data) as? NSDictionary)
+            } else { XCTFail("Frozen DNS must not depend on the provider's environment") }
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys]), input)
+        }
+    }
+
     func testEndpointEnvironmentBindsChainedDynamicParentDownload() throws {
         for proto in ["direct", "dns"] {
             let child: [String: Any] = ["address": "env:DOWNLOAD", "port": 8443, "network": "xhttp", "xhttpSettings": ["path": "/download"]]

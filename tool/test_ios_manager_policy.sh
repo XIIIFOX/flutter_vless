@@ -34,7 +34,14 @@ helper='enum ProxyOnlyRunner {\n'+s[delay_start:delay_end]+'\n'+s[helper_start:h
 a=s.index('        let proxyOnly = arguments["proxy_only"]')
 b=s.index('        let operation = commands.submit',a)
 (out/'NativeStart.swift').write_text('import Foundation\n'+helper+'struct FlutterError { let code: String; let message: String; let details: Any? }\nfinal class NativeStartEntryProbe {\n var reachedQueue = false\n func result(_ error: FlutterError) {}\n func start(arguments: [String: Any]) {\n let configData = try! JSONSerialization.data(withJSONObject: ["inbounds": [["protocol": "socks", "listen": "127.0.0.1", "port": 10808]]])\n'+s[a:b]+'        reachedQueue = true\n    }\n}\n')
-
+# The extracted production entry now freezes Address environment references
+# through the actual preparer. Compile its pure JSON dependencies in this same
+# fixture module; do not substitute a pass-through implementation.
+support=root/'ios/flutter_vless/Sources/flutter_vless_tunnel_support'
+for name in ['TunnelConfigKeys', 'TunnelDNSPolicy', 'TunnelIPv6Policy', 'TunnelXrayConfigPreparer']:
+    source=(support/(name+'.swift')).read_text()
+    source=source.replace('@_exported import flutter_vless_privacy\n', '').replace('import flutter_vless_privacy\n', '')
+    (out/(name+'.swift')).write_text(source)
 PYTHON
 xcrun swiftc -O -parse-as-library \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/VlessNativeOptions.swift" \
@@ -46,6 +53,10 @@ xcrun swiftc -O -parse-as-library \
   "$PROBE_DIR/Manager.swift" \
   "$PROBE_DIR/Provider.swift" \
   "$PROBE_DIR/NativeStart.swift" \
+  "$PROBE_DIR/TunnelConfigKeys.swift" \
+  "$PROBE_DIR/TunnelDNSPolicy.swift" \
+  "$PROBE_DIR/TunnelIPv6Policy.swift" \
+  "$PROBE_DIR/TunnelXrayConfigPreparer.swift" \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless/NativeOperationQueue.swift" \
   "$ROOT_DIR/tool/fixtures/ios_manager_policy/main.swift" \
   -o "$PROBE_DIR/probe"

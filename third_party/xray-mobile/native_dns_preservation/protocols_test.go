@@ -96,6 +96,7 @@ func TestProtocolCorpusBuilds(t *testing.T) {
 	testSelectorTrafficPreparation(t, false)
 	testLocalhostDNSTags(t, false)
 	testEndpointAddresses(t, false)
+	testDNSAddresses(t, false)
 }
 
 // File-only native preparation and Core Build. No core.Instance is created,
@@ -167,6 +168,7 @@ func testNativeProtocolPreparation(t *testing.T) {
 	testSelectorTrafficPreparation(t, true)
 	testLocalhostDNSTags(t, true)
 	testEndpointAddresses(t, true)
+	testDNSAddresses(t, true)
 }
 
 func foldedRoot(object map[string]any, name string) (any, bool) {

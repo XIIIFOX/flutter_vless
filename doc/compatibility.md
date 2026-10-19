@@ -569,13 +569,33 @@ the original Address to Core. Exact environment keys, including empty values,
 take precedence over the normalized alias. Lookup happens once; a result that
 would trigger another `env:` lookup on re-decoding is refused. The raw expanded
 text stays in the effective JSON; endpoint checks use Core's bracket-before-
-whitespace parsing order. Caller DNS, ignored stream addresses and arbitrary
+whitespace parsing order. Other caller policy, ignored stream addresses and arbitrary
 strings such as Host, paths and WireGuard's plain endpoint are unchanged.
 Three shared cases compare pinned Core protobufs and complete native prepared
 profiles against literal controls. The controlled XHTTP chain also changes the
 client process's environment after preparation and requires the original
 upload, download and carrier destinations to carry the payload. File-only
 equivalence and runtime acceptance remain distinct evidence.
+
+Root DNS address progress: the selected typed fields also include string DNS
+servers, object server `address`, root/per-server `clientIp`, and scalar or array
+values in `hosts`. Apple and Windows freeze these fields before protected
+preparation; Apple freezes them before profile persistence. Android binds them
+in caller config mode before checking unavailable FakeDNS. Its explicit proxy
+DNS mode still replaces the caller root by request. Server options, host-map
+keys, array order, tags and embedded `env:` substrings in URLs remain intact.
+Core's first domain-valued hosts array entry retains alias precedence over all
+IP entries. Guards inspect Core's parsed address while effective JSON keeps the
+expanded raw value. No new DNS transport or physical fallback is enabled.
+
+The three [shared DNS Address cases](../tool/fixtures/compatibility/dns-addresses.json)
+compare pinned Core DNS protobufs and complete prepared profiles with literal
+controls, then change the receiving environment and require identical compiled
+DNS. The controlled HTTPS DoH fixture also freezes its server and `full:` host
+mapping before starting the child with different environment values. New-head
+runtime qualification remains separate from these file-only controls. Logical
+DNS outbound/inbound addresses and other non-server typed Address fields remain
+outside this increment; it does not claim universal environment expansion.
 
 Core preflight is now wired into both Apple app entry points and into the final
 provider configuration before route installation. The additive Go bridge decodes

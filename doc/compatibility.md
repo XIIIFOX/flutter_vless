@@ -257,8 +257,11 @@ finite endpoint set and non-XHTTP downloads retain the existing refusal.
 Missing/null download socket settings on a nonpenetrating parent remain
 independent. Controlled CI acceptance adds actual XHTTP/VLESS payloads through
 separate HTTP fronts, including a parent SOCKS carrier, with distinct HTTP
-authority/path checks and zero OS-resolver attempts. This runtime gate is
-pending; it does not qualify additional XHTTP TLS/HTTP3/QUIC server handshakes.
+authority/path checks and zero OS-resolver attempts. At `cdc5b94`, ordinary
+pinned Core passes this packet-up HTTP/1.1 gate on Ubuntu, Windows and macOS,
+including both production preparers on macOS. Each variant echoes 57,344 bytes
+in both directions. This does not qualify additional XHTTP TLS/HTTP3/QUIC
+server handshakes, TUN traffic or physical iOS packets.
 Each controlled client runs in its own bounded process: Core's system dialer
 uses process-global DNS/handler state, and XHTTP detaches some request lifetimes
 from session cancellation. This keeps backend resolution and later tests
@@ -267,8 +270,7 @@ consumed body length, origin entry and backend log evidence. The controlled
 server's explicit final rule allows only TCP to the allocated origin IP and
 port, since Core blocks private targets after VLESS by default. All other Core
 defaults and client restrictions remain in force. An origin success event
-requires the complete body. Payload qualification remains pending, with the
-existing deadline and DNS counts unchanged.
+requires the complete body. The existing deadline and DNS counts stay strict.
 WG/XDRIVE and the exhaustive protocol matrix remain unqualified.
 Pinned Core requires one receiver/user in the relevant `servers`/`vnext` arrays;
 multiple independent outbounds with a balancer are a different supported shape.
@@ -796,9 +798,9 @@ Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |
 | --- | --- | --- |
-| 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private address queries. Caller AAAA passes Core/Android/Windows runtime acceptance; encrypted DoH trust/name controls pass ordinary Core on all three desktop systems. Direct-only traffic passes shared Core, Android TUN, native Apple and Windows TUN gates at ba25f85. Localhost adaptation, additional DNS paths and full FakeDNS semantics remain open. |
+| 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private address queries. Caller AAAA, bare/full resolver hosts and encrypted DoH trust/name controls pass ordinary Core on all three desktop systems. Missing/null/empty localhost server tags pass shared preparation and native Apple DNS generations. Direct-only traffic passes shared Core, Android TUN, native Apple and Windows TUN gates. Additional DNS paths and full FakeDNS semantics remain open. |
 | 2. IPv6 | Partial; physical iOS packet gate pending | IPv6 TCP/UDP with preserved AAAA policy passes ordinary Core on all three desktop systems, actual Android TUN and Windows 2022/2025 TUN/recovery/physical-interface controls. Actual shipped macOS HEV packet controls pass remotely; iOS simulator HEV is a verified link-only stub and physical iOS remains pending. Full macOS system-VPN acceptance, IPv6-only endpoints, NAT64, cross-family handover and broader physical bypass qualification remain open. |
-| 3. Protocol/transport matrix | Partial | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP and null legacy-endpoint preparation fixes pass a nine-case pinned Core build corpus with native preparation, including shared XHTTP upload/download socket policy. Imported loopback/DNS traffic passes ordinary Core acceptance on all three desktop systems at dacfd59; the new XHTTP payload gate, further protocol handshakes and the full matrix remain open. |
+| 3. Protocol/transport matrix | Partial; controlled XHTTP increment qualified | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP and null legacy-endpoint preparation fixes pass a nine-case pinned Core build corpus with native preparation, including shared XHTTP upload/download socket policy. At cdc5b94, ordinary Core on all three desktop systems carries actual XHTTP HTTP/1.1 packet-up payloads with and without a caller SOCKS chain; both Apple and Windows preparers pass on macOS. Further protocol handshakes, XHTTP TLS/HTTP3/QUIC, physical iOS packets and the full matrix remain open. |
 | 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes pass shared component, ordinary Core and native platform traffic gates at a475374. Source-inbound context, explicit VPN default selection, wildcard isolation and exact adapter counters remain open. |
 | 5. Ports/addresses | Partial | Shared 20-case port, 12-case exact service-tag, nine-case selector-prefix, 21-case numeric API and 36-case service-listener fixtures cover allocation. Real Android/iPhone list/range/env/Unix and tag-collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. OS port checks, service-name resolution, wildcard isolation, bind retries and broader proxy-only parity remain open. |
 | 6. Assets/import syntax | Partial; data-root increment qualified | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit roots propagate across native backends; custom GeoSite traffic passes Android TUN, both Apple preview runtimes and Windows 2022/2025. Relative certificate portability, managed asset import/lifetime and explicit multi-document merging remain open. |

@@ -174,6 +174,15 @@ admission: this report does not promise rollback to the previous session.
 The example displays the report and safe error descriptions, and clears a
 superseded report when its configuration changes or another start is attempted.
 
+An Apple Core version string such as `26.10.17` does not identify the loaded
+bridge ABI. Released SDKs and unpublished previews can share that version while
+only the preview supplies the additive Check/routing capabilities. A missing
+Check ABI yields `coreCheck: unavailable`; an explicit native routing request
+still requires native routing capability and fails closed when it is absent.
+Current physical iPhone preview observations are `host` preparation only, not
+final provider-report delivery or general DNS/internet acceptance. See the
+[source-bound CI qualification and remaining work](compatibility.md#remaining-compatibility-work).
+
 ## `stopVless()`
 
 Stops the active proxy or VPN/tunnel session.

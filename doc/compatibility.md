@@ -151,7 +151,7 @@ Track the small delivery gates separately from the eight full requirements:
 | Public Core schema fields and effective transport admission | Preparation qualified | The shared five-case corpus retains Go-folded fields and method precedence through all four public adapters, Android preparation and both native exporters. Core rejects the active-empty and non-string controls; ambiguous aliases remain refused. |
 | Opaque full-JSON fields | Qualified controlled increment | Six shared profiles retain 18 unknown subtrees through all four public adapters, actual Android preparation and both native exporters. Pinned Core comparisons and existing traffic gates pass Actions on all three Core systems at e49c1e0. Android's five live CallerRoot DNS tests also pass locally with the host VPN enabled, including six exact runtime metadata subtrees and retained DNS/HTTP/API controls. Physical iOS and broader configuration acceptance remain separate. |
 | Imported API/services/stats/policy | Qualified | Shared preparation and API/traffic gates, including Windows service acceptance. |
-| Safe per-start preparation reports | Implemented; device acceptance open | Closed operation codes follow each invocation's checked candidate. Apple VPN and Windows proxy reports explicitly cover host preparation; Android reports admission before asynchronous readiness. Known edits are summarized without profile values or a generic JSON diff. This does not complete rollback or final Apple VPN report delivery. |
+| Safe per-start preparation reports | Qualified controlled increment; device scope remains limited | Closed operation codes follow each invocation's checked candidate. Apple VPN and Windows proxy reports cover host preparation; Android reports admission before asynchronous readiness. The source-bound 80d3caf/53fafe8/28dc44b CI lineage below qualifies the closed summaries and retained runtime gates. Physical iPhone preview observations cover host preparation only; final Apple provider reports, broader device acceptance and later-startup rollback remain open. |
 | Port/address syntax and explicit data/certificate roots | Qualified baseline | Shared Core/native controls and the targeted runtime cases below; OS allocation/reload and managed import lifetime remain open. |
 | Environment aliases in ports and addresses | Qualified controlled increment | Shared eight-case Core/native corpus, four public adapters, actual Android builder and both Apple port binders pass. Generated Unicode casing matches pinned Go. Actual Windows UTF-16 environment reads and existing Core traffic pass Actions at 038615d. Apple byte-exact snapshots additionally pass synthetic native-reader, host-admission, allocation and startup-retry checks; physical acceptance remains separate. |
 | Source inbound and explicit VPN default | Qualified controlled baseline | Shared Core, Android TUN, Windows 2022/2025 and both enabled Apple SDK runtimes pass controlled source/default selection. Physical/system-VPN acceptance remains separately tracked. |
@@ -1235,6 +1235,9 @@ builds the extended runtime locally without publishing anything; CI requires
 actual traffic through an existing session after valid and invalid checks.
 Published runtime artifacts/checksums remain unchanged: legacy Apple binaries
 explicitly report preflight unavailable and retain their previous startup path.
+The released Apple SDKs and unpublished previews can report the same Core
+version while exposing different additive Check/routing ABIs. The version string
+does not establish preflight or routing capability; the loaded bridge must do so.
 This feature requires the build-only preview until its runtime artifacts are
 approved for release. Windows runs its bundled Core `run -test` against private
 documents before session replacement; proxy-only checks normalize the source
@@ -1254,12 +1257,25 @@ already Check and Start the same final preparation data before route installatio
 Both Apple proxy-only hosts now prepare once, Check that final data before
 stopping a system VPN, and pass the prepared data unchanged to the runner.
 Direct runner calls also reject an active singleton before changing its assets.
-The new admission and cleanup controls use inert native boundaries locally;
-remote runtime qualification of this finalization change remains pending.
+The admission and cleanup controls use inert native boundaries locally. The
+source-bound preparation-report qualification spans three runs with identical
+production bytes. [80d3caf](https://github.com/XIIIFOX/flutter_vless/actions/runs/39338662731)
+passes Core on all three systems, Dart/API/example tests and all 326 Android JVM
+tests, but remains an overall failure at Apple and Windows test compilation.
+[53fafe8](https://github.com/XIIIFOX/flutter_vless/actions/runs/39339803270)
+passes the Apple helper, SDK and app builds, both controlled Core runtimes and
+shipped macOS HEV packets; iOS HEV remains compile/link-only. Each Swift suite
+skips only its opt-in public-DNS smoke check. That run still fails at a
+Windows-only consumer test fixture.
+[28dc44b](https://github.com/XIIIFOX/flutter_vless/actions/runs/39340784664)
+passes all six Windows 2022/2025 jobs, including actual MSVC report controls
+(18 producer, 12 consumer and three extractor checks per system), release app
+builds and all 460 proxy/portable/VPN result rows. The repairs change test support
+and workflow selection only, not application/runtime source.
 
-Safe effective-config diffs,
-complete asset diagnostics, bind-race handling and rollback from later runtime
-failures are still pending; item 7 is not complete.
+These closed summaries are not general effective-configuration diffs. Complete
+asset diagnostics, bind-race handling, final Apple VPN provider report delivery
+and rollback from later runtime failures remain open; item 7 is still Partial.
 
 Apple's in-process preflight now refuses nonempty root `env` with the fixed
 `environment-policy` stage and `feature: env` before Core Build. Pinned Core
@@ -1537,7 +1553,7 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes pass shared component, ordinary Core and native platform traffic gates at a475374. Per-session source/default selection passes Android TUN at 2f74f13, both enabled Apple SDK runtimes at e5f9fc6 and Windows 2022/2025 at fb2eb75. Session-owned counters pass Android/Windows again at f5acbbc and both complete enabled Apple controlled gates at 02136f1. Public full-JSON startup/delay/import now also preserves explicit nulls and empty containers through all four platform message adapters; DNS hosts, known typed transport header dictionaries and routing-rule attribute dictionaries are exempt from legacy cleanup, and Android protected-feature checks respect those exact data dictionaries. The ten-profile header corpus adds preparation coverage without qualifying every transport handshake. The six-profile opaque-field corpus retains 18 unknown subtrees through schema-owned normalization, with Core comparisons on all three systems and six exact Android runtime metadata assertions. Broader schema coverage, wildcard isolation and physical/system-VPN acceptance remain open. |
 | 5. Ports/addresses | Partial | Shared port/service/tag fixtures and Android/iPhone list/range/env/Unix and collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. Bounded OS-aware generated TCP admission passes Android TUN at 2f74f13, both enabled Apple SDK held-port runtimes at e5f9fc6 and Windows 2022/2025 at fb2eb75. Android/Windows probe exclusion passes targeted runtime acceptance. The additional eight-case env corpus aligns simple Unicode casing and whitespace across native adapters; the actual Windows UTF-16 environment reader and Core regression traffic pass at 038615d. Apple byte-exact snapshots additionally pass synthetic reader, actual host-admission and startup-retry checks. Physical acceptance, recovery relocation, service-name resolution, wildcard isolation, bind races and broader proxy-only parity remain open. |
 | 6. Assets/import syntax | Partial; data-root increment qualified | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit roots propagate across native backends; custom GeoSite traffic passes Android TUN, both Apple preview runtimes and Windows 2022/2025. Explicit TLS certificate/key directory binding passes shared native/Core regressions; controlled CA-file TLS traffic passes ordinary Core on all three desktop systems at ca96891 (four variants per preparer, 16 markers). Physical Apple access/reload, managed asset import/lifetime, specialized certificate features and explicit multi-document merging remain open. |
-| 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |
+| 7. Preflight/errors | Partial | Preflight/storage checks retain working traffic after a rejected candidate. The source-bound 80d3caf/53fafe8/28dc44b lineage above qualifies per-invocation closed preparation reports and safe failure stages, with the stated host/final-candidate scopes. Apple bridge capability is distinct from its Core version. Arbitrary configuration diffs are outside this API contract; final Apple VPN provider reports, later-startup rollback, complete asset diagnostics and bind-race handling remain open. |
 | 8. Runtime corpus | Partial | Shared port/syntax fixtures and platform/device HTTP, DNS, routing and recovery checks exist. The complete ECH/DoH/QUIC/protocol corpus and remaining physical options acceptance are not complete. |
 
 Comment filtering follows the [pinned Core local-file reader](https://github.com/XTLS/Xray-core/blob/92ccc939aaf4f8965f369cf0b142e005aeaa11d5/infra/conf/json/reader.go),

@@ -222,6 +222,7 @@ jobs:
           python3 tool/test_verify_android_preview_apk.py
           python3 tool/test_android_protection_fixture.py
           python3 tool/test_android_flutter_smoke_retry.py
+          python3 tool/test_android_ci_gates.py
           python3 tool/test_android_emulator_failure_capture.py
           python3 tool/test_android_routing_builder.py
           python3 tool/test_android_routing_preview.py
@@ -257,6 +258,8 @@ jobs:
         with:
           go-version-file: third_party/xray-mobile/go.mod
           cache-dependency-path: third_party/xray-mobile/go.sum
+      - name: Test independent mandatory Android CI gates
+        run: python3 tool/test_android_ci_gates.py
       - name: Build unpublished Android routing runtime for instrumentation only
         run: |
           sdk_manager_path="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)"
@@ -280,9 +283,7 @@ jobs:
             adb -s emulator-5554 shell svc data enable
             adb -s emulator-5554 shell settings put global mobile_data_always_on 1
             (cd example && flutter pub get)
-            python3 tool/test_android_flutter_smoke.py --serial emulator-5554
-            ANDROID_SERIAL=emulator-5554 tool/test_android_security_emulator.sh --no-capture --native-routing-preview build/android-native-routing-preview
-            python3 tool/test_android_separate_uid.py --serial emulator-5554 --output build/android-separate-uid-results.json
+            python3 tool/run_android_ci_gates.py --serial emulator-5554 --native-routing-preview build/android-native-routing-preview
       - name: Preserve Android security test evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -291,6 +292,7 @@ jobs:
           path: |
             build/android-security-emulator.*/
             build/android-flutter-smoke/
+            build/android-ci-gates/result.json
             build/android-separate-uid-results.json
             build/android-native-dns-preview/result.json
             build/android-native-dns-preview/verification.json
@@ -302,9 +304,15 @@ jobs:
 
   apple-fakedns:
     if: github.event_name == 'workflow_dispatch' && inputs.validation == 'apple-fakedns'
-    name: Apple FakeDNS on released SDKs
+    name: Apple FakeDNS on released SDKs (${{ matrix.platform }})
     runs-on: ${{ inputs.apple_runner || 'macos-latest' }}
-    timeout-minutes: 20
+    timeout-minutes: ${{ matrix.platform == 'ios' && 30 || 20 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ios, macos]
+    env:
+      APPLE_SDK_PLATFORM: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
@@ -318,15 +326,19 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path, PurePosixPath
-          import hashlib, json, re, shutil, subprocess, urllib.request, zipfile
+          import hashlib, json, os, re, shutil, subprocess, urllib.request, zipfile
           root = Path.cwd()
           output = root / 'build/apple-fakedns-stock'
           output.mkdir(parents=True)
           records = []
+          selected_platform = os.environ['APPLE_SDK_PLATFORM']
+          assert selected_platform in {'ios', 'macos'}
           for platform, package, destination in [
               ('ios', 'ios/flutter_vless/Package.swift', 'ios/XRay.xcframework'),
               ('macos', 'packages/flutter_vless_macos/macos/flutter_vless_macos/Package.swift', 'packages/flutter_vless_macos/macos/XRay.xcframework'),
           ]:
+              if platform != selected_platform:
+                  continue
               text = (root / package).read_text()
               tag = re.search(r'let xrayReleaseTag = "([^"]+)"', text).group(1)
               expected = re.search(r'let xrayChecksum = "([0-9a-f]{64})"', text).group(1)
@@ -349,11 +361,13 @@ jobs:
               records.append(dict(platform=platform, tag=tag, url=url, sha256=actual))
               archive.unlink()
               shutil.rmtree(extracted)
+          assert len(records) == 1
           (output / 'sdk-inputs.json').write_text(json.dumps(records, indent=2) + '\n')
           PY
       - name: Test runtime composer isolation
         run: python3 -m unittest discover -s tool -p test_apple_runtime_probe_timeout.py
       - name: Test FakeDNS through the released iOS SDK
+        if: matrix.platform == 'ios'
         run: |
           SIMULATOR_UDID="$(xcrun simctl create 'Flutter Vless FakeDNS' com.apple.CoreSimulator.SimDeviceType.iPhone-16)"
           export SIMULATOR_UDID
@@ -362,8 +376,10 @@ jobs:
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b
           tool/test_ios_privacy_runtime.sh --fakedns-only
       - name: Test FakeDNS through the released macOS SDK
+        if: matrix.platform == 'macos'
         run: bash tool/test_macos_privacy_runtime.sh --fakedns-only
       - name: Test shipped HEV packet bridge
+        if: matrix.platform == 'macos'
         run: |
           swift package --package-path packages/flutter_vless_macos/macos/flutter_vless_macos resolve
           HEV=packages/flutter_vless_macos/macos/flutter_vless_macos/.build/artifacts/tun2sockskit/HevSocks5Tunnel/HevSocks5Tunnel.xcframework
@@ -372,7 +388,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: apple-fakedns-stock-evidence
+          name: apple-fakedns-stock-evidence-${{ matrix.platform }}
           retention-days: 7
           if-no-files-found: error
           path: |

@@ -711,8 +711,10 @@ inline std::optional<std::string> PortEnvironment(const std::string& name) {
   if (!size) return GetLastError() == ERROR_SUCCESS ? std::optional<std::string>{""} : std::nullopt;
   if (size > static_cast<DWORD>(INT_MAX)) return std::nullopt;
   std::wstring value(size, L'\0');
+  SetLastError(ERROR_SUCCESS);
   const auto length = GetEnvironmentVariableW(key.c_str(), value.data(), size);
-  if (!length || length >= size) return std::nullopt;
+  if (!length) return GetLastError() == ERROR_SUCCESS ? std::optional<std::string>{""} : std::nullopt;
+  if (length >= size) return std::nullopt;
   const auto bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), static_cast<int>(length), nullptr, 0, nullptr, nullptr);
   if (!bytes) return std::nullopt;
   std::string result(static_cast<size_t>(bytes), '\0');

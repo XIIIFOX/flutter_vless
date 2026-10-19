@@ -1,5 +1,6 @@
 """Fixture isolation checks run without Windows APIs or network access."""
 import unittest
+import ast
 import base64
 import hashlib
 import json
@@ -21,6 +22,122 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    def test_actual_rejection_publisher_is_invisible_until_closed_and_complete(self):
+        # Execute the actual main() publication expression, with a synchronous
+        # reader interleaved after open and each partial write (no child/thread).
+        main = next(node for node in ast.parse(Path(runtime.__file__).read_text()).body
+                    if isinstance(node, ast.FunctionDef) and node.name == "main")
+        calls = [node for node in ast.walk(main) if isinstance(node, ast.Expr)
+                 and isinstance(node.value, ast.Call) and (
+                     isinstance(node.value.func, ast.Attribute)
+                     and isinstance(node.value.func.value, ast.Name)
+                     and node.value.func.value.id == "rejection" and node.value.func.attr == "write_text"
+                     or isinstance(node.value.func, ast.Name) and node.value.func.id == "publish_rejection")]
+        self.assertEqual(1, len(calls), "Actual command publication boundary changed")
+        command = compile(ast.fix_missing_locations(ast.Module(body=calls, type_ignores=[])), "<actual-publisher>", "exec")
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "state.json.reject"
+            document = {"outbounds": [{"protocol": "synthetic-invalid"}], "canary": "private-test-value"}
+            expected = json.dumps(document).encode()
+            observations = []; writers = []
+            original_open, original_fdopen, original_replace = Path.open, runtime.os.fdopen, runtime.os.replace
+            def observe(): observations.append(target.read_bytes() if target.exists() else None)
+            class InterleavedWriter:
+                def __init__(self, stream): self.stream = stream; writers.append(stream); observe()
+                def __enter__(self): self.stream.__enter__(); return self
+                def __exit__(self, *args): return self.stream.__exit__(*args)
+                def __getattr__(self, name): return getattr(self.stream, name)
+                def write(self, text):
+                    split = max(1, len(text) // 2)
+                    self.stream.write(text[:split]); self.stream.flush(); observe()
+                    self.stream.write(text[split:]); self.stream.flush(); observe()
+                    return len(text)
+            def opened(path, *args, **kwargs):
+                stream = original_open(path, *args, **kwargs)
+                mode = kwargs.get("mode", args[0] if args else "r")
+                return InterleavedWriter(stream) if "w" in mode else stream
+            def fdopened(*args, **kwargs): return InterleavedWriter(original_fdopen(*args, **kwargs))
+            def replaced(source, destination):
+                self.assertTrue(writers and all(writer.closed for writer in writers))
+                self.assertEqual(target.parent, Path(source).parent)
+                self.assertEqual(target, Path(destination)); observe()
+                return original_replace(source, destination)
+            with patch.object(Path, "open", opened), patch.object(runtime.os, "fdopen", fdopened), \
+                 patch.object(runtime.os, "replace", replaced):
+                exec(command, {"rejection": target, "invalid": document, "json": json,
+                               "publish_rejection": getattr(runtime, "publish_rejection", None)})
+            self.assertGreaterEqual(len(observations), 3)
+            self.assertTrue(all(value is None for value in observations),
+                            "Reader observed a published empty/partial/open command")
+            self.assertEqual(expected, target.read_bytes())
+            self.assertEqual([target], list(target.parent.iterdir()))
+
+    def test_rejection_publication_failures_close_writer_remove_temp_and_keep_original(self):
+        for stage in ("write", "replace"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                target = Path(temporary) / "state.json.reject"; target.write_text("previous-complete-command")
+                primary = OSError("synthetic publication failure"); writers = []
+                original = runtime.os.fdopen
+                def opened(*args, **kwargs):
+                    stream = original(*args, **kwargs); writers.append(stream)
+                    if stage == "write":
+                        class FailedWriter:
+                            def __enter__(self): return self
+                            def __exit__(self, *args): return stream.__exit__(*args)
+                            def write(self, text): stream.write(text[:1]); raise primary
+                        return FailedWriter()
+                    return stream
+                with patch.object(runtime.os, "fdopen", opened), \
+                     patch.object(runtime.os, "replace", side_effect=primary) as replace:
+                    with self.assertRaises(OSError) as raised: runtime.publish_rejection(target, {"synthetic": "value"})
+                self.assertIs(primary, raised.exception)
+                self.assertTrue(writers and all(stream.closed for stream in writers))
+                self.assertEqual("previous-complete-command", target.read_text())
+                self.assertEqual([target], list(target.parent.iterdir()))
+                self.assertEqual(0 if stage == "write" else 1, replace.call_count)
+
+    def test_rejection_waiter_retains_numeric_child_exit_before_cleanup_without_raw_data(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary) / "state.json"; log = Path(temporary) / "runtime.log"
+            state.write_text(json.dumps({"running": True, "protecting": True, "secret": "private-state-canary"}))
+            log.write_text("START_RETURN=1\nprivate-log-canary\n")
+            process = Mock(); process.poll.return_value = 3221226505
+            with self.assertRaises(RuntimeError) as raised:
+                runtime.await_rejected_replacement(process, log, state, False)
+            self.assertEqual("Invalid replacement did not preserve the live session", str(raised.exception))
+            saved = Path(str(state) + ".rejection.evidence.log").read_text()
+            record = json.loads(saved)
+            self.assertEqual("CHILD_EXIT", record["stage"]); self.assertTrue(record["before_stop"])
+            self.assertEqual(3221226505, record["process_exit"])
+            self.assertEqual({"running": True, "protecting": True}, record["state"])
+            self.assertFalse(record["replacement_marker"] or record["asset_marker"])
+            self.assertLess(len(saved), 512)
+            self.assertNotIn("canary", saved + str(getattr(raised.exception, "__notes__", [])))
+            process.poll.assert_called_once(); process.kill.assert_not_called(); process.wait.assert_not_called()
+
+    def test_rejection_waiter_keeps_exact_markers_deadline_and_fixed_failure_on_bad_state(self):
+        for asset in (False, True):
+            with self.subTest(asset=asset), tempfile.TemporaryDirectory() as temporary:
+                state = Path(temporary) / "state.json"; log = Path(temporary) / "runtime.log"
+                log.write_text("REJECTED_REPLACEMENT_PRESERVED=1\n")
+                process = Mock(); process.poll.return_value = None
+                if not asset:
+                    runtime.await_rejected_replacement(process, log, state, False)
+                    process.poll.assert_not_called()
+                else:
+                    # Required asset marker remains absent: do not accept the
+                    # replacement marker alone or widen the existing25s budget.
+                    state.write_text("private-state-canary" * 4097)
+                    with patch.object(runtime.time, "monotonic", side_effect=[10, 35]), \
+                         patch.object(runtime.time, "sleep") as sleep:
+                        with self.assertRaises(RuntimeError): runtime.await_rejected_replacement(process, log, state, True)
+                    record = json.loads(Path(str(state) + ".rejection.evidence.log").read_text())
+                    self.assertEqual("TIMEOUT", record["stage"]); self.assertIsNone(record["process_exit"])
+                    self.assertTrue(record["replacement_marker"]); self.assertFalse(record["asset_marker"])
+                    self.assertEqual({"status": "invalid"}, record["state"]); sleep.assert_not_called()
+                    log.write_text("REJECTED_REPLACEMENT_PRESERVED=1\nREJECTED_ASSET_ROOT_PRESERVED=1\n")
+                    runtime.await_rejected_replacement(process, log, state, True)
+
     def test_occupied_private_ports_close_exact_owners_on_success_and_failure(self):
         for failure_stage in (None, "second_bind", "body"):
             with self.subTest(failure_stage=failure_stage):

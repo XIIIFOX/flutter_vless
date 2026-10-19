@@ -195,6 +195,66 @@ def diagnostic_error_class(error):
     return type(error).__name__[:48]
 
 
+def publish_rejection(path, document):
+    # The C++ consumer reads/removes immediately after exists(). Publish only
+    # after the sibling writer is closed, including on Windows sharing rules.
+    descriptor, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    temporary = Path(name)
+    primary = None
+    try:
+        try:
+            stream = os.fdopen(descriptor, "w", encoding="utf-8")
+        except BaseException:
+            try: os.close(descriptor)
+            except OSError: pass
+            raise
+        with stream:
+            stream.write(json.dumps(document))
+        os.replace(temporary, path)
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        try: temporary.unlink(missing_ok=True)
+        except OSError:
+            if primary is None: raise
+
+
+def replacement_failure(state, stage, process_exit, replacement_marker, asset_marker):
+    # Evidence is captured before the existing finally stops the child. Retain
+    # only fixed labels, booleans and the numeric exit status, never raw state/log.
+    record = dict(stage=stage, before_stop=True,
+                  process_exit=process_exit if type(process_exit) is int and -(1 << 31) <= process_exit < (1 << 32) else None,
+                  replacement_marker=replacement_marker, asset_marker=asset_marker)
+    try:
+        with state.open("rb") as stream: data = stream.read(4097)
+        value = json.loads(data) if len(data) <= 4096 else None
+        record["state"] = ({name: value[name] for name in ("running", "protecting")}
+                           if isinstance(value, dict) and all(type(value.get(name)) is bool for name in ("running", "protecting"))
+                           else {"status": "invalid"})
+    except (OSError, ValueError, RecursionError):
+        record["state"] = {"status": "unavailable"}
+    encoded = json.dumps(record, sort_keys=True)
+    error = RuntimeError("Invalid replacement did not preserve the live session")
+    try: Path(str(state) + ".rejection.evidence.log").write_text(encoded + "\n", encoding="utf-8")
+    except OSError: pass
+    if hasattr(error, "add_note"): error.add_note("REPLACEMENT_EVIDENCE " + encoded)
+    return error
+
+
+def await_rejected_replacement(process, log, state, require_asset):
+    deadline = time.monotonic() + 25
+    while True:
+        current_log = log.read_text(errors="replace")
+        replacement = "REJECTED_REPLACEMENT_PRESERVED=1" in current_log
+        asset = "REJECTED_ASSET_ROOT_PRESERVED=1" in current_log
+        if replacement and (not require_asset or asset): return
+        code = process.poll()
+        if code is not None or time.monotonic() >= deadline:
+            raise replacement_failure(state, "CHILD_EXIT" if code is not None else "TIMEOUT", code, replacement, asset)
+        time.sleep(0.1)
+
+
 class DirectOrigin(ThreadingHTTPServer):
     def get_request(self):
         connection, address = super().get_request()
@@ -1120,15 +1180,8 @@ def main():
                     rejection = Path(str(state_file) + ".reject")
                     invalid = json.loads(json.dumps(prepared))
                     invalid["outbounds"][0]["protocol"] = "private-preflight-canary"
-                    rejection.write_text(json.dumps(invalid))
-                    deadline = time.monotonic() + 25
-                    while True:
-                        current_log = (directory / (label + ".log")).read_text(errors="replace")
-                        if "REJECTED_REPLACEMENT_PRESERVED=1" in current_log and (assets is None or "REJECTED_ASSET_ROOT_PRESERVED=1" in current_log):
-                            break
-                        if process.poll() is not None or time.monotonic() >= deadline:
-                            raise RuntimeError("Invalid replacement did not preserve the live session")
-                        time.sleep(0.1)
+                    publish_rejection(rejection, invalid)
+                    await_rejected_replacement(process, directory / (label + ".log"), state_file, assets is not None)
                     results.append(dict(mode=label, check="Core-invalid replacement preserves live workers", passed=True))
                     if assets is not None:
                         results.append(dict(mode=label, check="invalid asset root preserves live workers", passed=True))

@@ -1,0 +1,212 @@
+[
+  {
+    "name": "flat_vless_environment",
+    "environment": {
+      "FLUTTER_VLESS_FIXTURE_ENDPOINT": "endpoint.invalid"
+    },
+    "resolvedAddresses": {
+      "outbounds.0.settings.address": "endpoint.invalid"
+    },
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "env:FLUTTER_VLESS_FIXTURE_ENDPOINT",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "service.invalid",
+              "masterKeyLog": ""
+            },
+            "network": "ws",
+            "wsSettings": {
+              "path": "/ws-fixture",
+              "headers": {
+                "Host": "websocket.invalid"
+              }
+            },
+            "address": "ignored.invalid",
+            "port": 9443
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "remarks": "env:FLUTTER_VLESS_FIXTURE_ENDPOINT",
+      "custom": {
+        "address": "env:FLUTTER_VLESS_FIXTURE_ENDPOINT",
+        "downloadSettings": {
+          "address": "env:FLUTTER_VLESS_FIXTURE_ENDPOINT"
+        }
+      }
+    }
+  },
+  {
+    "name": "legacy_shadowsocks_environment",
+    "environment": {
+      "FLUTTER_VLESS_FIXTURE_ENDPOINT": "endpoint.invalid"
+    },
+    "resolvedAddresses": {
+      "outbounds.0.settings.servers.0.address": "endpoint.invalid"
+    },
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "shadowsocks",
+          "settings": {
+            "address": null,
+            "servers": [
+              {
+                "address": "env: flutter.vless.fixture.endpoint ",
+                "port": 443,
+                "method": "2022-blake3-aes-128-gcm",
+                "password": "AAAAAAAAAAAAAAAAAAAAAA=="
+              }
+            ]
+          },
+          "streamSettings": {
+            "network": "tcp"
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "remarks": "env:FLUTTER_VLESS_FIXTURE_ENDPOINT",
+      "custom": {
+        "address": "env:FLUTTER_VLESS_FIXTURE_ENDPOINT",
+        "downloadSettings": {
+          "address": "env:FLUTTER_VLESS_FIXTURE_ENDPOINT"
+        }
+      }
+    }
+  },
+  {
+    "name": "penetrating_xhttp_environment",
+    "environment": {
+      "FLUTTER_VLESS_FIXTURE_ENDPOINT": "endpoint.invalid"
+    },
+    "resolvedAddresses": {
+      "outbounds.0.settings.address": "endpoint.invalid",
+      "outbounds.0.streamSettings.xhttpSettings.extra.downloadSettings.address": "endpoint.invalid"
+    },
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "tcp://9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "env:FLUTTER_VLESS_FIXTURE_ENDPOINT",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "service.invalid",
+              "masterKeyLog": ""
+            },
+            "network": "xhttp",
+            "xhttpSettings": {
+              "path": "/effective",
+              "host": "upload.invalid",
+              "extra": {
+                "downloadSettings": {
+                  "address": "env:FLUTTER_VLESS_FIXTURE_ENDPOINT",
+                  "port": 8443,
+                  "network": "xhttp",
+                  "security": "tls",
+                  "tlsSettings": {
+                    "serverName": "download.invalid",
+                    "masterKeyLog": ""
+                  },
+                  "xhttpSettings": {
+                    "path": "/download"
+                  },
+                  "sockopt": {
+                    "dialerProxy": "dormant-download-handler",
+                    "tcpKeepAliveIdle": 7
+                  }
+                }
+              }
+            },
+            "splithttpSettings": {
+              "downloadSettings": {
+                "address": "dormant.invalid",
+                "port": 9443
+              }
+            },
+            "sockopt": {
+              "penetrate": true,
+              "tcpKeepAliveIdle": 30
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "remarks": "env:FLUTTER_VLESS_FIXTURE_ENDPOINT",
+      "custom": {
+        "address": "env:FLUTTER_VLESS_FIXTURE_ENDPOINT",
+        "downloadSettings": {
+          "address": "env:FLUTTER_VLESS_FIXTURE_ENDPOINT"
+        }
+      }
+    }
+  }
+]

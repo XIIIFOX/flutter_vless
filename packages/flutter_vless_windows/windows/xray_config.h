@@ -400,7 +400,7 @@ inline std::string PortTrimSpace(std::string text) {
 // Alias folding here covers ASCII environment names. Refuse an unqualified
 // Unicode alias instead of converting a missing lookup to an AnyIP listener.
 // Exact UTF-8 names are passed unchanged to the platform reader.
-inline std::optional<std::string> ResolveInboundListen(const std::string& text, const PortEnvironmentReader& read_environment) {
+inline std::optional<std::string> ResolveAddress(const std::string& text, const PortEnvironmentReader& read_environment) {
   if (text.rfind("env:", 0) != 0) return text;
   const auto name = text.substr(4);
   auto resolved = read_environment(name);
@@ -416,11 +416,19 @@ inline std::optional<std::string> ResolveInboundListen(const std::string& text, 
   if (resolved->rfind("env:", 0) == 0) return std::nullopt;
   return resolved;
 }
+inline std::optional<std::string> ResolveInboundListen(const std::string& text, const PortEnvironmentReader& read_environment) {
+  return ResolveAddress(text, read_environment);
+}
+inline std::string ParsedAddressText(std::string text) {
+  // Core ParseAddress removes brackets before trimming. Keep this parsed view
+  // separate from the raw expanded Address frozen in the candidate document.
+  if (text.size() >= 2 && text.front() == '[' && text.back() == ']') text = text.substr(1, text.size() - 2);
+  return PortTrimSpace(text);
+}
 inline bool UnixInboundListen(std::string resolved) {
   // Match ParseAddress's bracket-removal-before-trim order for classification;
   // preserve the raw resolved string in the generated document.
-  if (resolved.size() >= 2 && resolved.front() == '[' && resolved.back() == ']') resolved = resolved.substr(1, resolved.size() - 2);
-  resolved = PortTrimSpace(resolved);
+  resolved = ParsedAddressText(resolved);
   return (!resolved.empty() && resolved[0] == '@') || std::filesystem::u8path(resolved).is_absolute();
 }
 
@@ -573,6 +581,73 @@ inline std::string EffectiveStreamNetwork(const Json& stream) {
   return "tcp";
 }
 
+inline bool EndpointProtocol(const std::string& protocol) {
+  return std::set<std::string>{"vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria", "masque", "wireguard"}.count(protocol) != 0;
+}
+inline std::optional<std::vector<Json*>> EndpointEntries(Json& outbound, const std::string& protocol) {
+  if (!Object(outbound, "settings") || !Fields(outbound["settings"], {"address", "vnext", "servers", "peers"})) return std::nullopt;
+  auto& settings = outbound["settings"];
+  std::vector<Json*> entries;
+  if (settings.contains("address") && !settings["address"].is_null()) entries.push_back(&settings);
+  else {
+    const auto* key = protocol == "vless" || protocol == "vmess" ? "vnext" : "servers";
+    if (!settings.contains(key) || !settings[key].is_array()) return std::nullopt;
+    for (auto& entry : settings[key]) entries.push_back(&entry);
+  }
+  if (entries.empty()) return std::nullopt;
+  for (auto* entry : entries) if (!Fields(*entry, {"address", "endpoint"})) return std::nullopt;
+  return entries;
+}
+inline Json* EndpointField(Json& object, const char* name) {
+  for (auto it = object.begin(); it != object.end(); ++it) if (Fold(it.key()) == Fold(name)) return &it.value();
+  return nullptr;
+}
+inline bool BindEndpointAddress(Json& object) {
+  auto canonical = object;
+  if (!Fields(canonical, {"address"}) || !canonical.contains("address") || !canonical["address"].is_string()) return false;
+  const auto expanded = ResolveAddress(canonical["address"].get<std::string>(), PortEnvironment);
+  if (!expanded) return false;
+  *EndpointField(object, "address") = *expanded;
+  return true;
+}
+inline bool BindStreamEndpointAddress(Json& stream) {
+  if (stream.is_null()) return true;
+  auto canonical = stream;
+  if (!Fields(canonical, {"network", "method", "xhttpSettings", "splithttpSettings"})) return false;
+  const auto network = EffectiveStreamNetwork(canonical);
+  if (network != "xhttp" && network != "splithttp") return true;
+  const auto* key = canonical.contains("xhttpSettings") && !canonical["xhttpSettings"].is_null() ? "xhttpSettings" : "splithttpSettings";
+  auto* settings = EndpointField(stream, key);
+  if (!settings || settings->is_null()) return true;
+  auto effective = *settings;
+  if (!Fields(effective, {"extra", "downloadSettings"})) return false;
+  if (effective.contains("extra")) {
+    if (effective["extra"].is_null()) return true;
+    settings = EndpointField(*settings, "extra");
+    effective = *settings;
+    if (!Fields(effective, {"downloadSettings"})) return false;
+  }
+  auto* download = EndpointField(*settings, "downloadSettings");
+  // The immediate client's Address is decoded even when parent sockopt is
+  // inherited. getHTTPClient does not recursively dial its nested download.
+  return !download || download->is_null() || BindEndpointAddress(*download);
+}
+inline bool BindEndpointAddresses(Json& config) {
+  for (auto& outbound : config["outbounds"]) {
+    const auto protocol = outbound["protocol"].get<std::string>();
+    if (protocol == "blackhole" || protocol == "block" || protocol == "loopback" || protocol == "wireguard") continue;
+    if (EndpointProtocol(protocol)) {
+      auto entries = EndpointEntries(outbound, protocol);
+      if (!entries) return false;
+      for (auto* entry : *entries) if (!BindEndpointAddress(*entry)) return false;
+    }
+    // Freedom/direct and DNS may also dial an active XHTTP download through a
+    // caller chain. Freeze it before any outbound's physical resolve callback.
+    if (auto* stream = EndpointField(outbound, "streamSettings")) if (!BindStreamEndpointAddress(*stream)) return false;
+  }
+  return true;
+}
+
 inline bool EffectiveBootstrapChains(Json stream, std::vector<std::string>& chains) {
   if (stream.is_null()) return true;
   if (!Fields(stream, {"sockopt", "network", "method", "xhttpSettings", "splithttpSettings"})) return false;
@@ -700,7 +775,8 @@ inline bool BootstrapStream(Json& stream, const std::vector<BootstrapEndpoint>& 
     options["domainStrategy"] = "AsIs";
   } else {
     bool needs_pins = false;
-    for (const auto& endpoint : physical) {
+    for (auto& endpoint : physical) {
+      endpoint.host = ParsedAddressText(endpoint.host);
       if (endpoint.host.empty() || endpoint.host.find(':') != std::string::npos || !endpoint.port) return false;
       needs_pins = needs_pins || !Literal4(endpoint.host);
     }
@@ -863,6 +939,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   auto config = Parse(text);
   if (username.empty() || password.empty() || username.size() > 255 || password.size() > 255 || interface_name.empty()
       || !Normalize(config) || config.contains("fakeDns") || config.contains("fakedns")) return std::nullopt;
+  if (!BindEndpointAddresses(config)) return std::nullopt;
   if (!ValidBootstrapChains(config["outbounds"])) return std::nullopt;
   ServiceTags service_tags(config);
   auto& inbounds = config["inbounds"];
@@ -904,35 +981,23 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
       if (!BootstrapStream(outbound["streamSettings"], {}, interface_name, resolve, service_tags, ipv6_tag, bootstrap, send_through)) return std::nullopt;
       continue;
     }
-    if (!std::set<std::string>{"vless","vmess","trojan","shadowsocks","socks","http","hysteria","masque","wireguard"}.count(protocol)) return std::nullopt;
+    if (!EndpointProtocol(protocol)) return std::nullopt;
     if (!outbound.contains("tag") || outbound["tag"].is_null() || outbound["tag"] == "") {
       outbound["tag"] = service_tags.Next("flutter-vless-proxy");
     }
     if (proxy.empty() || outbound["tag"] == "proxy") proxy = outbound["tag"].get<std::string>();
-    if (!Object(outbound, "settings") || !Fields(outbound["settings"], {"address", "vnext", "servers", "peers"})) return std::nullopt;
-    auto& settings = outbound["settings"];
-    std::vector<Json*> endpoints;
-    if (settings.contains("address") && !settings["address"].is_null()) endpoints.push_back(&settings);
-    else {
-      const auto key = protocol == "wireguard" ? "peers" : (protocol == "vless" || protocol == "vmess" ? "vnext" : "servers");
-      if (!settings.contains(key) || !settings[key].is_array()) return std::nullopt;
-      for (auto& entry : settings[key]) endpoints.push_back(&entry);
-    }
-    if (endpoints.empty()) return std::nullopt;
+    // WireGuard's endpoint is a plain string and its own resolver/socket path
+    // does not use this graph. Do not expand it or broaden admission here.
+    if (protocol == "wireguard") return std::nullopt;
+    auto endpoints = EndpointEntries(outbound, protocol);
+    if (!endpoints) return std::nullopt;
     std::vector<BootstrapEndpoint> physical;
-    for (auto* entry : endpoints) {
-      if (!Fields(*entry, {"address", "endpoint"})) return std::nullopt;
-      const char* key = protocol == "wireguard" ? "endpoint" : "address";
+    for (auto* entry : *endpoints) {
+      const char* key = "address";
       if (!entry->contains(key) || !(*entry)[key].is_string()) return std::nullopt;
-      std::string host = (*entry)[key].get<std::string>();
       auto remote_port = Port(*entry);
-      if (protocol == "wireguard") {
-        // WireGuard's own resolver/socket path does not use this dialer graph.
-        // It requires a separate protected implementation before admission.
-        return std::nullopt;
-      }
       if (!remote_port) return std::nullopt;
-      physical.push_back({host, *remote_port});
+      physical.push_back({(*entry)[key].get<std::string>(), *remote_port});
     }
     if (!BootstrapStream(outbound["streamSettings"], physical, interface_name, resolve, service_tags, ipv6_tag, bootstrap, send_through)) return std::nullopt;
   }

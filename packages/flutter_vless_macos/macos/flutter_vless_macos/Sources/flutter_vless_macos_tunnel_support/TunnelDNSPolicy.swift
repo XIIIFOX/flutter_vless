@@ -32,12 +32,66 @@ public enum TunnelDNSPolicy {
         ((stream["method"] as? String) ?? (stream["network"] as? String) ?? "tcp").lowercased()
     }
 
+    /// Bind only schema-selected typed endpoint addresses. Caller DNS and
+    /// opaque maps are not Address fields; a failure never publishes a partial edit.
+    @discardableResult
+    static func bindEndpointEnvironment(to config: inout [String: Any], environment: [String: String]) throws -> Bool {
+        guard var output = TunnelConfigKeys.normalize(config) else { throw LocalProxyAccessError.malformedConfiguration }
+        guard var outbounds = output["outbounds"] as? [[String: Any]] else { return false }
+        var changed = false
+        func bind(_ object: inout [String: Any]) throws {
+            guard let raw = object["address"] as? String, raw.hasPrefix("env:") else { return }
+            object["address"] = try LocalProxyAccessPolicy.bindingAddressEnvironment(raw, environment: environment)
+            changed = true
+        }
+        func bindDownload(_ stream: inout [String: Any]) throws {
+            guard ["xhttp", "splithttp"].contains(effectiveTransport(in: stream)) else { return }
+            let key = stream["xhttpSettings"] is [String: Any] ? "xhttpSettings" : "splithttpSettings"
+            guard var settings = stream[key] as? [String: Any] else { return }
+            if let extraValue = settings["extra"] {
+                guard var extra = extraValue as? [String: Any], var download = extra["downloadSettings"] as? [String: Any] else { return }
+                try bind(&download)
+                extra["downloadSettings"] = download
+                settings["extra"] = extra
+            } else if var download = settings["downloadSettings"] as? [String: Any] {
+                try bind(&download)
+                settings["downloadSettings"] = download
+            }
+            stream[key] = settings
+        }
+        for index in outbounds.indices {
+            let proto = protocolRole(outbounds[index]["protocol"])
+            guard proto != "wireguard", endpointProtocols.contains(proto) || ["freedom", "dns"].contains(proto) else { continue }
+            if endpointProtocols.contains(proto), var settings = outbounds[index]["settings"] as? [String: Any] {
+                if settings["address"] is String {
+                    try bind(&settings)
+                } else if settings["address"] == nil || settings["address"] is NSNull {
+                    let listKey = ["vless", "vmess"].contains(proto) ? "vnext" : "servers"
+                    if ["vless", "vmess", "trojan", "shadowsocks", "http", "socks"].contains(proto),
+                       var servers = settings[listKey] as? [[String: Any]] {
+                        for server in servers.indices { try bind(&servers[server]) }
+                        settings[listKey] = servers
+                    }
+                }
+                outbounds[index]["settings"] = settings
+            }
+            if var stream = outbounds[index]["streamSettings"] as? [String: Any] {
+                try bindDownload(&stream)
+                outbounds[index]["streamSettings"] = stream
+            }
+        }
+        if changed { output["outbounds"] = outbounds; config = output }
+        return changed
+    }
+
     static func apply(to config: inout [String: Any], managedInboundTag: String,
                       resolveIPv4: (String) -> String?) -> [String]? {
         // Admission is transactional: a failed bootstrap must not partially
         // rewrite a caller dictionary which might be retried.
-        guard var output = TunnelConfigKeys.normalize(config),
-              var outbounds = output["outbounds"] as? [[String: Any]], !outbounds.isEmpty else { return nil }
+        guard var output = TunnelConfigKeys.normalize(config) else { return nil }
+        do { try bindEndpointEnvironment(to: &output, environment: ProcessInfo.processInfo.environment) }
+        catch { return nil }
+        guard var outbounds = output["outbounds"] as? [[String: Any]], !outbounds.isEmpty else { return nil }
         let primary = primaryEndpointIndex(in: outbounds)
         let tags = outbounds.compactMap { $0["tag"] as? String }.filter { !$0.isEmpty }
         guard Set(tags).count == tags.count else { return nil }
@@ -113,8 +167,9 @@ public enum TunnelDNSPolicy {
             guard !entries.isEmpty else { return nil }
             var endpoints: [Endpoint] = []
             for entry in entries {
-                guard let host = entry["address"] as? String, !host.isEmpty,
-                      let port = port(entry["port"]) else { return nil }
+                guard let raw = entry["address"] as? String, let port = port(entry["port"]) else { return nil }
+                let host = LocalProxyAccessPolicy.coreAddressText(raw)
+                guard !host.isEmpty else { return nil }
                 endpoints.append(Endpoint(host: host, port: port))
             }
             guard prepareStream(&stream, endpoints: endpoints, sendThrough: outbounds[index]["sendThrough"], allocator: &allocator, denied: denied,
@@ -236,8 +291,10 @@ public enum TunnelDNSPolicy {
             // Core replaces the child's entire socket policy with this parent
             // and dials its immediate XHTTP destination without child recursion.
             guard ["xhttp", "splithttp"].contains(effectiveTransport(in: download)),
-                  let host = download["address"] as? String, !host.isEmpty,
+                  let raw = download["address"] as? String,
                   let p = port(download["port"]) else { return false }
+            let host = LocalProxyAccessPolicy.coreAddressText(raw)
+            guard !host.isEmpty else { return false }
             if let tls = download["tlsSettings"] as? [String: Any],
                tls.keys.contains(where: { XrayJSONField.matches($0, "echConfigList") && (tls[$0] as? String ?? "").contains("://") }) { return false }
             if !physicalTargets.contains(where: { $0.host == host && $0.port == p }) {
@@ -286,7 +343,7 @@ public enum TunnelDNSPolicy {
                 var extra = extraValue as? [String: Any] ?? [:]
                 if var download = extra["downloadSettings"] as? [String: Any] {
                     guard let host = download["address"] as? String, let p = port(download["port"]),
-                          prepareStream(&download, endpoints: [Endpoint(host: host, port: p)], sendThrough: sendThrough, allocator: &allocator,
+                          prepareStream(&download, endpoints: [Endpoint(host: LocalProxyAccessPolicy.coreAddressText(host), port: p)], sendThrough: sendThrough, allocator: &allocator,
                                         denied: denied, generated: &generated, rules: &rules, resolved: &resolved,
                                         addresses: &addresses, resolver: resolver) else { return false }
                     extra["downloadSettings"] = download
@@ -294,7 +351,7 @@ public enum TunnelDNSPolicy {
                 }
             } else if var download = settings["downloadSettings"] as? [String: Any] {
                 guard let host = download["address"] as? String, let p = port(download["port"]),
-                      prepareStream(&download, endpoints: [Endpoint(host: host, port: p)], sendThrough: sendThrough, allocator: &allocator,
+                      prepareStream(&download, endpoints: [Endpoint(host: LocalProxyAccessPolicy.coreAddressText(host), port: p)], sendThrough: sendThrough, allocator: &allocator,
                                     denied: denied, generated: &generated, rules: &rules, resolved: &resolved,
                                     addresses: &addresses, resolver: resolver) else { return false }
                 settings["downloadSettings"] = download

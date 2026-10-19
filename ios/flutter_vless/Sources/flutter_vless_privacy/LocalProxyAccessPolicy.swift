@@ -220,29 +220,46 @@ public enum LocalProxyAccessPolicy {
         var changed = false
         for index in inputs.indices {
             guard let listen = inputs[index]["listen"] as? String, listen.hasPrefix("env:") else { continue }
-            let name = String(listen.dropFirst(4))
-            let resolved: String
-            if let exact = environment[name] {
-                resolved = exact // LookupEnv preserves an explicitly empty value.
-            } else {
-                let trimmed = name.trimmingCharacters(in: goWhitespace)
-                // Swift full Unicode uppercasing can expand a scalar (ß -> SS),
-                // unlike Go's simple case mapping. Keep that alias boundary
-                // explicit while retaining exact Unicode environment keys.
-                guard trimmed.unicodeScalars.allSatisfy({ $0.isASCII }) else {
-                    throw LocalProxyAccessError.malformedConfiguration
-                }
-                let alternate = trimmed.uppercased().replacingOccurrences(of: ".", with: "_")
-                resolved = alternate.isEmpty ? "" : environment[alternate] ?? ""
-            }
-            // Core rejects this literal domain after its single lookup. Do not
-            // accidentally give it a second lookup when saved JSON is parsed.
-            guard !resolved.hasPrefix("env:") else { throw LocalProxyAccessError.malformedConfiguration }
+            let resolved = try bindingAddressEnvironment(listen, environment: environment)
             inputs[index]["listen"] = resolved
             changed = true
         }
         if changed { config["inbounds"] = inputs }
         return changed
+    }
+
+    /// Match Core's one-time Address.UnmarshalJSON environment lookup. Keep
+    /// raw expanded text so a later Core decode performs ParseAddress once.
+    public static func bindingAddressEnvironment(_ raw: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment) throws -> String {
+        guard raw.hasPrefix("env:") else { return raw }
+        let name = String(raw.dropFirst(4))
+        let resolved: String
+        if let exact = environment[name] {
+            resolved = exact // LookupEnv preserves an explicitly empty value.
+        } else {
+            let trimmed = name.trimmingCharacters(in: goWhitespace)
+            // Swift full Unicode uppercasing can expand a scalar (ß -> SS),
+            // unlike Go's simple case mapping. Keep that alias boundary
+            // explicit while retaining exact Unicode environment keys.
+            guard trimmed.unicodeScalars.allSatisfy({ $0.isASCII }) else {
+                throw LocalProxyAccessError.malformedConfiguration
+            }
+            let alternate = trimmed.uppercased().replacingOccurrences(of: ".", with: "_")
+            resolved = alternate.isEmpty ? "" : environment[alternate] ?? ""
+        }
+        // Emitting a raw env: result would perform another lookup when saved
+        // JSON is decoded. Refuse it instead of changing Core's one-lookup meaning.
+        guard !resolved.hasPrefix("env:") else { throw LocalProxyAccessError.malformedConfiguration }
+        return resolved
+    }
+
+    /// ParseAddress strips one bracket pair before Go's whitespace trim.
+    /// This classification view must not replace the caller's raw JSON value.
+    public static func coreAddressText(_ raw: String) -> String {
+        let unbracketed = raw.hasPrefix("[") && raw.hasSuffix("]")
+            ? String(raw.dropFirst().dropLast()) : raw
+        return unbracketed.trimmingCharacters(in: goWhitespace)
     }
 
     // strings.TrimSpace uses Go's Unicode White_Space table. Keep it explicit
@@ -253,9 +270,7 @@ public enum LocalProxyAccessPolicy {
     private static func isUnixListener(_ raw: String) -> Bool {
         // ParseAddress removes one outer bracket pair before TrimSpace. This
         // view is for classification only; retain the original effective text.
-        let unbracketed = raw.hasPrefix("[") && raw.hasSuffix("]")
-            ? String(raw.dropFirst().dropLast()) : raw
-        let address = unbracketed.trimmingCharacters(in: goWhitespace)
+        let address = coreAddressText(raw)
         return address.hasPrefix("/") || address.hasPrefix("@")
     }
 

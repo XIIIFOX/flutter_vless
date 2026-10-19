@@ -19,7 +19,10 @@
     "transport/internet/splithttp/dialer.go": "ed4ec0d02b7f4bed517f1326c534186e7648af81fe0c974f601a1e933666d0cd",
     "transport/internet/memory_settings.go": "333dad0111e0d215460aa2b1f376a032f79c2f12837b40911077662a7e35edcb",
     "infra/conf/transport_sockopt.go": "9fba6eab1f52d0dac18c26b12f828a04762dfe44f08c123218da53faf45b32e3",
-    "transport/internet/splithttp/client.go": "b528c116a72e77cb51e4fb1978a07d0e92d6b0587e0bafb3011d4891a63499dc"
+    "transport/internet/splithttp/client.go": "b528c116a72e77cb51e4fb1978a07d0e92d6b0587e0bafb3011d4891a63499dc",
+    "infra/conf/common.go": "74ac5deea7f399d9691895fbfd34673230a70e0962b741b56d4366d612aed78a",
+    "common/net/address.go": "e4227567ade9104f8cdd90f6cd1b10844d7903c4baf01abe586ae28f5038dcb1",
+    "common/platform/platform.go": "8aaf82c4a54553484a5482d7778926743269408cf6ca0cd0937cccfeb8d66557"
   },
   "module": "github.com/xtls/xray-core",
   "module_version": "v1.260327.1-0.20261017152356-92ccc939aaf4",

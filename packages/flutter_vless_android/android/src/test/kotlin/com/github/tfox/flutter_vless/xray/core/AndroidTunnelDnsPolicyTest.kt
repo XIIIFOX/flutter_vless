@@ -438,6 +438,139 @@ class AndroidTunnelDnsPolicyTest {
         }
     }
 
+    @Test fun sharedEndpointAddressEnvironmentFreezesOnlySelectedTypedAddresses() {
+        val cases = JSONArray(requireNotNull(javaClass.getResource("/endpoint-addresses.json")).readText())
+        assertEquals(3, cases.length())
+        fun value(root: Any, path: List<String>): Any = path.fold(root) { item, part ->
+            if (item is JSONArray) item.get(part.toInt()) else (item as JSONObject).get(part)
+        }
+        fun retained(expected: Any?, actual: Any?) {
+            when (expected) {
+                is JSONObject -> expected.keys().forEach { key -> retained(expected.get(key), (actual as JSONObject).get(key)) }
+                is JSONArray -> {
+                    assertEquals(expected.length(), (actual as JSONArray).length())
+                    for (index in 0 until expected.length()) retained(expected.get(index), actual.get(index))
+                }
+                else -> assertEquals(expected, actual)
+            }
+        }
+        for (index in 0 until cases.length()) {
+            val item = cases.getJSONObject(index); val label = item.getString("name")
+            val input = item.getJSONObject("config"); val before = input.toString()
+            val environment = item.getJSONObject("environment"); val lookups = mutableListOf<String>()
+            val resolved = mutableListOf<String>()
+            val prepared = AndroidTunnelDnsPolicy.prepare(before, "proxy", environment = { name ->
+                lookups.add(name); if (environment.has(name)) environment.getString(name) else null
+            }) { name -> resolved.add(name); listOf("192.0.2.17") }
+            assertEquals(label, listOf("endpoint.invalid"), resolved)
+            assertEquals(label, setOf("endpoint.invalid"), prepared.bootstrapHostnames)
+            assertTrue("Structural/resolving passes must share a lookup snapshot", lookups.groupingBy { it }.eachCount().values.all { it == 1 })
+            val expected = JSONObject(before)
+            val addresses = item.getJSONObject("resolvedAddresses")
+            addresses.keys().forEach { path ->
+                val parts = path.split('.')
+                (value(expected, parts.dropLast(1)) as JSONObject).put(parts.last(), addresses.getString(path))
+            }
+            val actual = JSONObject(prepared.configJson)
+            val expectedOutbounds = expected.getJSONArray("outbounds")
+            for (outboundIndex in 0 until expectedOutbounds.length())
+                retained(expectedOutbounds.get(outboundIndex), actual.getJSONArray("outbounds").get(outboundIndex))
+            assertEquals(label, input.getJSONObject("custom").toString(), actual.getJSONObject("custom").toString())
+            assertEquals(label, input.getString("remarks"), actual.getString("remarks"))
+            val caller = AndroidTunnelDnsPolicy.prepare(before, "config", environment = { error("Config mode must not read endpoint environment") }) {
+                error("Config mode must not bootstrap endpoints")
+            }
+            val callerJson = JSONObject(caller.configJson)
+            assertEquals(label, input.getJSONObject("dns").toString(), callerJson.getJSONObject("dns").toString())
+            for (outboundIndex in 0 until expectedOutbounds.length())
+                assertEquals(label, input.getJSONArray("outbounds").get(outboundIndex).toString(),
+                    callerJson.getJSONArray("outbounds").get(outboundIndex).toString())
+            assertEquals(label, before, input.toString())
+        }
+    }
+
+    @Test fun endpointEnvironmentSnapshotPreservesRawValueAndIgnoresUntypedStrings() {
+        val stream = JSONObject().put("network", "ws").put("address", "env:DORMANT")
+            .put("tlsSettings", JSONObject().put("serverName", "env:SNI"))
+            .put("wsSettings", JSONObject().put("path", "/env:PATH").put("headers", JSONObject().put("Host", "env:HOST")))
+        val input = config(outbound(address = "env:ENDPOINT").put("streamSettings", stream))
+        val before = input.toString(); val lookups = mutableListOf<String>(); val resolved = mutableListOf<String>()
+        val prepared = AndroidTunnelDnsPolicy.prepare(before, "proxy", environment = { name ->
+            lookups.add(name); if (name == "ENDPOINT" && lookups.size == 1) "Endpoint.Invalid." else error("Repeated or untyped environment lookup")
+        }) { name -> resolved.add(name); listOf("192.0.2.17") }
+        val output = JSONObject(prepared.configJson).getJSONArray("outbounds").getJSONObject(0)
+        assertEquals(listOf("ENDPOINT"), lookups)
+        assertEquals(listOf("endpoint.invalid"), resolved)
+        assertEquals("Endpoint.Invalid.", output.getJSONObject("settings").getJSONArray("servers").getJSONObject(0).getString("address"))
+        for (key in listOf("address", "tlsSettings", "wsSettings"))
+            assertEquals(stream.get(key).toString(), output.getJSONObject("streamSettings").get(key).toString())
+        assertEquals(before, input.toString())
+        val wireguard = JSONObject().put("tag", "proxy").put("protocol", "wireguard")
+            .put("settings", JSONObject().put("peers", JSONArray().put(JSONObject().put("endpoint", "env:WIREGUARD"))))
+        rejected {
+            AndroidTunnelDnsPolicy.prepare(config(wireguard).toString(), "proxy", environment = { error("WireGuard endpoint is a plain String") }) {
+                error("No invented WireGuard target may be resolved")
+            }
+        }
+    }
+
+    @Test fun typedEndpointCoreAddressViewKeepsRawBracketsAndGoWhitespace() {
+        val raw = "[ \u00a0127.0.0.1\u3000]"
+        for (sourceAddress in listOf(raw, "env:PHYSICAL")) {
+            val download = JSONObject().put("address", sourceAddress).put("network", "xhttp")
+                .put("xhttpSettings", JSONObject().put("path", "/download"))
+            val stream = JSONObject().put("network", "xhttp")
+                .put("xhttpSettings", JSONObject().put("downloadSettings", download))
+            val input = config(outbound(address = sourceAddress).put("streamSettings", stream))
+            val before = input.toString()
+            val prepared = AndroidTunnelDnsPolicy.prepare(before, "proxy", environment = { name ->
+                assertEquals("PHYSICAL", name); raw
+            }) { error("Core parsed IP literals must not invoke DNS") }
+            assertTrue(prepared.bootstrapHostnames.isEmpty())
+            assertEquals(setOf("127.0.0.1"), prepared.bootstrapAddresses)
+            val output = JSONObject(prepared.configJson).getJSONArray("outbounds").getJSONObject(0)
+            assertEquals(raw, output.getJSONObject("settings").getJSONArray("servers").getJSONObject(0).getString("address"))
+            assertEquals(raw, output.getJSONObject("streamSettings").getJSONObject("xhttpSettings")
+                .getJSONObject("downloadSettings").getString("address"))
+            assertEquals(before, input.toString())
+        }
+    }
+
+    @Test fun typedAddressDoesNotStripBracketsAgainAfterGoWhitespaceTrim() {
+        for (raw in listOf(" [127.0.0.1] ", " [::1] ")) {
+            for (sourceAddress in listOf(raw, "env:PHYSICAL")) {
+                val input = config(outbound(address = sourceAddress)); val before = input.toString()
+                rejected {
+                    AndroidTunnelDnsPolicy.prepare(before, "proxy", environment = { raw }) {
+                        error("Core parsed a bracketed DOMAIN; never reinterpret it as an IP")
+                    }
+                }
+                assertEquals(before, input.toString())
+            }
+        }
+    }
+
+    @Test fun missingEmptyAndNestedEndpointEnvironmentNeverInventsFallbackOrRecurses() {
+        for ((raw, environment) in listOf(
+            "env:endpoint.name" to mapOf("endpoint.name" to "", "ENDPOINT_NAME" to "wrong.invalid"),
+            "env:MISSING" to emptyMap(), "env:FIRST" to mapOf("FIRST" to "env:SECOND", "SECOND" to "wrong.invalid"),
+            "ENV:ENDPOINT" to mapOf("ENDPOINT" to "wrong.invalid"),
+            " env:ENDPOINT" to mapOf("ENDPOINT" to "wrong.invalid"))) {
+            val input = config(outbound(address = raw)); val before = input.toString(); val lookups = mutableListOf<String>()
+            rejected {
+                AndroidTunnelDnsPolicy.prepare(before, "proxy", environment = { name -> lookups.add(name); environment[name] }) {
+                    error("Invalid effective endpoint must fail before DNS")
+                }
+            }
+            assertFalse(lookups.contains("SECOND"))
+            if (raw == "env:endpoint.name") assertEquals(listOf("endpoint.name"), lookups)
+            if (!raw.startsWith("env:")) assertTrue(lookups.isEmpty())
+            val caller = JSONObject(AndroidTunnelDnsPolicy.prepare(before, "config", environment = { error("No config-mode environment lookup") }).configJson)
+            assertEquals(input.getJSONArray("outbounds").getJSONObject(0).toString(), caller.getJSONArray("outbounds").getJSONObject(0).toString())
+            assertEquals(before, input.toString())
+        }
+    }
+
     @Test fun sharedPinnedCoreProtocolCorpusPreservesCallerOutboundsAndTransportFields() {
         val cases = JSONArray(requireNotNull(javaClass.getResource("/protocols.json")).readText())
         assertEquals("Expected the complete shared protocol corpus", 9, cases.length())

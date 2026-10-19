@@ -560,6 +560,23 @@ advertises TCP, while its HTTP inbound also supports Unix sockets. See the
 [pinned Core port parser](https://github.com/XTLS/Xray-core/blob/92ccc939aaf4f8965f369cf0b142e005aeaa11d5/infra/conf/common.go)
 and [inbound implementations](https://github.com/XTLS/Xray-core/tree/92ccc939aaf4f8965f369cf0b142e005aeaa11d5/proxy).
 
+Typed endpoint address progress (2026-10-19): Apple and Windows bind native
+`env:` references in the selected protocol server address and active immediate
+XHTTP download address before physical bootstrap. Apple also freezes these
+values before saving a session for its provider process. Android applies the
+same binding in explicit proxy DNS mode; default config mode already passes
+the original Address to Core. Exact environment keys, including empty values,
+take precedence over the normalized alias. Lookup happens once; a result that
+would trigger another `env:` lookup on re-decoding is refused. The raw expanded
+text stays in the effective JSON; endpoint checks use Core's bracket-before-
+whitespace parsing order. Caller DNS, ignored stream addresses and arbitrary
+strings such as Host, paths and WireGuard's plain endpoint are unchanged.
+Three shared cases compare pinned Core protobufs and complete native prepared
+profiles against literal controls. The controlled XHTTP chain also changes the
+client process's environment after preparation and requires the original
+upload, download and carrier destinations to carry the payload. File-only
+equivalence and runtime acceptance remain distinct evidence.
+
 Core preflight is now wired into both Apple app entry points and into the final
 provider configuration before route installation. The additive Go bridge decodes
 and builds with pinned Core without opening listeners. Closed numeric results

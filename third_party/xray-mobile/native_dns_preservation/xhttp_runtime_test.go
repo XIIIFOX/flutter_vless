@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -290,16 +291,42 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 			}
 			source := map[string]any{"log": map[string]any{"loglevel": "none"}, "inbounds": []any{}, "outbounds": outbounds,
 				"dns": map[string]any{"hosts": map[string]any{"endpoint.invalid": "127.0.0.2"}, "queryStrategy": "UseIPv4", "servers": []string{"tcp://9.9.9.9"}}}
-			prepared, managedPort := prepare(t, source)
+			wantDownload, _ := json.Marshal(download)
+			var prepared []byte
+			var managedPort int
+			if chained {
+				// Freeze typed addresses before crossing into the client process.
+				// Changing that process's environment must not retarget the session.
+				const variable = "FLUTTER_VLESS_FIXTURE_ENDPOINT"
+				t.Setenv(variable, "endpoint.invalid")
+				control, _ := json.Marshal(source)
+				for _, index := range []int{0, len(outbounds) - 1} {
+					outbounds[index].(map[string]any)["settings"].(map[string]any)["address"] = "env:" + variable
+				}
+				download["address"] = "env:" + variable
+				input, _ := json.Marshal(source)
+				baseline := prepareEndpointAddress(t, control)
+				effective := prepareEndpointAddress(t, input)
+				if !reflect.DeepEqual(baseline, effective) {
+					t.Fatal("environment XHTTP differs from its literal prepared control")
+				}
+				prepared, err = json.Marshal(effective)
+				if err != nil {
+					t.Fatal(err)
+				}
+				managedPort = int(effective["inbounds"].([]any)[0].(map[string]any)["port"].(float64))
+				t.Setenv(variable, "unreachable.invalid")
+			} else {
+				prepared, managedPort = prepare(t, source)
+			}
 			var effective map[string]any
 			if err := json.Unmarshal(prepared, &effective); err != nil {
 				t.Fatal(err)
 			}
 			stream := effective["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)
 			actualDownload := stream["xhttpSettings"].(map[string]any)["extra"].(map[string]any)["downloadSettings"]
-			want, _ := json.Marshal(download)
 			got, _ := json.Marshal(actualDownload)
-			if !bytes.Equal(want, got) {
+			if !bytes.Equal(wantDownload, got) {
 				t.Fatal("XHTTP preparation rewrote the inherited download stream")
 			}
 			if chained && stream["sockopt"].(map[string]any)["dialerProxy"] != "carrier" {
@@ -342,6 +369,9 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 					len(events), events[:min(len(events), 48)], failures[:min(len(failures), 8)], output)
 			}
 			t.Logf("XHTTP_PENETRATE_PAYLOAD_PASS chained=%t bytes=%d", chained, len(payload))
+			if chained {
+				t.Log("XHTTP_ENVIRONMENT_FROZEN_PASS")
+			}
 		})
 		allPassed = passed && allPassed
 	}

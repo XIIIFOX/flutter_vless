@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Bind selected server and active XHTTP download `env:` addresses before protected preparation on Apple and Windows, and in Android's explicit proxy DNS mode. Preserve raw values and caller DNS, freeze Apple sessions before persistence, and add shared Core-equivalence and cross-process traffic regressions.
 * Isolate controlled XHTTP clients from the backend and later tests in bounded processes. Preserve strict payload/DNS checks and retain bounded packet sequence, body length, origin entry and backend failure evidence after transport errors.
 * Permit only the allocated loopback HTTP origin in the controlled XHTTP server's final rules. Retain Core's other defaults and the existing client restrictions.
 * Record bounded, content-free HTTP fixture stages and response lengths in Android CI when protected system DNS tests fail. Retain the original error and request behavior; add pure failure-path controls.

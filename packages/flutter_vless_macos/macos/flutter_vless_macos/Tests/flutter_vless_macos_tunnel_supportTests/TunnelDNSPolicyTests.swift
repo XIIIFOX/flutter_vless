@@ -1,4 +1,5 @@
 import XCTest
+import Darwin
 @testable import flutter_vless_macos_tunnel_support
 
 final class TunnelDNSPolicyTests: XCTestCase {
@@ -468,6 +469,130 @@ final class TunnelDNSPolicyTests: XCTestCase {
         }
         let rules = try XCTUnwrap((config["routing"] as? [String: Any])?["rules"] as? [[String: Any]])
         XCTAssertEqual(Set(rules.compactMap { ($0["domain"] as? [String]) == ["full:shared.example"] ? $0["port"] as? String : nil }), ["8443", "8444", "8445"])
+    }
+
+    func testSharedEndpointEnvironmentMatchesLiteralControlWithoutChangingEditorFields() throws {
+        func replace(_ object: Any, path: ArraySlice<String>, value: String) -> Any {
+            guard let head = path.first else { return value }
+            if var map = object as? [String: Any], let child = map[head] {
+                map[head] = replace(child, path: path.dropFirst(), value: value); return map
+            }
+            var list = object as! [Any]; let index = Int(head)!
+            list[index] = replace(list[index], path: path.dropFirst(), value: value); return list
+        }
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/endpoint-addresses.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/endpoint-addresses.json"))) as? [[String: Any]])
+        XCTAssertEqual(cases.count, 3)
+        for item in cases {
+            let original = try XCTUnwrap(item["config"] as? [String: Any])
+            let environment = try XCTUnwrap(item["environment"] as? [String: String])
+            let previous = environment.keys.map { ($0, getenv($0).map { String(cString: $0) }) }
+            for (key, value) in environment { setenv(key, value, 1) }
+            defer { for (key, value) in previous { if let value { setenv(key, value, 1) } else { unsetenv(key) } } }
+            let input = try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys])
+            var literal: Any = original
+            for (path, value) in try XCTUnwrap(item["resolvedAddresses"] as? [String: String]) {
+                literal = replace(literal, path: ArraySlice(path.split(separator: ".").map(String.init)), value: value)
+            }
+            let control = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: JSONSerialization.data(withJSONObject: literal), credentials: Self.credentials, resolveIPv4: { $0 == "endpoint.invalid" ? "203.0.113.9" : nil }))
+            guard let prepared = TunnelXrayConfigPreparer.prepare(jsonData: input, credentials: Self.credentials, resolveIPv4: { $0 == "endpoint.invalid" ? "203.0.113.9" : nil }) else {
+                XCTFail("Core-valid endpoint environment rejected: \(item["name"] ?? "")"); continue
+            }
+            XCTAssertEqual(try JSONSerialization.jsonObject(with: prepared.data) as? NSDictionary, try JSONSerialization.jsonObject(with: control.data) as? NSDictionary)
+            let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+            XCTAssertEqual(output["dns"] as? NSDictionary, original["dns"] as? NSDictionary)
+            XCTAssertEqual(output["custom"] as? NSDictionary, original["custom"] as? NSDictionary)
+            XCTAssertEqual(output["remarks"] as? String, original["remarks"] as? String)
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys]), input)
+        }
+    }
+
+    func testEndpointEnvironmentBindsChainedDynamicParentDownload() throws {
+        for proto in ["direct", "dns"] {
+            let child: [String: Any] = ["address": "env:DOWNLOAD", "port": 8443, "network": "xhttp", "xhttpSettings": ["path": "/download"]]
+            let source: [String: Any] = ["dns": ["servers": ["tcp://9.9.9.9"]], "outbounds": [
+                ["tag": "dynamic", "protocol": proto, "streamSettings": ["network": "xhttp", "sockopt": ["penetrate": true, "dialerProxy": "carrier"], "xhttpSettings": ["downloadSettings": child]]],
+                ["tag": "carrier", "protocol": "http", "settings": ["address": "192.0.2.9", "port": 443]]]]
+            let input = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            let frozen = try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: input, environment: ["DOWNLOAD": "download.invalid"])
+            var expectedChild = child; expectedChild["address"] = "download.invalid"
+            let output = try XCTUnwrap(JSONSerialization.jsonObject(with: frozen) as? [String: Any])
+            let stream = try XCTUnwrap((output["outbounds"] as? [[String: Any]])?.first?["streamSettings"] as? [String: Any])
+            XCTAssertEqual((stream["xhttpSettings"] as? [String: Any])?["downloadSettings"] as? NSDictionary, expectedChild as NSDictionary)
+            XCTAssertEqual(try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: frozen, environment: ["DOWNLOAD": "different.invalid"]), frozen)
+            let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: frozen, credentials: Self.credentials, resolveIPv4: { _ in XCTFail("Caller chain targets remain logical"); return nil }))
+            var literal = source
+            var literalOutbounds = source["outbounds"] as! [[String: Any]]
+            var literalStream = literalOutbounds[0]["streamSettings"] as! [String: Any]
+            literalStream["xhttpSettings"] = ["downloadSettings": expectedChild]
+            literalOutbounds[0]["streamSettings"] = literalStream; literal["outbounds"] = literalOutbounds
+            let control = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: JSONSerialization.data(withJSONObject: literal), credentials: Self.credentials))
+            XCTAssertEqual(try JSONSerialization.jsonObject(with: prepared.data) as? NSDictionary, try JSONSerialization.jsonObject(with: control.data) as? NSDictionary)
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), input)
+        }
+    }
+
+    func testEndpointEnvironmentFreezesRawAddressAcrossProviderEnvironments() throws {
+        let original: [String: Any] = ["dns": ["servers": ["tcp://9.9.9.9"]], "outbounds": [["tag": "proxy", "protocol": "http", "settings": ["address": "env:ENDPOINT", "port": 443]]]]
+        let source = try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys])
+        for (raw, target) in [("[127.0.0.1]", "127.0.0.1"), ("[ endpoint.invalid ]", "endpoint.invalid"), ("\u{0085}endpoint.invalid\u{3000}", "endpoint.invalid")] {
+            let frozen = try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: source, environment: ["ENDPOINT": raw])
+            XCTAssertEqual(try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: frozen, environment: ["ENDPOINT": "different.invalid"]), frozen)
+            var calls: [String] = []
+            let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: frozen, credentials: Self.credentials, resolveIPv4: { calls.append($0); return $0 == "endpoint.invalid" ? "203.0.113.9" : nil }))
+            let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+            let settings = try XCTUnwrap((output["outbounds"] as? [[String: Any]])?.first?["settings"] as? [String: Any])
+            XCTAssertEqual(settings["address"] as? String, raw)
+            XCTAssertEqual(calls, target == "127.0.0.1" ? [] : [target])
+            XCTAssertEqual(output["dns"] as? NSDictionary, original["dns"] as? NSDictionary)
+        }
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env: endpoint.name ", environment: ["ENDPOINT_NAME": "endpoint.invalid"]), "endpoint.invalid")
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env: endpoint.name ", environment: [" endpoint.name ": "", "ENDPOINT_NAME": "wrong.invalid"]), "")
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:ABSENT", environment: [:]), "")
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment(" env:ENDPOINT ", environment: ["ENDPOINT": "wrong.invalid"]), " env:ENDPOINT ")
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:ß", environment: ["ß": "endpoint.invalid", "SS": "wrong.invalid"]), "endpoint.invalid")
+        XCTAssertThrowsError(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:ß", environment: ["SS": "wrong.invalid"]))
+        XCTAssertThrowsError(try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: source, environment: ["ENDPOINT": "env:SECOND", "SECOND": "wrong.invalid"]))
+        let empty = try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: source, environment: [:])
+        XCTAssertNil(TunnelXrayConfigPreparer.prepare(jsonData: empty, credentials: Self.credentials, resolveIPv4: { _ in XCTFail("Empty effective endpoint must reject before lookup"); return nil }))
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys]), source)
+    }
+
+    func testEndpointEnvironmentVisitsEffectiveFieldsAndKeepsCallerChainLogical() throws {
+        let child: [String: Any] = ["address": "env:DOWNLOAD", "port": 8443, "network": "xhttp", "sockopt": ["dialerProxy": "inactive-child"], "xhttpSettings": ["path": "env:PATH"]]
+        let original: [String: Any] = ["dns": ["servers": ["tcp://9.9.9.9"]], "custom": ["address": "env:UPLOAD"], "outbounds": [
+            ["tag": "proxy", "protocol": "http", "settings": ["address": "env:UPLOAD", "port": 443, "servers": [["address": "env:IGNORED", "port": 9443]]],
+             "streamSettings": ["address": "env:IGNORED", "network": "xhttp", "sockopt": ["penetrate": true, "dialerProxy": "carrier"], "tlsSettings": ["serverName": "env:SNI"],
+                "xhttpSettings": ["host": "env:HOST", "downloadSettings": ["address": "env:IGNORED", "port": 9443], "extra": ["downloadSettings": child]],
+                "splithttpSettings": ["downloadSettings": ["address": "env:IGNORED", "port": 9443]]]],
+            ["tag": "carrier", "protocol": "socks", "settings": ["address": "env:CARRIER", "port": 1080]]]]
+        let source = try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys])
+        let frozen = try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: source, environment: ["UPLOAD": "logical-upload.invalid", "DOWNLOAD": "logical-download.invalid", "CARRIER": "carrier.invalid"])
+        let bound = try XCTUnwrap(JSONSerialization.jsonObject(with: frozen) as? [String: Any])
+        let first = try XCTUnwrap((bound["outbounds"] as? [[String: Any]])?.first)
+        let stream = try XCTUnwrap(first["streamSettings"] as? [String: Any])
+        XCTAssertEqual((first["settings"] as? [String: Any])?["servers"] as? NSArray, [["address": "env:IGNORED", "port": 9443]] as NSArray)
+        XCTAssertEqual(stream["address"] as? String, "env:IGNORED")
+        XCTAssertEqual((stream["tlsSettings"] as? [String: Any])?["serverName"] as? String, "env:SNI")
+        let xhttp = try XCTUnwrap(stream["xhttpSettings"] as? [String: Any])
+        XCTAssertEqual(xhttp["host"] as? String, "env:HOST")
+        XCTAssertEqual(xhttp["downloadSettings"] as? NSDictionary, ["address": "env:IGNORED", "port": 9443] as NSDictionary)
+        XCTAssertEqual(stream["splithttpSettings"] as? NSDictionary, ["downloadSettings": ["address": "env:IGNORED", "port": 9443]] as NSDictionary)
+        var expectedChild = child; expectedChild["address"] = "logical-download.invalid"
+        XCTAssertEqual((xhttp["extra"] as? [String: Any])?["downloadSettings"] as? NSDictionary, expectedChild as NSDictionary)
+        var calls: [String] = []
+        XCTAssertNotNil(TunnelXrayConfigPreparer.prepare(jsonData: frozen, credentials: Self.credentials, resolveIPv4: { calls.append($0); return $0 == "carrier.invalid" ? "203.0.113.9" : nil }))
+        XCTAssertEqual(calls, ["carrier.invalid"])
+        XCTAssertEqual(bound["custom"] as? NSDictionary, original["custom"] as? NSDictionary)
+        var transactional = original
+        let before = transactional as NSDictionary
+        XCTAssertThrowsError(try TunnelDNSPolicy.bindEndpointEnvironment(to: &transactional, environment: ["UPLOAD": "logical-upload.invalid", "DOWNLOAD": "env:SECOND", "CARRIER": "carrier.invalid"]))
+        XCTAssertEqual(transactional as NSDictionary, before)
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys]), source)
     }
 
     func testPenetratingDownloadSharesClosedParentPinsAndKeepsChildSocketPolicy() throws {

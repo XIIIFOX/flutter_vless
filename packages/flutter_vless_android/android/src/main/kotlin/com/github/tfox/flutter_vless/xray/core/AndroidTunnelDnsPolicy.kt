@@ -25,20 +25,33 @@ internal object AndroidTunnelDnsPolicy {
 
     /** Perform preflight without querying DNS or modifying the caller's configuration. */
     fun validate(configJson: String, policy: String = "config", proxyOutboundTag: String? = null,
-                 excludedRoutes: List<String> = emptyList()) {
-        prepareInternal(configJson, policy, proxyOutboundTag, excludedRoutes, null)
+                 excludedRoutes: List<String> = emptyList(),
+                 environment: (String) -> String? = System::getenv) {
+        prepareInternal(configJson, policy, proxyOutboundTag, excludedRoutes, null, snapshotEnvironment(environment))
     }
 
     /** Call before replacing a live session. The resolver must be scoped to a physical Network. */
     fun prepare(configJson: String, policy: String = "config", proxyOutboundTag: String? = null,
                 excludedRoutes: List<String> = emptyList(),
+                environment: (String) -> String? = System::getenv,
                 resolveEndpoint: (String) -> List<String> = { emptyList() }): Prepared {
-        validate(configJson, policy, proxyOutboundTag, excludedRoutes)
-        return prepareInternal(configJson, policy, proxyOutboundTag, excludedRoutes, resolveEndpoint)
+        val snapshot = snapshotEnvironment(environment)
+        prepareInternal(configJson, policy, proxyOutboundTag, excludedRoutes, null, snapshot)
+        return prepareInternal(configJson, policy, proxyOutboundTag, excludedRoutes, resolveEndpoint, snapshot)
+    }
+
+    /** Missing and empty are distinct, and both passes must use the same value. */
+    private fun snapshotEnvironment(environment: (String) -> String?): (String) -> String? {
+        val values = mutableMapOf<String, String?>()
+        return { name ->
+            if (values.containsKey(name)) values[name]
+            else environment(name).also { values[name] = it }
+        }
     }
 
     private fun prepareInternal(configJson: String, policy: String, proxyOutboundTag: String?,
-                                excludedRoutes: List<String>, resolveEndpoint: ((String) -> List<String>)?): Prepared {
+                                excludedRoutes: List<String>, resolveEndpoint: ((String) -> List<String>)?,
+                                environment: (String) -> String?): Prepared {
         require(policy == "config" || policy == "proxy") { "Unsupported Android DNS policy" }
         require(proxyOutboundTag == null || policy == "proxy") { "DNS proxy outbound tag requires proxy DNS policy" }
         if (policy == "config") return prepareCallerRoot(configJson, excludedRoutes)
@@ -71,15 +84,18 @@ internal object AndroidTunnelDnsPolicy {
         val hosts = JSONObject()
         val names = linkedSetOf<String>()
         val addresses = linkedSetOf<String>()
-        fun pinEndpoint(raw: String) {
-            require(raw.isNotBlank()) { "Proxy endpoint is empty" }
-            val literal = literalAddress(raw)
+        fun pinEndpoint(raw: String, typedAddress: Boolean) {
+            // Keep raw JSON intact, but bootstrap the same Address Core parsed.
+            // Brackets have already had their single chance to be removed.
+            val value = if (typedAddress) XrayPortSpec.coreAddressText(raw) else raw
+            require(value.isNotBlank()) { "Proxy endpoint is empty" }
+            val literal = literalAddress(value, allowBrackets = !typedAddress)
             if (literal != null) {
                 require(!isVirtualAddress(literal)) { "Proxy endpoint conflicts with virtual system DNS" }
                 addresses.add(literal.hostAddress!!.substringBefore('%'))
                 return
             }
-            val name = canonicalHostname(raw)
+            val name = canonicalHostname(value)
             if (!names.add(name)) return
             if (resolveEndpoint == null) return // structural preflight cannot issue DNS queries
             val answers = try { resolveEndpoint(name) } catch (_: Exception) {
@@ -109,12 +125,17 @@ internal object AndroidTunnelDnsPolicy {
             require(entries.isNotEmpty()) { "Proxy outbound has no endpoints" }
             entries.forEach { entry ->
                 canonicalize(entry, "address", "endpoint")
-                val address = optionalString(entry, "address") ?: endpointHost(optionalString(entry, "endpoint"))
+                val address = optionalString(entry, "address")?.let { raw ->
+                    // WireGuard endpoint is a plain String, unlike these typed
+                    // protocol Address fields. Never expand arbitrary strings.
+                    if (proto == "wireguard") raw else XrayPortSpec.bindAddressEnvironment(raw, environment)
+                        .also { entry.put("address", it) }
+                } ?: endpointHost(optionalString(entry, "endpoint"))
                 require(address != null) { "Proxy outbound has no endpoint address" }
-                pinEndpoint(address)
+                pinEndpoint(address, typedAddress = proto != "wireguard")
             }
             val stream = objectValue(outbound, "streamSettings") ?: JSONObject()
-            prepareStream(stream, ::pinEndpoint)
+            prepareStream(stream, { pinEndpoint(it, typedAddress = true) }, environment = environment)
             outbound.put("streamSettings", stream)
         }
         val routing = objectValue(config, "routing") ?: JSONObject()
@@ -219,7 +240,8 @@ internal object AndroidTunnelDnsPolicy {
         }
     }
 
-    private fun prepareStream(stream: JSONObject, pinEndpoint: (String) -> Unit, independentDownload: Boolean = false) {
+    private fun prepareStream(stream: JSONObject, pinEndpoint: (String) -> Unit, independentDownload: Boolean = false,
+                              environment: (String) -> String?) {
         canonicalize(stream, "sockopt", "address", "network", "method", "xhttpSettings", "splithttpSettings")
         // Core treats an absent or null SocketSettings as nil. The independent
         // download keeps its own policy; only Core's explicit penetrate flag
@@ -238,7 +260,11 @@ internal object AndroidTunnelDnsPolicy {
         // XDRIVE uses the primary MemoryStreamConfig destination; an independent
         // XHTTP download always has its own destination, regardless of method.
         if (independentDownload || network.equals("xdrive", ignoreCase = true))
-            optionalString(stream, "address")?.let(pinEndpoint)
+            optionalString(stream, "address")?.let { raw ->
+                val address = XrayPortSpec.bindAddressEnvironment(raw, environment)
+                stream.put("address", address)
+                pinEndpoint(address)
+            }
         if (network?.lowercase(Locale.ROOT) !in setOf("xhttp", "splithttp")) return
         fun nullableObject(value: JSONObject, key: String) =
             if (value.isNull(key)) null else objectValue(value, key)
@@ -250,8 +276,8 @@ internal object AndroidTunnelDnsPolicy {
             // Even explicit extra:null replaces outer advanced settings in Core.
             val extra = nullableObject(transport, "extra") ?: return
             canonicalize(extra, "downloadSettings")
-            nullableObject(extra, "downloadSettings")?.let { prepareStream(it, pinEndpoint, independentDownload = true) }
-        } else nullableObject(transport, "downloadSettings")?.let { prepareStream(it, pinEndpoint, independentDownload = true) }
+            nullableObject(extra, "downloadSettings")?.let { prepareStream(it, pinEndpoint, independentDownload = true, environment = environment) }
+        } else nullableObject(transport, "downloadSettings")?.let { prepareStream(it, pinEndpoint, independentDownload = true, environment = environment) }
     }
 
     /** User bypass routes may never remove the reserved resolver from TUN capture. */
@@ -268,8 +294,8 @@ internal object AndroidTunnelDnsPolicy {
     }
 
     /** InetAddress is used only after lexical validation prevents any resolver access. */
-    private fun literalAddress(raw: String): InetAddress? {
-        val value = if (raw.startsWith('[') && raw.endsWith(']')) raw.drop(1).dropLast(1) else raw
+    private fun literalAddress(raw: String, allowBrackets: Boolean = true): InetAddress? {
+        val value = if (allowBrackets && raw.startsWith('[') && raw.endsWith(']')) raw.drop(1).dropLast(1) else raw
         if (value.contains(':')) {
             if (!value.matches(Regex("[0-9a-fA-F:.]+"))) return null
             return runCatching { InetAddress.getByName(value) }.getOrNull()

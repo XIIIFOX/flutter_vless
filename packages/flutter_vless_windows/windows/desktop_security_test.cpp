@@ -4,6 +4,177 @@
 #include <fstream>
 using namespace flutter_vless::xray_config;
 void Require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+class EndpointEnvironment {
+ public:
+  explicit EndpointEnvironment(const Json& values) {
+    for (auto it = values.begin(); it != values.end(); ++it) {
+      previous_.push_back({it.key(), PortEnvironment(it.key())});
+#ifdef _WIN32
+      Require(_putenv_s(it.key().c_str(), it->get<std::string>().c_str()) == 0, "cannot set fixture endpoint environment");
+#else
+      Require(setenv(it.key().c_str(), it->get<std::string>().c_str(), 1) == 0, "cannot set fixture endpoint environment");
+#endif
+    }
+  }
+  ~EndpointEnvironment() {
+    for (const auto& entry : previous_) {
+#ifdef _WIN32
+      _putenv_s(entry.first.c_str(), entry.second ? entry.second->c_str() : "");
+#else
+      if (entry.second) setenv(entry.first.c_str(), entry.second->c_str(), 1);
+      else unsetenv(entry.first.c_str());
+#endif
+    }
+  }
+ private:
+  std::vector<std::pair<std::string, std::optional<std::string>>> previous_;
+};
+Json& EndpointPath(Json& value, const std::string& path) {
+  auto* current = &value;
+  size_t offset = 0;
+  while (offset < path.size()) {
+    const auto end = path.find('.', offset);
+    const auto key = path.substr(offset, end == std::string::npos ? path.size() - offset : end - offset);
+    current = current->is_array() ? &(*current)[std::stoul(key)] : &(*current)[key];
+    if (end == std::string::npos) break;
+    offset = end + 1;
+  }
+  return *current;
+}
+void EndpointAddressCases(const std::string& only = "") {
+  std::ifstream input("tool/fixtures/compatibility/endpoint-addresses.json");
+  Require(input.good(), "shared endpoint Address corpus is required");
+  Json fixtures; input >> fixtures; Require(fixtures.size() == 3, "shared endpoint Address corpus changed");
+  auto prepare = [](const Json& profile, std::vector<std::string>& calls) {
+    return PrepareProtectedVpn(profile.dump(), "session-user", "session-password", "Ethernet", [&](const std::string& host) {
+      calls.push_back(host); return host == "endpoint.invalid" ? "192.0.2.5" : "";
+    });
+  };
+  bool selected = only.empty();
+  for (const auto& fixture : fixtures) {
+    const auto name = fixture["name"].get<std::string>();
+    if (!only.empty() && only != name) continue;
+    selected = true;
+    const auto source = fixture["config"]; const auto original = source.dump();
+    EndpointEnvironment environment(fixture["environment"]);
+    std::vector<std::string> calls;
+    const auto result = prepare(source, calls);
+    Require(result.has_value(), "Core-valid typed endpoint env Address rejected");
+    auto literal = source;
+    for (auto it = fixture["resolvedAddresses"].begin(); it != fixture["resolvedAddresses"].end(); ++it) EndpointPath(literal, it.key()) = it.value();
+    std::vector<std::string> literal_calls;
+    const auto expected = prepare(literal, literal_calls);
+    Require(expected && Parse(*result) == Parse(*expected), "endpoint env expansion differs from the exact literal candidate");
+    Require(calls == std::vector<std::string>{"endpoint.invalid"} && calls == literal_calls, "physical bootstrap received raw env text or resolved a dormant field");
+    Require(source.dump() == original, "endpoint env preparation mutated caller JSON");
+  }
+  if (only.empty() || only == "parse-view") {
+    selected = true;
+    auto profile = fixtures[0]["config"];
+    for (const auto& address : {std::string("[ \tendpoint.invalid\n]"), std::string("\xc2\xa0" "endpoint.invalid\xe3\x80\x80")}) {
+      EndpointEnvironment environment({{"FLUTTER_VLESS_FIXTURE_ENDPOINT", address}});
+      std::vector<std::string> calls;
+      const auto result = prepare(profile, calls);
+      Require(result && Parse(*result)["outbounds"][0]["settings"]["address"] == address
+          && calls == std::vector<std::string>{"endpoint.invalid"}, "endpoint raw Address was not frozen with a Core-parsed pin view");
+    }
+    EndpointEnvironment environment({{"FLUTTER_VLESS_FIXTURE_ENDPOINT", "[ 192.0.2.5 ]"}});
+    std::vector<std::string> calls;
+    const auto numeric = prepare(profile, calls);
+    Require(numeric && calls.empty() && Parse(*numeric)["outbounds"][0]["settings"]["address"] == "[ 192.0.2.5 ]", "numeric expanded Address attempted OS bootstrap or changed raw text");
+  }
+  if (only.empty() || only == "caller-chain") {
+    selected = true;
+    auto profile = fixtures[2]["config"];
+    profile["outbounds"][0]["streamSettings"]["sockopt"]["dialerProxy"] = "front";
+    profile["outbounds"][0]["settings"]["address"] = "env:FLUTTER_VLESS_FIXTURE_UPLOAD";
+    profile["outbounds"][0]["streamSettings"]["xhttpSettings"]["extra"]["downloadSettings"]["address"] = "env:FLUTTER_VLESS_FIXTURE_DOWNLOAD";
+    profile["outbounds"].push_back({{"tag", "front"}, {"protocol", "socks"}, {"settings", {{"address", "env:FLUTTER_VLESS_FIXTURE_ENDPOINT"}, {"port", 10443}}}});
+    EndpointEnvironment environment({{"FLUTTER_VLESS_FIXTURE_UPLOAD", "logical-upload.invalid"}, {"FLUTTER_VLESS_FIXTURE_DOWNLOAD", "logical-download.invalid"}, {"FLUTTER_VLESS_FIXTURE_ENDPOINT", "endpoint.invalid"}});
+    std::vector<std::string> calls;
+    const auto result = prepare(profile, calls);
+    Require(result.has_value(), "chained env endpoint profile rejected"); const auto config = Parse(*result);
+    Require(calls == std::vector<std::string>{"endpoint.invalid"} && config["outbounds"][0]["settings"]["address"] == "logical-upload.invalid"
+        && config["outbounds"][0]["streamSettings"]["xhttpSettings"]["extra"]["downloadSettings"]["address"] == "logical-download.invalid"
+        && config["outbounds"][0]["streamSettings"]["sockopt"]["dialerProxy"] == "front", "caller chain resolved logical targets or retained raw env tokens");
+    for (const auto* role : {"freedom", "direct", "dns"}) {
+      auto dynamic = profile;
+      dynamic["outbounds"][0]["protocol"] = role;
+      dynamic["outbounds"][0]["settings"] = Json::object();
+      calls.clear();
+      const auto dynamic_result = prepare(dynamic, calls);
+      auto literal = dynamic;
+      literal["outbounds"][0]["streamSettings"]["xhttpSettings"]["extra"]["downloadSettings"]["address"] = "logical-download.invalid";
+      literal["outbounds"].back()["settings"]["address"] = "endpoint.invalid";
+      std::vector<std::string> literal_calls;
+      const auto expected = prepare(literal, literal_calls);
+      Require(dynamic_result && expected && Parse(*dynamic_result) == Parse(*expected)
+          && calls == std::vector<std::string>{"endpoint.invalid"}, "dynamic chained outbound did not freeze its active download Address");
+    }
+  }
+  if (only.empty() || only == "download-scope") {
+    selected = true;
+    for (const bool penetrate : {false, true}) {
+      auto profile = fixtures[2]["config"];
+      auto& stream = profile["outbounds"][0]["streamSettings"];
+      stream["sockopt"]["penetrate"] = penetrate;
+      auto& child = stream["xhttpSettings"]["extra"]["downloadSettings"];
+      if (!penetrate) child["sockopt"] = Json::object();
+      else child["xhttpSettings"]["downloadSettings"] = {{"address", "env:FLUTTER_VLESS_FIXTURE_DORMANT"}, {"port", 9443}};
+      stream["xhttpSettings"]["downloadSettings"] = {{"address", "env:FLUTTER_VLESS_FIXTURE_DORMANT"}, {"port", 9443}};
+      stream["splithttpSettings"]["downloadSettings"]["address"] = "env:FLUTTER_VLESS_FIXTURE_DORMANT";
+      stream["tlsSettings"]["serverName"] = "env:FLUTTER_VLESS_FIXTURE_ENDPOINT";
+      stream["xhttpSettings"]["host"] = "env:FLUTTER_VLESS_FIXTURE_ENDPOINT";
+      EndpointEnvironment environment(fixtures[2]["environment"]);
+      std::vector<std::string> calls;
+      const auto result = prepare(profile, calls);
+      auto literal = profile;
+      for (auto it = fixtures[2]["resolvedAddresses"].begin(); it != fixtures[2]["resolvedAddresses"].end(); ++it) EndpointPath(literal, it.key()) = it.value();
+      std::vector<std::string> literal_calls;
+      const auto expected = prepare(literal, literal_calls);
+      Require(result && expected && Parse(*result) == Parse(*expected) && calls == std::vector<std::string>{"endpoint.invalid"},
+          "active download env was not frozen or inactive download/Host/SNI was expanded");
+    }
+  }
+  if (only.empty() || only == "before-bootstrap") {
+    selected = true;
+    auto profile = fixtures[0]["config"];
+    auto second = profile["outbounds"][0]; second["tag"] = "backup";
+    second["settings"]["address"] = "env:FLUTTER_VLESS_FIXTURE_SECOND";
+    profile["outbounds"].push_back(second);
+    EndpointEnvironment environment({{"FLUTTER_VLESS_FIXTURE_ENDPOINT", "endpoint.invalid"}, {"FLUTTER_VLESS_FIXTURE_SECOND", "endpoint.invalid"}});
+    std::vector<std::string> calls;
+    const auto result = PrepareProtectedVpn(profile.dump(), "session-user", "session-password", "Ethernet", [&](const std::string& host) {
+      calls.push_back(host);
+#ifdef _WIN32
+      Require(_putenv_s("FLUTTER_VLESS_FIXTURE_SECOND", "unreachable.invalid") == 0, "cannot alter fixture endpoint environment");
+#else
+      Require(setenv("FLUTTER_VLESS_FIXTURE_SECOND", "unreachable.invalid", 1) == 0, "cannot alter fixture endpoint environment");
+#endif
+      return host == "endpoint.invalid" ? "192.0.2.5" : "";
+    });
+    profile["outbounds"][0]["settings"]["address"] = "endpoint.invalid";
+    profile["outbounds"].back()["settings"]["address"] = "endpoint.invalid";
+    std::vector<std::string> literal_calls;
+    const auto expected = prepare(profile, literal_calls);
+    Require(result && expected && Parse(*result) == Parse(*expected) && calls == std::vector<std::string>{"endpoint.invalid"},
+        "later endpoint env was read after a physical bootstrap callback");
+  }
+  if (only.empty() || only == "refused-expansion") {
+    selected = true;
+    for (const auto& value : {"env:FLUTTER_VLESS_FIXTURE_OTHER", "", " env:FLUTTER_VLESS_FIXTURE_OTHER"}) {
+      EndpointEnvironment environment({{"FLUTTER_VLESS_FIXTURE_ENDPOINT", value}, {"FLUTTER_VLESS_FIXTURE_OTHER", "endpoint.invalid"}});
+      auto profile = fixtures[0]["config"]; std::vector<std::string> calls;
+      Require(!prepare(profile, calls), "nested/missing endpoint env was recursively expanded");
+    }
+    auto profile = fixtures[0]["config"];
+    profile["outbounds"][0]["settings"]["address"] = " env:FLUTTER_VLESS_FIXTURE_ENDPOINT";
+    EndpointEnvironment environment({{"FLUTTER_VLESS_FIXTURE_ENDPOINT", "endpoint.invalid"}});
+    std::vector<std::string> calls;
+    Require(!prepare(profile, calls), "endpoint env prefix was eagerly trimmed before expansion");
+  }
+  Require(selected, "unknown endpoint Address case");
+}
 void DirectOnlyCases(const std::string& only = "") {
   for (const auto* protocol : {"freedom", "direct"}) {
     if (!only.empty() && only != protocol) continue;
@@ -501,6 +672,7 @@ int main(int argc, char** argv) try {
   if (argc == 3 && std::string(argv[1]) == "--direct-only-case") { DirectOnlyCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--ipv6-case") { IPv6PayloadCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--protocol-case") { ProtocolCompatibilityCases(argv[2]); return 0; }
+  if (argc == 3 && std::string(argv[1]) == "--endpoint-address-case") { EndpointAddressCases(argv[2]); return 0; }
   if (argc != 1) {
     if (argc != 7 || std::string(argv[1]) != "--prepare-dns-fixture") return 2;
     std::ifstream input(argv[2]);
@@ -517,6 +689,7 @@ int main(int argc, char** argv) try {
   IPv6PayloadCases();
   DirectOnlyCases();
   ProtocolCompatibilityCases();
+  EndpointAddressCases();
   const auto source = Parse(R"({
     "log":{"access":"private-canary.log","error":"secret.log","loglevel":"debug","dnsLog":true},
     "inbounds":[{"protocol":"socks","listen":"127.0.0.1","port":18580,"tag":"socks-in","settings":{"auth":"noauth"},"sniffing":{"enabled":true,"destOverride":["http","tls"],"routeOnly":false}}],

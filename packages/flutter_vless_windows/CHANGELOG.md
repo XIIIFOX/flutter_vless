@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Accept exact lowercase `full:` hosts keys for named DNS bootstrap. Match Core domain lowercasing without schema-key folding, retain caller maps and reject mappings that cannot resolve the upstream; add shared preparation and DoH regressions.
 * Treat null outbound tags like absent tags, matching Core. Keep untagged direct defaults intact and allocate the existing private name for remote endpoints; retain strict invalid-type and chain rejection.
 * Keep private service tags outside known nonempty balancer/observatory prefixes without freezing caller selectors. Add shared allocation and round-robin TUN regression fixtures; empty wildcard selection remains open.
 * Follow Core's legacy server fallback for a null flat address without changing caller settings. Add the Shadowsocks 2022 case to shared native preparation/Core-build coverage.

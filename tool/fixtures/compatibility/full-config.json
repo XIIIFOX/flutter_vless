@@ -54,5 +54,14 @@
       "outbounds": [{"tag": null, "protocol": "freedom"}, {"tag": "blocked", "protocol": "blackhole"}],
       "dns": {"queryStrategy": "UseIPv4", "servers": ["tcp://9.9.9.9"]}
     }
+  },
+  {
+    "name": "full_prefixed_hosts_bootstrap_named_doh",
+    "config": {
+      "log": {"loglevel": "none"},
+      "inbounds": [],
+      "outbounds": [{"tag": "proxy", "protocol": "http", "settings": {"address": "endpoint.invalid", "port": 443}}, {"tag": "direct", "protocol": "freedom"}],
+      "dns": {"queryStrategy": "UseIP", "hosts": {"full:resolver.invalid": "192.0.2.53", "static.invalid": "192.0.2.14"}, "servers": [{"address": "https://resolver.invalid/dns-query", "domains": ["full:probe.invalid"], "tag": "caller-doh", "skipFallback": true}, "tcp://9.9.9.9"]}
+    }
   }
 ]

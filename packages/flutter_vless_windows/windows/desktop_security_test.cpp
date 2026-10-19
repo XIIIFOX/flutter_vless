@@ -134,6 +134,48 @@ void ProtocolCompatibilityCases(const std::string& only = "") {
     throw std::runtime_error("protocol case references missing handler");
   };
   std::map<std::string, std::function<void()>> cases;
+  cases["dns-full-host-map"] = [&] {
+    for (const auto* scheme : {"https", "h2c"}) for (const auto* key : {"full:dns.example", "full:DNS.EXAMPLE"}) {
+      auto profile = source;
+      profile["dns"]["hosts"] = {{key, Json::array({"203.0.113.53"})}};
+      profile["dns"]["servers"] = Json::array({{{"address", std::string(scheme) + "://DNS.EXAMPLE./dns-query"}, {"tag", "caller-doh"}}});
+      const auto output = prepare(profile);
+      Require(output.has_value(), "Core full: IPv4 resolver hosts mapping rejected");
+      Require(Parse(*output)["dns"] == profile["dns"], "full: resolver mapping, URL or caller tag changed");
+    }
+  };
+  cases["dns-domain-unicode-case"] = [&] {
+    for (const auto& mapping : {std::pair<std::string, std::string>{"\xE2\x84\xAA.EXAMPLE", "k.example"},
+                               {"\xC4\xB0.EXAMPLE", "i.example"}}) {
+      auto profile = source;
+      profile["dns"]["hosts"] = {{mapping.first, "203.0.113.53"}};
+      profile["dns"]["servers"] = Json::array({"https://" + mapping.second + "/dns-query"});
+      const auto output = prepare(profile);
+      Require(output.has_value() && Parse(*output)["dns"] == profile["dns"], "Core domain lowercase-to-ASCII mapping rejected or rewritten");
+    }
+  };
+  cases["dns-long-s-not-case"] = [&] {
+    for (const auto* key : {"dn\xC5\xBF.example", "full:dn\xC5\xBF.example"}) {
+      auto profile = source;
+      profile["dns"]["hosts"] = {{key, "203.0.113.53"}};
+      profile["dns"]["servers"] = Json::array({"https://dns.example/dns-query"});
+      Require(!prepare(profile), "schema long-S folding admitted a nonmatching Core DNS hosts key");
+    }
+  };
+  cases["dns-full-host-negatives"] = [&] {
+    for (const auto* key : {"FULL:dns.example", "Full:dns.example", "full:dns.example."}) {
+      auto profile = source;
+      profile["dns"]["hosts"] = {{key, "203.0.113.53"}};
+      profile["dns"]["servers"] = Json::array({"https://dns.example/dns-query"});
+      Require(!prepare(profile), "unrecognized full: prefix or nonmatching trailing-dot key admitted");
+    }
+    for (const auto& mapping : {Json("alias.invalid"), Json::array(), Json::array({"203.0.113.53", "2001:db8::53"})}) {
+      auto profile = source;
+      profile["dns"]["hosts"] = {{"full:dns.example", mapping}};
+      profile["dns"]["servers"] = Json::array({"https://dns.example/dns-query"});
+      Require(!prepare(profile), "unqualified full: resolver address/alias/family admitted");
+    }
+  };
   cases["null-direct-tag"] = [&] {
     auto profile = source;
     profile["outbounds"].erase(profile["outbounds"].begin());

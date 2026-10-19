@@ -268,6 +268,66 @@ final class TunnelDNSPolicyTests: XCTestCase {
         }
     }
 
+    func testMappedDoHValidFullPrefixKeepsCallerPolicy() throws {
+        for key in ["full:doh.example", "full:DOH.Example", "DOH.Example"] {
+            let dns: [String: Any] = ["hosts": [key: ["192.0.2.53", "192.0.2.54"]],
+                "servers": [["address": "https://doh.example/dns-query", "tag": "caller-doh", "domains": ["full:private.example"]]], "queryStrategy": "UseIP"]
+            let original: [String: Any] = ["dns": dns, "outbounds": [["tag": "proxy", "protocol": "http", "settings": ["address": "endpoint.invalid", "port": 443]]]]
+            let before = try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys])
+            var output = original; var lookups: [String] = []
+            XCTAssertNotNil(TunnelDNSPolicy.apply(to: &output, managedInboundTag: "tun", resolveIPv4: { host in
+                lookups.append(host); return host == "endpoint.invalid" ? "203.0.113.7" : nil
+            }), key)
+            XCTAssertEqual(lookups, ["endpoint.invalid"], "DoH must use caller hosts, not native bootstrap")
+            XCTAssertEqual(output["dns"] as? NSDictionary, dns as NSDictionary)
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys]), before)
+        }
+    }
+
+    func testMappedDoHRejectsNonliteralFullPrefixBeforeBootstrap() throws {
+        let badHosts: [[String: Any]] = [
+            ["FULL:doh.example": "192.0.2.53"], ["Full:doh.example": "192.0.2.53"],
+            ["full:doh.example.": "192.0.2.53"], ["doh.example.": "192.0.2.53"],
+            ["domain:doh.example": "192.0.2.53"], ["full:doh.example": "alias.example"],
+            ["full:doh.example": "2001:db8::53"], ["full:doh.example": ["192.0.2.53", "2001:db8::53"]]
+        ]
+        for hosts in badHosts {
+            var source: [String: Any] = ["dns": ["hosts": hosts, "servers": ["https://doh.example/dns-query"]],
+                "outbounds": [["tag": "proxy", "protocol": "http", "settings": ["address": "endpoint.invalid", "port": 443]]]]
+            let before = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            XCTAssertNil(TunnelDNSPolicy.apply(to: &source, managedInboundTag: "tun", resolveIPv4: { _ in
+                XCTFail("Unsafe DoH mapping must reject before endpoint bootstrap"); return "203.0.113.7"
+            }))
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), before)
+        }
+    }
+
+    func testMappedDoHGoCaseMappingDoesNotApplySchemaFold() throws {
+        let cases = [("full:İnternal.invalid", "internal.invalid", true),
+                     ("full:Key.invalid", "key.invalid", true),
+                     ("full:doſ.invalid", "dos.invalid", false),
+                     ("full:I\u{0307}nternal.invalid", "internal.invalid", false)]
+        for (key, host, allowed) in cases {
+            let dns: [String: Any] = ["hosts": [key: "192.0.2.53"], "servers": ["https://\(host)/dns-query"]]
+            let original: [String: Any] = ["dns": dns, "outbounds": [["tag": "proxy", "protocol": "http", "settings": ["address": "endpoint.invalid", "port": 443]]]]
+            let before = try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys])
+            var output = original; var lookups: [String] = []
+            let result = TunnelDNSPolicy.apply(to: &output, managedInboundTag: "tun", resolveIPv4: { host in
+                lookups.append(host); return "203.0.113.7"
+            })
+            if allowed {
+                XCTAssertNotNil(result, key)
+                XCTAssertEqual(lookups, ["endpoint.invalid"], key)
+                XCTAssertEqual(output["dns"] as? NSDictionary, dns as NSDictionary)
+            } else {
+                XCTAssertNil(result, key)
+                XCTAssertEqual(lookups, [], "A schema-only long-s fold must not authorize DNS")
+                XCTAssertEqual(try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys]), before)
+            }
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys]), before)
+        }
+    }
+
     func testStaticMappedDoHPreservesURLAndCallerHosts() throws {
         for mapping: Any in ["192.0.2.80", ["192.0.2.80", "192.0.2.81"]] {
             let dns: [String: Any] = ["hosts": ["doh.example": mapping], "servers": [["address": "https://doh.example/dns-query", "domains": ["domain:private.example"], "tag": "caller-doh"]], "queryStrategy": "UseIPv4"]

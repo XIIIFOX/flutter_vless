@@ -74,7 +74,7 @@ class XrayCoreManagerTest {
 
     @Test fun sharedFullConfigCorpusPreservesCallerApiStatsPolicyAndPrivateAdapter() {
         val cases = JSONArray(requireNotNull(javaClass.getResource("/full-config.json")).readText())
-        assertEquals(5, cases.length())
+        assertEquals(6, cases.length())
         for (index in 0 until cases.length()) {
             val item = cases.getJSONObject(index); val label = item.getString("name")
             val source = item.getJSONObject("config"); val before = source.toString()
@@ -107,6 +107,26 @@ class XrayCoreManagerTest {
                 assertTrue(actual.getJSONObject(0).has("tag")); assertTrue(actual.getJSONObject(0).isNull("tag"))
                 assertEquals("freedom", actual.getJSONObject(0).getString("protocol"))
                 assertEquals(source.getJSONObject("dns").toString(), dnsOutput.getJSONObject("dns").toString())
+                assertTrue(prepared.bootstrapHostnames.isEmpty()); assertTrue(prepared.bootstrapAddresses.isEmpty())
+            }
+            if (label == "full_prefixed_hosts_bootstrap_named_doh") {
+                val prepared = AndroidTunnelDnsPolicy.prepare(before, "config") {
+                    error("Caller named DoH hosts must not invoke the preparer resolver")
+                }
+                val dnsOutput = JSONObject(prepared.configJson)
+                val actualDns = dnsOutput.getJSONObject("dns")
+                assertEquals(source.getJSONObject("dns").toString(), actualDns.toString())
+                assertEquals("192.0.2.53", actualDns.getJSONObject("hosts").getString("full:resolver.invalid"))
+                assertFalse(actualDns.getJSONObject("hosts").has("resolver.invalid"))
+                assertEquals("UseIP", actualDns.getString("queryStrategy"))
+                val server = actualDns.getJSONArray("servers").getJSONObject(0)
+                assertEquals("https://resolver.invalid/dns-query", server.getString("address"))
+                assertEquals("caller-doh", server.getString("tag"))
+                val expected = source.getJSONArray("outbounds"); val actual = dnsOutput.getJSONArray("outbounds")
+                assertEquals(expected.length() + 1, actual.length())
+                for (outbound in 0 until expected.length())
+                    assertEquals("$label/DNS preparation changed caller outbounds", expected.get(outbound).toString(),
+                        actual.get(outbound).toString())
                 assertTrue(prepared.bootstrapHostnames.isEmpty()); assertTrue(prepared.bootstrapAddresses.isEmpty())
             }
             assertEquals(label, before, source.toString())

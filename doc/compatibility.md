@@ -183,7 +183,7 @@ DNS proxy variants, two generations, non-IP refusal and failure without direct
 fallback. This qualifies the minimum DNS increment, not full advanced DNS,
 physical Apple VPN routing or encrypted DoH/TLS.
 
-The next DNS runtime gate uses a synthetic HTTPS/HTTP2 resolver with a private
+The encrypted DNS runtime gate uses a synthetic HTTPS/HTTP2 resolver with a private
 test CA. It requires A/AAAA wire answers over the managed TCP/UDP resolver,
 preserved SNI/HTTP authority/path, caller service/tag policy, an independent
 transport pin and zero OS-resolver attempts. Fresh bounded child processes
@@ -193,7 +193,9 @@ hosts, working proxy traffic and disabled caller counters after TLS rejection.
 The trust file is selected only in those disposable Go 1.27 test children;
 host trust stores, production DNS policy and public runtime artifacts are
 unchanged. Crypto/material, bounded-output and Core Build checks pass locally.
-Actual encrypted DoH acceptance is pending. This does not qualify DoQ, ECH
+Ordinary Core acceptance passes on all three desktop systems at
+[9361270](https://github.com/XIIIFOX/flutter_vless/actions/runs/39184191040).
+This does not qualify device-wide encrypted DNS, DoQ, ECH
 background lookups or additional production certificate/import APIs.
 
 ### Minimum protocol and transport adaptation
@@ -248,7 +250,7 @@ may therefore leave the example's counters at zero; this does not prevent VPN
 startup. Exact per-adapter accounting and a public availability signal remain
 separate work. Apple uses its existing in-process reader.
 
-The shared [five-case full-config corpus](../tool/fixtures/compatibility/full-config.json)
+The shared [six-case full-config corpus](../tool/fixtures/compatibility/full-config.json)
 checks these source sections after native preparation and against pinned Core
 decode/build. Runtime acceptance additionally requires a caller StatsService
 to remain available while HTTP/DNS traffic flows and disabled counters to stay
@@ -268,6 +270,18 @@ non-null types and broken chains still fail. Shared native preparation and
 Android checks retain the untagged direct default, outbound order and caller DNS.
 This is a focused compatibility increment, not new remote-protocol handshake
 qualification.
+
+The sixth case adds a named DoH resolver with an exact `full:` static hosts key.
+Windows previously rejected this Core-supported form. Apple already admitted
+it but also accepted an uppercase prefix which Core treats as part of a literal
+domain name. Native checks now recognize only the literal lowercase `full:`
+prefix, then apply DNS domain lowercasing independently of JSON schema folding.
+The original hosts map, URL, server tags and query strategy remain unchanged.
+Pure checks use the pinned Core's actual inert static-host matcher, including
+wrong prefix/FQDN and Unicode controls; the existing HTTPS fixture adds a full-key
+positive child alongside its bare-key trust/name controls. Runtime acceptance
+for this new case is pending. Named resolvers without a qualifying static map
+and broader DNS bootstrap routing remain separate work.
 
 Listener address increment: native preparation now expands only imported
 `inbound.listen` environment references before deciding whether a listener
@@ -470,7 +484,13 @@ Core, Android, Apple and Windows runtime fixtures require actual HTTP and DNS
 bytes, caller domain blocking and bounded cleanup for that profile. Ordinary
 Core acceptance passes on all three desktop systems in
 [3d6da94 CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39189818021).
-Platform runtime acceptance is pending; preparation/build and pure checks pass.
+[Successor a475374 CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39190514531)
+passes Android's 168 JVM, 37 native and three Flutter checks, both Apple native
+fixtures including the third balancer profile, and the existing remote macOS
+HEV packet gates. [Windows runtime](https://github.com/XIIIFOX/flutter_vless/actions/runs/39190539040)
+passes all six jobs and 410 proxy/portable/VPN rows on 2022/2025, including the
+third balancer session and final drained origin counts. Physical iOS packet and
+full macOS system-VPN acceptance remain separate.
 An empty selector (`[""]`, including a null array element decoded as an empty
 string) matches every tag. Naming cannot isolate it. Universal prefix coverage
 also remains open; complete support needs construction-owned handler provenance
@@ -737,7 +757,7 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private address queries. Caller AAAA passes Core/Android/Windows runtime acceptance; encrypted DoH trust/name controls pass ordinary Core on all three desktop systems. Direct-only traffic passes shared Core, Android TUN, native Apple and Windows TUN gates at ba25f85. Localhost adaptation, additional DNS paths and full FakeDNS semantics remain open. |
 | 2. IPv6 | Partial; physical iOS packet gate pending | IPv6 TCP/UDP with preserved AAAA policy passes ordinary Core on all three desktop systems, actual Android TUN and Windows 2022/2025 TUN/recovery/physical-interface controls. Actual shipped macOS HEV packet controls pass remotely; iOS simulator HEV is a verified link-only stub and physical iOS remains pending. Full macOS system-VPN acceptance, IPv6-only endpoints, NAT64, cross-family handover and broader physical bypass qualification remain open. |
 | 3. Protocol/transport matrix | Partial | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP and null legacy-endpoint preparation fixes pass an eight-case pinned Core build corpus with native preparation. Imported loopback/DNS traffic passes ordinary Core acceptance on all three desktop systems at dacfd59; new protocol handshakes, XHTTP penetrate and the full matrix remain open. |
-| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes pass shared preparation/component and ordinary Core traffic checks; platform runtime acceptance is pending. Source-inbound context, explicit VPN default selection, wildcard isolation and exact adapter counters remain open. |
+| 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes pass shared component, ordinary Core and native platform traffic gates at a475374. Source-inbound context, explicit VPN default selection, wildcard isolation and exact adapter counters remain open. |
 | 5. Ports/addresses | Partial | Shared 20-case port, 12-case exact service-tag, nine-case selector-prefix, 21-case numeric API and 36-case service-listener fixtures cover allocation. Real Android/iPhone list/range/env/Unix and tag-collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. OS port checks, service-name resolution, wildcard isolation, bind retries and broader proxy-only parity remain open. |
 | 6. Assets/import syntax | Partial; data-root increment qualified | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit roots propagate across native backends; custom GeoSite traffic passes Android TUN, both Apple preview runtimes and Windows 2022/2025. Relative certificate portability, managed asset import/lifetime and explicit multi-document merging remain open. |
 | 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |

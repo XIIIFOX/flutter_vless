@@ -174,8 +174,8 @@ def main():
         binary = EVIDENCE / ('acceptance.test.exe' if os.name == 'nt' else 'acceptance.test')
         checked('acceptance-compile', [arguments.go, 'test', '-c', '-o', str(binary), './native_dns_preservation'], 300, MOBILE)
         report['acceptance_sha256'] = digest(binary)
-        # Decode/build, file-only preparers and an in-memory selector manager
-        # with inert handlers: no Core instance, listener, resolver or engine.
+        # Decode/build, file-only preparers, a static-host matcher and an inert
+        # selector manager: no Core instance, listener, resolver or engine.
         pure_tests = [PROTOCOL_TEST, 'TestProtocolCorpusBuilds', MATERIAL_TEST, 'TestNativeSelectorPrefixAllocation']
         checked('protocol-preparation-pure', [str(binary), '-test.run', '^(' + '|'.join(pure_tests) + ')$',
                 '-test.v', '-test.timeout=60s'], 75, MOBILE, runtime_environment)

@@ -31,9 +31,11 @@ import (
 	"time"
 
 	dns "github.com/miekg/dns"
+	appdns "github.com/xtls/xray-core/app/dns"
 	statscommand "github.com/xtls/xray-core/app/stats/command"
 	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/core"
+	dnsfeature "github.com/xtls/xray-core/features/dns"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
@@ -143,6 +145,46 @@ func dohDocument(proxyPort int, apiAddress, resolverAddress, question string) ma
 }
 
 func TestNativeDoHMaterialOnly(t *testing.T) {
+	// The actual static-host matcher is inert: no Core instance, DNS client,
+	// listener or resolver. Schema folding must not alter domain-rule syntax.
+	for _, tc := range []struct {
+		key, question string
+		match         bool
+	}{
+		{"resolver.invalid", "resolver.invalid", true},
+		{"full:resolver.invalid", "resolver.invalid", true},
+		{"full:ReSoLvEr.InVaLiD", "resolver.invalid", true},
+		{"FULL:resolver.invalid", "resolver.invalid", false},
+		{"full:resolver.invalid.", "resolver.invalid", false},
+		{"reſolver.invalid", "resolver.invalid", false},
+		{"full:Kelvin.invalid", "kelvin.invalid", true},
+		{"full:İnternal.invalid", "internal.invalid", true},
+	} {
+		raw, err := json.Marshal(map[string]any{"dns": map[string]any{"hosts": map[string]any{tc.key: "192.0.2.53"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := serial.DecodeJSONConfig(bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mappings, err := decoded.DNSConfig.Hosts.Build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		hosts, err := appdns.NewStaticHosts(mappings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		answer, err := hosts.Lookup(tc.question, dnsfeature.IPOption{IPv4Enable: true})
+		count := 0
+		if tc.match {
+			count = 1
+		}
+		if err != nil || len(answer) != count || tc.match && answer[0].String() != "192.0.2.53" {
+			t.Fatalf("Core static-host semantics differ for %q: %v %v", tc.key, answer, err)
+		}
+	}
 	output := new(dohOutput)
 	input := bytes.Repeat([]byte("synthetic-output"), 20000)
 	if count, err := output.Write(input); err != nil || count != len(input) {
@@ -240,13 +282,13 @@ func testNativeHTTPSDoH(t *testing.T) {
 			return
 		}
 		mu.Lock()
-		good, badCA, badName := requests["good"], requests["bad-ca"], requests["bad-name"]
+		good, full, badCA, badName := requests["good"], requests["good-full-hosts"], requests["bad-ca"], requests["bad-name"]
 		mu.Unlock()
-		if good != 4 || badCA != 0 || badName != 0 {
-			t.Error("late DoH request count changed", good, badCA, badName)
+		if good != 4 || full != 4 || badCA != 0 || badName != 0 {
+			t.Error("late DoH request count changed", good, full, badCA, badName)
 		}
 		seen, failures := origin.snapshot()
-		if !reflect.DeepEqual(seen, []string{"HTTP remote-marker.invalid", "HTTP remote-marker.invalid", "HTTP remote-marker.invalid"}) || len(failures) != 0 {
+		if !reflect.DeepEqual(seen, []string{"HTTP remote-marker.invalid", "HTTP remote-marker.invalid", "HTTP remote-marker.invalid", "HTTP remote-marker.invalid"}) || len(failures) != 0 {
 			t.Error("DoH source proxy/bootstrap marker failed", seen, failures)
 		}
 	})
@@ -330,11 +372,27 @@ func testNativeHTTPSDoH(t *testing.T) {
 	}
 	preparedPath, sourcePath := write("effective.json", prepared), write("source.json", sourceJSON)
 	_ = reservation.Close()
-	for _, variant := range []string{"good", "bad-ca", "bad-name"} {
+	for _, variant := range []string{"good", "bad-ca", "bad-name", "good-full-hosts"} {
+		childPrepared, childSource, childPort := preparedPath, sourcePath, port
+		if variant == "good-full-hosts" {
+			var fullSource map[string]any
+			if err := json.Unmarshal(sourceJSON, &fullSource); err != nil {
+				t.Fatal(err)
+			}
+			hosts := fullSource["dns"].(map[string]any)["hosts"].(map[string]any)
+			delete(hosts, "resolver.invalid")
+			hosts["full:resolver.invalid"] = "127.0.0.1"
+			fullPrepared, fullPort := prepare(t, fullSource)
+			fullJSON, err := json.Marshal(fullSource)
+			if err != nil {
+				t.Fatal(err)
+			}
+			childPrepared, childSource, childPort = write("effective-full.json", fullPrepared), write("source-full.json", fullJSON), fullPort
+		}
 		mu.Lock()
 		mode = variant
 		mu.Unlock()
-		data, err := json.Marshal(dohSpec{Prepared: preparedPath, Source: sourcePath, Port: port, API: source["api"].(map[string]any)["listen"].(string), Question: question, Mode: variant})
+		data, err := json.Marshal(dohSpec{Prepared: childPrepared, Source: childSource, Port: childPort, API: source["api"].(map[string]any)["listen"].(string), Question: question, Mode: variant})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -364,12 +422,13 @@ func testNativeHTTPSDoH(t *testing.T) {
 		mu.Lock()
 		h, r := hellos[variant], requests[variant]
 		mu.Unlock()
-		if h == 0 || variant == "good" && r != 4 || variant != "good" && r != 0 {
+		positive := variant == "good" || variant == "good-full-hosts"
+		if h == 0 || positive && r != 4 || !positive && r != 0 {
 			t.Fatal("DoH handshake/request causal control failed", variant, h, r)
 		}
 	}
 	completed = true
-	t.Log("PASS named HTTPS DoH preserves SNI/Host/path and caller A/AAAA policy; untrusted and wrong-name certificates fail without OS fallback; caller API and private endpoint pins survive")
+	t.Log("PASS named HTTPS DoH preserves bare/full: hosts, SNI/Host/path and caller A/AAAA policy; untrusted and wrong-name certificates fail without OS fallback; caller API and private endpoint pins survive")
 }
 
 func TestNativeHTTPSDoHChild(t *testing.T) {
@@ -381,7 +440,7 @@ func TestNativeHTTPSDoHChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	var spec dohSpec
-	if len(data) > 4096 || json.Unmarshal(data, &spec) != nil || (spec.Mode != "good" && spec.Mode != "bad-ca" && spec.Mode != "bad-name") {
+	if len(data) > 4096 || json.Unmarshal(data, &spec) != nil || (spec.Mode != "good" && spec.Mode != "good-full-hosts" && spec.Mode != "bad-ca" && spec.Mode != "bad-name") {
 		t.Fatal("invalid owned DoH child specification")
 	}
 	var attempts atomic.Int64
@@ -447,7 +506,7 @@ func TestNativeHTTPSDoHChild(t *testing.T) {
 		}
 	}
 	checkAPI()
-	if spec.Mode == "good" {
+	if spec.Mode == "good" || spec.Mode == "good-full-hosts" {
 		for _, udp := range []bool{false, true} {
 			for _, kind := range []uint16{dns.TypeA, dns.TypeAAAA} {
 				answer := query(t, spec.Port, udp, spec.Question, kind)

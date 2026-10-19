@@ -721,6 +721,18 @@ inline bool BootstrapStream(Json& stream, const std::vector<BootstrapEndpoint>& 
   return true;
 }
 
+inline std::string DnsDomainLower(std::string value) {
+  // Resolver names admitted below are ASCII. These are the only non-ASCII
+  // scalars which strings.ToLower in pinned Go lowers to ASCII. Schema Fold
+  // also equates long S with s, which Core DNS domain matching does not.
+  for (const auto& pair : {std::pair<std::string, std::string>{"\xC4\xB0", "i"}, {"\xE2\x84\xAA", "k"}}) {
+    size_t offset = 0;
+    while ((offset = value.find(pair.first, offset)) != std::string::npos) value.replace(offset, pair.first.size(), pair.second);
+  }
+  for (auto& c : value) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+  return value;
+}
+
 inline bool ProtectedDnsAddress(const std::string& address, const Json& hosts) {
   auto host = address;
   const auto scheme = host.find("://");
@@ -741,12 +753,16 @@ inline bool ProtectedDnsAddress(const std::string& address, const Json& hosts) {
   if (Literal4(host)) return true;
   // Named remote resolvers need a caller-owned static bootstrap. No native
   // endpoint mapping is added to this map; URLs/TLS names remain unchanged.
-  host = Fold(host);
+  host = DnsDomainLower(host);
   if (!host.empty() && host.back() == '.') host.pop_back(); // Root LookupIP trims the FQDN suffix.
   if (!hosts.is_object()) return false;
   bool found = false;
   for (auto it = hosts.begin(); it != hosts.end(); ++it) {
-    if (Fold(it.key()) != host) continue;
+    auto domain = it.key();
+    // Core recognizes the prefix case-sensitively, then lowercases only its
+    // domain value. A mapping's terminal dot is not stripped by the matcher.
+    if (domain.rfind("full:", 0) == 0) domain.erase(0, 5);
+    if (DnsDomainLower(domain) != host) continue;
     found = true;
     if (it->is_string()) { if (!Literal4(it->get<std::string>())) return false; }
     else {

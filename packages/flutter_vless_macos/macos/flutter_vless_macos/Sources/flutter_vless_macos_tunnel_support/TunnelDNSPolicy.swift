@@ -155,7 +155,15 @@ public enum TunnelDNSPolicy {
               !systemStrategy(field(dns, "queryStrategy")) else { return false }
         let hosts = field(dns, "hosts") as? [String: Any] ?? [:]
         func staticIPv4(_ host: String) -> Bool {
-            let keys = hosts.keys.filter { $0.lowercased() == hostKey(host) || $0.lowercased() == "full:" + hostKey(host) }
+            let keys = hosts.keys.filter { key in
+                // Core recognizes the literal lowercase rule prefix before
+                // folding only the domain body; FULL: is not a full rule.
+                let domain = key.hasPrefix("full:") ? String(key.dropFirst(5)) : key
+                // Go's simple lowercase maps U+0130 to ASCII i; Foundation's
+                // full mapping expands it. Keep decomposed sequences distinct.
+                let folded = domain.replacingOccurrences(of: "İ", with: "i", options: .literal).lowercased()
+                return folded == hostKey(host)
+            }
             guard keys.count == 1, let value = hosts[keys[0]] else { return false }
             if let ip = value as? String { return isIPv4(ip) }
             if let ips = value as? [String] { return !ips.isEmpty && ips.allSatisfy(isIPv4) }

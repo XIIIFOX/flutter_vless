@@ -263,11 +263,12 @@ Each controlled client runs in its own bounded process: Core's system dialer
 uses process-global DNS/handler state, and XHTTP detaches some request lifetimes
 from session cancellation. This keeps backend resolution and later tests
 independent. Failed clients retain bounded front response/status, packet sequence,
-consumed body length, origin entry and backend log evidence. Exact `dbf2ec2`
-acceptance reaches matching upload/download sessions with HTTP 200 on all three
-desktop systems, but still times out before payload qualification. An origin
-success event requires the complete body; its absence alone does not locate the
-failure. The existing payload deadline and DNS counts stay strict.
+consumed body length, origin entry and backend log evidence. The controlled
+server's explicit final rule allows only TCP to the allocated origin IP and
+port, since Core blocks private targets after VLESS by default. All other Core
+defaults and client restrictions remain in force. An origin success event
+requires the complete body. Payload qualification remains pending, with the
+existing deadline and DNS counts unchanged.
 WG/XDRIVE and the exhaustive protocol matrix remain unqualified.
 Pinned Core requires one receiver/user in the relevant `servers`/`vnext` arrays;
 multiple independent outbounds with a balancer are a different supported shape.

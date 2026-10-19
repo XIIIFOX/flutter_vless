@@ -175,7 +175,13 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 				"streamSettings": map[string]any{"network": "xhttp", "xhttpSettings": map[string]any{"path": "/fixture", "host": "backend.invalid", "mode": "packet-up"}}},
 			map[string]any{"listen": "127.0.0.1", "port": carrierPort, "protocol": "socks", "settings": map[string]any{"auth": "noauth"}},
 		},
-		"outbounds": []any{map[string]any{"protocol": "freedom", "settings": map[string]any{"domainStrategy": "ForceIPv4"}}},
+		"outbounds": []any{map[string]any{"protocol": "freedom", "settings": map[string]any{
+			"domainStrategy": "ForceIPv4",
+			// VLESS normally blocks private targets. Only this owned origin is
+			// exempt; every unmatched target keeps Core's existing defaults.
+			"finalRules": []any{map[string]any{"action": "allow", "network": "tcp",
+				"ip": []string{originAddress.Addr().String() + "/32"}, "port": strconv.Itoa(int(originAddress.Port()))}},
+		}}},
 	}
 	serverData, err := json.Marshal(serverSource)
 	if err != nil {

@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Treat root DNS hosts and inbound/outbound WebSocket headers as caller data during normalization and protected-feature checks. Preserve literal values while retaining rejection of actual unsupported XICMP and local QUIC DNS paths.
+
 * Preserve caller DNS hosts keys and values through runtime normalization, including names matching legacy stream settings. Retain TLS cleanup and add shared preparation and TUN DNS controls.
 
 * Preserve compatible FakeDNS engines and caller DNS in VPN preparation, restore domains only on the managed input, and move private DNS outside the default fake pool. Reject native-address pool overlaps before bootstrap; add shared and device regression coverage.

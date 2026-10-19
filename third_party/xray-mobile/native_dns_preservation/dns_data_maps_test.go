@@ -1,12 +1,15 @@
 package native_dns_preservation_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
 
 	appdns "github.com/xtls/xray-core/app/dns"
 	dnsfeature "github.com/xtls/xray-core/features/dns"
+	"github.com/xtls/xray-core/infra/conf/serial"
+	"github.com/xtls/xray-core/transport/internet/websocket"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -54,5 +57,38 @@ func testDNSDataMaps(t *testing.T, native bool) {
 				t.Fatal("native preparation changed the caller source", err)
 			}
 		})
+	}
+}
+
+// These strings are dictionary data in pinned Core, never active socket or
+// compatibility settings. Only Build and the inert static-host matcher run.
+func assertWebSocketDictionaryData(t *testing.T, data []byte) {
+	t.Helper()
+	document, err := serial.DecodeJSONConfig(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := document.OutboundConfigs[0].StreamSetting
+	message, err := stream.WSSettings.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := message.(*websocket.Config).Header
+	for key, want := range map[string]string{
+		"allowInsecure": "literal-header-value", "network": "MiXeD-CaSe",
+		"xHTTPSettings": "literal-alias-name", "type": "xicmp",
+		"Origin": "quic+local://literal.invalid",
+	} {
+		if headers[key] != want {
+			t.Fatalf("Core WebSocket header data changed: %s", key)
+		}
+	}
+	hosts, err := appdns.NewStaticHosts(buildRootDNSAddresses(t, data).StaticHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer, err := hosts.Lookup("type", dnsfeature.IPOption{IPv4Enable: true})
+	if err != nil || len(answer) != 1 || answer[0].String() != "192.0.2.9" {
+		t.Fatal("Core DNS alias named type is caller data", err)
 	}
 }

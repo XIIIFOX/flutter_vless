@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve WebSocket header dictionaries through full JSON imports, startup and delay checks on all four platforms. Keep header names/values separate from legacy settings; prevent Android DNS hosts and headers from being mistaken for protected socket features.
+
 * Preserve caller DNS hosts as data during raw JSON normalization, including names matching legacy settings. Accept remote DoH URL path/query data containing `+local` on Windows and caller `useSystemHosts` on Apple; retain local-DNS transport restrictions and TLS compatibility cleanup. Add shared preparation and targeted traffic regressions.
 
 * Preserve explicit nulls, empty objects and arrays, and null array elements when passing full Xray JSON through import, startup and delay checks. Retain raw FakeDNS engine semantics while keeping share-link cleanup separate.

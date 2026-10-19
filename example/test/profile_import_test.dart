@@ -23,6 +23,27 @@ void main() {
     });
   }
 
+  test('WebSocket header dictionary survives example import', () {
+    final profiles =
+        (jsonDecode(
+                  File(
+                    '../tool/fixtures/compatibility/protocols.json',
+                  ).readAsStringSync(),
+                )
+                as List<dynamic>)
+            .cast<Map<String, dynamic>>();
+    final config =
+        profiles.singleWhere(
+              (profile) => profile['name'] == 'vless_websocket_tls',
+            )['config']
+            as Map<String, dynamic>;
+    final source = jsonEncode(config);
+    for (final input in [source, '[$source]']) {
+      expect(jsonDecode(importProfile(input).config), config);
+    }
+    expect(jsonEncode(config), source);
+  });
+
   test('Raw JSON retains existing remark aliases', () {
     for (final key in ['remarks', 'remark', 'ps']) {
       final input = jsonEncode({

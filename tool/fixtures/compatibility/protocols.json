@@ -66,7 +66,11 @@
         "queryStrategy": "UseIPv4",
         "servers": [
           "tcp://9.9.9.9"
-        ]
+        ],
+        "hosts": {
+          "type": "xicmp",
+          "xicmp": "192.0.2.9"
+        }
       },
       "outbounds": [
         {
@@ -88,7 +92,12 @@
             "wsSettings": {
               "path": "/ws-fixture",
               "headers": {
-                "Host": "websocket.invalid"
+                "Host": "websocket.invalid",
+                "allowInsecure": "literal-header-value",
+                "network": "MiXeD-CaSe",
+                "xHTTPSettings": "literal-alias-name",
+                "type": "xicmp",
+                "Origin": "quic+local://literal.invalid"
               }
             },
             "address": "ignored.invalid",

@@ -92,6 +92,9 @@ func TestProtocolCorpusBuilds(t *testing.T) {
 			if _, err := decoded.Build(); err != nil {
 				t.Fatal("source fixture is not valid pinned Core configuration", err)
 			}
+			if tc.Name == "vless_websocket_tls" {
+				assertWebSocketDictionaryData(t, data)
+			}
 		})
 	}
 	testListenAddresses(t, false)
@@ -133,6 +136,9 @@ func testNativeProtocolPreparation(t *testing.T) {
 			}
 			if _, err := decoded.Build(); err != nil {
 				t.Fatal("native preparation broke valid Core configuration", err)
+			}
+			if tc.Name == "vless_websocket_tls" {
+				assertWebSocketDictionaryData(t, prepared)
 			}
 			var effective map[string]any
 			if err := json.Unmarshal(prepared, &effective); err != nil {

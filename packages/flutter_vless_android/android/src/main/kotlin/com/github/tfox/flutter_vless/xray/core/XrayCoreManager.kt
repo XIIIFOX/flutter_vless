@@ -51,7 +51,17 @@ object XrayCoreManager {
         true
     } catch (_: IOException) { false }
 
-    private fun normalizeRuntimeConfig(value: Any?, atRoot: Boolean = true, dnsRoot: Boolean = false): Any? {
+    private fun schemaField(key: String): String =
+        key.replace('ſ', 's').replace('K', 'k').lowercase(java.util.Locale.ROOT)
+
+    /** Core treats these exact schema-owned maps as caller names and values. */
+    private fun callerDictionary(path: List<String>): Boolean =
+        path == listOf("dns", "hosts") ||
+            (path.size == 5 && path[0] in setOf("inbounds", "outbounds") &&
+                path.subList(1, 5) == listOf("*", "streamsettings", "wssettings", "headers"))
+
+    private fun normalizeRuntimeConfig(value: Any?, path: List<String> = emptyList()): Any? {
+        if (value is JSONObject && callerDictionary(path)) return value
         return when (value) {
             is JSONObject -> {
                 val normalized = JSONObject()
@@ -65,19 +75,14 @@ object XrayCoreManager {
                     val key = keys.next()
                     if (key == "allowInsecure") continue
 
-                    val field = key.replace('ſ', 's').replace('K', 'k').lowercase(java.util.Locale.ROOT)
-                    val isDnsRoot = atRoot && field == "dns"
+                    val field = schemaField(key)
+                    val isDnsRoot = path.isEmpty() && field == "dns"
                     val targetKey = if (isDnsRoot) "dns" else aliases[key] ?: key
                     require(!isDnsRoot || !normalized.has(targetKey)) { "Duplicate native configuration field" }
                     if (aliases.containsKey(key) && value.has(targetKey)) continue
 
                     val child = value.opt(key)
-                    // DNS host keys and address values are caller data, not
-                    // configuration fields. Only this schema-owned dictionary
-                    // bypasses compatibility cleanup; TLS and other DNS fields
-                    // still take the ordinary normalization path.
-                    val normalizedValue = if (dnsRoot && field == "hosts" && child is JSONObject) child
-                        else normalizeRuntimeConfig(child, atRoot = false, dnsRoot = isDnsRoot)
+                    val normalizedValue = normalizeRuntimeConfig(child, path + field)
                     if (targetKey == "network" && normalizedValue is String) {
                         normalized.put(targetKey, normalizedValue.lowercase())
                     } else {
@@ -89,7 +94,7 @@ object XrayCoreManager {
             is JSONArray -> {
                 val normalized = JSONArray()
                 for (i in 0 until value.length()) {
-                    normalized.put(normalizeRuntimeConfig(value.opt(i), atRoot = false))
+                    normalized.put(normalizeRuntimeConfig(value.opt(i), path + "*"))
                 }
                 normalized
             }
@@ -129,16 +134,19 @@ object XrayCoreManager {
     }
 
     /** These upstream paths open sockets outside Xray's controller interfaces. */
-    internal fun requireProtectedSocketSupport(value: Any?) {
+    internal fun requireProtectedSocketSupport(value: Any?) = requireProtectedSocketSupport(value, emptyList())
+
+    private fun requireProtectedSocketSupport(value: Any?, path: List<String>) {
+        if (value is JSONObject && callerDictionary(path)) return
         when (value) {
             is JSONObject -> value.keys().forEach { key ->
                 val child = value.opt(key)
                 require(!(key.equals("type", ignoreCase = true) && child is String && child.equals("xicmp", ignoreCase = true))) {
                     "xicmp is unavailable in protected VPN mode"
                 }
-                requireProtectedSocketSupport(child)
+                requireProtectedSocketSupport(child, path + schemaField(key))
             }
-            is JSONArray -> for (index in 0 until value.length()) requireProtectedSocketSupport(value.opt(index))
+            is JSONArray -> for (index in 0 until value.length()) requireProtectedSocketSupport(value.opt(index), path + "*")
             is String -> require(!value.startsWith("quic+local://", ignoreCase = true)) {
                 "quic+local DNS is unavailable in protected VPN mode; use https+local or tcp+local"
             }

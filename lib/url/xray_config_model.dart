@@ -418,12 +418,22 @@ bool _matchesXrayField(String key, String field) =>
     key.replaceAll('\u017f', 's').replaceAll('\u212a', 'k').toLowerCase() ==
     field;
 
+bool _isWebSocketHeaders(List<String> path) =>
+    path.length == 5 &&
+    (_matchesXrayField(path[0], 'inbounds') ||
+        _matchesXrayField(path[0], 'outbounds')) &&
+    path[1] == '*' &&
+    _matchesXrayField(path[2], 'streamsettings') &&
+    _matchesXrayField(path[3], 'wssettings') &&
+    _matchesXrayField(path[4], 'headers');
+
 dynamic _sanitizeXrayJson(
   dynamic params, {
   required bool preserveStructure,
   bool root = false,
   bool dnsFields = false,
   bool dictionaryData = false,
+  List<String> path = const [],
 }) {
   if (params is XrayJsonModel) {
     return _sanitizeXrayJson(
@@ -432,6 +442,7 @@ dynamic _sanitizeXrayJson(
       root: root,
       dnsFields: dnsFields,
       dictionaryData: dictionaryData,
+      path: path,
     );
   }
   if (params is Map) {
@@ -439,8 +450,8 @@ dynamic _sanitizeXrayJson(
       params.entries
           .map((entry) => MapEntry(entry.key.toString(), entry.value)),
     );
-    // DNS hosts keys and values are caller data, including names which happen
-    // to match legacy stream fields. Only schema objects need that cleanup.
+    // DNS hosts and WebSocket headers contain caller keys and values, including
+    // names which match legacy stream fields. Only schema needs that cleanup.
     if (!dictionaryData) {
       _normalizeStreamSettingsAliases(source);
       source.remove('allowInsecure');
@@ -448,12 +459,15 @@ dynamic _sanitizeXrayJson(
 
     final map = <String, dynamic>{};
     source.forEach((key, value) {
+      final childPath = [...path, key];
       final sanitized = _sanitizeXrayJson(
         value,
         preserveStructure: preserveStructure,
         dnsFields: root && _matchesXrayField(key, 'dns'),
-        dictionaryData:
-            dictionaryData || (dnsFields && _matchesXrayField(key, 'hosts')),
+        dictionaryData: dictionaryData ||
+            (dnsFields && _matchesXrayField(key, 'hosts')) ||
+            _isWebSocketHeaders(childPath),
+        path: childPath,
       );
       if (preserveStructure || sanitized != null) {
         map[key] = sanitized;
@@ -468,6 +482,7 @@ dynamic _sanitizeXrayJson(
         value,
         preserveStructure: preserveStructure,
         dictionaryData: dictionaryData,
+        path: [...path, '*'],
       );
       if (preserveStructure || sanitized != null) {
         list.add(sanitized);

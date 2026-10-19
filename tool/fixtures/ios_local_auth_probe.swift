@@ -334,3 +334,97 @@ func runAssetRuntimeChecks() throws {
     precondition(!FileManager.default.fileExists(atPath: root.path))
     print("ASSET_CUSTOM_ROOT_RUNTIME_PASS")
 }
+
+
+func runDirectOnlyRuntimeChecks() throws {
+    let encoded = "__DIRECT_ONLY_FIXTURE_JSON_BASE64__"
+    let cases = try JSONSerialization.jsonObject(with: Data(base64Encoded: encoded)!) as! [[String: Any]]
+    precondition(cases.count == 2)
+    let origin = LocalProbeOrigin(port: 18096)
+    let trap = DNSDirectFallbackTrap(port: 18104)
+    defer { XRayStop(); origin.stop(); trap.stop() }
+    let credentials = try LocalProxyCredentials.generate()
+    let expected = Array("HTTP/1.1 204 ".utf8)
+    for (index, item) in cases.enumerated() {
+        var raw = item["config"] as! [String: Any]
+        // Keep both allowed and blocked targets on the controlled origin. A
+        // lost caller block must yield actual204bytes and fail this fixture.
+        var dns = raw["dns"] as! [String: Any]
+        var hosts = dns["hosts"] as! [String: Any]
+        hosts["direct-only.invalid"] = "127.0.0.1"; hosts["blocked.invalid"] = "127.0.0.1"
+        hosts["dns-proof.invalid"] = "192.0.2.14"
+        dns["hosts"] = hosts; dns["servers"] = ["tcp://127.0.0.1:18104"]
+        raw["dns"] = dns
+        raw["api"] = ["tag": "caller-direct-api", "listen": "127.0.0.1:10808", "services": ["StatsService"]]
+        raw["stats"] = [String: Any]()
+        raw["policy"] = ["system": ["statsInboundUplink": false, "statsInboundDownlink": false,
+            "statsOutboundUplink": false, "statsOutboundDownlink": false]]
+        let sourceOutbounds = raw["outbounds"] as! [[String: Any]]
+        let source = try JSONSerialization.data(withJSONObject: raw)
+        guard let prepared = TunnelXrayConfigPreparer.prepare(jsonData: source, credentials: credentials, resolveIPv4: { _ in
+            preconditionFailure("Direct-only runtime must not bootstrap a proxy endpoint")
+        }) else { preconditionFailure("Direct-only runtime preparation failed") }
+        let effective = try JSONSerialization.jsonObject(with: prepared.data) as! [String: Any]
+        precondition(effective["dns"] as! NSDictionary == dns as NSDictionary)
+        precondition(effective["api"] as! NSDictionary == raw["api"] as! NSDictionary)
+        let outbounds = effective["outbounds"] as! [[String: Any]]
+        precondition(outbounds.prefix(sourceOutbounds.count).map { $0["protocol"] as! String } == sourceOutbounds.map { $0["protocol"] as! String })
+        precondition(outbounds.prefix(sourceOutbounds.count).map { $0["tag"] as! String } == sourceOutbounds.map { $0["tag"] as! String })
+        let port = TunnelXrayConfigPreparer.parseConfig(jsonData: prepared.data)!.inboundPort
+        var error: NSError?
+        precondition(XRayStartPrivate(prepared.data, ProbeLogger(), &error))
+        defer { XRayStop() }
+        func checkAPI() {
+            let fd = openLoopback(10808); defer { close(fd) }
+            precondition(LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".utf8) + [0, 0, 0, 4, 0, 0, 0, 0, 0]))
+            let frame = LocalSOCKS5Client.receiveExactly(fd: fd, count: 9) ?? []
+            precondition(frame.count == 9 && frame[3] == 4 && frame.suffix(4).allSatisfy { $0 == 0 })
+        }
+        checkAPI()
+        let fd = try LocalSOCKS5Client.openConnection(proxyPort: port, credentials: credentials, host: "direct-only.invalid", port: 18096)
+        precondition(LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("GET /direct-only HTTP/1.1\r\nHost: direct-only.invalid\r\nConnection: close\r\n\r\n".utf8)))
+        let response = LocalSOCKS5Client.receiveExactly(fd: fd, count: expected.count) ?? []
+        close(fd); precondition(response == expected)
+        precondition(origin.state().0 == index + 1)
+        do {
+            let blocked = openLoopback(port); defer { close(blocked) }
+            precondition(LocalSOCKS5Client.authenticate(fd: blocked, credentials: credentials))
+            // Distinguish peer closure/reset from a read timeout; a silent
+            // stalled request is not evidence that caller blocking survived.
+            func readOrClosed(_ count: Int) -> [UInt8]? {
+                var bytes = [UInt8](repeating: 0, count: count); var offset = 0
+                while offset < count {
+                    let n = bytes.withUnsafeMutableBytes { recv(blocked, $0.baseAddress!.advanced(by: offset), count - offset, 0) }
+                    if n == 0 || (n < 0 && errno == ECONNRESET) { return nil }
+                    if n < 0 && errno == EINTR { continue }
+                    precondition(n > 0, "Blocked connection timed out or failed without an explicit refusal")
+                    offset += n
+                }
+                return bytes
+            }
+            let host = Array("blocked.invalid".utf8)
+            precondition(LocalSOCKS5Client.sendAll(fd: blocked, bytes: [5, 1, 0, 3, UInt8(host.count)] + host + [UInt8(18096 >> 8), UInt8(18096 & 255)]))
+            if let header = readOrClosed(4) {
+                precondition(header[0] == 5 && header[2] == 0)
+                if header[1] == 0 {
+                    precondition(header[3] == 1 || header[3] == 4)
+                    if readOrClosed(header[3] == 1 ? 6 : 18) != nil {
+                        _ = LocalSOCKS5Client.sendAll(fd: blocked, bytes: Array("GET /blocked HTTP/1.1\r\nHost: blocked.invalid\r\nConnection: close\r\n\r\n".utf8))
+                        precondition(readOrClosed(1) == nil, "Blocked connection returned payload bytes")
+                    }
+                }
+            }
+        }
+        precondition(origin.state().0 == index + 1, "Caller block/default order was bypassed")
+        for udp in [false, true] {
+            let id = UInt16(0x5800 + index * 2 + (udp ? 1 : 0))
+            let answer = try queryVirtualDNS(proxyPort: port, credentials: credentials, udp: udp, id: id)
+            precondition(answer != nil && answer!.prefix(2).elementsEqual([UInt8(id >> 8), UInt8(id & 255)]))
+            precondition(answer![3] & 15 == 0 && answer![6] == 0 && answer![7] == 1 && answer!.suffix(4).elementsEqual([192, 0, 2, 14]))
+        }
+        precondition(trap.count() == 0, "Caller static hosts must not query any resolver")
+        checkAPI(); XRayStop()
+        print("DIRECT_ONLY_RUNTIME_PASS=\(index)")
+    }
+    precondition(origin.state().0 == 2 && !origin.state().1)
+}

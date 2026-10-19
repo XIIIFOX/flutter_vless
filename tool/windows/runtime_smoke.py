@@ -191,7 +191,14 @@ def exact(sock, count):
 
 
 class Direct(BaseHTTPRequestHandler):
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(5)
+
     def do_GET(self):
+        if hasattr(self.server, "direct_only_lock"):
+            with self.server.direct_only_lock:
+                self.server.direct_only_observed.append(self.headers.get("Host"))
         body = b"DIRECT-FIXTURE"
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
@@ -269,6 +276,48 @@ class Socks(socketserver.BaseRequestHandler):
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
+
+
+class DirectDns(socketserver.BaseRequestHandler):
+    def handle(self):
+        self.request.settimeout(5)
+        try:
+            query = exact(self.request, int.from_bytes(exact(self.request, 2), "big"))
+            _, end = dns_question(query)
+            with self.server.questions_lock:
+                self.server.questions.append(query[12:end].hex())
+            answer = dns_response(query)
+            self.request.sendall(len(answer).to_bytes(2, "big") + answer)
+        except (OSError, EOFError, ValueError):
+            pass
+
+
+def direct_only_config(index, address, dns_port):
+    corpus = json.loads((Path(__file__).resolve().parents[2] / "tool/fixtures/compatibility/direct-only.json").read_text(encoding="utf-8"))
+    assert index in (0, 1) and len(corpus) == 2 and 1 <= dns_port <= 65535
+    socket.inet_aton(address)  # The controlled fixture endpoint is numeric, never an OS lookup.
+    profile = corpus[index]["config"]
+    profile["dns"]["hosts"]["direct-only.invalid"] = address
+    profile["dns"]["servers"] = [f"tcp://{address}:{dns_port}"]
+    direct = next(outbound for outbound in profile["outbounds"] if outbound["tag"] == "direct")
+    direct["settings"]["redirect"] = address + ":0"  # Preserve HTTP and resolver ports.
+    assert all(outbound["protocol"] in ("freedom", "direct", "blackhole", "block") for outbound in profile["outbounds"])
+    return profile
+
+
+def direct_only_dns(server, tcp):
+    name = uuid.uuid4().hex + ".invalid"
+    question = b"\x20" + name[:32].encode() + b"\x07invalid\x00\x00\x01\x00\x01"
+    query = b"\x12\x34\x01\x00\x00\x01" + bytes(6) + question
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as sock:
+        sock.settimeout(5); sock.connect(("198.18.0.2", 53))
+        assert sock.getsockname()[0] == "10.0.85.2", "Direct-only DNS bypassed the TUN"
+        sock.sendall((len(query).to_bytes(2, "big") if tcp else b"") + query)
+        answer = exact(sock, int.from_bytes(exact(sock, 2), "big")) if tcp else sock.recv(4096)
+    assert answer[:2] == query[:2] and answer[3] & 15 == 0 and answer[12:12 + len(question)] == question \
+        and answer.endswith(b"\xc6\x33\x64\x07"), "Direct-only DNS reply changed"
+    with server.questions_lock:
+        assert question.hex() in server.questions, "Direct-only DNS did not reach the numeric TCP resolver"
 
 
 def request(host, vpn, loopback=False, proxy_port=None):
@@ -616,6 +665,67 @@ def adapter_datagram(directory, subnet, ipv6, denied):
     return f"{verdict}; control packet {'absent' if denied else 'observed'} at adapter"
 
 
+def direct_only_gate(probe, directory, address, dns, origin, results):
+    origin.direct_only_observed, origin.direct_only_lock = [], threading.Lock()
+    for index in (0, 1):
+        label = "vpn-direct-only-" + ("freedom-default" if index == 0 else "block-default")
+        profile, stop, state, guard_stop = [directory / (label + suffix) for suffix in (".json", ".stop", ".state.json", ".guard-stop")]
+        for stale in (stop, state, guard_stop):
+            stale.unlink(missing_ok=True)
+        profile.write_text(json.dumps(direct_only_config(index, address, dns.server_address[1])))
+        log_path = directory / (label + ".log")
+        with log_path.open("w") as log:
+            process = subprocess.Popen([str(probe), "run-vpn", str(profile), "120", str(stop), str(state)],
+                                       cwd=directory, stdout=log, stderr=log)
+            guard = None
+            try:
+                guard = subprocess.Popen([str(probe), "guard", str(process.pid), "120", str(guard_stop)],
+                                         cwd=directory, stdout=log, stderr=log)
+                deadline = time.monotonic() + 65
+                while "START_RETURN=1" not in log_path.read_text(errors="replace"):
+                    assert process.poll() is None and time.monotonic() < deadline, "Direct-only VPN did not become ready"
+                    time.sleep(0.1)
+                assert request("direct-only.invalid", True) == "DIRECT-FIXTURE", "Direct-only HTTP bytes failed"
+                try:
+                    request("blocked.invalid", True)
+                except (OSError, EOFError, RuntimeError):
+                    pass
+                else:
+                    raise AssertionError("Direct-only caller domain block was bypassed")
+                assert request("direct-only.invalid", True) == "DIRECT-FIXTURE", "Direct-only HTTP did not survive the blocked request"
+                with origin.direct_only_lock:
+                    assert origin.direct_only_observed.count("direct-only.invalid") == 2 * (index + 1) \
+                        and "blocked.invalid" not in origin.direct_only_observed, "Caller domain block reached the controlled origin"
+                for tcp in (False, True):
+                    direct_only_dns(dns, tcp)
+                results.append(dict(mode=label, check="no-proxy HTTP, caller domain block and numeric TCP root DNS via virtual TCP/UDP", passed=True))
+                stop.touch()
+                assert process.wait(timeout=25) == 0, "Direct-only VPN Stop failed"
+                assert native(probe, "policy-count") == "0", "Direct-only Stop retained WFP filters"
+                inventory = json.loads(subprocess.check_output(["powershell", "-NoProfile", "-Command",
+                    "[pscustomobject]@{Routes=@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1','::/1','8000::/1') }).Count; "
+                    "IPv6Addresses=@(Get-NetIPAddress -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -eq 'flutter_vless_tun' -and $_.IPAddress -eq 'fd00:198:18::2' }).Count} | ConvertTo-Json -Compress"], text=True, timeout=25))
+                assert inventory == {"Routes": 0, "IPv6Addresses": 0}, "Direct-only Stop retained tunnel routes/address"
+                results.append(dict(mode=label, check="explicit Stop removes owned WFP, capture routes and IPv6 address", passed=True))
+            finally:
+                try:
+                    if process.poll() is None:
+                        stop.touch()
+                        try:
+                            process.wait(timeout=15)
+                        except subprocess.TimeoutExpired:
+                            process.kill(); process.wait(timeout=5)
+                    native(probe, "release-protection")
+                finally:
+                    guard_stop.touch()
+                    if guard is not None:
+                        try:
+                            guard.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            guard.kill(); guard.wait(timeout=5)
+        time.sleep(2)
+
+
 def main():
     global PROBE, REAL_DNS
     parser = argparse.ArgumentParser()
@@ -660,6 +770,7 @@ def main():
         # on that interface, not a loopback-only target on another interface.
         servers = [ThreadingHTTPServer((direct_address, 0), Direct),
                    Server((direct_address, 0), Socks)]
+        servers[0].daemon_threads = False  # Join bounded HTTP callbacks before final direct-only observations.
         PORTS["direct"] = servers[0].server_address[1]
         PORTS["proxy"] = servers[1].server_address[1]
         if args.vpn:
@@ -673,6 +784,10 @@ def main():
             assert relay.server_address == servers[1].server_address, "IPv6 proxy UDP relay changed endpoint"
             servers.append(relay)
             servers.append(ThreadingHTTPServer(("127.0.0.1", PORTS["direct"]), Direct))
+            direct_dns = Server((direct_address, 0), DirectDns)
+            direct_dns.daemon_threads = False  # server_close joins the bounded, owned DNS callbacks.
+            direct_dns.questions, direct_dns.questions_lock = [], threading.Lock()
+            servers.append(direct_dns)
         for server in servers:
             threading.Thread(target=server.serve_forever, daemon=True).start()
         with socket.socket() as candidate:
@@ -939,6 +1054,8 @@ def main():
                             guard.wait(timeout=10)
             # Stop removes the Wintun adapter; allow the next creation to settle.
             time.sleep(2)
+        if args.vpn:
+            direct_only_gate(probe, directory, direct_address, direct_dns, servers[0], results)
     finally:
         for process, stop in adapters:
             stop.touch()
@@ -955,6 +1072,11 @@ def main():
         for server in servers:
             server.shutdown()
             server.server_close()
+        if servers and hasattr(servers[0], "direct_only_lock"):
+            with servers[0].direct_only_lock:
+                clean = servers[0].direct_only_observed.count("direct-only.invalid") == 4 \
+                    and "blocked.invalid" not in servers[0].direct_only_observed
+            results.append(dict(check="direct-only origin counts after owned callbacks drain", passed=clean))
         if ipv6_payload is not None:
             try:
                 ipv6_payload.require_clean()

@@ -128,7 +128,7 @@ final class TunnelXrayConfigPreparerTests: XCTestCase {
         XCTAssertFalse(result.proxyUsesXhttp)
         XCTAssertEqual(vnext[0]["address"] as? String, "reality.example.com")
         XCTAssertEqual(result.bootstrapAddresses, ["203.0.113.10"])
-        XCTAssertTrue(result.logMessages.contains("Configured system IPv4 DNS through the caller Core DNS policy"))
+        XCTAssertTrue(result.logMessages.contains("Configured system address DNS through the caller Core DNS policy"))
     }
 
     func testParsesInboundPortAndProxyServerAcrossProtocols() throws {

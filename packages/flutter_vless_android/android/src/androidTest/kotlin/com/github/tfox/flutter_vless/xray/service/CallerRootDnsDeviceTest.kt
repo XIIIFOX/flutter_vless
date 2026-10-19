@@ -32,6 +32,8 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketException
+import java.net.SocketTimeoutException
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -149,7 +151,7 @@ class CallerRootDnsDeviceTest {
         if (controlled) assertArrayEquals(byteArrayOf(10, 0, 2, 2), response.takeLast(4).toByteArray())
     }
 
-    private fun http(host: String = "10.0.2.2") = Socket().use { socket ->
+    private fun httpResponse(host: String): String = Socket().use { socket ->
         socket.soTimeout = 3000
         socket.connect(InetSocketAddress(host, 18083), 3000)
         socket.getOutputStream().write("GET /?caller-dns=$run HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n".toByteArray())
@@ -159,8 +161,11 @@ class CallerRootDnsDeviceTest {
             if (size < 0) break
             bytes.write(chunk, 0, size)
         }
-        assertTrue("No real HTTP fixture bytes through TUN", bytes.toString("UTF-8").contains("flutter-vless-direct-bypass"))
+        bytes.toString("UTF-8")
     }
+
+    private fun http(host: String = "10.0.2.2") =
+        assertTrue("No real HTTP fixture bytes through TUN", httpResponse(host).contains("flutter-vless-direct-bypass"))
 
     @Test fun callerHostsPerDomainAndDnsTagsResolveViaProductionTun() {
         // A VPN also carries Android background DNS. Prove that declining one
@@ -276,6 +281,61 @@ class CallerRootDnsDeviceTest {
                 http()
             } finally { stop() }
             http() // Stop also restores ordinary emulator HTTP connectivity.
+        }
+    }
+
+    @Test fun directOnlyCallerDnsAndBlockingSurviveProductionTun() {
+        val corpus = InstrumentationRegistry.getInstrumentation().context.assets.open("direct-only.json")
+            .bufferedReader().use { JSONArray(it.readText()) }
+        assertEquals("Shared direct-only corpus changed", 2, corpus.length())
+        for (index in 0 until corpus.length()) {
+            val original = corpus.getJSONObject(index).getJSONObject("config"); val originalBytes = original.toString()
+            DnsFixture().use { fixture ->
+                val source = JSONObject(originalBytes)
+                val dns = source.getJSONObject("dns")
+                // Both destinations are known reachable. A missing block rule
+                // would return the same HTTP marker as the positive control.
+                for (host in listOf("direct-only.invalid", "blocked.invalid")) {
+                    dns.getJSONObject("hosts").put(host, "10.0.2.2")
+                    fixture.allowOwnedName(host)
+                }
+                dns.put("disableCache", true).put("servers", JSONArray().put("tcp://127.0.0.1:${fixture.port}"))
+                val before = source.toString()
+                http() // The fixture is reachable before applying either policy.
+                try {
+                    start(source)
+                    val udp = name("direct-only-udp-$index"); val tcp = name("direct-only-tcp-$index")
+                    assertA(query(udp, false)); assertA(query(tcp, true))
+                    assertTrue(InetAddress.getAllByName("direct-only.invalid").any { it.hostAddress == "10.0.2.2" })
+                    assertTrue(InetAddress.getAllByName("blocked.invalid").any { it.hostAddress == "10.0.2.2" })
+                    http("direct-only.invalid")
+                    var deniedBytes = 0
+                    var deniedClosed = false
+                    try {
+                        Socket().use { socket ->
+                            socket.soTimeout = 3000
+                            socket.connect(InetSocketAddress("blocked.invalid", 18083), 3000)
+                            socket.getOutputStream().write("GET /?caller-dns=$run HTTP/1.1\r\nHost: blocked.invalid\r\nConnection: close\r\n\r\n".toByteArray())
+                            val bytes = ByteArray(1024)
+                            while (deniedBytes < 8192) {
+                                val count = socket.getInputStream().read(bytes, 0, minOf(bytes.size, 8192 - deniedBytes))
+                                if (count < 0) { deniedClosed = true; break }
+                                deniedBytes += count
+                            }
+                        }
+                    } catch (error: SocketTimeoutException) {
+                        throw AssertionError("Caller blocking only timed out without a rejection or closure", error)
+                    } catch (_: SocketException) { deniedClosed = true }
+                    assertEquals("Caller blocking returned HTTP response bytes", 0, deniedBytes)
+                    assertTrue("Caller blocking did not reject or close the connection", deniedClosed)
+                    val observed = fixture.observations()
+                    for (expected in listOf(udp, tcp)) assertTrue("Caller direct DNS route was not used", expected to 1 in observed)
+                    assertFalse("Caller static hosts escaped to DNS", observed.any { it.first in setOf("direct-only.invalid", "blocked.invalid") })
+                    assertEquals(before, source.toString())
+                    assertEquals(originalBytes, original.toString())
+                } finally { stop() }
+                http() // Each profile must restore ordinary connectivity before the next starts.
+            }
         }
     }
 

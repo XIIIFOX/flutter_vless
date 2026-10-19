@@ -1,5 +1,6 @@
 ## 1.1.7
 
+* Admit direct-only Apple/Windows VPN profiles with explicit caller DNS. Preserve the first outbound, caller domain/DNS routes and existing physical dialing policy; add shared preparation and platform HTTP/DNS/blocking regressions.
 * Bound Android startup authentication and packet readiness to one owned-process deadline. Wait only for native connection-refused before the handshake; retain immediate failure for permissions, credentials and protocol errors. Add encrypted DoH trust/name acceptance fixtures and separate HEV simulator linking from physical iOS packet qualification.
 * Capture IPv6 payload in the Android and Windows tunnels, retain Apple capture, and delegate private A/AAAA queries to caller DNS. Remove managed IPv6 routing blocks while retaining caller rules and Windows physical-interface protection; add controlled TCP/UDP packet regressions. IPv6-only underlay, NAT64 and handover qualification remain separate.
 * Honor explicit data-asset directories on Android and Windows across preflight, launch and saved recovery profiles. Permit custom-only or empty asset roots on Apple, validate referenced files with Core, and keep certificate lookup independent. Add shared custom GeoSite and platform traffic regressions.

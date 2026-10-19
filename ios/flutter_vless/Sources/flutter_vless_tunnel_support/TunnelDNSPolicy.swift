@@ -37,17 +37,17 @@ public enum TunnelDNSPolicy {
         // Admission is transactional: a failed bootstrap must not partially
         // rewrite a caller dictionary which might be retried.
         guard var output = TunnelConfigKeys.normalize(config),
-              var outbounds = output["outbounds"] as? [[String: Any]],
-              let primary = primaryEndpointIndex(in: outbounds) else { return nil }
+              var outbounds = output["outbounds"] as? [[String: Any]], !outbounds.isEmpty else { return nil }
+        let primary = primaryEndpointIndex(in: outbounds)
         let tags = outbounds.compactMap { $0["tag"] as? String }.filter { !$0.isEmpty }
         guard Set(tags).count == tags.count else { return nil }
         var allocator = XrayServiceTags(configuration: output)
         let relay = allocator.next("flutter-vless-system-dns")
         let denied = allocator.next("flutter-vless-bootstrap-block")
-        if (outbounds[primary]["tag"] as? String ?? "").isEmpty {
+        if let primary, (outbounds[primary]["tag"] as? String ?? "").isEmpty {
             outbounds[primary]["tag"] = allocator.next("flutter-vless-dns-proxy")
         }
-        let selected = outbounds[primary]["tag"] as! String
+        let selected = primary.flatMap { outbounds[$0]["tag"] as? String }
         var privateRules: [[String: Any]] = []
         var generated: [[String: Any]] = []
         var resolved: [String: String] = [:]
@@ -141,7 +141,7 @@ public enum TunnelDNSPolicy {
     }
 
     private static func prepareDNS(_ dns: inout [String: Any], allocator: inout XrayServiceTags,
-                                   selected: String, rules: inout [[String: Any]]) -> Bool {
+                                   selected: String?, rules: inout [[String: Any]]) -> Bool {
         // Read aliases without normalizing caller DNS maps or nested fields.
         func field(_ object: [String: Any], _ name: String) -> Any? {
             object.first { XrayJSONField.matches($0.key, name) }?.value
@@ -178,6 +178,9 @@ public enum TunnelDNSPolicy {
             else { return false }
             guard !systemStrategy(field(entry, "queryStrategy")) else { return false }
             if address.lowercased() == "localhost" || address.isEmpty {
+                // Explicit remote caller DNS needs no selected proxy. Only the
+                // native protected default requires a qualified detour.
+                guard let selected else { return false }
                 let addressKey = entry.keys.first { XrayJSONField.matches($0, "address") } ?? "address"
                 entry[addressKey] = "tcp://1.1.1.1"
                 var tag = field(entry, "tag") as? String ?? ""

@@ -128,6 +128,40 @@ class AndroidTunnelDnsPolicyTest {
         }
     }
 
+    @Test fun sharedDirectOnlyProfilesPreserveCallerDnsOutboundOrderAndBlockingRules() {
+        val cases = JSONArray(requireNotNull(javaClass.getResource("/direct-only.json")).readText())
+        assertEquals(2, cases.length())
+        for (index in 0 until cases.length()) {
+            val item = cases.getJSONObject(index); val label = item.getString("name")
+            val input = item.getJSONObject("config"); val before = input.toString()
+            val prepared = AndroidTunnelDnsPolicy.prepare(before, "config") {
+                error("$label must not require a proxy endpoint or wrapper DNS lookup")
+            }
+            val profile = com.github.tfox.flutter_vless.xray.dto.XrayConfig(V2RAY_FULL_JSON_CONFIG = prepared.configJson)
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(profile, java.io.File("build/test-files/direct-only"),
+                LocalProxyCredentials("direct-fixture-user", "direct-fixture-password"), prepared)
+            assertEquals(label, input.getJSONObject("dns").toString(), runtime.getJSONObject("dns").toString())
+            val expected = input.getJSONArray("outbounds"); val actual = runtime.getJSONArray("outbounds")
+            assertEquals(label, expected.length() + 1, actual.length())
+            for (outbound in 0 until expected.length())
+                assertEquals("$label/outbound$outbound", expected.getJSONObject(outbound).toString(), actual.getJSONObject(outbound).toString())
+            val originalRules = input.getJSONObject("routing").getJSONArray("rules")
+            val actualRules = runtime.getJSONObject("routing").getJSONArray("rules")
+            assertTrue(label, actualRules.length() >= originalRules.length())
+            val start = actualRules.length() - originalRules.length()
+            for (rule in 0 until originalRules.length())
+                assertEquals("$label/rule$rule", originalRules.getJSONObject(rule).toString(), actualRules.getJSONObject(start + rule).toString())
+            val relayTag = actual.getJSONObject(expected.length()).getString("tag")
+            val bridge = (0 until actualRules.length()).map(actualRules::getJSONObject).single { rule ->
+                rule.optString("outboundTag") == relayTag && rule.optString("port") == "53"
+            }
+            assertEquals(prepared.managedInboundTag, bridge.getJSONArray("inboundTag").getString(0))
+            assertEquals("${AndroidTunnelDnsPolicy.VIRTUAL_SERVER}/32", bridge.getJSONArray("ip").getString(0))
+            assertTrue(prepared.bootstrapHostnames.isEmpty()); assertTrue(prepared.bootstrapAddresses.isEmpty())
+            assertEquals(label, before, input.toString())
+        }
+    }
+
     @Test fun configModeReservesPrivateIdentitiesWithoutRenamingCallerDnsOrInputTags() {
         val input = config(outbound(tag = AndroidTunnelDnsPolicy.RELAY_TAG))
         input.getJSONObject("dns").put("tag", "flutter-vless-system-dns-1")

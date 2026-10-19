@@ -4,6 +4,77 @@
 #include <fstream>
 using namespace flutter_vless::xray_config;
 void Require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+void DirectOnlyCases(const std::string& only = "") {
+  for (const auto* protocol : {"freedom", "direct"}) {
+    if (!only.empty() && only != protocol) continue;
+    Json source = {
+        {"log", {{"loglevel", "none"}}},
+        {"outbounds", Json::array({
+            {{"protocol", protocol}, {"tag", "direct"}, {"settings", {{"domainStrategy", "AsIs"}}}},
+            {{"protocol", "blackhole"}, {"tag", "blocked"}}})},
+        {"dns", {{"tag", "caller-direct-dns"}, {"queryStrategy", "UseIPv4"},
+            {"hosts", {{"direct-only.invalid", "127.0.0.1"}, {"blocked.invalid", "192.0.2.80"}}},
+            {"servers", Json::array({"tcp://9.9.9.9"})}}},
+        {"routing", {{"domainStrategy", "AsIs"}, {"rules", Json::array({
+            {{"type", "field"}, {"domain", Json::array({"full:blocked.invalid"})}, {"outboundTag", "blocked"}}})}}}};
+    const size_t direct_index = std::string(protocol) == "direct" ? 1 : 0;
+    if (direct_index == 1) {
+      std::swap(source["outbounds"][0], source["outbounds"][1]);
+      source["outbounds"][0]["protocol"] = "block";
+      source["dns"]["queryStrategy"] = "UseIP";
+      source["routing"]["rules"] = Json::array({
+          {{"type", "field"}, {"inboundTag", Json::array({"caller-direct-dns"})}, {"outboundTag", "direct"}},
+          {{"type", "field"}, {"domain", Json::array({"full:direct-only.invalid"})}, {"outboundTag", "direct"}}});
+    }
+    size_t bootstrap_calls = 0;
+    const auto output = PrepareProtectedVpn(source.dump(), "session-user", "session-password", "Ethernet",
+        [&](const std::string&) { ++bootstrap_calls; return std::string(); });
+    Require(output.has_value(), "valid direct-only profile rejected because it has no proxy endpoint");
+    const auto config = Parse(*output);
+    Require(bootstrap_calls == 0, "direct-only profile attempted physical endpoint bootstrap");
+    Require(config["dns"] == source["dns"], "direct-only adaptation changed caller DNS policy or static hosts");
+    const auto& direct = config["outbounds"][direct_index];
+    Require(direct["protocol"] == protocol && direct["tag"] == "direct"
+        && config["outbounds"][1 - direct_index] == source["outbounds"][1 - direct_index],
+        "direct-only adaptation changed caller default handler/order/alias");
+    Require(direct["settings"]["domainStrategy"] == "ForceIPv4"
+        && direct["streamSettings"]["sockopt"]["domainStrategy"] == "ForceIPv4"
+        && direct["streamSettings"]["sockopt"]["interface"] == "Ethernet"
+        && !direct["streamSettings"]["sockopt"].contains("dialerProxy"), "direct-only physical dialer lost its protected IPv4 underlay binding");
+    Require(config["inbounds"][0]["settings"]["auth"] == "password"
+        && config["inbounds"][0]["settings"]["accounts"][0] == Json{{"user", "session-user"}, {"pass", "session-password"}},
+        "direct-only adapter lost native session authentication");
+    const auto& rules = config["routing"]["rules"];
+    Require(rules.size() >= source["routing"]["rules"].size(), "direct-only adaptation lost caller routing rules");
+    const auto offset = rules.size() - source["routing"]["rules"].size();
+    for (size_t i = 0; i < source["routing"]["rules"].size(); ++i)
+      Require(rules[offset + i] == source["routing"]["rules"][i], "direct-only adaptation changed caller routing order");
+    Require(rules[0]["inboundTag"] == Json::array({config["inbounds"][0]["tag"]})
+        && rules[0]["ip"] == Json::array({std::string(kVirtualDns) + "/32"})
+        && rules[0]["port"] == "53" && rules[0]["network"] == "tcp,udp", "direct-only system DNS is not isolated to the native virtual destination");
+    const auto relay_tag = rules[0]["outboundTag"];
+    bool relay_found = false;
+    for (const auto& outbound : config["outbounds"]) {
+      if (outbound.value("tag", Json()) == relay_tag) {
+        relay_found = outbound["protocol"] == "dns" && outbound["settings"]["rules"] == Json::array({
+            {{"action", "hijack"}, {"qType", "1,28"}}, {{"action", "return"}, {"rCode", 5}}});
+      }
+      Require(outbound.value("protocol", "") != "socks" && outbound.value("protocol", "") != "vless",
+          "direct-only adaptation synthesized an external proxy endpoint");
+    }
+    Require(relay_found, "direct-only system A/AAAA does not use the caller Core DNS client");
+    for (int variant = 0; variant < 4; ++variant) {
+      auto implicit = source;
+      if (variant == 0) implicit.erase("dns");
+      if (variant == 1) implicit["dns"] = Json::object();
+      if (variant == 2) implicit["dns"]["servers"] = Json::array();
+      if (variant == 3) implicit["dns"]["servers"] = Json::array({{{"address", "localhost"}, {"tag", "caller-local"}}});
+      Require(!PrepareProtectedVpn(implicit.dump(), "session-user", "session-password", "Ethernet",
+          [](const std::string&) { return std::string(); }), "direct-only native DNS replacement guessed an egress or emitted an empty tag");
+    }
+  }
+  Require(only.empty() || only == "freedom" || only == "direct", "unknown direct-only test case");
+}
 void IPv6PayloadCases(const std::string& only = "") {
   const auto source = Parse(R"({"inbounds":[],"outbounds":[{"tag":"proxy","protocol":"socks","settings":{"servers":[{"address":"endpoint.invalid","port":443}]}},{"tag":"direct","protocol":"freedom"}],"dns":{"queryStrategy":"UseIP","hosts":{"payload.invalid":["198.51.100.7","2001:db8::7"]},"servers":["tcp://1.1.1.1"]},"routing":{"rules":[{"type":"field","ip":["2001:db8::/32"],"network":"tcp,udp","outboundTag":"proxy"}]}})");
   auto prepare = [](const Json& value) {
@@ -151,6 +222,7 @@ void ProtocolCompatibilityCases(const std::string& only = "") {
   } else for (const auto& item : cases) item.second();
 }
 int main(int argc, char** argv) try {
+  if (argc == 3 && std::string(argv[1]) == "--direct-only-case") { DirectOnlyCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--ipv6-case") { IPv6PayloadCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--protocol-case") { ProtocolCompatibilityCases(argv[2]); return 0; }
   if (argc != 1) {
@@ -167,6 +239,7 @@ int main(int argc, char** argv) try {
     return output.good() ? 0 : 4;
   }
   IPv6PayloadCases();
+  DirectOnlyCases();
   ProtocolCompatibilityCases();
   const auto source = Parse(R"({
     "log":{"access":"private-canary.log","error":"secret.log","loglevel":"debug","dnsLog":true},

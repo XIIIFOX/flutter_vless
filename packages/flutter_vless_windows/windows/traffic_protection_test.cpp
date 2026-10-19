@@ -35,6 +35,18 @@ bool permits(Flow flow) {
   }
   return !chosen || chosen->action==FWP_ACTION_PERMIT;
 }
+void require_physical_dns_boundary() {
+  for (bool inbound : {false, true}) {
+    for (UINT8 protocol : {static_cast<UINT8>(IPPROTO_TCP), static_cast<UINT8>(IPPROTO_UDP)}) {
+      Flow dns; dns.inbound=inbound; dns.protocol=protocol; dns.remote=53; dns.interface_=99;
+      assert(!permits(dns)); // Ordinary application/OS DNS cannot bypass the TUN.
+      dns.elevated=true; assert(!permits(dns)); // Elevation alone is no image grant.
+      dns.elevated=false; dns.xray=true; assert(!permits(dns));
+      dns.elevated=true; assert(permits(dns)); // Existing owned Core IPv4 direct egress includes caller DNS.
+      dns.v6=true; assert(!permits(dns)); // Direct DNS does not add a physical IPv6 grant.
+    }
+  }
+}
 void require_tunnel_only_ipv6(UINT64 tunnel) {
   for (bool inbound : {false, true}) {
     for (UINT8 protocol : {static_cast<UINT8>(IPPROTO_TCP), static_cast<UINT8>(IPPROTO_UDP)}) {
@@ -130,6 +142,7 @@ int main() {
     assert(protection.Inspect() && !protection.Active());
     assert(protection.Install(L"C:\\app\\xray.exe"));
     assert(protection.Active());
+    require_physical_dns_boundary();
     assert(!permits({})); // IPv4 before TUN ready
     Flow dns;dns.protocol=IPPROTO_UDP;dns.remote=53;assert(!permits(dns));
     Flow v6;v6.v6=true;assert(!permits(v6));v6.xray=true;assert(!permits(v6));
@@ -137,6 +150,7 @@ int main() {
     Flow loop;loop.loop=true;assert(permits(loop));loop.v6=true;assert(permits(loop));
     Flow dhcp;dhcp.protocol=IPPROTO_UDP;dhcp.local=68;dhcp.remote=67;assert(!permits(dhcp));dhcp.service_app=true;assert(!permits(dhcp));dhcp.service=true;assert(permits(dhcp));
     NET_LUID tun{};tun.Value=42;assert(protection.Install(L"C:\\app\\xray.exe",&tun));
+    require_physical_dns_boundary();
     require_tunnel_only_ipv6(tun.Value);
     Flow client;client.interface_=42;assert(permits(client));
     client.interface_=99;assert(!permits(client)); // new physical adapter

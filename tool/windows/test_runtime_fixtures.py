@@ -20,6 +20,104 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    def test_direct_only_profiles_preserve_default_order_and_dns_tag_route(self):
+        corpus_path = Path(runtime.__file__).resolve().parents[2] / "tool/fixtures/compatibility/direct-only.json"
+        original = corpus_path.read_bytes()
+        for index in (0, 1):
+            source = json.loads(original)[index]["config"]
+            actual = runtime.direct_only_config(index, "192.0.2.10", 15353)
+            self.assertEqual(source["routing"], actual["routing"])
+            self.assertEqual([o["protocol"] for o in source["outbounds"]], [o["protocol"] for o in actual["outbounds"]])
+            self.assertEqual([o["tag"] for o in source["outbounds"]], [o["tag"] for o in actual["outbounds"]])
+            self.assertEqual(["tcp://192.0.2.10:15353"], actual["dns"]["servers"])
+            self.assertEqual(source["dns"]["queryStrategy"], actual["dns"]["queryStrategy"])
+            direct = next(o for o in actual["outbounds"] if o["tag"] == "direct")
+            self.assertEqual("192.0.2.10:0", direct["settings"]["redirect"])
+        self.assertEqual(original, corpus_path.read_bytes())
+
+    def test_direct_tcp_dns_fixture_observes_and_frames_exact_question(self):
+        query = question("remote.invalid")
+        stream = bytearray(len(query).to_bytes(2, "big") + query)
+        client = Mock()
+        def recv(count):
+            result = bytes(stream[:count]); del stream[:count]; return result
+        client.recv.side_effect = recv
+        server = SimpleNamespace(questions=[], questions_lock=runtime.threading.Lock())
+        runtime.DirectDns(client, ("192.0.2.10", 50000), server)
+        answer = client.sendall.call_args.args[0]
+        self.assertEqual(len(answer) - 2, int.from_bytes(answer[:2], "big"))
+        self.assertEqual(query[:2], answer[2:4])
+        self.assertEqual([query[12:].hex()], server.questions)
+        self.assertTrue(answer.endswith(b"\xc6\x33\x64\x07"))
+
+    def test_direct_only_virtual_dns_requires_tun_source_reply_and_resolver_observation(self):
+        for tcp in (False, True):
+            for defect in (None, "source", "reply", "unobserved"):
+                with self.subTest(tcp=tcp, defect=defect):
+                    client = Mock(); client.__enter__ = Mock(return_value=client); client.__exit__ = Mock(return_value=False)
+                    client.getsockname.return_value = ("192.0.2.10" if defect == "source" else "10.0.85.2", 50000)
+                    server = SimpleNamespace(questions=[], questions_lock=runtime.threading.Lock())
+                    response = bytearray()
+                    def send(data):
+                        query = data[2:] if tcp else data
+                        if defect != "unobserved": server.questions.append(query[12:].hex())
+                        answer = runtime.dns_response(query)
+                        if defect == "reply": answer = answer[:-4] + bytes(4)
+                        response.extend((len(answer).to_bytes(2, "big") if tcp else b"") + answer)
+                    def recv(count):
+                        result = bytes(response[:count]); del response[:count]; return result
+                    client.sendall.side_effect = send; client.recv.side_effect = recv
+                    with patch.object(runtime.socket, "socket", return_value=client):
+                        if defect is None: runtime.direct_only_dns(server, tcp)
+                        else:
+                            with self.assertRaises(AssertionError): runtime.direct_only_dns(server, tcp)
+                    client.connect.assert_called_once_with(("198.18.0.2", 53))
+
+    def test_direct_only_origin_observes_denied_host_before_sending_bytes(self):
+        handler = runtime.Direct.__new__(runtime.Direct)
+        handler.server = SimpleNamespace(direct_only_observed=[], direct_only_lock=runtime.threading.Lock())
+        handler.headers = {"Host": "blocked.invalid"}
+        handler.send_response = Mock(); handler.send_header = Mock(); handler.end_headers = Mock(); handler.wfile = Mock()
+        handler.do_GET()
+        self.assertEqual(["blocked.invalid"], handler.server.direct_only_observed)
+        handler.wfile.write.assert_called_once_with(b"DIRECT-FIXTURE")
+
+    def test_direct_only_gate_timeout_does_not_hide_origin_delivery_and_drains_owned_children(self):
+        for delivered in (False, True):
+            with self.subTest(delivered=delivered), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary); origin = SimpleNamespace(); children = []
+                def launch(command, **kwargs):
+                    child = Mock(pid=200 + len(children)); child.poll.return_value = None
+                    def wait(timeout): child.poll.return_value = 0; return 0
+                    child.wait.side_effect = wait; children.append(child)
+                    if command[1] == "run-vpn":
+                        kwargs["stdout"].write("START_RETURN=1\n"); kwargs["stdout"].flush()
+                    return child
+                def http(host, vpn):
+                    self.assertTrue(vpn)
+                    if host == "blocked.invalid":
+                        if delivered: origin.direct_only_observed.append(host)
+                        raise runtime.socket.timeout("controlled missing response")
+                    origin.direct_only_observed.append(host)
+                    return "DIRECT-FIXTURE"
+                with patch.object(runtime.subprocess, "Popen", side_effect=launch), \
+                     patch.object(runtime.subprocess, "check_output", return_value='{"Routes":0,"IPv6Addresses":0}'), \
+                     patch.object(runtime, "native", return_value="0") as native, \
+                     patch.object(runtime, "request", side_effect=http), \
+                     patch.object(runtime, "direct_only_dns"), patch.object(runtime.time, "sleep"):
+                    if delivered:
+                        with self.assertRaisesRegex(AssertionError, "controlled origin"):
+                            runtime.direct_only_gate(directory / "runtime_probe.exe", directory, "192.0.2.10",
+                                                     SimpleNamespace(server_address=("192.0.2.10", 15353)), origin, [])
+                    else:
+                        rows = []
+                        runtime.direct_only_gate(directory / "runtime_probe.exe", directory, "192.0.2.10",
+                                                 SimpleNamespace(server_address=("192.0.2.10", 15353)), origin, rows)
+                        self.assertEqual(4, len(rows)); self.assertTrue(all(row["passed"] for row in rows))
+                    self.assertEqual(2 if delivered else 4, len(children))
+                    for child in children: child.wait.assert_called(); child.kill.assert_not_called()
+                    self.assertTrue(any(call.args[1] == "release-protection" for call in native.call_args_list))
+
     def test_ipv6_profile_keeps_numeric_ipv4_proxy_and_exact_payload_route(self):
         ordinary = runtime.config(False, "203.0.113.1", "192.0.2.10")
         profile = runtime.config(False, "203.0.113.1", "192.0.2.10", ipv6_payload=True)

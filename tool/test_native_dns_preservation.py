@@ -51,6 +51,7 @@ def source_snapshot():
              WINDOWS / 'xray_config_test.cpp', WINDOWS / 'third_party/nlohmann/json.hpp']
     paths.append(ROOT / 'tool/fixtures/compatibility/protocols.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/full-config.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/direct-only.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/listen-addresses.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/asset-files.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/ipv6-payload.json')

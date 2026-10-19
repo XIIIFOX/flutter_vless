@@ -700,6 +700,7 @@ inline bool ProtectedDns(Json& config, ServiceTags& tags, const std::string& pro
     if (!address.is_string()) return false;
     const auto value = Fold(address.get<std::string>());
     if (value == "localhost") {
+      if (proxy.empty()) return false; // No implicit direct/default selection for a native DNS replacement.
       if (server.is_string()) server = {{"address", "tcp://1.1.1.1"}};
       else {
         for (auto it = server.begin(); it != server.end(); ++it) if (Fold(it.key()) == "address") { it.value() = "tcp://1.1.1.1"; break; }
@@ -810,7 +811,6 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
     }
     if (!BootstrapStream(outbound["streamSettings"], physical, interface_name, resolve, service_tags, ipv6_tag, bootstrap, send_through)) return std::nullopt;
   }
-  if (proxy.empty()) return std::nullopt;
   Json dns_rules = Json::array();
   if (!ProtectedDns(config, service_tags, proxy, dns_rules)) return std::nullopt;
   config["outbounds"].push_back({{"tag", relay_tag}, {"protocol", "dns"},

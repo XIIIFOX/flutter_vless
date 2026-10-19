@@ -350,7 +350,7 @@ func prepare(t *testing.T, source map[string]any) ([]byte, int) {
 	if !bytes.Equal(wantDNS, gotDNS) {
 		t.Fatal("production preparation replaced caller DNS")
 	}
-	wantOut, _ := json.Marshal(source["outbounds"].([]any)[0].(map[string]any)["settings"])
+	wantOut, _ := json.Marshal(nativeExpectedSettings(source["outbounds"].([]any)[0].(map[string]any)))
 	gotOut, _ := json.Marshal(effective["outbounds"].([]any)[0].(map[string]any)["settings"])
 	if !bytes.Equal(wantOut, gotOut) {
 		t.Fatal("logical proxy endpoint changed")
@@ -495,10 +495,12 @@ func TestNativeDNSPreservation(t *testing.T) {
 	t.Run("WindowsPreparer", testNativeDNSPreservation)
 	t.Run("WindowsIPv6Payload", testNativeIPv6Payload)
 	t.Run("WindowsHTTPSDoH", testNativeHTTPSDoH)
+	t.Run("WindowsDirectOnly", testNativeDirectOnly)
 	if apple := os.Getenv("NATIVE_DNS_PREPARER_APPLE"); apple != "" {
 		t.Run("ApplePreparer", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeDNSPreservation(t) })
 		t.Run("AppleIPv6Payload", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeIPv6Payload(t) })
 		t.Run("AppleHTTPSDoH", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeHTTPSDoH(t) })
+		t.Run("AppleDirectOnly", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeDirectOnly(t) })
 	}
 }
 

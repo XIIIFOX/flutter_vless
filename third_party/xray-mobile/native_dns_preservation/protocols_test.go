@@ -26,6 +26,32 @@ func fullConfigCorpus(t *testing.T) []protocolCase {
 	return preparationCorpus(t, "full-config.json", 4)
 }
 
+func directOnlyCorpus(t *testing.T) []protocolCase {
+	return preparationCorpus(t, "direct-only.json", 2)
+}
+
+func preparationCases(t *testing.T) []protocolCase {
+	return append(append(protocolCorpus(t), fullConfigCorpus(t)...), directOnlyCorpus(t)...)
+}
+
+// Preserve all logical settings except the existing, documented physical
+// freedom/direct IPv4 policy. This exception must not weaken endpoint checks.
+func nativeExpectedSettings(outbound map[string]any) any {
+	role, _ := outbound["protocol"].(string)
+	if role != "freedom" && role != "direct" {
+		return outbound["settings"]
+	}
+	settings := map[string]any{}
+	if original, ok := outbound["settings"].(map[string]any); ok {
+		for key, value := range original {
+			settings[key] = value
+		}
+	}
+	settings["domainStrategy"] = "ForceIPv4"
+	delete(settings, "targetStrategy")
+	return settings
+}
+
 func preparationCorpus(t *testing.T, name string, count int) []protocolCase {
 	t.Helper()
 	_, source, _, ok := runtime.Caller(0)
@@ -48,7 +74,7 @@ func preparationCorpus(t *testing.T, name string, count int) []protocolCase {
 
 // Decode/build only: no core.Instance, listeners, DNS or runtime initialization.
 func TestProtocolCorpusBuilds(t *testing.T) {
-	for _, tc := range append(protocolCorpus(t), fullConfigCorpus(t)...) {
+	for _, tc := range preparationCases(t) {
 		t.Run(tc.Name, func(t *testing.T) {
 			data, err := json.Marshal(tc.Config)
 			if err != nil {
@@ -82,7 +108,7 @@ func TestNativeProtocolPreparation(t *testing.T) {
 }
 
 func testNativeProtocolPreparation(t *testing.T) {
-	for _, tc := range append(protocolCorpus(t), fullConfigCorpus(t)...) {
+	for _, tc := range preparationCases(t) {
 		t.Run(tc.Name, func(t *testing.T) {
 			prepared, _ := prepare(t, tc.Config)
 			decoded, err := serial.DecodeJSONConfig(bytes.NewReader(prepared))
@@ -105,8 +131,7 @@ func testNativeProtocolPreparation(t *testing.T) {
 				if result["protocol"] != source["protocol"] || result["tag"] != source["tag"] {
 					t.Fatal("source handler order, role alias or tag changed")
 				}
-				role := source["protocol"].(string)
-				if role != "freedom" && role != "direct" && !reflect.DeepEqual(source["settings"], result["settings"]) {
+				if !reflect.DeepEqual(nativeExpectedSettings(source), result["settings"]) {
 					t.Fatal("protocol settings or logical destination changed")
 				}
 				stream, ok := source["streamSettings"].(map[string]any)

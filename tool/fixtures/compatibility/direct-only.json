@@ -1,0 +1,41 @@
+[
+  {
+    "name": "freedom_default_with_explicit_caller_dns",
+    "config": {
+      "log": {"loglevel": "none"},
+      "dns": {
+        "tag": "caller-direct-dns",
+        "queryStrategy": "UseIPv4",
+        "hosts": {"direct-only.invalid": "127.0.0.1", "blocked.invalid": "192.0.2.80"},
+        "servers": ["tcp://9.9.9.9"]
+      },
+      "outbounds": [
+        {"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "AsIs"}},
+        {"protocol": "blackhole", "tag": "blocked"}
+      ],
+      "routing": {"domainStrategy": "AsIs", "rules": [
+        {"type": "field", "domain": ["full:blocked.invalid"], "outboundTag": "blocked"}
+      ]}
+    }
+  },
+  {
+    "name": "block_default_with_explicit_direct_and_dns_routes",
+    "config": {
+      "log": {"loglevel": "none"},
+      "dns": {
+        "tag": "caller-direct-dns",
+        "queryStrategy": "UseIP",
+        "hosts": {"direct-only.invalid": "127.0.0.1", "blocked.invalid": "192.0.2.80"},
+        "servers": ["tcp://9.9.9.9"]
+      },
+      "outbounds": [
+        {"protocol": "block", "tag": "blocked"},
+        {"protocol": "direct", "tag": "direct", "settings": {"domainStrategy": "AsIs"}}
+      ],
+      "routing": {"domainStrategy": "AsIs", "rules": [
+        {"type": "field", "inboundTag": ["caller-direct-dns"], "outboundTag": "direct"},
+        {"type": "field", "domain": ["full:direct-only.invalid"], "outboundTag": "direct"}
+      ]}
+    }
+  }
+]

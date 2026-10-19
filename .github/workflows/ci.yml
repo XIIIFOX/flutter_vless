@@ -46,6 +46,10 @@ jobs:
             FLVLESS_EXPORT_ROUTING_PAIR="$pair_dir" bash "tool/test_${platform}_tunnel_support.sh" --filter TunnelRoutingMetadataTests > "build/native_routing_cli/apple-$platform-preparation.log" 2>&1
             build/native_routing_cli/optional-xray native-routing check --config "$pair_dir/config.json" --spec "$pair_dir/spec.json" > "build/native_routing_cli/apple-$platform-check.log"
           done
+      - name: Check Windows routing metadata with the shared Core validator
+        if: matrix.os == 'windows-latest'
+        shell: cmd
+        run: tool\windows\test_native_routing_spec.cmd
       - name: Test private Android forwarder ownership without TUN
         if: matrix.os == 'ubuntu-latest'
         run: python tool/test_native_tun_preview.py
@@ -167,7 +171,17 @@ jobs:
         working-directory: example
         run: flutter pub get
       - name: Run plugin Kotlin unit tests
+        env:
+          FLVLESS_EXPORT_ROUTING_PAIR: ${{ runner.temp }}/android-routing-pair
         run: python3 tool/with_android_local_runtime.py :flutter_vless_android:testDebugUnitTest --stacktrace
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: third_party/xray-mobile/go.mod
+          cache-dependency-path: third_party/xray-mobile/go.sum
+      - name: Check Android routing metadata with the shared Core validator
+        run: |
+          python3 tool/build_native_routing_cli.py --output build/android-native-routing-check
+          build/android-native-routing-check/xray native-routing check --config "$RUNNER_TEMP/android-routing-pair/config.json" --spec "$RUNNER_TEMP/android-routing-pair/spec.json" > build/android-native-routing-check/android-pair-check.log
       - name: Test physical DNS capture verification and fragmented fixture requests
         run: |
           python3 tool/test_verify_android_dns_capture.py
@@ -183,6 +197,16 @@ jobs:
           python3 tool/test_android_routing_builder.py
       - name: Verify Maven Central Android runtime resolution
         run: tool/test_android_maven_runtime.sh
+      - name: Preserve Android routing metadata checks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-routing-metadata
+          path: |
+            build/android-native-routing-check/*.log
+            build/android-native-routing-check/result.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   android-emulator:
     name: Android emulator security and runtime

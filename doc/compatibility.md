@@ -407,6 +407,14 @@ private guard. Mirrored pure tests cover this metadata, ordinary preparation
 and DNS; the exported synthetic pair passes the shared Go Check without
 constructing Core. Provider adoption and device traffic acceptance remain open.
 
+Matching native-only Kotlin and C++ encoders retain that same byte/digest and
+selection contract. Focused JVM and portable C++ tests exercise their ordinary
+path, immutable inputs, explicit source mapping and guard/default refusals;
+both synthetic exported pairs also pass Go Check without constructing Core.
+The C++ Windows hash implementation uses BCrypt; its Windows execution gate
+remains pending CI. CI pairs each platform's metadata producer with the shared
+Go validator. These helpers do not yet expose or enable a public routing option.
+
 The Android emulator at ada26d6 passes all 37 native cases without skips and
 three Flutter cases, including the four protected system-DNS scenarios. This
 does not identify the earlier intermittent empty HTTP ready response. A

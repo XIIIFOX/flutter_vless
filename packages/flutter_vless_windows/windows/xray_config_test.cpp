@@ -123,9 +123,18 @@ void CertificatePathCases() {
     masks["udp"].push_back({{"type", u8"xdnſ"}, {"settings", {{"resolvers", Json::array({opaque})}}}});
     stream["security"] = "none"; stream["tlsSettings"] = opaque["tlsConfig"];
     auto expected = profile;
-    for (const auto& path : cases[index]["bind"]) {
-      auto& file = expected.at(Json::json_pointer(path.get<std::string>()));
-      file = (root / fs::u8path(file.get<std::string>())).lexically_normal().u8string();
+    for (const auto& pointer : cases[index]["bind"]) {
+      Json* file = &expected;
+      const auto path = pointer.get<std::string>();
+      size_t offset = 1;
+      while (offset <= path.size()) {
+        const auto end = path.find('/', offset);
+        const auto key = path.substr(offset, end == std::string::npos ? end : end - offset);
+        file = file->is_array() ? &file->at(static_cast<size_t>(std::stoul(key))) : &file->at(key);
+        if (end == std::string::npos) break;
+        offset = end + 1;
+      }
+      *file = (root / fs::u8path(file->get<std::string>())).lexically_normal().u8string();
     }
     auto candidate = folded(profile).dump();
     Check(BindCertificatePaths(candidate, root) && Parse(candidate) == folded(expected),

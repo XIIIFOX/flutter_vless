@@ -56,6 +56,33 @@ class AppleCounterRuntimeWiringTest(unittest.TestCase):
         self.assertIn('assert text.splitlines().count(marker) == 1', qualifier)
 
 
+class AppleFakeDNSRuntimeWiringTest(unittest.TestCase):
+    root = AppleCounterRuntimeWiringTest.root
+    generated = AppleCounterRuntimeWiringTest.generated
+
+    def assert_fake_dns_gate(self, platform):
+        generated = self.generated(platform)
+        self.assertEqual(1, generated.count('func runAppleFakeDNSRuntimeChecks() throws'))
+        self.assertEqual(1, generated.count('try runAppleFakeDNSRuntimeChecks()'))
+        modes = generated[generated.index('func runModes()'):]
+        self.assertLess(modes.index('try runAppleFakeDNSRuntimeChecks()'), modes.index('    let markers = ['))
+        script = (self.root / ('tool/test_' + platform + '_privacy_runtime.sh')).read_text()
+        qualifier = script.rsplit('python3 - "$OUT/runtime.log" <<\'PY\'\n', 1)[1]
+        self.assertIn("assert text.splitlines().count('APPLE_FAKEDNS_SDK_PASS=2') == 1", qualifier)
+
+    def test_ios_generated_runtime_requires_one_actual_sdk_fakedns_gate(self):
+        self.assert_fake_dns_gate('ios')
+
+    def test_macos_generated_runtime_requires_one_actual_sdk_fakedns_gate(self):
+        self.assert_fake_dns_gate('macos')
+
+    def test_actual_dns_udp_query_uses_current_policy_virtual_address(self):
+        generated = self.generated('ios')
+        self.assertNotIn('[0, 0, 0, 1, 198, 18, 0, 2, 0, 53]', generated)
+        self.assertIn('host: TunnelDNSPolicy.virtualServer, port: 53, payload: query)', generated)
+        self.assertIn('dnsProbeUDPHeader(host: host, port: port)', generated)
+
+
 class ApplePhaseMetadataTest(unittest.TestCase):
     simulator = '01234567-89AB-CDEF-0123-456789ABCDEF'
 

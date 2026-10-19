@@ -136,29 +136,45 @@ private final class DNSControlledProxy: @unchecked Sendable {
     }
 }
 
-private func dnsProbeQuery(id: UInt16, type: UInt16 = 1) -> [UInt8] {
+private func dnsProbeQuery(id: UInt16, type: UInt16 = 1, name: String = "dns-proof.invalid") -> [UInt8] {
     var bytes: [UInt8] = [UInt8(id >> 8), UInt8(id & 255), 1, 0, 0, 1, 0, 0, 0, 0, 0, 0]
-    for label in ["dns-proof", "invalid"] { bytes += [UInt8(label.utf8.count)] + Array(label.utf8) }
+    for label in name.split(separator: ".") {
+        precondition(!label.isEmpty && label.utf8.count <= 63)
+        bytes += [UInt8(label.utf8.count)] + Array(label.utf8)
+    }
     return bytes + [0, UInt8(type >> 8), UInt8(type & 255), 0, 1]
 }
 
-private func queryVirtualDNS(proxyPort: Int, credentials: LocalProxyCredentials, udp: Bool, id: UInt16, type: UInt16 = 1) throws -> [UInt8]? {
-    let query = dnsProbeQuery(id: id, type: type)
+private func dnsProbeUDPHeader(host: String, port: UInt16) -> [UInt8] {
+    var address = in_addr()
+    precondition(inet_pton(AF_INET, host, &address) == 1)
+    return [0, 0, 0, 1] + withUnsafeBytes(of: &address) { Array($0) } + [UInt8(port >> 8), UInt8(port & 255)]
+}
+
+private func queryVirtualDNS(proxyPort: Int, credentials: LocalProxyCredentials, udp: Bool, id: UInt16, type: UInt16 = 1, name: String = "dns-proof.invalid") throws -> [UInt8]? {
+    let query = dnsProbeQuery(id: id, type: type, name: name)
     if !udp {
         let fd = try LocalSOCKS5Client.openConnection(proxyPort: proxyPort, credentials: credentials, host: TunnelDNSPolicy.virtualServer, port: 53, timeout: 3)
         defer { close(fd) }
-        _ = LocalSOCKS5Client.sendAll(fd: fd, bytes: [0, UInt8(query.count)] + query)
+        _ = LocalSOCKS5Client.sendAll(fd: fd, bytes: [UInt8(query.count >> 8), UInt8(query.count & 255)] + query)
         guard let size = LocalSOCKS5Client.receiveExactly(fd: fd, count: 2) else { return nil }
         return LocalSOCKS5Client.receiveExactly(fd: fd, count: Int(size[0]) * 256 + Int(size[1]))
     }
+    return exchangeSOCKSUDP(proxyPort: proxyPort, credentials: credentials,
+                            host: TunnelDNSPolicy.virtualServer, port: 53, payload: query)
+}
+
+private func exchangeSOCKSUDP(proxyPort: Int, credentials: LocalProxyCredentials, host: String, port: UInt16, payload: [UInt8]) -> [UInt8]? {
     let control = openLoopback(proxyPort)
     defer { close(control) }
     precondition(LocalSOCKS5Client.authenticate(fd: control, credentials: credentials))
     _ = LocalSOCKS5Client.sendAll(fd: control, bytes: [5, 3, 0, 1, 0, 0, 0, 0, 0, 0])
-    guard let relay = LocalSOCKS5Client.receiveExactly(fd: control, count: 10), relay.prefix(4).elementsEqual([5, 0, 0, 1]) else {
+    guard let relay = LocalSOCKS5Client.receiveExactly(fd: control, count: 10), relay.prefix(8).elementsEqual([5, 0, 0, 1, 127, 0, 0, 1]),
+          relay[8] != 0 || relay[9] != 0 else {
         preconditionFailure("Authenticated UDP ASSOCIATE failed")
     }
     let fd = socket(AF_INET, SOCK_DGRAM, 0)
+    precondition(fd >= 0)
     defer { close(fd) }
     dnsProbeTimeout(fd, seconds: 2)
     var address = sockaddr_in()
@@ -166,17 +182,17 @@ private func queryVirtualDNS(proxyPort: Int, credentials: LocalProxyCredentials,
     address.sin_family = sa_family_t(AF_INET)
     address.sin_port = (UInt16(relay[8]) * 256 + UInt16(relay[9])).bigEndian
     inet_pton(AF_INET, "127.0.0.1", &address.sin_addr)
-    let bytes: [UInt8] = [0, 0, 0, 1, 198, 18, 0, 2, 0, 53] + query
-    let sent = bytes.withUnsafeBytes { buffer in
-        withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-            sendto(fd, buffer.baseAddress, bytes.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-        } }
-    }
+    precondition(withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    } == 0)
+    let header = dnsProbeUDPHeader(host: host, port: port)
+    let bytes = header + payload
+    let sent = bytes.withUnsafeBytes { send(fd, $0.baseAddress, bytes.count, 0) }
     precondition(sent == bytes.count)
     var response = [UInt8](repeating: 0, count: 4096)
     let received = recv(fd, &response, response.count, 0)
-    guard received >= 22 else { return nil }
-    precondition(response.prefix(4).elementsEqual([0, 0, 0, 1]))
+    guard received >= header.count else { return nil }
+    precondition(response.prefix(header.count).elementsEqual(header))
     return Array(response[10..<received])
 }
 

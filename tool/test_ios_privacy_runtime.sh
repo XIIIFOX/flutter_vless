@@ -35,9 +35,9 @@ source=(root/'ios/flutter_vless/Sources/flutter_vless/FlutterVlessPlugin.swift')
 # Preserve actual runner implementations; no duplicated config transformation.
 head=source[:source.index('public class FlutterVlessPlugin:')].replace('import Flutter\n','')
 asset=source[source.index('private func configureXrayAssetLocation'):source.index('final class PacketTunnelManager:')]
-harness=(root/'tool/fixtures/ios_local_auth_probe.swift').read_text()+'\n'+(root/'tool/fixtures/ios_dns_runtime_probe.swift').read_text()+'\n'+(root/'tool/fixtures/apple_native_routing_runtime.swift').read_text()+'\n'+(root/'tool/fixtures/ios_privacy_probe.swift').read_text()
+harness=(root/'tool/fixtures/ios_local_auth_probe.swift').read_text()+'\n'+(root/'tool/fixtures/ios_dns_runtime_probe.swift').read_text()+'\n'+(root/'tool/fixtures/apple_fakedns_runtime.swift').read_text()+'\n'+(root/'tool/fixtures/apple_native_routing_runtime.swift').read_text()+'\n'+(root/'tool/fixtures/ios_privacy_probe.swift').read_text()
 harness=(root/'tool/fixtures/macos_runtime_regressions.swift').read_text()+'\n'+harness
-harness=harness.replace('    let markers = [', '    do { try await runAppleProxyCounterChecks() } catch { print("IOS_COUNTERS_FAILED"); exit(1) }\n    let markers = [')
+harness=harness.replace('    let markers = [', '    do { try await runAppleProxyCounterChecks() } catch { print("IOS_COUNTERS_FAILED"); exit(1) }\n    do { try runAppleFakeDNSRuntimeChecks() } catch { print("APPLE_FAKEDNS_SDK_FAILED"); exit(1) }\n    let markers = [')
 harness=harness.replace('__ASSET_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/asset-files.json').read_bytes()).decode('ascii'))
 harness=harness.replace('__DIRECT_ONLY_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/direct-only.json').read_bytes()).decode('ascii'))
 harness=harness.replace('__SELECTOR_TRAFFIC_FIXTURE_JSON_BASE64__', base64.b64encode((root/'tool/fixtures/compatibility/selector-traffic.json').read_bytes()).decode('ascii'))
@@ -74,6 +74,7 @@ import os, sys
 from pathlib import Path
 text=Path(sys.argv[1]).read_text()
 assert "RUNTIME=26.10.17" in text, "Unexpected embedded Xray version"
+assert text.splitlines().count('APPLE_FAKEDNS_SDK_PASS=2') == 1
 for marker in ['IOS_COUNTERS_AND_API_PASSTHROUGH_PASS', 'IOS_COUNTERS_UNTAGGED_UNAVAILABLE_PASS', 'IOS_COUNTERS_DISABLED_UNAVAILABLE_PASS']:
     assert text.splitlines().count(marker) == 1, marker
 for marker in ['privacy-canary.invalid','synthetic-password-canary','d2719f44-f51f-4c35-aeae-246230d21f38','local-user-canary','local-password-canary']:

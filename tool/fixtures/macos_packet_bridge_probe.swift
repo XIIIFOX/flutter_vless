@@ -48,6 +48,8 @@ private final class ProbeFlow: TunnelPacketFlow {
 @main
 #endif
 struct PacketBridgeProbe {
+    private static let ipv4Source: [UInt8] = [10, 0, 85, 2]
+
     static func main() throws {
         setbuf(stdout, nil)
         let listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
@@ -162,7 +164,7 @@ struct PacketBridgeProbe {
         let config = """
         tunnel:
           mtu: 1500
-          ipv4: 10.0.85.2
+          ipv4: \(ipv4Source.map(String.init).joined(separator: "."))
         socks5:
           address: 127.0.0.1
           port: \(port)
@@ -352,7 +354,7 @@ struct PacketBridgeProbe {
     }
 
     private static func tcp(sequence: UInt32, ack: UInt32, flags: UInt8, payload: Data = Data()) -> Data {
-        let source: [UInt8] = [198, 18, 0, 2]
+        let source = ipv4Source
         let target: [UInt8] = [192, 0, 2, 1]
         func bytes(_ value: UInt32) -> [UInt8] { [24, 16, 8, 0].map { UInt8(truncatingIfNeeded: value >> $0) } }
         var tcp: [UInt8] = [0xc0, 0, 0, 80] + bytes(sequence) + bytes(ack) + [0x50, flags, 0xff, 0xff, 0, 0, 0, 0] + payload

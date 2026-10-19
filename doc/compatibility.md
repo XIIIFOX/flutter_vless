@@ -139,7 +139,7 @@ Track the small delivery gates separately from the eight full requirements:
 
 | Minimum increment | Status | Acceptance boundary |
 | --- | --- | --- |
-| Preserve caller DNS and private A/AAAA path | Previous baseline qualified; FakeDNS and address relocation pending | Shared Core traffic on Linux/macOS/Windows, Android TUN and native Apple DNS generations; advanced DNS/FakeDNS stays open. |
+| Preserve caller DNS and private A/AAAA path | Caller DNS baseline qualified; controlled Core FakeDNS qualified, native FakeDNS pending | Shared Core traffic on Linux/macOS/Windows, Android TUN and native Apple DNS generations. The new FakeDNS Core gate passes; native adapter/address relocation acceptance and wider DNS semantics remain open. |
 | Protocol/transport preparation and controlled XHTTP | Qualified | Shared pinned-Core corpus and controlled payloads; the exhaustive external-server matrix is deferred. |
 | Imported API/services/stats/policy | Qualified | Shared preparation and API/traffic gates, including Windows service acceptance. |
 | Port/address syntax and explicit data/certificate roots | Qualified baseline | Shared Core/native controls and the targeted runtime cases below; OS allocation/reload and managed import lifetime remain open. |
@@ -156,7 +156,7 @@ caller `UseIPv4` still produces successful AAAA NODATA. Other record types retur
 Imported listeners do not acquire this private path. Proxy-only and measurement
 preparation retain their separate behavior.
 
-The next FakeDNS increment moves owned DNS to `10.0.85.53`, the Windows probe
+The FakeDNS increment moves owned DNS to `10.0.85.53`, the Windows probe
 to `10.0.85.54`, and Apple interface IPv4 to `10.0.85.2/24`, outside Core's
 implicit `198.18.0.0/15` pool. Native preparation preserves caller engine/pools
 and DNS selection, and enables FakeDNS restoration only on its managed input.
@@ -166,8 +166,15 @@ malformed pools and ambiguous fields also refuse. This is an explicit native
 namespace reservation. It does not implement dynamic relocation for every
 possible caller pool. Direct-name lookups need real DNS or caller static hosts:
 Core's ordinary lookups skip FakeDNS; a fake-only root may return NODATA.
-The shared five-profile corpus and focused native regressions test preparation;
-actual FakeDNS packet acceptance and relocation regressions remain pending.
+The shared five-profile corpus and focused native regressions test preparation.
+At `f5acbbc`, the [controlled Core run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39270289950)
+passes on Linux, macOS and Windows: two fresh engines carry opaque TCP/UDP bytes
+to the recovered domain, return the exact fake IPv4 to the client, retain mixed
+real DNS and caller `UseIPv4`, and close their associations before restarting.
+This tests an explicit `198.19.0.0/16` pool through native-prepared configurations;
+it does not qualify the implicit pool through each OS tunnel. Android/Windows
+TUN and Apple SDK FakeDNS acceptance remain separate gates, as do combined Apple
+HEV/FakeDNS and physical iOS packets.
 
 
 The default Android CI job runs the production adapter and its two focused
@@ -1274,7 +1281,7 @@ Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |
 | --- | --- | --- |
-| 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private address queries. Caller AAAA, bare/full resolver hosts and encrypted DoH trust/name controls pass ordinary Core on all three desktop systems. Missing/null/empty localhost server tags pass shared preparation and native Apple DNS generations. Direct-only traffic passes shared Core, Android TUN, native Apple and Windows TUN gates. Additional DNS paths and full FakeDNS semantics remain open. |
+| 1. Advanced DNS | Partial; minimum increment qualified | Production adapters preserve explicit remote caller DNS and use Core for private address queries. Caller AAAA, bare/full resolver hosts and encrypted DoH trust/name controls pass ordinary Core on all three desktop systems. Missing/null/empty localhost server tags pass shared preparation and native Apple DNS generations. Direct-only traffic passes shared Core, Android TUN, native Apple and Windows TUN gates. Controlled FakeDNS TCP/UDP passes native-prepared ordinary Core on Linux/macOS/Windows at f5acbbc; native FakeDNS and additional DNS paths remain open. |
 | 2. IPv6 | Partial; physical iOS packet gate pending | IPv6 TCP/UDP with preserved AAAA policy passes ordinary Core on all three desktop systems, actual Android TUN and Windows 2022/2025 TUN/recovery/physical-interface controls. Actual shipped macOS HEV packet controls pass remotely; iOS simulator HEV is a verified link-only stub and physical iOS remains pending. Full macOS system-VPN acceptance, IPv6-only endpoints, NAT64, cross-family handover and broader physical bypass qualification remain open. |
 | 3. Protocol/transport matrix | Partial; controlled XHTTP increment qualified | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP and null legacy-endpoint preparation fixes pass a nine-case pinned Core build corpus with native preparation, including shared XHTTP upload/download socket policy. At cdc5b94, ordinary Core on all three desktop systems carries actual XHTTP HTTP/1.1 packet-up payloads with and without a caller SOCKS chain; both Apple and Windows preparers pass on macOS. Further protocol handshakes, XHTTP TLS/HTTP3/QUIC, physical iOS packets and the full matrix remain open. |
 | 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes pass shared component, ordinary Core and native platform traffic gates at a475374. Per-session source/default selection passes Android TUN at 2f74f13, both enabled Apple SDK runtimes at e5f9fc6 and Windows 2022/2025 at fb2eb75. Session-owned counters pass Windows runtime at 2775207 and the complete Android/Apple controlled gates at 02136f1. Wildcard isolation and physical/system-VPN acceptance remain open. |

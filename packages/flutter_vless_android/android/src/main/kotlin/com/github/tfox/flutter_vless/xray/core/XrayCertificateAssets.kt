@@ -15,7 +15,7 @@ internal object XrayCertificateAssets {
         }
     }
 
-    fun prepare(configJson: String, requested: String?): JSONObject {
+    fun prepare(configJson: String, requested: String?, onBound: () -> Unit = {}): JSONObject {
         val directory = validateDirectory(requested)
         val config = JSONObject(configJson)
         if (directory == null) return config
@@ -36,8 +36,10 @@ internal object XrayCertificateAssets {
         fun bindFile(certificate: JSONObject, name: String) {
             val spelling = key(certificate, name) ?: return
             val file = certificate.opt(spelling) as? String ?: return
-            if (file.isNotEmpty() && !File(file).isAbsolute)
+            if (file.isNotEmpty() && !File(file).isAbsolute) {
                 certificate.put(spelling, directory.resolve(file).normalize().absolutePath)
+                onBound()
+            }
         }
         fun tlsFiles(tls: JSONObject) {
             val certificates = field(tls, "certificates") as? JSONArray ?: return

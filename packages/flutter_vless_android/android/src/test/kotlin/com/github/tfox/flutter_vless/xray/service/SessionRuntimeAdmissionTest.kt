@@ -3,6 +3,8 @@ package com.github.tfox.flutter_vless.xray.service
 import android.content.pm.ApplicationInfo
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
 import com.github.tfox.flutter_vless.xray.core.LocalProxyCredentials
+import com.github.tfox.flutter_vless.xray.core.StartupPreparationOutcome
+import com.github.tfox.flutter_vless.xray.core.PreparationStage
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import org.json.JSONArray
 import org.json.JSONObject
@@ -49,10 +51,11 @@ class SessionRuntimeAdmissionTest {
     private fun anyProfile(): XrayConfig { Mockito.any(XrayConfig::class.java); return XrayConfig() }
     private fun set(target: Any, name: String, value: Any?) = target.javaClass.getDeclaredField(name)
         .apply { isAccessible = true }.set(target, value)
-    private fun accept(service: XrayVPNService, profile: XrayConfig): Boolean = try {
+    private fun accept(service: XrayVPNService, profile: XrayConfig, outcome: StartupPreparationOutcome): Boolean = try {
         XrayVPNService::class.java.getDeclaredMethod("acceptSession", XrayConfig::class.java,
-            Boolean::class.javaPrimitiveType, Long::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
-            .apply { isAccessible = true }.invoke(service, profile, true, 1L, false) as Boolean
+            Boolean::class.javaPrimitiveType, Long::class.javaPrimitiveType, Boolean::class.javaPrimitiveType,
+            StartupPreparationOutcome::class.java)
+            .apply { isAccessible = true }.invoke(service, profile, true, 1L, false, outcome) as Boolean
     } catch (error: InvocationTargetException) { throw error.targetException }
 
     private fun fixture(rejectFinal: Boolean = false, staleDuringCheck: Boolean = false, failSave: Boolean = false,
@@ -92,6 +95,7 @@ class SessionRuntimeAdmissionTest {
             GEO_ASSETS_DIRECTORY = directory.absolutePath, PLUGIN_OPTIONS_JSON = "{}",
             VPN_ROUTING_SELECTION_JSON = if(routingCapability == null) null else "{}")
         var checkedFinal = false
+        val preparationOutcome = StartupPreparationOutcome()
         try {
             // No real ServerSocket constructor or bind is executed in this control.
             Mockito.mockConstruction(ServerSocket::class.java) { listener, _ ->
@@ -131,7 +135,7 @@ class SessionRuntimeAdmissionTest {
                 }
             }.use { builds ->
                 if (allTcpOccupied) {
-                    val outcome=runCatching { accept(service, incoming) }
+                    val outcome=runCatching { accept(service, incoming, preparationOutcome) }
                     assertSame(oldChild, processField.get(XrayCoreManager))
                     Mockito.verify(oldChild, Mockito.never()).destroy()
                     Mockito.verify(oldChild, Mockito.never()).destroyForcibly()
@@ -142,14 +146,20 @@ class SessionRuntimeAdmissionTest {
                     assertEquals("No Core parser process is needed after allocation exhaustion",0,builds.constructed().size)
                     assertFalse(outcome.getOrThrow())
                     Mockito.verify(service,Mockito.never()).createReadinessProbe(anyJson())
-                } else if (failSave) assertSame(saveFailure, assertThrows(IllegalStateException::class.java) { accept(service, incoming) })
-                else assertFalse(accept(service, incoming))
+                } else if (failSave) assertSame(saveFailure, assertThrows(IllegalStateException::class.java) { accept(service, incoming, preparationOutcome) })
+                else assertFalse(accept(service, incoming, preparationOutcome))
                 if (!allTcpOccupied) assertEquals(if(failProbePreparation) 0 else if(routingCapability == 1) 2 else 1, builds.constructed().size)
             }
             }
             if(allTcpOccupied || failProbePreparation || routingCapability == 0) assertFalse(checkedFinal)
             else assertTrue("Actual service native preflight must include generated readiness rule", checkedFinal)
             assertSame(active, XrayVPNService::class.java.getDeclaredField("config").apply { isAccessible = true }.get(service))
+            assertNull("Rejected/stale candidates never publish a successful preparation report", preparationOutcome.report)
+            assertEquals(when {
+                failSave -> PreparationStage.PERSIST
+                rejectFinal -> PreparationStage.CORE_CHECK
+                else -> PreparationStage.PREPARE
+            }, preparationOutcome.stage)
             assertEquals(1L, recovery.generation)
             assertSame(oldChild, processField.get(XrayCoreManager))
             Mockito.verify(oldChild, Mockito.never()).destroy()

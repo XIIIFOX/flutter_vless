@@ -122,26 +122,41 @@ ProxyService::~ProxyService() {
   CleanupTempFiles();
 }
 
-bool ProxyService::Start(const std::string& config, flutter_vless::asset_location::Root assets) {
+bool ProxyService::Start(const std::string& config, flutter_vless::asset_location::Root assets,
+    flutter_vless::preparation::StartupOutcome* outcome, flutter_vless::preparation::Report changes,
+    std::function<void()> admitted) {
+  using flutter_vless::preparation::Stage;
+  if (outcome) outcome->Fail(Stage::prepare);
   if (!flutter_vless::asset_location::Valid(assets)) return false;
   std::string prepared = config;
   if (!flutter_vless::xray_config::PrepareProxy(prepared,
-      [this](uint16_t port) { return IsPortFree(port); }, [this] { return FindFreePort(); })) return false;
+      [this](uint16_t port) { return IsPortFree(port); }, [this] { return FindFreePort(); }, &changes)) return false;
   auto executable = FindXrayExecutable();
+  auto failure = Stage::core_check;
   if (!executable || !flutter_vless::native::CheckConfig(prepared, *executable,
-      flutter_vless::native::ConfigCheckStorage::currentUser, assets)) return false;
+      flutter_vless::native::ConfigCheckStorage::currentUser, assets, &failure)) {
+    if (outcome) outcome->Fail(failure);
+    return false;
+  }
+  // CheckConfig normalizes its private copy; the worker writes a separate file.
+  changes.CheckedHost();
   const auto owned_api_port = flutter_vless::xray_config::OwnedApiPort(config, prepared);
+  if (admitted) admitted();
   Stop();
   xray_executable_path_ = *executable;
   current_config_ = prepared;
   asset_directory_ = std::move(assets);
   api_address_ = owned_api_port ? "127.0.0.1:" + std::to_string(*owned_api_port) : "";
   ready_.store(false); is_running_.store(true);
-  { std::lock_guard<std::mutex> lock(start_mutex_); start_finished_ = false; }
-  v2ray_thread_ = std::thread(&ProxyService::RunV2ray, this);
+  auto startup = std::make_shared<flutter_vless::preparation::StartupCompletion>();
+  startup->report = changes;
+  if (outcome) outcome->Fail(Stage::start);
+  v2ray_thread_ = std::thread(&ProxyService::RunV2ray, this, startup);
   std::unique_lock<std::mutex> lock(start_mutex_);
-  start_changed_.wait_for(lock, std::chrono::seconds(10), [this] { return start_finished_; });
-  return ready_.load();
+  start_changed_.wait_for(lock, std::chrono::seconds(10), [&] { return startup->finished; });
+  const bool ready = startup->finished && startup->ready && ready_.load();
+  if (outcome) { if (ready) outcome->Succeed(startup->report); else outcome->Fail(startup->stage); }
+  return ready;
 }
 
 void ProxyService::Stop() {
@@ -167,13 +182,16 @@ bool ProxyService::IsRunning() const {
   return ready_.load();
 }
 
-void ProxyService::RunV2ray() try {
-  auto finish = [this](bool ready) {
+void ProxyService::RunV2ray(std::shared_ptr<flutter_vless::preparation::StartupCompletion> startup) try {
+  auto finish = [this, startup](bool ready, flutter_vless::preparation::Stage stage = flutter_vless::preparation::Stage::start) {
     ready_.store(ready);
-    { std::lock_guard<std::mutex> lock(start_mutex_); start_finished_ = true; }
+    { std::lock_guard<std::mutex> lock(start_mutex_); startup->ready = ready; startup->stage = stage; startup->finished = true; }
     start_changed_.notify_all();
   };
-  if (!WriteConfigToFile(current_config_, temp_config_path_) || !StartXrayProcess(temp_config_path_.string())) {
+  if (!WriteConfigToFile(current_config_, temp_config_path_)) {
+    is_running_.store(false); finish(false, flutter_vless::preparation::Stage::persist); CleanupTempFiles(); return;
+  }
+  if (!StartXrayProcess(temp_config_path_.string())) {
     is_running_.store(false); finish(false); CleanupTempFiles(); return;
   }
   auto json = flutter_vless::xray_config::Parse(current_config_);
@@ -213,7 +231,7 @@ void ProxyService::RunV2ray() try {
   StopXrayProcess();
 } catch (...) {
   ready_.store(false); is_running_.store(false);
-  { std::lock_guard<std::mutex> lock(start_mutex_); start_finished_ = true; }
+  { std::lock_guard<std::mutex> lock(start_mutex_); startup->ready = false; startup->stage = flutter_vless::preparation::Stage::start; startup->finished = true; }
   start_changed_.notify_all();
   StopXrayProcess(); CleanupTempFiles();
   flutter_vless::DiagnosticsLog::Instance().Append("runtime", "Native proxy operation failed");

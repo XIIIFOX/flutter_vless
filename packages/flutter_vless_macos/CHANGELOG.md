@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Return per-start host/proxy preparation reports with actual typed edit codes, exact Core-check availability and safe preparation stages. Keep VPN provider preparation outside the host report.
+
 * Restrict XHTTP bootstrap chain admission to the upload and its active immediate download. Preserve unused grandchild socket settings while retaining missing-chain and cycle checks.
 
 * Bind relative Realm/XDNS TLS certificate and key files to the explicit certificate assets directory, retaining effective XHTTP download and opaque-data semantics.

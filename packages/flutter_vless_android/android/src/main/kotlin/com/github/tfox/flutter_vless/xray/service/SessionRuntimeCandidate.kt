@@ -1,12 +1,14 @@
 package com.github.tfox.flutter_vless.xray.service
 
 import com.github.tfox.flutter_vless.xray.core.NativeRuntimeConfig
+import com.github.tfox.flutter_vless.xray.core.PreparationChanges
+import com.github.tfox.flutter_vless.xray.core.PreparationReport
 import org.json.JSONObject
 import java.io.Closeable
 
 /** Owns a candidate's probe until admission, then until the active worker adopts it. */
 internal class SessionRuntimeCandidate<P : Closeable> private constructor(
-    val configuration: NativeRuntimeConfig, private var probe: P?
+    val configuration: NativeRuntimeConfig, val preparationReport: PreparationReport, private var probe: P?
 ) : Closeable {
     private var admitted = false
     private var consumed = false
@@ -46,15 +48,17 @@ internal class SessionRuntimeCandidate<P : Closeable> private constructor(
         fun <P : Closeable> prepare(base: JSONObject, createProbe: () -> P?,
                                    configure: (P, JSONObject) -> JSONObject,
                                    validate: (NativeRuntimeConfig) -> Boolean,
-                                   freeze: (JSONObject) -> NativeRuntimeConfig = NativeRuntimeConfig::freeze): SessionRuntimeCandidate<P> {
+                                   freeze: (JSONObject) -> NativeRuntimeConfig = NativeRuntimeConfig::freeze,
+                                   changes: PreparationChanges? = null): SessionRuntimeCandidate<P> {
             var probe: P? = null
             try {
                 val working = JSONObject(base.toString())
                 probe = createProbe()
                 val final = if (probe == null) working else configure(probe, working)
                 val frozen = freeze(final)
+                val observed = changes?.snapshot().orEmpty()
                 require(validate(frozen)) { "Native configuration rejected" }
-                return SessionRuntimeCandidate(frozen, probe)
+                return SessionRuntimeCandidate(frozen, PreparationReport.checked(observed), probe)
             } catch (error: Throwable) {
                 try { probe?.close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
                 throw error

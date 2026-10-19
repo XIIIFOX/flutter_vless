@@ -16,6 +16,12 @@ spec.loader.exec_module(runner)
 
 
 class PreservationRunnerGuards(unittest.TestCase):
+    def test_snapshot_binds_transitive_preparation_report_header(self):
+        with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
+                mock.patch.object(runner.platform, 'system', return_value='Linux'):
+            snapshot = runner.source_snapshot()
+        self.assertEqual(snapshot.get('packages/flutter_vless_windows/windows/preparation_report.h'), 'synthetic-digest')
+
     def test_snapshot_binds_opaque_field_corpus(self):
         with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
                 mock.patch.object(runner.platform, 'system', return_value='Linux'):

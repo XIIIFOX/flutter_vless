@@ -17,7 +17,7 @@ private func FLVlessCheckCorePrivate(_ data: Data) -> Int64 {
 }
 private func configureXrayAssetLocation(_ directory: String?) throws {
     events.append("assets")
-    if assetFailure { throw NSError(domain: "fixture", code: 1) }
+    if assetFailure { throw NSError(domain: "fixture", code: 1, userInfo: [NSLocalizedDescriptionKey: "private-asset-path-canary"]) }
 }
 private enum FixturePrivacy { case `public` }
 private struct FixtureLogMessage: ExpressibleByStringInterpolation {
@@ -62,7 +62,7 @@ private enum SystemProxyHelper {
 }
 private enum VlessSystemControl { static func clear(group: String) { events.append("clear-control") } }
 private final class Proxy {
-    struct Prepared { let data: Data }
+    struct Prepared { let data: Data; var changes: [NativePreparationReport.Change] = [] }
     var isRunning = false
     func stop() { events.append("proxy-stop") }
     func clearDiagnostics() { events.append("clear-diagnostics") }
@@ -87,6 +87,32 @@ private final class Manager {
 
 @main struct TransactionTest {
     static func main() async throws {
+        let reply = try await StartProbe().startReply(proxyOnly: false)
+        guard let envelope = reply as? [String: Any], let report = envelope["preparationReport"] as? [String: Any],
+              report["version"] as? Int == 1, report["scope"] as? String == "host",
+              report["coreCheck"] as? String == "passed" else {
+            print("FAIL: actual Apple start success omitted its per-invocation preparation report")
+            exit(1)
+        }
+        for (hasCheck, code) in [(false, Int64(0)), (true, Int64(-1)), (true, Int64(0))] {
+            available = hasCheck; coreCode = code; events = []; checkedData = []; proxyStartedData = []
+            let reply = try await StartProbe().startReply(proxyOnly: true) as! [String: Any]
+            let report = reply["preparationReport"] as! [String: Any]
+            let passed = hasCheck && code == 0
+            precondition(report["coreCheck"] as? String == (passed ? "passed" : "unavailable"))
+            precondition(report["scope"] as? String == (passed ? "runtimeFinal" : "host"))
+            precondition(!hasCheck || checkedData == proxyStartedData)
+        }
+        available = true; coreCode = 0; events = []; checkedData = []
+        let concurrent = StartProbe()
+        let first = concurrent.start(proxyOnly: false, data: Data("first-secret-canary".utf8), changes: [.addressEnvironmentBound])
+        let second = concurrent.start(proxyOnly: false, data: Data("second-secret-canary".utf8), changes: [.portEnvironmentBound])
+        let firstReport = try await first.value, secondReport = try await second.value
+        precondition(firstReport.changes == [.addressEnvironmentBound] && secondReport.changes == [.portEnvironmentBound])
+        precondition(checkedData == [Data("first-secret-canary".utf8), Data("second-secret-canary".utf8)])
+        let serialized = try JSONSerialization.data(withJSONObject: [firstReport.flutterResult, secondReport.flutterResult])
+        precondition(!String(decoding: serialized, as: UTF8.self).contains("secret-canary"))
+        print("PASS: actual Apple success reply, legacy unavailable, exact proxy bytes and queued invocation reports")
         for proxyOnly in [false, true] {
             for failure in ["core", "assets", "active"] {
                 events = []; available = true; assetFailure = failure == "assets"
@@ -94,9 +120,19 @@ private final class Manager {
                 let subject = StartProbe()
                 subject.proxyOnlyRunner.isRunning = failure == "active"
                 do {
-                    try await subject.start(proxyOnly: proxyOnly).value
-                    preconditionFailure("Rejected candidate was started")
-                } catch {}
+                    _ = try await subject.startReply(proxyOnly: proxyOnly)
+                    preconditionFailure("Rejected candidate returned a successful report")
+                } catch {
+                    if failure == "assets" {
+                        guard let closed = error as? CorePreflightError,
+                              closed.stage == "prepare",
+                              closed.details as NSDictionary == ["stage": "prepare"] as NSDictionary,
+                              !closed.localizedDescription.contains("private-asset-path-canary") else {
+                            fputs("FAIL: actual Apple asset setup failure omitted its safe preparation stage\n", stderr)
+                            exit(1)
+                        }
+                    }
+                }
                 precondition(subject.packetTunnelManager!.xrayConfig == Data("old".utf8))
                 precondition(subject.packetTunnelManager!.certificateAssetsDirectory == "/fixture/old-certificate-assets")
                 precondition(!events.contains { $0.contains("start") || $0.contains("stop") || $0.contains("clear") })
@@ -170,11 +206,31 @@ private final class Manager {
         print("PASS: production Apple start transaction checks before stop/profile replacement; active sessions and asset failures preserved")
         print("PASS: exact prepared proxy bytes admitted before stop and reused by actual runner; legacy admission preserved")
 #if APPLE_PROXY_COUNTER_TEST
+        try preparationReportChecks()
         try counterChecks()
 #endif
     }
 
 #if APPLE_PROXY_COUNTER_TEST
+    static func preparationReportChecks() throws {
+        let safe: [String: Any] = ["log": ["access": "none", "error": "none", "loglevel": "warning", "dnsLog": false],
+            "inbounds": [["listen": "127.0.0.1", "port": 18095, "protocol": "socks"]], "outbounds": [["protocol": "freedom"]]]
+        var opaque = safe
+        opaque["custom"] = ["access": "secret-canary", "tlsSettings": ["masterKeyLog": "secret-canary"], "type": "xicmp"]
+        let baseline = try ActualProxyRunner.prepare(configData: JSONSerialization.data(withJSONObject: safe))
+        let untouched = try ActualProxyRunner.prepare(configData: JSONSerialization.data(withJSONObject: opaque))
+        precondition(baseline.changes.isEmpty && untouched.changes.isEmpty)
+        var privateLog = safe; privateLog["log"] = ["access": "secret-canary", "error": "none", "loglevel": "warning", "dnsLog": false]
+        let changed = try ActualProxyRunner.prepare(configData: JSONSerialization.data(withJSONObject: privateLog))
+        precondition(changed.changes == [.privateLoggingApplied])
+        var noListener = safe; noListener.removeValue(forKey: "inbounds")
+        let listener = try ActualProxyRunner.prepare(configData: JSONSerialization.data(withJSONObject: noListener))
+        precondition(listener.changes == [.privateListenerAdded])
+        let encoded = try JSONSerialization.data(withJSONObject: NativePreparationReport(proxyOnly: true, coreCheckPassed: true, changes: changed.changes).flutterResult)
+        precondition(!String(decoding: encoded, as: UTF8.self).contains("secret-canary"))
+        print("PASS: actual proxy preparation reports only typed privacy/listener changes and ignores opaque metadata")
+    }
+
     static func counterChecks() throws {
         var failures = 0
         let enabled = ["statsInboundUplink": true, "statsInboundDownlink": true,

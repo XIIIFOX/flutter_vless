@@ -23,6 +23,8 @@ import com.github.tfox.flutter_vless.xray.service.XrayVPNService
 import com.github.tfox.flutter_vless.xray.service.NativeOptionsStore
 import com.github.tfox.flutter_vless.xray.service.NativeVlessOptions
 import com.github.tfox.flutter_vless.xray.core.XrayDiagnosticsStore
+import com.github.tfox.flutter_vless.xray.core.PreparationReport
+import com.github.tfox.flutter_vless.xray.core.PreparationStage
 import com.google.gson.Gson
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -116,7 +118,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
             "startVless" -> {
                 val certificateArgument = call.argument<Any>("certificate_assets_directory")
                 if (certificateArgument != null && certificateArgument !is String) {
-                    result.error("INVALID_CONFIG", "Certificate asset directory must be a string", null)
+                    result.error("INVALID_CONFIG", "Certificate asset directory must be a string", mapOf("stage" to "prepare"))
                     return
                 }
                 // 1. Parse configuration from Flutter
@@ -130,7 +132,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                     config.VPN_ROUTING_SELECTION_JSON = com.github.tfox.flutter_vless.xray.service.NativeRoutingSelection.encode(
                         call.argument<Any>("vpn_routing"), config.PROXY_ONLY)
                 } catch (_: Exception) {
-                    result.error("INVALID_CONFIG", "Invalid VPN routing selection", null)
+                    result.error("INVALID_CONFIG", "Invalid VPN routing selection", mapOf("stage" to "prepare"))
                     return
                 }
                 config.V2RAY_FULL_JSON_CONFIG = call.argument("config") ?: ""
@@ -182,7 +184,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
 
                 try { XrayCoreManager.validateConfiguration(config) }
                 catch (_: Exception) {
-                    result.error("INVALID_CONFIG", "VPN configuration or local inbound policy is incompatible", null)
+                    result.error("INVALID_CONFIG", "VPN configuration or local inbound policy is incompatible", mapOf("stage" to "prepare"))
                     return
                 }
 
@@ -194,8 +196,8 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                 intent.putExtra("PROXY_ONLY", config.PROXY_ONLY)
                 intent.putExtra("start_receiver", object : ResultReceiver(Handler(Looper.getMainLooper())) {
                     override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                        if (resultCode == 0) result.success(null)
-                        else result.error("INVALID_CONFIG", "VPN configuration was rejected; the active session was preserved", null)
+                        if (resultCode == 0) result.success(PreparationReport.fromBundle(resultData)?.let { mapOf("preparationReport" to it.asMap()) })
+                        else result.error("INVALID_CONFIG", "VPN configuration could not be prepared or admitted", PreparationStage.details(resultData))
                     }
                 })
                 

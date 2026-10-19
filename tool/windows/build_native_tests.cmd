@@ -49,6 +49,18 @@ cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX %S%\xray_config_test.cpp /
 if errorlevel 1 exit /b 1
 build\windows-runtime\xray_config_test.exe
 if errorlevel 1 exit /b 1
+cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX %S%\preparation_report_test.cpp /Fe:build\windows-runtime\preparation_report_test.exe /Fo:build\windows-runtime\preparation_report_test.obj
+if errorlevel 1 exit /b 1
+build\windows-runtime\preparation_report_test.exe
+if errorlevel 1 exit /b 1
+python tool\test_windows_preparation_report.py
+if errorlevel 1 exit /b 1
+python tool\test_windows_preparation_report.py --generate build\windows-runtime\preparation_report_consumer_test.cpp
+if errorlevel 1 exit /b 1
+cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX /I%S% build\windows-runtime\preparation_report_consumer_test.cpp /Fe:build\windows-runtime\preparation_report_consumer_test.exe /Fo:build\windows-runtime\preparation_report_consumer_test.obj
+if errorlevel 1 exit /b 1
+build\windows-runtime\preparation_report_consumer_test.exe
+if errorlevel 1 exit /b 1
 cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX %S%\desktop_security_test.cpp /Fe:build\windows-runtime\desktop_security_test.exe /Fo:build\windows-runtime\desktop_security_test.obj
 if errorlevel 1 exit /b 1
 build\windows-runtime\desktop_security_test.exe

@@ -30,17 +30,18 @@ internal object AndroidTunnelDnsPolicy {
     fun validate(configJson: String, policy: String = "config", proxyOutboundTag: String? = null,
                  excludedRoutes: List<String> = emptyList(),
                  environment: (String) -> String? = System::getenv) {
-        prepareInternal(configJson, policy, proxyOutboundTag, excludedRoutes, null, snapshotEnvironment(environment))
+        prepareInternal(configJson, policy, proxyOutboundTag, excludedRoutes, null, snapshotEnvironment(environment), null)
     }
 
     /** Call before replacing a live session. The resolver must be scoped to a physical Network. */
     fun prepare(configJson: String, policy: String = "config", proxyOutboundTag: String? = null,
                 excludedRoutes: List<String> = emptyList(),
                 environment: (String) -> String? = System::getenv,
+                changes: PreparationChanges? = null,
                 resolveEndpoint: (String) -> List<String> = { emptyList() }): Prepared {
         val snapshot = snapshotEnvironment(environment)
-        prepareInternal(configJson, policy, proxyOutboundTag, excludedRoutes, null, snapshot)
-        return prepareInternal(configJson, policy, proxyOutboundTag, excludedRoutes, resolveEndpoint, snapshot)
+        prepareInternal(configJson, policy, proxyOutboundTag, excludedRoutes, null, snapshot, changes)
+        return prepareInternal(configJson, policy, proxyOutboundTag, excludedRoutes, resolveEndpoint, snapshot, changes)
     }
 
     /** Missing and empty are distinct, and both passes must use the same value. */
@@ -54,14 +55,14 @@ internal object AndroidTunnelDnsPolicy {
 
     private fun prepareInternal(configJson: String, policy: String, proxyOutboundTag: String?,
                                 excludedRoutes: List<String>, resolveEndpoint: ((String) -> List<String>)?,
-                                environment: (String) -> String?): Prepared {
+                                environment: (String) -> String?, changes: PreparationChanges?): Prepared {
         require(policy == "config" || policy == "proxy") { "Unsupported Android DNS policy" }
         require(proxyOutboundTag == null || policy == "proxy") { "DNS proxy outbound tag requires proxy DNS policy" }
-        if (policy == "config") return prepareCallerRoot(configJson, excludedRoutes, environment)
+        if (policy == "config") return prepareCallerRoot(configJson, excludedRoutes, environment, changes)
         require(allowsRouteExclusions(excludedRoutes)) { "Excluded route conflicts with virtual system DNS" }
 
         val config = JSONObject(configJson)
-        bindLogicalAddresses(config, environment)
+        bindLogicalAddresses(config, environment, changes)
         // The explicit policy replaces caller DNS, but a separately configured
         // FakeDNS engine must still leave the adapter's reserved addresses free.
         fakeDnsActive(config, inspectServers = false)
@@ -135,14 +136,14 @@ internal object AndroidTunnelDnsPolicy {
                 val address = optionalString(entry, "address")?.let { raw ->
                     // WireGuard endpoint is a plain String, unlike these typed
                     // protocol Address fields. Never expand arbitrary strings.
-                    if (proto == "wireguard") raw else XrayPortSpec.bindAddressEnvironment(raw, environment)
+                    if (proto == "wireguard") raw else XrayPortSpec.bindAddressEnvironment(raw, environment) { changes?.record(PreparationChange.ADDRESS_ENVIRONMENT_BOUND) }
                         .also { entry.put("address", it) }
                 } ?: endpointHost(optionalString(entry, "endpoint"))
                 require(address != null) { "Proxy outbound has no endpoint address" }
                 pinEndpoint(address, typedAddress = proto != "wireguard")
             }
             val stream = objectValue(outbound, "streamSettings") ?: JSONObject()
-            prepareStream(stream, { pinEndpoint(it, typedAddress = true) }, environment = environment)
+            prepareStream(stream, { pinEndpoint(it, typedAddress = true) }, environment = environment, changes = changes)
             outbound.put("streamSettings", stream)
         }
         val routing = objectValue(config, "routing") ?: JSONObject()
@@ -177,6 +178,7 @@ internal object AndroidTunnelDnsPolicy {
         // Explicit proxy policy owns system DNS. No local/+local/OS fallback is retained.
         config.put("dns", JSONObject().put("hosts", hosts).put("servers", JSONArray().put("tcp://1.1.1.1"))
             .put("tag", upstreamTag).put("queryStrategy", "UseIP").put("disableFallback", true))
+        changes?.record(PreparationChange.SYSTEM_DNS_GUARD_ADDED)
         return Prepared(config.toString(), listOf(VIRTUAL_SERVER), names, addresses, managedInboundTag, listOf(0, 1))
     }
 
@@ -188,11 +190,11 @@ internal object AndroidTunnelDnsPolicy {
      * official protected Core resolver's D broker on an Android physical Network.
      * This does not pin transport endpoints into caller hosts or select a proxy.
      */
-    private fun prepareCallerRoot(configJson: String, excludedRoutes: List<String>, environment: (String) -> String?): Prepared {
+    private fun prepareCallerRoot(configJson: String, excludedRoutes: List<String>, environment: (String) -> String?, changes: PreparationChanges?): Prepared {
         require(allowsRouteExclusions(excludedRoutes)) { "Excluded route conflicts with virtual system DNS" }
         val config = JSONObject(configJson)
-        bindLogicalAddresses(config, environment)
-        bindRootDnsAddresses(config, environment)
+        bindLogicalAddresses(config, environment, changes)
+        bindRootDnsAddresses(config, environment, changes)
         fakeDnsActive(config)
         canonicalize(config, "outbounds", "inbounds", "routing")
         val outbounds = objects(config, "outbounds", required = true)
@@ -226,6 +228,7 @@ internal object AndroidTunnelDnsPolicy {
             .put(JSONObject().put("action", "return").put("rCode", 5))
         config.put("outbounds", JSONArray(outbounds).put(JSONObject().put("tag", relayTag)
             .put("protocol", "dns").put("settings", JSONObject().put("rules", dnsRules))))
+        changes?.record(PreparationChange.SYSTEM_DNS_GUARD_ADDED)
         return Prepared(config.toString(), listOf(VIRTUAL_SERVER), managedInboundTag = managedInboundTag, guardRuleIndices = listOf(0))
     }
 
@@ -242,7 +245,7 @@ internal object AndroidTunnelDnsPolicy {
     /** These typed Addresses describe a logical dispatch destination, not a
      * physical transport endpoint. Match Core's non-null primary precedence
      * without resolving it or changing its dormant compatibility alias. */
-    private fun bindLogicalAddresses(config: JSONObject, environment: (String) -> String?) {
+    private fun bindLogicalAddresses(config: JSONObject, environment: (String) -> String?, changes: PreparationChanges?) {
         fun bind(collection: String, protocols: Set<String>) {
             val entries = schemaField(config, collection) as? JSONArray ?: return
             for (index in 0 until entries.length()) {
@@ -256,7 +259,7 @@ internal object AndroidTunnelDnsPolicy {
                 // Invalid non-null primary values stay invalid for Core's
                 // preflight, rather than falling back to a different target.
                 val raw = settings.opt(selected) as? String ?: continue
-                settings.put(selected, XrayPortSpec.bindAddressEnvironment(raw, environment))
+                settings.put(selected, XrayPortSpec.bindAddressEnvironment(raw, environment) { changes?.record(PreparationChange.ADDRESS_ENVIRONMENT_BOUND) })
             }
         }
         bind("outbounds", setOf("dns"))
@@ -265,18 +268,18 @@ internal object AndroidTunnelDnsPolicy {
 
     /** Address values only: hosts dictionary keys, tags, URLs containing env:
      * and arbitrary nested caller objects never become environment references. */
-    private fun bindRootDnsAddresses(config: JSONObject, environment: (String) -> String?) {
+    private fun bindRootDnsAddresses(config: JSONObject, environment: (String) -> String?, changes: PreparationChanges?) {
         val dns = schemaField(config, "dns") as? JSONObject ?: return
         fun bindField(owner: JSONObject, name: String) {
             val key = schemaKey(owner, name) ?: return
             val raw = owner.opt(key) as? String ?: return
-            owner.put(key, XrayPortSpec.bindAddressEnvironment(raw, environment))
+            owner.put(key, XrayPortSpec.bindAddressEnvironment(raw, environment) { changes?.record(PreparationChange.ADDRESS_ENVIRONMENT_BOUND) })
         }
         bindField(dns, "clientip")
         (schemaField(dns, "servers") as? JSONArray)?.let { servers ->
             for (index in 0 until servers.length()) {
                 when (val server = servers.opt(index)) {
-                    is String -> servers.put(index, XrayPortSpec.bindAddressEnvironment(server, environment))
+                    is String -> servers.put(index, XrayPortSpec.bindAddressEnvironment(server, environment) { changes?.record(PreparationChange.ADDRESS_ENVIRONMENT_BOUND) })
                     is JSONObject -> {
                         bindField(server, "address")
                         bindField(server, "clientip")
@@ -287,10 +290,10 @@ internal object AndroidTunnelDnsPolicy {
         val hosts = schemaField(dns, "hosts") as? JSONObject ?: return
         for (key in hosts.keys().asSequence().toList()) {
             when (val value = hosts.opt(key)) {
-                is String -> hosts.put(key, XrayPortSpec.bindAddressEnvironment(value, environment))
+                is String -> hosts.put(key, XrayPortSpec.bindAddressEnvironment(value, environment) { changes?.record(PreparationChange.ADDRESS_ENVIRONMENT_BOUND) })
                 is JSONArray -> for (index in 0 until value.length()) {
                     val raw = value.opt(index) as? String ?: continue
-                    value.put(index, XrayPortSpec.bindAddressEnvironment(raw, environment))
+                    value.put(index, XrayPortSpec.bindAddressEnvironment(raw, environment) { changes?.record(PreparationChange.ADDRESS_ENVIRONMENT_BOUND) })
                 }
             }
         }
@@ -368,7 +371,7 @@ internal object AndroidTunnelDnsPolicy {
     }
 
     private fun prepareStream(stream: JSONObject, pinEndpoint: (String) -> Unit, independentDownload: Boolean = false,
-                              inheritedSocketPolicy: Boolean = false, environment: (String) -> String?) {
+                              inheritedSocketPolicy: Boolean = false, environment: (String) -> String?, changes: PreparationChanges?) {
         canonicalize(stream, "sockopt", "address", "network", "method", "xhttpSettings", "splithttpSettings")
         // Core treats an absent or null SocketSettings as nil. The independent
         // download keeps its own policy; only Core's explicit penetrate flag
@@ -396,7 +399,7 @@ internal object AndroidTunnelDnsPolicy {
         // XHTTP download always has its own destination, regardless of method.
         if (independentDownload || network.equals("xdrive", ignoreCase = true))
             optionalString(stream, "address")?.let { raw ->
-                val address = XrayPortSpec.bindAddressEnvironment(raw, environment)
+                val address = XrayPortSpec.bindAddressEnvironment(raw, environment) { changes?.record(PreparationChange.ADDRESS_ENVIRONMENT_BOUND) }
                 stream.put("address", address)
                 pinEndpoint(address)
             }
@@ -416,10 +419,10 @@ internal object AndroidTunnelDnsPolicy {
             val extra = nullableObject(transport, "extra") ?: return
             canonicalize(extra, "downloadSettings")
             nullableObject(extra, "downloadSettings")?.let {
-                prepareStream(it, pinEndpoint, independentDownload = true, inheritedSocketPolicy = penetrating, environment = environment)
+                prepareStream(it, pinEndpoint, independentDownload = true, inheritedSocketPolicy = penetrating, environment = environment, changes = changes)
             }
         } else nullableObject(transport, "downloadSettings")?.let {
-            prepareStream(it, pinEndpoint, independentDownload = true, inheritedSocketPolicy = penetrating, environment = environment)
+            prepareStream(it, pinEndpoint, independentDownload = true, inheritedSocketPolicy = penetrating, environment = environment, changes = changes)
         }
     }
 

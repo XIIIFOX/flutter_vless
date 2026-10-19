@@ -513,12 +513,14 @@ private final class ProxyOnlyRunner {
 
     struct Prepared {
         let data: Data
+        let changes: [NativePreparationReport.Change]
         fileprivate let endpoint: (protocolName: String, port: Int, credentials: LocalProxyCredentials?)?
         fileprivate let counterTag: String?
     }
 
     fileprivate static func prepare(configData: Data) throws -> Prepared {
-        let data = try buildProxyOnlyConfigData(configData: configData)
+        var changes: [NativePreparationReport.Change] = []
+        let data = try buildProxyOnlyConfigData(configData: configData, onChange: { changes.append($0) })
         let endpoint = try findDelayEndpoint(data)
         var counterTag: String?
         if let endpoint, let json = try? LocalProxyAccessPolicy.normalizedConfig(configData: data),
@@ -530,7 +532,7 @@ private final class ProxyOnlyRunner {
                 counterTag = tag
             }
         }
-        return Prepared(data: data, endpoint: endpoint, counterTag: counterTag)
+        return Prepared(data: data, changes: changes, endpoint: endpoint, counterTag: counterTag)
     }
 
     // Direct callers share the host admission order: finalize and check before
@@ -698,14 +700,15 @@ private final class ProxyOnlyRunner {
         logger.reset()
     }
 
-    fileprivate static func buildProxyOnlyConfigData(configData: Data) throws -> Data {
+    fileprivate static func buildProxyOnlyConfigData(configData: Data, onChange: ((NativePreparationReport.Change) -> Void)? = nil) throws -> Data {
         var json = try LocalProxyAccessPolicy.normalizedConfig(configData: configData)
 
-        guard XrayPrivacyConfig.apply(to: &json) else {
+        guard XrayPrivacyConfig.apply(to: &json, onLoggingChange: { onChange?(.privateLoggingApplied) }) else {
             throw NSError(domain: "FlutterVless", code: 13, userInfo: [NSLocalizedDescriptionKey: "Invalid private Xray configuration"])
         }
 
         if json["inbounds"] as? [[String: Any]] == nil {
+            onChange?(.privateListenerAdded)
             json["inbounds"] = [
                 [
                     "tag": "socks",
@@ -1180,7 +1183,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
               let remark = arguments["remark"] as? String,
               let config = arguments["config"] as? String,
               let configData = config.data(using: .utf8) else {
-            result(FlutterError(code: "INVALID_ARGUMENTS", message: "Invalid arguments for startVless.", details: nil))
+            result(FlutterError(code: "INVALID_ARGUMENTS", message: "Invalid arguments for startVless.", details: ["stage": "prepare"]))
             return
         }
         let proxyOnly = arguments["proxy_only"] as? Bool ?? false
@@ -1192,9 +1195,9 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 try NativeRoutingSpec.requireRuntime(FLVlessCoreRoutingCapability())
             }
         } catch NativeRoutingSpecError.unsupportedRuntime {
-            result(FlutterError(code: "VPN_ROUTING_UNAVAILABLE", message: NativeRoutingSpecError.unsupportedRuntime.localizedDescription, details: nil)); return
+            result(FlutterError(code: "VPN_ROUTING_UNAVAILABLE", message: NativeRoutingSpecError.unsupportedRuntime.localizedDescription, details: ["stage": "capability"])); return
         } catch {
-            result(FlutterError(code: "INVALID_VPN_ROUTING", message: "Invalid VPN routing selection.", details: nil)); return
+            result(FlutterError(code: "INVALID_VPN_ROUTING", message: "Invalid VPN routing selection.", details: ["stage": "routing"])); return
         }
         let bypassArgument = arguments["bypass_subnets"]
         let bypassSubnets = bypassArgument as? [String]
@@ -1202,21 +1205,27 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         let geoAssetsDirectory = arguments["geo_assets_directory"] as? String
         let certificateArgument = arguments["certificate_assets_directory"]
         guard certificateArgument == nil || certificateArgument is NSNull || certificateArgument is String else {
-            result(FlutterError(code: "INVALID_ARGUMENTS", message: "Invalid certificate assets directory.", details: nil)); return
+            result(FlutterError(code: "INVALID_ARGUMENTS", message: "Invalid certificate assets directory.", details: ["stage": "certificate-assets"])); return
         }
         let certificateAssetsDirectory = certificateArgument as? String
         guard !hasBypassArgument || bypassSubnets != nil else {
             result(FlutterError(code: "INCOMPATIBLE_ROUTING", message: "bypassSubnets must be a list of IPv4 CIDRs", details: nil)); return
         }
+        var changes = Set<NativePreparationReport.Change>()
+        var preparationStage = "certificate-assets"
         let effectiveConfigData: Data
         let preparedProxyConfig: ProxyOnlyRunner.Prepared?
         do {
             let environment = captureEnvironment()
-            let certificateBound = try XrayCertificatePaths.bind(configData: configData, directory: certificateAssetsDirectory)
-            let listenerBound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: certificateBound, environmentSnapshot: environment)
-            effectiveConfigData = try XrayAddressEnvironment.bind(configData: listenerBound, environmentSnapshot: environment)
+            let certificateBound = try XrayCertificatePaths.bind(configData: configData, directory: certificateAssetsDirectory, onBinding: { changes.insert(.certificateRefsBound) })
+            preparationStage = "port-environment"
+            let listenerBound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: certificateBound, environmentSnapshot: environment, onBinding: { changes.insert(.portEnvironmentBound) })
+            preparationStage = "prepare"
+            effectiveConfigData = try XrayAddressEnvironment.bind(configData: listenerBound, environmentSnapshot: environment, onBinding: { changes.insert(.addressEnvironmentBound) })
+            preparationStage = "routing"
             try NativeRoutingSpec.validateSource(effectiveConfigData, intent: vpnRouting)
             try DesktopBypassPolicy.validate(bypassSubnets ?? [])
+            preparationStage = "prepare"
             if proxyOnly {
                 preparedProxyConfig = try ProxyOnlyRunner.prepare(configData: effectiveConfigData)
             } else {
@@ -1224,9 +1233,9 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 preparedProxyConfig = nil
             }
         } catch is NativeRoutingSpecError {
-            result(FlutterError(code: "INVALID_VPN_ROUTING", message: "Invalid VPN routing selection.", details: nil)); return
+            result(FlutterError(code: "INVALID_VPN_ROUTING", message: "Invalid VPN routing selection.", details: ["stage": "routing"])); return
         } catch is XrayCertificatePaths.Failure {
-            result(FlutterError(code: "CERTIFICATE_ASSETS_ERROR", message: "Unable to prepare certificate file paths.", details: nil)); return
+            result(FlutterError(code: "CERTIFICATE_ASSETS_ERROR", message: "Unable to prepare certificate file paths.", details: ["stage": "certificate-assets"])); return
         } catch LocalProxyAccessError.portEnvironment(let index) {
             result(FlutterError(code: "PORT_ENVIRONMENT_ERROR",
                 message: LocalProxyAccessError.portEnvironment(index).localizedDescription,
@@ -1234,18 +1243,21 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return
         } catch {
             result(FlutterError(code: "INCOMPATIBLE_LOCAL_PROXY",
-                message: "Unable to prepare the local adapter for this configuration.", details: nil))
+                message: "Unable to prepare the local adapter for this configuration.", details: ["stage": preparationStage]))
             return
         }
+        let preparationChanges = Array(changes)
         let operation = commands.submit {
             // Do not replace the app-process singleton or change its asset
             // environment while a proxy-only session is still serving traffic.
             guard !self.proxyOnlyRunner.isRunning else {
                 throw CorePreflightError.activeProxySession
             }
+            var coreCheckPassed = false
             if FLVlessHasCorePreflight() {
-                try configureXrayAssetLocation(geoAssetsDirectory)
-                try CorePreflightPolicy.validate(preparedProxyConfig?.data ?? effectiveConfigData, check: FLVlessCheckCorePrivate)
+                do { try configureXrayAssetLocation(geoAssetsDirectory) }
+                catch { throw CorePreflightError.assetPreparation }
+                coreCheckPassed = try CorePreflightPolicy.validate(preparedProxyConfig?.data ?? effectiveConfigData, check: FLVlessCheckCorePrivate)
             } else {
                 pluginLog.warning("Core preflight unavailable in legacy runtime")
             }
@@ -1269,12 +1281,14 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 manager.certificateAssetsDirectory = certificateAssetsDirectory
                 try await manager.start()
             }
+            return NativePreparationReport(proxyOnly: preparedProxyConfig != nil, coreCheckPassed: coreCheckPassed,
+                changes: preparationChanges + (preparedProxyConfig?.changes ?? []))
         }
         Task {
             do {
-                try await operation.value
+                let report = try await operation.value
                 self.refreshRuntimePolling(reason: "startVless-success")
-                result(nil)
+                result(report.flutterResult)
             } catch let error as CorePreflightError {
                 result(FlutterError(code: "CORE_CONFIG_ERROR", message: error.localizedDescription, details: error.details))
                 self.refreshRuntimePolling(reason: "startVless-preflight-error")
@@ -1282,7 +1296,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 pluginLog.error("Failed to start runtime: \(NativeLogPrivacy.runtimeEvent(NativeLogPrivacy.operationError(error).localizedDescription))")
                 result(FlutterError(code: error is TunnelSecretError ? "VPN_KEYCHAIN_ERROR" : (proxyOnly ? "PROXY_ONLY_ERROR" : "VPN_ERROR"),
                     message: error is TunnelSecretError || error is DesktopTunnelError ? error.localizedDescription : NativeLogPrivacy.operationError(error).localizedDescription,
-                    details: nil))
+                    details: ["stage": "start"]))
                 self.refreshRuntimePolling(reason: "startVless-error")
             }
         }

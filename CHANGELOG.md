@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Add optional per-start preparation reports with closed operation codes and safe failure stages, preserving the existing start API. Keep host checks separate from final-runtime checks, legacy unavailability and actual network readiness; show the report in example.
+
 * Follow Core's immediate XHTTP download socket dependencies on Apple and Windows. Preserve unused nested download chains without treating them as bootstrap requirements; retain active-chain validation and add controlled preparation/traffic regressions.
 
 * Apply `certificateAssetsDirectory` to Core-built Realm and XDNS TLS certificate/key files, including effective XHTTP download streams. Keep unrelated mask metadata and absolute/inline certificate settings unchanged across all four native platforms.

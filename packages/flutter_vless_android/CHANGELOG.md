@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Return a request-owned report after final Core preflight and candidate admission. Collect actual typed preparation edits and closed failure stages without exposing configuration data.
+
 * Add preparation regressions for preserved, unused XHTTP grandchild socket chains.
 
 * Bind relative Realm/XDNS TLS certificate and key files to the explicit certificate assets directory without traversing unrelated mask data.

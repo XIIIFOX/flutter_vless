@@ -24,7 +24,9 @@ class V2rayManager {
 
   bool Start(const std::string& config, bool proxy_only, const flutter_vless::NativeOptions& options = {},
       flutter_vless::asset_location::Root assets = std::nullopt,
-      std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing = std::nullopt);
+      std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing = std::nullopt,
+      flutter_vless::preparation::StartupOutcome* outcome = nullptr,
+      flutter_vless::preparation::Report changes = {});
   void Stop();
   void Shutdown();
   bool IsRunning() const;
@@ -55,7 +57,8 @@ class V2rayManager {
 
   // Helper methods
   void RunV2ray();
-  bool ValidateConfig(const std::string& config, bool proxy_only, const flutter_vless::asset_location::Root& assets);
+  bool ValidateConfig(const std::string& config, bool proxy_only, const flutter_vless::asset_location::Root& assets,
+      flutter_vless::preparation::Stage* failure = nullptr);
   std::string ModifyConfigForWindows(const std::string& config, bool proxy_only);
   
   // Thread synchronization and state

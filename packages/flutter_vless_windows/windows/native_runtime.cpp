@@ -235,7 +235,8 @@ void RemovePrivateConfig(fs::path& path) {
   if (DeleteFileW(path.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND) path.clear();
 }
 bool CheckConfig(const std::string& config, const fs::path& executable, ConfigCheckStorage storage,
-    const asset_location::Root& assets) try {
+    const asset_location::Root& assets, preparation::Stage* failure) try {
+  if (failure) *failure = preparation::Stage::prepare;
   if (!asset_location::Valid(assets)) return false;
   auto document = xray_config::Parse(config);
   if (!xray_config::Normalize(document)) return false;
@@ -245,10 +246,12 @@ bool CheckConfig(const std::string& config, const fs::path& executable, ConfigCh
     ~PrivateDocument() { RemovePrivateConfig(path); }
   } candidate;
   fs::path image = executable;
+  if (failure) *failure = preparation::Stage::persist;
   if (storage == ConfigCheckStorage::administrators) {
     if (!protected_runtime.Create(executable, !assets.has_value()) || !protected_runtime.WriteConfig(document.dump(), candidate.path)) return false;
     image = protected_runtime.Executable();
   } else if (!WritePrivateConfig(document.dump(), candidate.path)) return false;
+  if (failure) *failure = preparation::Stage::core_check;
   auto process = Launch(image, {L"run", L"-test", L"-config", candidate.path.wstring()}, false, assets);
   if (!process) return false;
   const HANDLE handle = reinterpret_cast<HANDLE>(process->hProcess);
@@ -257,9 +260,12 @@ bool CheckConfig(const std::string& config, const fs::path& executable, ConfigCh
   return GetExitCodeProcess(handle, &code) && code == 0;
 } catch (...) { return false; }
 bool CheckPreparedConfig(const std::string& config, ProtectedRuntime& runtime,
-    fs::path& path, const asset_location::Root& assets) try {
+    fs::path& path, const asset_location::Root& assets, preparation::Stage* failure) try {
+  if (failure) *failure = preparation::Stage::prepare;
   if (!path.empty() || !asset_location::Valid(assets) || !xray_config::Parse(config).is_object()) return false;
+  if (failure) *failure = preparation::Stage::persist;
   if (!runtime.WriteConfig(config, path)) return false;
+  if (failure) *failure = preparation::Stage::core_check;
   auto process = Launch(runtime.Executable(), {L"run", L"-test", L"-config", path.wstring()}, false, assets);
   if (!process) return false;
   const HANDLE handle = reinterpret_cast<HANDLE>(process->hProcess);
@@ -274,10 +280,13 @@ bool RoutingCapability(const ProtectedRuntime& runtime, const asset_location::Ro
 }
 bool CheckRoutingPreparedConfig(const std::string& config, const std::string& metadata,
     ProtectedRuntime& runtime, fs::path& config_path, fs::path& metadata_path,
-    const asset_location::Root& assets) try {
+    const asset_location::Root& assets, preparation::Stage* failure) try {
+  if (failure) *failure = preparation::Stage::prepare;
   if (!config_path.empty() || !metadata_path.empty() || !asset_location::Valid(assets)
       || !xray_config::Parse(config).is_object() || !xray_config::Parse(metadata).is_object()) return false;
+  if (failure) *failure = preparation::Stage::persist;
   if (!runtime.WriteConfig(config, config_path) || !runtime.WriteConfig(metadata, metadata_path)) return false;
+  if (failure) *failure = preparation::Stage::core_check;
   std::string output;
   return Command(runtime.Executable(), {L"native-routing", L"check", L"--config", config_path.wstring(),
       L"--spec", metadata_path.wstring()}, output, 10000, assets) && native_routing::SuccessfulReply(output, "check");

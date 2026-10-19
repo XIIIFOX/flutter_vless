@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Return per-start preparation reports from the checked candidate and worker, with closed typed edit codes and failure stages. Preserve manager state on an ordinary VPN preflight refusal as well as explicit routing starts.
+
 * Restrict XHTTP bootstrap chain admission to the upload and its active immediate download. Preserve unused grandchild socket settings while retaining missing-chain and cycle checks.
 
 * Bind relative Realm/XDNS TLS certificate and key files to the explicit certificate assets directory without traversing unrelated mask data.

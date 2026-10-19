@@ -130,6 +130,50 @@ Validation:
 `ArgumentError` when the string is not valid JSON, is not a JSON object, has an
 invalid `inbounds` section, or does not contain at least one valid outbound.
 
+## `startVlessWithReport()`
+
+This optional alternative accepts the same arguments and starts the same
+session as `startVless()`. Existing `Future<void>` callers remain supported.
+
+```dart
+final report = await flutterVless.startVlessWithReport(
+  remark: parsed.remark,
+  config: parsed.getFullConfiguration(),
+);
+// Only closed codes and enums; no profile values or file paths.
+final safeSummary = report.toMap();
+```
+
+The report belongs to that invocation. `coreCheck: passed` means Core accepted
+the candidate covered by `scope`; it does not mean the connection is ready or
+has internet access. `host` covers preparation in the application process.
+Apple VPN reports use this scope because the extension prepares another final
+configuration later. Windows proxy-only checks also use `host`, because the
+checker normalizes a separate input. `runtimeFinal` identifies the immutable
+final candidate used by the native runtime. Android returns after candidate
+admission, before asynchronous forwarding readiness. A runtime or older platform
+implementation without this contract returns `unavailable`, never a guessed
+successful check.
+
+`changes` lists instrumented edits to known schema fields: certificate file
+references, generated private listeners, managed system DNS guards, private
+logging, bound endpoint/listener environment references, and shared Dart legacy
+TLS/transport cleanup. Only actual edits are reported. Reading an environment
+port for reservation alone is not a binding edit. Opaque data, arbitrary field
+names, values, tags, addresses, paths, sizes and configuration fingerprints are
+not included. This is a safe summary of known operations, not a general JSON
+diff or a list of every Core default. Host reports omit provider-only changes.
+
+Native rejection still throws `PlatformException`. Read closed locations with
+`VlessConfigurationFailure.fromDetails(error.details)` rather than parsing Core
+text. Where known, native backends distinguish preparation, Core checking,
+persistence and startup; Apple also retains its safe Decode/Build location.
+Unknown native details are ignored. A later startup failure can occur after
+admission: this report does not promise rollback to the previous session.
+
+The example displays the report and safe error descriptions, and clears a
+superseded report when its configuration changes or another start is attempted.
+
 ## `stopVless()`
 
 Stops the active proxy or VPN/tunnel session.

@@ -14,7 +14,9 @@
 #include <vector>
 #include <cstdint>
 #include <condition_variable>
+#include <functional>
 #include "asset_location.h"
+#include "preparation_report.h"
 #include "traffic_counters.h"
 
 namespace fs = std::filesystem;
@@ -48,7 +50,8 @@ class ProxyService {
    * @param config The Xray configuration JSON.
    * @return true if started successfully, false otherwise.
    */
-  bool Start(const std::string& config, flutter_vless::asset_location::Root assets = std::nullopt);
+  bool Start(const std::string& config, flutter_vless::asset_location::Root assets = std::nullopt,
+      flutter_vless::preparation::StartupOutcome* outcome = nullptr, flutter_vless::preparation::Report changes = {}, std::function<void()> admitted = {});
 
   /**
    * @brief Stops the proxy service.
@@ -84,7 +87,7 @@ class ProxyService {
  private:
   friend struct ApiClient;
 
-  void RunV2ray();
+  void RunV2ray(std::shared_ptr<flutter_vless::preparation::StartupCompletion> startup);
   bool StartXrayProcess(const std::string& config_path);
   void StopXrayProcess();
   bool WriteConfigToFile(const std::string& config, fs::path& config_path);
@@ -114,7 +117,6 @@ class ProxyService {
   std::atomic<bool> ready_{false};
   std::mutex start_mutex_;
   std::condition_variable start_changed_;
-  bool start_finished_ = false;
   bool proxy_snapshot_ = false;
   unsigned long saved_proxy_flags_ = 0;
   std::wstring saved_proxy_server_, saved_proxy_bypass_, saved_proxy_pac_;

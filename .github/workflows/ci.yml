@@ -14,6 +14,7 @@ on:
           - apple-fakedns
           - core-dns-context
           - native-listeners
+          - preparation-report
       apple_runner:
         description: Apple runner for manual validation
         type: choice
@@ -29,7 +30,7 @@ on:
 
 jobs:
   core-dns-context:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'core-dns-context' || inputs.validation == 'native-listeners'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'core-dns-context' || inputs.validation == 'native-listeners' || inputs.validation == 'preparation-report'
     name: Scoped Core DNS runtime (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
@@ -97,7 +98,7 @@ jobs:
           retention-days: 7
 
   dart:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'preparation-report'
     name: Dart and Flutter tests
     runs-on: ubuntu-latest
     steps:
@@ -172,11 +173,11 @@ jobs:
         working-directory: example
         run: |
           flutter pub get
-          flutter analyze lib/vpn_routing.dart test/vpn_routing_test.dart
-          flutter test test/vpn_routing_test.dart test/widget_test.dart
+          flutter analyze lib test
+          flutter test
 
   android-native:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'native-listeners'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'native-listeners' || inputs.validation == 'preparation-report'
     name: Android native unit tests
     runs-on: ubuntu-latest
     steps:
@@ -398,7 +399,7 @@ jobs:
             build/macos_packet_bridge_probe/runtime.log
 
   ios:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'apple-runtime'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'apple-runtime' || inputs.validation == 'preparation-report'
     name: iOS Swift and Xcode build
     runs-on: ${{ inputs.apple_runner || 'macos-latest' }}
     timeout-minutes: 45
@@ -522,7 +523,7 @@ jobs:
             build/macos_packet_bridge_probe/runtime.log
 
   windows:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'native-listeners'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'native-listeners' || inputs.validation == 'preparation-report'
     name: Windows native plugin build
     runs-on: windows-latest
     steps:

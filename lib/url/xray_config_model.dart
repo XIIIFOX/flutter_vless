@@ -403,19 +403,25 @@ JsonMap? _immutableMap(JsonMap? value) {
   return UnmodifiableMapView<String, dynamic>(value);
 }
 
+enum XrayJsonChange { tlsOverrideRemoved, streamAliasNormalized }
+
 /// Normalizes legacy fields while optionally retaining raw JSON structure.
 ///
 /// Typed generators omit absent values by default. Raw configurations must keep
 /// explicit nulls and empty containers because Core can distinguish them from
 /// omitted fields.
-dynamic sanitizeXrayJson(dynamic params, {bool preserveStructure = false}) {
+dynamic sanitizeXrayJson(
+  dynamic params, {
+  bool preserveStructure = false,
+  void Function(XrayJsonChange)? onChange,
+}) {
   final sanitized = _sanitizeXrayJson(
     params,
     preserveStructure: preserveStructure,
     root: true,
   );
   if (preserveStructure && sanitized is JsonMap) {
-    _normalizeRawStreamFields(sanitized);
+    _normalizeRawStreamFields(sanitized, onChange);
   }
   return sanitized;
 }
@@ -425,28 +431,37 @@ JsonMap? _rawObjectField(JsonMap object, String name) {
   return value is JsonMap ? value : null;
 }
 
-void _normalizeRawTls(JsonMap? tls) {
+void _normalizeRawTls(JsonMap? tls, void Function(XrayJsonChange)? onChange) {
   if (tls == null) return;
   // Match Core's field folding, but never treat nested user maps as TLS.
   readXraySchemaField(tls, 'allowInsecure');
-  tls.removeWhere((key, _) => _matchesXrayField(key, 'allowinsecure'));
+  final keys =
+      tls.keys.where((key) => _matchesXrayField(key, 'allowinsecure')).toList();
+  for (final key in keys) {
+    tls.remove(key);
+  }
+  if (keys.isNotEmpty) onChange?.call(XrayJsonChange.tlsOverrideRemoved);
 }
 
-void _normalizeRawStreamFields(JsonMap config) {
+void _normalizeRawStreamFields(
+    JsonMap config, void Function(XrayJsonChange)? onChange) {
   for (final name in ['inbounds', 'outbounds']) {
     final handlers = readXraySchemaField(config, name);
     if (handlers is! Iterable) continue;
     for (final handler in handlers) {
       if (handler is! JsonMap) continue;
       final stream = _rawObjectField(handler, 'streamSettings');
-      if (stream != null) _normalizeRawStream(stream);
+      if (stream != null) _normalizeRawStream(stream, onChange);
     }
   }
 }
 
-void _normalizeRawStream(JsonMap stream) {
-  _normalizeStreamSettingsAliases(stream);
-  _normalizeRawTls(_rawObjectField(stream, 'tlsSettings'));
+void _normalizeRawStream(
+    JsonMap stream, void Function(XrayJsonChange)? onChange) {
+  if (_normalizeStreamSettingsAliases(stream)) {
+    onChange?.call(XrayJsonChange.streamAliasNormalized);
+  }
+  _normalizeRawTls(_rawObjectField(stream, 'tlsSettings'), onChange);
 
   // These are Core's two other TLSConfig owners. A tlsConfig-looking key in
   // another mask, or in any arbitrary metadata, remains caller data.
@@ -460,13 +475,14 @@ void _normalizeRawStream(JsonMap stream) {
       if (type is! String || settings == null) continue;
       switch (type.toLowerCase()) {
         case 'realm':
-          _normalizeRawTls(_rawObjectField(settings, 'tlsConfig'));
+          _normalizeRawTls(_rawObjectField(settings, 'tlsConfig'), onChange);
         case 'xdns':
           final resolvers = readXraySchemaField(settings, 'resolvers');
           if (resolvers is Iterable) {
             for (final resolver in resolvers) {
               if (resolver is JsonMap) {
-                _normalizeRawTls(_rawObjectField(resolver, 'tlsConfig'));
+                _normalizeRawTls(
+                    _rawObjectField(resolver, 'tlsConfig'), onChange);
               }
             }
           }
@@ -484,7 +500,7 @@ void _normalizeRawStream(JsonMap stream) {
   final effective = hasExtra ? (extra is JsonMap ? extra : null) : xhttp;
   if (effective == null) return;
   final download = _rawObjectField(effective, 'downloadSettings');
-  if (download != null) _normalizeRawStream(download);
+  if (download != null) _normalizeRawStream(download, onChange);
 }
 
 String _xrayField(String key) => foldXraySchemaField(key);
@@ -606,11 +622,13 @@ dynamic _sanitizeXrayJson(
   return params;
 }
 
-void _normalizeStreamSettingsAliases(JsonMap map) {
+bool _normalizeStreamSettingsAliases(JsonMap map) {
+  var changed = false;
   void moveAlias(String from, String to) {
     if (!map.containsKey(from)) {
       return;
     }
+    changed = true;
     final value = map.remove(from);
     map.putIfAbsent(to, () => value);
   }
@@ -620,7 +638,9 @@ void _normalizeStreamSettingsAliases(JsonMap map) {
   moveAlias('splitHTTPSettings', 'splithttpSettings');
 
   final network = map['network'];
-  if (network is String) {
+  if (network is String && network != network.toLowerCase()) {
+    changed = true;
     map['network'] = network.toLowerCase();
   }
+  return changed;
 }

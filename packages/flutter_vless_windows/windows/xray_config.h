@@ -16,6 +16,7 @@
 #include <vector>
 #include "third_party/nlohmann/json.hpp"
 #include "asset_location.h"
+#include "preparation_report.h"
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -255,8 +256,8 @@ inline std::optional<std::string> PortEnvironment(const std::string& name);
 inline std::string PortTrimSpace(std::string text);
 inline std::optional<std::string> ResolveInboundListen(const std::string& text, const PortEnvironmentReader& read_environment);
 inline bool UnixInboundListen(std::string resolved);
-inline bool BindDnsAddresses(Json& config, const PortEnvironmentReader& read_environment);
-inline bool BindLogicalAddresses(Json& config, const PortEnvironmentReader& read_environment);
+inline bool BindDnsAddresses(Json& config, const PortEnvironmentReader& read_environment, preparation::Report* report = nullptr);
+inline bool BindLogicalAddresses(Json& config, const PortEnvironmentReader& read_environment, preparation::Report* report = nullptr);
 
 inline Json Parse(const std::string& text) {
   bool duplicate = false;
@@ -298,7 +299,8 @@ inline bool Object(Json& parent, const char* key) {
 // Freeze only file fields actually consumed by Core's StreamConfig.Build.
 // The explicit root is a resolution base, not a filesystem sandbox. Referenced
 // files and their contents are validated by Core before session replacement.
-inline bool BindCertificatePaths(std::string& text, const asset_location::Root& directory) {
+inline bool BindCertificatePaths(std::string& text, const asset_location::Root& directory, preparation::Report* report = nullptr) {
+  bool bound = false;
   if (!directory) return true;
   if (!asset_location::Valid(directory)) return false;
   auto config = Parse(text);
@@ -336,6 +338,7 @@ inline bool BindCertificatePaths(std::string& text, const asset_location::Root& 
             joined += std::filesystem::path::preferred_separator;
             joined += file.native();
             *path = joined.lexically_normal().u8string();
+            bound = true;
           }
         }
       }
@@ -414,26 +417,31 @@ inline bool BindCertificatePaths(std::string& text, const asset_location::Root& 
       }
     }
     text = config.dump();
+    if (report && bound) report->Add(preparation::Change::certificate_refs_bound);
     return true;
   } catch (const std::exception&) {
     return false;
   }
 }
-inline bool PrivateStream(Json& stream) {
+inline bool PrivateStream(Json& stream, preparation::Report* report = nullptr) {
+  const auto assign = [&](Json& object, const char* key, const Json& value) {
+    if (report && (!object.contains(key) || object[key] != value)) report->Add(preparation::Change::private_logging_applied);
+    object[key] = value;
+  };
   if (!Fields(stream, {"tlsSettings", "realitySettings", "xhttpSettings", "splithttpSettings", "finalmask"})) return false;
   for (const auto* key : {"tlsSettings", "realitySettings"}) {
     if (!stream.contains(key) || stream[key].is_null()) continue;
     auto& settings = stream[key];
     if (!Fields(settings, {"masterKeyLog", "show"})) return false;
-    settings["masterKeyLog"] = "";
-    if (std::string(key) == "realitySettings") settings["show"] = false;
+    assign(settings, "masterKeyLog", "");
+    if (std::string(key) == "realitySettings") assign(settings, "show", false);
   }
   if (stream.contains("finalmask") && !stream["finalmask"].is_null()) {
     auto& mask = stream["finalmask"];
     if (!Fields(mask, {"tcp", "udp", "quicParams"})) return false;
     if (mask.contains("quicParams") && !mask["quicParams"].is_null()) {
       if (!Fields(mask["quicParams"], {"debug"})) return false;
-      mask["quicParams"]["debug"] = false;
+      assign(mask["quicParams"], "debug", false);
     }
     for (const auto* key : {"tcp", "udp"}) {
       if (!mask.contains(key) || mask[key].is_null()) continue;
@@ -445,7 +453,7 @@ inline bool PrivateStream(Json& stream) {
         if (!Object(entry, "settings") || !Fields(entry["settings"], {"tlsConfig"})) return false;
         auto& settings = entry["settings"];
         if (!Object(settings, "tlsConfig") || !Fields(settings["tlsConfig"], {"masterKeyLog"})) return false;
-        settings["tlsConfig"]["masterKeyLog"] = "";
+        assign(settings["tlsConfig"], "masterKeyLog", "");
       }
     }
   }
@@ -456,12 +464,13 @@ inline bool PrivateStream(Json& stream) {
     for (auto* container : {&settings, settings.contains("extra") && !settings["extra"].is_null() ? &settings["extra"] : &settings}) {
       if (!Fields(*container, {"downloadSettings"})) return false;
       if (container->contains("downloadSettings") && !(*container)["downloadSettings"].is_null()
-          && !PrivateStream((*container)["downloadSettings"])) return false;
+          && !PrivateStream((*container)["downloadSettings"], report)) return false;
     }
   }
   return true;
 }
-inline bool Normalize(Json& config, const PortEnvironmentReader& read_environment = PortEnvironment) {
+inline bool Normalize(Json& config, const PortEnvironmentReader& read_environment = PortEnvironment, preparation::Report* report = nullptr) {
+  preparation::Report changes;
   if (!Fields(config, {"inbounds", "outbounds", "dns", "routing", "log", "api", "policy", "stats", "fakeDns", "fakedns"})) return false;
   for (const auto* key : {"inbounds", "outbounds"}) {
     if (std::string(key) == "inbounds" && !config.contains(key)) config[key] = Json::array();
@@ -475,14 +484,30 @@ inline bool Normalize(Json& config, const PortEnvironmentReader& read_environmen
       if (std::string(key) == "inbounds" && entry.contains("listen") && entry["listen"].is_string()) {
         const auto resolved = ResolveInboundListen(entry["listen"].get<std::string>(), read_environment);
         if (!resolved) return false;
+        if (entry["listen"].get<std::string>().rfind("env:", 0) == 0) changes.Add(preparation::Change::address_environment_bound);
         entry["listen"] = *resolved;
       }
-      if (entry.contains("streamSettings") && !entry["streamSettings"].is_null() && !PrivateStream(entry["streamSettings"])) return false;
+      if (entry.contains("streamSettings") && !entry["streamSettings"].is_null() && !PrivateStream(entry["streamSettings"], &changes)) return false;
     }
   }
-  if (!BindDnsAddresses(config, read_environment) || !BindLogicalAddresses(config, read_environment)) return false;
+  if (!BindDnsAddresses(config, read_environment, &changes) || !BindLogicalAddresses(config, read_environment, &changes)) return false;
   // No imported filenames, core stdout, DNS questions, TLS keys or Reality dumps.
-  config["log"] = {{"access", "none"}, {"error", "none"}, {"loglevel", "none"}, {"dnsLog", false}};
+  const Json private_log = {{"access", "none"}, {"error", "none"}, {"loglevel", "none"}, {"dnsLog", false}};
+  bool logging_changed = !config.contains("log") || !config["log"].is_object();
+  if (!logging_changed) for (auto wanted = private_log.begin(); wanted != private_log.end(); ++wanted) {
+    unsigned matches = 0;
+    for (auto field = config["log"].begin(); field != config["log"].end(); ++field)
+      if (Fold(field.key()) == Fold(wanted.key())) { ++matches; if (field.value() != wanted.value()) logging_changed = true; }
+    if (matches != 1) logging_changed = true;
+  }
+  // The replacement retains dnsLog=false, but removes Core's maskAddress
+  // field. Unknown log metadata must not turn into a reported operation.
+  if (config.contains("log") && config["log"].is_object())
+    for (auto field = config["log"].begin(); field != config["log"].end(); ++field)
+      if (Fold(field.key()) == "maskaddress") logging_changed = true;
+  if (logging_changed) changes.Add(preparation::Change::private_logging_applied);
+  config["log"] = private_log;
+  if (report) report->Merge(changes);
   return true;
 }
 
@@ -648,9 +673,10 @@ inline std::optional<uint16_t> AvailablePort(const Json& config, uint16_t prefer
 
 inline bool PrepareProxy(std::string& text,
                          const std::function<bool(uint16_t)>& is_free,
-                         const std::function<uint16_t()>& free_port) {
+                         const std::function<uint16_t()>& free_port, preparation::Report* report = nullptr) {
+  preparation::Report changes;
   auto config = Parse(text);
-  if (!Normalize(config) || !config.contains("inbounds") ||
+  if (!Normalize(config, PortEnvironment, &changes) || !config.contains("inbounds") ||
       !config["inbounds"].is_array()) return false;
   for (auto& inbound : config["inbounds"]) {
     if (inbound.contains("listen") && inbound["listen"].is_string()
@@ -681,8 +707,11 @@ inline bool PrepareProxy(std::string& text,
     owned_api_port = *api_port;
   }
   if (!AddApi(config, owned_api_port)) return false;
+  if (owned_api_port) changes.Add(preparation::Change::private_listener_added);
   text = config.dump();
-  return SocksPort(text).has_value();
+  const bool valid = SocksPort(text).has_value();
+  if (valid && report) report->Merge(changes);
+  return valid;
 }
 
 // Freedom sockets must use the interface selected before installing the TUN
@@ -844,7 +873,8 @@ inline std::string ParsedAddressText(std::string text) {
 }
 // Only these root-DNS values are conf.Address fields. Keep caller matcher
 // keys, case, alias/array order, URLs and non-Address strings exactly as supplied.
-inline bool BindDnsAddresses(Json& config, const PortEnvironmentReader& read_environment) {
+inline bool BindDnsAddresses(Json& config, const PortEnvironmentReader& read_environment, preparation::Report* report) {
+  preparation::Report changes;
   if (!config.contains("dns") || config["dns"].is_null()) return true;
   auto dns = config["dns"];
   if (!dns.is_object()) return false;
@@ -868,6 +898,7 @@ inline bool BindDnsAddresses(Json& config, const PortEnvironmentReader& read_env
     if (!address.is_string()) return false;
     const auto expanded = ResolveAddress(address.get<std::string>(), snapshot);
     if (!expanded) return false;
+    if (address.get<std::string>().rfind("env:", 0) == 0) changes.Add(preparation::Change::address_environment_bound);
     address = *expanded;
     return true;
   };
@@ -893,12 +924,14 @@ inline bool BindDnsAddresses(Json& config, const PortEnvironmentReader& read_env
   // Commit only after every inspected field has passed; never leave a partial
   // binding in a candidate rejected for an ambiguous field or nested env value.
   config["dns"] = std::move(dns);
+  if (report) report->Merge(changes);
   return true;
 }
 // These targets are logical destinations of existing handlers, not physical
 // server endpoints. Core gives a nonnull legacy address precedence over
 // rewriteAddress; leave the dormant field and all forwarding policy untouched.
-inline bool BindLogicalAddresses(Json& config, const PortEnvironmentReader& read_environment) {
+inline bool BindLogicalAddresses(Json& config, const PortEnvironmentReader& read_environment, preparation::Report* report) {
+  preparation::Report changes;
   std::vector<std::pair<Json*, Json>> pending;
   std::map<std::string, std::optional<std::string>> environment;
   const PortEnvironmentReader snapshot = [&](const std::string& name) {
@@ -923,10 +956,12 @@ inline bool BindLogicalAddresses(Json& config, const PortEnvironmentReader& read
       if (!expanded) return false;
       for (auto it = settings.begin(); it != settings.end(); ++it)
         if (Fold(it.key()) == Fold(key)) { it.value() = *expanded; break; }
+      if (canonical[key].get<std::string>().rfind("env:", 0) == 0) changes.Add(preparation::Change::address_environment_bound);
       pending.push_back({&handler["settings"], std::move(settings)});
     }
   }
   for (auto& update : pending) *update.first = std::move(update.second);
+  if (report) report->Merge(changes);
   return true;
 }
 inline bool UnixInboundListen(std::string resolved) {
@@ -1120,15 +1155,16 @@ inline Json* EndpointField(Json& object, const char* name) {
   for (auto it = object.begin(); it != object.end(); ++it) if (Fold(it.key()) == Fold(name)) return &it.value();
   return nullptr;
 }
-inline bool BindEndpointAddress(Json& object) {
+inline bool BindEndpointAddress(Json& object, preparation::Report* report = nullptr) {
   auto canonical = object;
   if (!Fields(canonical, {"address"}) || !canonical.contains("address") || !canonical["address"].is_string()) return false;
   const auto expanded = ResolveAddress(canonical["address"].get<std::string>(), PortEnvironment);
   if (!expanded) return false;
   *EndpointField(object, "address") = *expanded;
+  if (report && canonical["address"].get<std::string>().rfind("env:", 0) == 0) report->Add(preparation::Change::address_environment_bound);
   return true;
 }
-inline bool BindStreamEndpointAddress(Json& stream) {
+inline bool BindStreamEndpointAddress(Json& stream, preparation::Report* report = nullptr) {
   if (stream.is_null()) return true;
   auto canonical = stream;
   if (!Fields(canonical, {"network", "method", "xhttpSettings", "splithttpSettings"})) return false;
@@ -1148,20 +1184,20 @@ inline bool BindStreamEndpointAddress(Json& stream) {
   auto* download = EndpointField(*settings, "downloadSettings");
   // The immediate client's Address is decoded even when parent sockopt is
   // inherited. getHTTPClient does not recursively dial its nested download.
-  return !download || download->is_null() || BindEndpointAddress(*download);
+  return !download || download->is_null() || BindEndpointAddress(*download, report);
 }
-inline bool BindEndpointAddresses(Json& config) {
+inline bool BindEndpointAddresses(Json& config, preparation::Report* report = nullptr) {
   for (auto& outbound : config["outbounds"]) {
     const auto protocol = outbound["protocol"].get<std::string>();
     if (protocol == "blackhole" || protocol == "block" || protocol == "loopback" || protocol == "wireguard") continue;
     if (EndpointProtocol(protocol)) {
       auto entries = EndpointEntries(outbound, protocol);
       if (!entries) return false;
-      for (auto* entry : *entries) if (!BindEndpointAddress(*entry)) return false;
+      for (auto* entry : *entries) if (!BindEndpointAddress(*entry, report)) return false;
     }
     // Freedom/direct and DNS may also dial an active XHTTP download through a
     // caller chain. Freeze it before any outbound's physical resolve callback.
-    if (auto* stream = EndpointField(outbound, "streamSettings")) if (!BindStreamEndpointAddress(*stream)) return false;
+    if (auto* stream = EndpointField(outbound, "streamSettings")) if (!BindStreamEndpointAddress(*stream, report)) return false;
   }
   return true;
 }
@@ -1645,11 +1681,12 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
     const std::string& username, const std::string& password, const std::string& interface_name,
     const std::function<std::string(const std::string&)>& resolve,
     VpnRoutingProvenance* provenance = nullptr,
-    const std::function<bool(uint16_t)>& tcp_available = {}) try {
+    const std::function<bool(uint16_t)>& tcp_available = {}, preparation::Report* report = nullptr) try {
+  preparation::Report changes;
   auto config = Parse(text);
   if (username.empty() || password.empty() || username.size() > 255 || password.size() > 255 || interface_name.empty()
-      || !Normalize(config)) return std::nullopt;
-  if (!BindEndpointAddresses(config)) return std::nullopt;
+      || !Normalize(config, PortEnvironment, &changes)) return std::nullopt;
+  if (!BindEndpointAddresses(config, &changes)) return std::nullopt;
   bool fake_dns = false;
   if (!ProtectedFakeDns(config, fake_dns)) return std::nullopt;
   if (!ValidBootstrapChains(config["outbounds"])) return std::nullopt;
@@ -1668,6 +1705,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
       {"sniffing", {{"enabled", true}, {"routeOnly", true}, {"destOverride", Json::array({"http", "tls", "quic"})}}}};
   if (fake_dns) inbound["sniffing"]["destOverride"].push_back("fakedns");
   inbounds.insert(inbounds.begin(), inbound);
+  changes.Add(preparation::Change::private_listener_added);
   const auto relay_tag = service_tags.Next(kDnsRelay);
   const auto ipv6_tag = service_tags.Next(kIpv6Block);
   std::string proxy;
@@ -1732,6 +1770,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
       {{"type", "field"}, {"inboundTag", Json::array({managed_tag})}, {"ip", Json::array({std::string(kVirtualDns) + "/32"})}, {"port", "53"}, {"network", "tcp,udp"}, {"outboundTag", relay_tag}}
   });
   generated.guard_rule_indices.push_back(0);
+  changes.Add(preparation::Change::system_dns_guard_added);
   for (const auto& rule : dns_rules) {
     generated.guard_rule_indices.push_back(static_cast<int64_t>(rules.size())); rules.push_back(rule);
   }
@@ -1745,6 +1784,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   if (!api_port || !AddApi(config, *api_port)) return std::nullopt;
   if (owned_api) config["api"]["tag"] = service_tags.Next("flutter-vless-stats");
   if (provenance) *provenance = std::move(generated);
+  if (report) report->Merge(changes);
   return config.dump();
 } catch (...) { return std::nullopt; }
 

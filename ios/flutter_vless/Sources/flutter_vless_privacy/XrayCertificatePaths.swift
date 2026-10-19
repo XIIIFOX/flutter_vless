@@ -6,6 +6,10 @@ public enum XrayCertificatePaths {
     public enum Failure: Error { case invalidDirectory, malformedConfiguration, invalidFilePath }
 
     public static func bind(configData: Data, directory: String?) throws -> Data {
+        try bind(configData: configData, directory: directory, onBinding: nil)
+    }
+
+    public static func bind(configData: Data, directory: String?, onBinding: (() -> Void)?) throws -> Data {
         guard let directory else { return configData }
         guard directory.hasPrefix("/"), !directory.contains("\0") else { throw Failure.invalidDirectory }
         let base = clean(directory)
@@ -113,7 +117,10 @@ public enum XrayCertificatePaths {
             }
             config[listKey] = entries
         }
-        return changed ? try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys]) : configData
+        guard changed else { return configData }
+        let result = try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+        onBinding?()
+        return result
     }
 
     private static func clean(_ path: String) -> String {

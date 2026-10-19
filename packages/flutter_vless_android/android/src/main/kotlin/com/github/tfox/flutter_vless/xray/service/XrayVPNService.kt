@@ -19,6 +19,9 @@ import com.github.tfox.flutter_vless.xray.core.LocalProxyAccessPolicy
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
 import com.github.tfox.flutter_vless.xray.core.XrayPortSpec
 import com.github.tfox.flutter_vless.xray.core.NativeRuntimeConfig
+import com.github.tfox.flutter_vless.xray.core.PreparationChanges
+import com.github.tfox.flutter_vless.xray.core.PreparationStage
+import com.github.tfox.flutter_vless.xray.core.StartupPreparationOutcome
 import com.github.tfox.flutter_vless.xray.core.XrayDiagnosticsStore
 import com.github.tfox.flutter_vless.xray.core.XrayDiagnosticsStore.Event
 import com.github.tfox.flutter_vless.xray.core.StartupReadiness
@@ -164,6 +167,7 @@ class XrayVPNService : VpnService() {
         if (tileToggle) tileStartPending = true
         showForeground("Connecting; traffic protection is being prepared")
         worker.execute {
+            val outcome = StartupPreparationOutcome()
             @Suppress("DEPRECATION")
             val receiver = intent?.getParcelableExtra<ResultReceiver>("start_receiver")
             @Suppress("DEPRECATION")
@@ -189,18 +193,18 @@ class XrayVPNService : VpnService() {
                 tileStartPending = false
                 NativeQuickAccess.refresh(this)
                 event(Event.PROFILE_UNAVAILABLE)
-                receiver?.send(1, Bundle())
+                receiver?.send(1, outcome.toBundle(false))
                 if (request == requests.get() && tun == null && !recovery.authorized) {
                     XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED)
                     stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(startId)
                 }
                 return@execute
             }
-            val accepted = runCatching { acceptSession(incoming, command == AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE, request, systemAlwaysOnStart) }
+            val accepted = runCatching { acceptSession(incoming, command == AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE, request, systemAlwaysOnStart, outcome) }
                 .getOrElse { event(Event.CONFIG_REJECTED); false }
             if (tileToggle && accepted) XrayCoreManager.publishState(this,AppConfigs.V2RAY_STATES.V2RAY_CONNECTING)
             tileStartPending = false
-            receiver?.send(if (accepted) 0 else 1, Bundle())
+            receiver?.send(if (accepted) 0 else 1, outcome.toBundle(accepted))
             if (!accepted && request == requests.get() && tun == null && !recovery.authorized) {
                 stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(startId)
             }
@@ -208,7 +212,8 @@ class XrayVPNService : VpnService() {
         return START_STICKY
     }
 
-    private fun acceptSession(incoming: XrayConfig, explicit: Boolean, request: Long, systemAlwaysOnStart: Boolean): Boolean {
+    private fun acceptSession(incoming: XrayConfig, explicit: Boolean, request: Long, systemAlwaysOnStart: Boolean,
+                              outcome: StartupPreparationOutcome): Boolean {
         if (request != requests.get()) return false
         val options = try {
             val parsed = incoming.PLUGIN_OPTIONS_JSON?.let { Gson().fromJson(it,Map::class.java) }
@@ -219,6 +224,7 @@ class XrayVPNService : VpnService() {
         } catch (_: Exception) { event(Event.CONFIG_REJECTED); return false }
         val candidate = incoming.copy(BLOCKED_APPS = ArrayList(incoming.BLOCKED_APPS), BYPASS_SUBNETS = ArrayList(incoming.BYPASS_SUBNETS))
         val secret = LocalProxyCredentials.generate()
+        val changes = PreparationChanges()
         var candidateDnsServers = dnsServers
         var candidateRouting: NativeRoutingPreparation? = null
         val (json, finalCandidate, candidateCredentials) = try {
@@ -227,7 +233,7 @@ class XrayVPNService : VpnService() {
                 require(XrayCoreManager.supportsNativeRouting(this)) { "Native VPN routing is unavailable" }
             if (request != requests.get()) return false
             val dns = if (candidate.PROXY_ONLY) null else AndroidTunnelDnsPolicy.prepare(candidate.V2RAY_FULL_JSON_CONFIG, candidate.ANDROID_DNS_POLICY,
-                candidate.ANDROID_DNS_PROXY_OUTBOUND_TAG, candidate.BYPASS_SUBNETS) {
+                candidate.ANDROID_DNS_PROXY_OUTBOUND_TAG, candidate.BYPASS_SUBNETS, changes = changes) {
                 XraySocketProtector.resolveBootstrapHostname(this, it)
             }
             if (dns != null) {
@@ -236,20 +242,25 @@ class XrayVPNService : VpnService() {
             }
             val runtime = XrayCoreManager.buildRuntimeConfigJson(candidate, noBackupFilesDir, secret, dns,
                 routingPrepared = { candidateRouting=it },
+                changes = changes,
                 tcpAvailable = if (candidate.PROXY_ONLY) null else XrayCoreManager::tcpListenerAvailable)
             val localCredentials = if (candidate.PROXY_ONLY)
                 LocalProxyAccessPolicy.credentialsForProxyOnly(runtime, candidate.LOCAL_SOCKS5_PORT) else secret
             // The candidate probe/rule belong to this request. Final native
             // preflight happens before profiles, generations or active workers change.
-            Triple(runtime, finalizeRuntime(candidate, runtime, candidateRouting, secret.username, capabilityChecked=true), localCredentials)
+            Triple(runtime, finalizeRuntime(candidate, runtime, candidateRouting, secret.username, capabilityChecked=true,
+                changes = changes, outcome = outcome), localCredentials)
         } catch (_: Exception) {
             event(Event.CONFIG_REJECTED)
             return false
         }
-        return finalCandidate.admit(isCurrent = { request == requests.get() }, persist = {
+        val admitted = finalCandidate.admit(isCurrent = { request == requests.get() }, persist = {
+            outcome.stage = PreparationStage.PERSIST
             try { if (explicit) { if (candidate.PROXY_ONLY) profiles.disarm() else profiles.save(incoming) } }
             catch (error: Exception) { event(Event.PROFILE_SAVE_FAILED); throw error }
+            outcome.stage = PreparationStage.PREPARE
         }, commit = { accepted ->
+            outcome.stage = PreparationStage.START
             // Mode changes intentionally deactivate VPN protection; VPN-to-VPN replacements retain it.
             if (candidate.PROXY_ONLY && tun != null) deactivateSession()
             val owner = recovery.activate()
@@ -285,11 +296,14 @@ class XrayVPNService : VpnService() {
                 true
             }
         })
+        if (admitted) outcome.report = finalCandidate.preparationReport
+        return admitted
     }
 
     private fun finalizeRuntime(current: XrayConfig, base: JSONObject,
                                 routing: NativeRoutingPreparation? = routingPreparation,
-                                authUser: String = credentials?.username.orEmpty(), capabilityChecked: Boolean = false): SessionRuntimeCandidate<SessionReadinessProbe> {
+                                authUser: String = credentials?.username.orEmpty(), capabilityChecked: Boolean = false,
+                                changes: PreparationChanges? = null, outcome: StartupPreparationOutcome? = null): SessionRuntimeCandidate<SessionReadinessProbe> {
         if (current.VPN_ROUTING_SELECTION_JSON != null) {
             requireNotNull(routing) { "Native VPN routing preparation unavailable" }
             if (!capabilityChecked) require(XrayCoreManager.supportsNativeRouting(this)) { "Native VPN routing unavailable" }
@@ -297,8 +311,12 @@ class XrayVPNService : VpnService() {
         return SessionRuntimeCandidate.prepare(
             base, createProbe = { if (current.PROXY_ONLY) null else createReadinessProbe(base) },
             configure = { probe, json -> probe.configure(json, current.LOCAL_SOCKS5_PORT) },
-            validate = { final -> XrayCoreManager.validateNative(this, final, current.GEO_ASSETS_DIRECTORY) },
-            freeze = { final -> routing?.freeze(final, authUser) ?: NativeRuntimeConfig.freeze(final) })
+            validate = { final ->
+                outcome?.stage = PreparationStage.CORE_CHECK
+                XrayCoreManager.validateNative(this, final, current.GEO_ASSETS_DIRECTORY)
+            },
+            freeze = { final -> routing?.freeze(final, authUser) ?: NativeRuntimeConfig.freeze(final) },
+            changes = changes).also { outcome?.stage = PreparationStage.PREPARE }
     }
 
     /** Test seam supplies an inert probe; normal startup still uses the existing owned listener. */

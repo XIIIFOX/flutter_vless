@@ -191,6 +191,7 @@ object XrayCoreManager {
         credentials: LocalProxyCredentials? = null, protectedDns: AndroidTunnelDnsPolicy.Prepared? = null,
         routingPrepared: ((NativeRoutingPreparation) -> Unit)? = null,
         tcpAvailable: ((Int) -> Boolean)? = null,
+        changes: PreparationChanges? = null,
         environment: (String) -> String? = System::getenv): JSONObject {
         config.runtimeTrafficInboundTag = null
         // The DNS preparer chooses the adapter identity before adding its rule.
@@ -202,7 +203,9 @@ object XrayCoreManager {
             }
             requireNotNull(protectedDns?.managedInboundTag) { "Protected DNS adapter identity is unavailable" }
         } else null
-        val imported = XrayCertificateAssets.prepare(config.V2RAY_FULL_JSON_CONFIG, config.CERTIFICATE_ASSETS_DIRECTORY)
+        val imported = XrayCertificateAssets.prepare(config.V2RAY_FULL_JSON_CONFIG, config.CERTIFICATE_ASSETS_DIRECTORY) {
+            changes?.record(PreparationChange.CERTIFICATE_REFS_BOUND)
+        }
         // Service and policy subtrees belong to the caller. Keep them outside
         // the compatibility normalizer, including explicit null and unknown
         // fields, and reject ambiguous Go-decoder aliases before choosing one.
@@ -220,6 +223,12 @@ object XrayCoreManager {
         normalizeVlessOutbounds(json)
         require(json.optJSONArray("outbounds")?.length()?.let { it > 0 } == true) { "At least one outbound is required" }
         // Raw native logs can contain addresses and secrets even at error level.
+        val previousLog = json.optJSONObject("log")
+        val privateLogFields = setOf("loglevel", "access", "error")
+        val typedLogFields = privateLogFields + setOf("dnslog", "maskaddress")
+        if (previousLog == null || privateLogFields.any { previousLog.opt(it) != "none" } ||
+            previousLog.keys().asSequence().any { it !in privateLogFields && schemaField(it) in typedLogFields })
+            changes?.record(PreparationChange.PRIVATE_LOGGING_APPLIED)
         json.put("log", JSONObject().put("loglevel", "none").put("access", "none").put("error", "none"))
         val inbounds = json.optJSONArray("inbounds") ?: JSONArray()
         val originalInboundCount = inbounds.length()
@@ -234,7 +243,9 @@ object XrayCoreManager {
         for (i in 0 until inbounds.length()) {
             val inbound = inbounds.getJSONObject(i)
             val port = inbound.optInt("port", -1)
-            val listen = XrayPortSpec.bindListenEnvironment(inbound.optString("listen"), environment)
+            val listen = XrayPortSpec.bindListenEnvironment(inbound.optString("listen"), environment) {
+                changes?.record(PreparationChange.ADDRESS_ENVIRONMENT_BOUND)
+            }
             if (inbound.opt("listen") is String) inbound.put("listen", listen)
             val unixSocket = XrayPortSpec.isUnixListen(listen)
             // Xray also accepts string port lists/ranges. Reserve every port
@@ -256,6 +267,7 @@ object XrayCoreManager {
                     .put("destOverride", JSONArray().put("http").put("tls").put("quic")
                         .also { if (restoreFakeDns) it.put("fakedns") })))
             managedInput = inbounds.getJSONObject(inbounds.length() - 1)
+            changes?.record(PreparationChange.PRIVATE_LISTENER_ADDED)
             used.add(config.LOCAL_SOCKS5_PORT)
         }
         if (!config.PROXY_ONLY) {
@@ -280,6 +292,7 @@ object XrayCoreManager {
             val apiTag = serviceTags.next("flutter-vless-stats-in")
             inbounds.put(JSONObject().put("tag", apiTag).put("port", config.LOCAL_API_PORT).put("listen", "127.0.0.1")
                 .put("protocol", "dokodemo-door").put("settings", JSONObject().put("address", "127.0.0.1")))
+            changes?.record(PreparationChange.PRIVATE_LISTENER_ADDED)
             val routing = json.optJSONObject("routing") ?: JSONObject()
             val rules = JSONArray().put(JSONObject().put("type", "field").put("inboundTag", JSONArray().put(apiTag)).put("outboundTag", apiOutboundTag))
             routing.optJSONArray("rules")?.let { for (i in 0 until it.length()) rules.put(it.get(i)) }

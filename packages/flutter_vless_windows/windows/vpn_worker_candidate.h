@@ -19,13 +19,14 @@ class VpnWorkerCandidate {
   template <class MakeProbe, class Check>
   static std::unique_ptr<VpnWorkerCandidate> Prepare(const std::string& base,
       const std::string& underlay, uint64_t identity, uint16_t managed_port,
-      MakeProbe make_probe, Check check, RemoveConfig remove) {
+      MakeProbe make_probe, Check check, RemoveConfig remove, preparation::Report report = {}) {
     auto config = xray_config::Parse(base);
     if (underlay.empty() || !config.is_object() || !config.contains("outbounds")
         || !config["outbounds"].is_array()) return nullptr;
     for (auto& outbound : config["outbounds"]) Rebind(outbound, underlay);
     auto candidate = std::unique_ptr<VpnWorkerCandidate>(new VpnWorkerCandidate(
         make_probe(), underlay, identity, std::move(remove)));
+    candidate->report_ = std::move(report);
     if (!candidate->probe_ || !candidate->probe_->Start()
         || !candidate->probe_->Configure(config, managed_port, &candidate->probe_guards_)) return nullptr;
     candidate->bytes_ = config.dump();
@@ -37,9 +38,11 @@ class VpnWorkerCandidate {
       accepted = check(candidate->bytes_, candidate->path_, candidate->metadata_, candidate->metadata_path_, candidate->probe_guards_);
     } else accepted = check(candidate->bytes_, candidate->path_);
     if (!accepted || candidate->path_.empty() || candidate->metadata_.empty() != candidate->metadata_path_.empty()) return nullptr;
+    candidate->report_.CheckedFinal();
     return candidate;
   }
 
+  const preparation::Report& PreparationReport() const { return report_; }
   const std::string& Bytes() const { return bytes_; }
   const std::filesystem::path& Path() const { return path_; }
   const std::string& Underlay() const { return underlay_; }
@@ -70,6 +73,7 @@ class VpnWorkerCandidate {
   std::string underlay_;
   uint64_t identity_;
   RemoveConfig remove_;
+  preparation::Report report_;
   std::string bytes_;
   std::filesystem::path path_;
   std::string metadata_;

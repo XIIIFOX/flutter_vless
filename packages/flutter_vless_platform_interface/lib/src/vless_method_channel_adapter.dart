@@ -8,6 +8,7 @@ import 'vless_status.dart';
 import 'android_dns_policy.dart';
 import 'vpn_routing_options.dart';
 import 'vless_options.dart';
+import 'vless_preparation_report.dart';
 
 class VlessMethodChannelAdapter extends VlessPlatform {
   VlessMethodChannelAdapter({
@@ -22,6 +23,7 @@ class VlessMethodChannelAdapter extends VlessPlatform {
   final EventChannel eventChannel;
 
   StreamSubscription<dynamic>? _statusSubscription;
+  static final Object _reportCaptureKey = Object();
 
   @override
   Future<void> initializeVless({
@@ -181,7 +183,45 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     if (certificateAssetsDirectory != null) {
       arguments['certificate_assets_directory'] = certificateAssetsDirectory;
     }
-    await methodChannel.invokeMethod('startVless', arguments);
+    final capture = Zone.current[_reportCaptureKey] as _StartReportCapture?;
+    capture?.begin();
+    final reply =
+        await methodChannel.invokeMethod<Object?>('startVless', arguments);
+    capture?.complete(config, VlessPreparationReport.fromNativeReply(reply));
+  }
+
+  @override
+  Future<VlessPreparationReport> startVlessWithReport({
+    required String remark,
+    required String config,
+    required String notificationDisconnectButtonName,
+    List<String>? blockedApps,
+    List<String>? bypassSubnets,
+    bool proxyOnly = false,
+    String? geoAssetsDirectory,
+    String? certificateAssetsDirectory,
+    AndroidDnsPolicy androidDnsPolicy = AndroidDnsPolicy.config,
+    String? androidDnsProxyOutboundTag,
+    VpnRoutingOptions? vpnRouting,
+  }) async {
+    final capture = _StartReportCapture(config);
+    await runZoned(
+        () => startVless(
+              remark: remark,
+              config: config,
+              notificationDisconnectButtonName:
+                  notificationDisconnectButtonName,
+              blockedApps: blockedApps,
+              bypassSubnets: bypassSubnets,
+              proxyOnly: proxyOnly,
+              geoAssetsDirectory: geoAssetsDirectory,
+              certificateAssetsDirectory: certificateAssetsDirectory,
+              androidDnsPolicy: androidDnsPolicy,
+              androidDnsProxyOutboundTag: androidDnsProxyOutboundTag,
+              vpnRouting: vpnRouting,
+            ),
+        zoneValues: {_reportCaptureKey: capture});
+    return capture.report;
   }
 
   Future<void> _requireSecurityCapability(String capability) async {
@@ -247,5 +287,25 @@ class VlessMethodChannelAdapter extends VlessPlatform {
           'getProviderDebugSnapshot',
         ) ??
         '';
+  }
+}
+
+// A per-invocation observer preserves virtual dispatch to older adapter
+// overrides. It never stores a process-wide last report. An override which
+// uses another candidate or more than one native start cannot claim a report.
+class _StartReportCapture {
+  _StartReportCapture(this.expectedConfiguration);
+  final String expectedConfiguration;
+  int invocations = 0;
+  VlessPreparationReport report = const VlessPreparationReport.unavailable();
+  void begin() {
+    invocations++;
+    report = const VlessPreparationReport.unavailable();
+  }
+
+  void complete(String configuration, VlessPreparationReport result) {
+    if (invocations == 1 && configuration == expectedConfiguration) {
+      report = result;
+    }
   }
 }

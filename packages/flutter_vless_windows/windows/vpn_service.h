@@ -59,7 +59,8 @@ class VpnService {
   bool Start(const std::string& config, const flutter_vless::NativeOptions& options = {},
       flutter_vless::asset_location::Root assets = std::nullopt,
       std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing = std::nullopt,
-      std::function<void()> admitted = {});
+      std::function<void()> admitted = {},
+      flutter_vless::preparation::StartupOutcome* outcome = nullptr, flutter_vless::preparation::Report changes = {});
 
   /**
    * @brief Stops the VPN service and cleans up resources.
@@ -91,14 +92,15 @@ class VpnService {
   flutter_vless::traffic::Sample GetTrafficSample();
 
  private:
-  void RunVpn();
-  bool StartWorkers();
+  void RunVpn(std::shared_ptr<flutter_vless::preparation::StartupCompletion> startup);
+  bool StartWorkers(flutter_vless::preparation::Report* report = nullptr, flutter_vless::preparation::Stage* failure = nullptr);
   using WorkerCandidate = flutter_vless::native::VpnWorkerCandidate<flutter_vless::PacketPathProbe>;
   std::unique_ptr<WorkerCandidate> PrepareWorkerCandidate(const std::string& base,
       uint16_t managed_port, flutter_vless::native::ProtectedRuntime& runtime,
       const flutter_vless::asset_location::Root& assets,
       const std::optional<flutter_vless::native_routing::NativeRoutingIntent>& routing,
-      const flutter_vless::xray_config::VpnRoutingProvenance& provenance, const std::string& auth_user);
+      const flutter_vless::xray_config::VpnRoutingProvenance& provenance, const std::string& auth_user,
+      flutter_vless::preparation::Report changes = {}, flutter_vless::preparation::Stage* failure = nullptr);
   void StopWorkers();
   bool RetireIPv6Address();
   void StopSession(bool release_protection);
@@ -108,7 +110,6 @@ class VpnService {
   std::thread vpn_thread_;
   std::mutex state_mutex_;
   std::condition_variable state_changed_;
-  bool first_attempt_finished_ = false;
   std::unique_ptr<ProcessHandle> xray_process_;
   std::unique_ptr<ProcessHandle> tun2socks_process_;
   fs::path xray_executable_path_;

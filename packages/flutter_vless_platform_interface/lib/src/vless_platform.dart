@@ -6,6 +6,7 @@ import 'vless_status.dart';
 import 'android_dns_policy.dart';
 import 'vpn_routing_options.dart';
 import 'vless_options.dart';
+import 'vless_preparation_report.dart';
 import 'method_channel_vless_platform.dart';
 
 /// Contract implemented by every federated `flutter_vless` platform package.
@@ -83,6 +84,37 @@ abstract class VlessPlatform extends PlatformInterface {
     VpnRoutingOptions? vpnRouting,
   }) {
     throw UnimplementedError('startVless() has not been implemented.');
+  }
+
+  /// Starts with an optional safe report. Older third-party implementations
+  /// keep their existing start behavior and explicitly report unavailability.
+  Future<VlessPreparationReport> startVlessWithReport({
+    required String remark,
+    required String config,
+    required String notificationDisconnectButtonName,
+    List<String>? blockedApps,
+    List<String>? bypassSubnets,
+    bool proxyOnly = false,
+    String? geoAssetsDirectory,
+    String? certificateAssetsDirectory,
+    AndroidDnsPolicy androidDnsPolicy = AndroidDnsPolicy.config,
+    String? androidDnsProxyOutboundTag,
+    VpnRoutingOptions? vpnRouting,
+  }) async {
+    await startVless(
+      remark: remark,
+      config: config,
+      notificationDisconnectButtonName: notificationDisconnectButtonName,
+      blockedApps: blockedApps,
+      bypassSubnets: bypassSubnets,
+      proxyOnly: proxyOnly,
+      geoAssetsDirectory: geoAssetsDirectory,
+      certificateAssetsDirectory: certificateAssetsDirectory,
+      androidDnsPolicy: androidDnsPolicy,
+      androidDnsProxyOutboundTag: androidDnsProxyOutboundTag,
+      vpnRouting: vpnRouting,
+    );
+    return const VlessPreparationReport.unavailable();
   }
 
   /// Stops the active proxy or VPN/tunnel session.

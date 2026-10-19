@@ -191,13 +191,14 @@ class XrayCertificateAssetsTest {
 
     @Test fun certificateChannelRejectsNonstringBeforeNativeContextAndAdvertisesSupport() {
         val plugin = FlutterVlessPlugin()
-        class Response : MethodChannel.Result {
+        class Response(private val stage: String? = null) : MethodChannel.Result {
             var value: Any? = null
             var code: String? = null
             var message: String? = null
             override fun success(result: Any?) { value = result }
             override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
-                code = errorCode; message = errorMessage; assertNull(errorDetails)
+                code = errorCode; message = errorMessage
+                assertEquals(stage?.let { mapOf("stage" to it) }, errorDetails)
             }
             override fun notImplemented() = fail("Certificate capability/channel unavailable")
         }
@@ -208,7 +209,7 @@ class XrayCertificateAssetsTest {
         // refused before touching stores, activities, executors or workers.
         for (method in listOf("startVless", "getServerDelay")) {
             for (value in listOf<Any>(42, true, emptyList<Any>(), mapOf("path" to "opaque"))) {
-                val result = Response()
+                val result = Response(if (method == "startVless") "prepare" else null)
                 plugin.onMethodCall(MethodCall(method, mapOf("certificate_assets_directory" to value)), result)
                 assertEquals("INVALID_CONFIG", result.code)
                 assertEquals("Certificate asset directory must be a string", result.message)

@@ -12,11 +12,17 @@ public enum XrayAddressEnvironment {
     }
 
     public static func bind(configData: Data, environmentSnapshot: XrayEnvironmentSnapshot) throws -> Data {
+        try bind(configData: configData, environmentSnapshot: environmentSnapshot, onBinding: nil)
+    }
+
+    public static func bind(configData: Data, environmentSnapshot: XrayEnvironmentSnapshot, onBinding: (() -> Void)?) throws -> Data {
         guard var config = try JSONSerialization.jsonObject(with: configData) as? [String: Any] else {
             throw LocalProxyAccessError.malformedConfiguration
         }
         guard try bind(to: &config, environmentSnapshot: environmentSnapshot) else { return configData }
-        return try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+        let result = try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+        onBinding?()
+        return result
     }
 
     private static let endpointProtocols: Set<String> = [

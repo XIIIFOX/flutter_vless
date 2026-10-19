@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
@@ -6,8 +7,122 @@ import 'package:flutter_vless/flutter_vless.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:flutter_vless_example/main.dart';
+import 'package:flutter_vless_example/routing.dart';
 
 void main() {
+  for (final edit in ['JSON', 'certificates', 'VPN routing', 'mode', 'bypass', 'apps']) {
+  testWidgets('$edit edits cannot receive an older pending report',
+      (tester) async {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    const channel = MethodChannel('flutter_vless');
+    const status = MethodChannel('flutter_vless/status');
+    final pending = Completer<Object?>();
+    var starting = false;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'getCoreVersion') return '26.10.17';
+      if (call.method == 'requestPermission') return true;
+      if (call.method == 'startVless') {
+        starting = true;
+        return pending.future;
+      }
+      return null;
+    });
+    messenger.setMockMethodCallHandler(status, (_) async => null);
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(channel, null);
+      messenger.setMockMethodCallHandler(status, null);
+    });
+    await tester.pumpWidget(const MyApp());
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first,
+        '{"outbounds":[{"protocol":"freedom"}]}');
+    await tester.tap(find.text('Connect'));
+    await tester.pump();
+    expect(starting, isTrue);
+    switch (edit) {
+      case 'JSON':
+        await tester.enterText(find.byType(TextField).first,
+            '{"outbounds":[{"protocol":"blackhole"}]}');
+      case 'certificates':
+        await tester.ensureVisible(find.text('Certificate files'));
+        await tester.tap(find.text('Certificate files'));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.widgetWithText(TextField,
+            'Certificate directory (optional)'), '/private/test-certificates');
+      case 'VPN routing':
+        await tester.ensureVisible(find.text('VPN routing'));
+        await tester.tap(find.text('VPN routing'));
+      case 'mode':
+        await tester.ensureVisible(find.text('VPN Mode'));
+        await tester.tap(find.text('VPN Mode'));
+      case 'bypass':
+        await tester.ensureVisible(find.text('Bypass Subnets'));
+        await tester.tap(find.text('Bypass Subnets'));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.descendant(of: find.byType(AlertDialog),
+            matching: find.byType(TextField)), '192.0.2.0/24');
+        await tester.tap(find.text('Save'));
+      case 'apps':
+        await tester.tap(find.byTooltip('Routing / Rules'));
+        await tester.pumpAndSettle();
+        // App selection is Android-only. Exercise the actual live callback
+        // separately from JSON, including a platform without that editor.
+        tester.widget<Routing>(find.byType(Routing)).onApplyApps!(['test.excluded']);
+        await tester.pageBack();
+    }
+    pending.complete({'preparationReport': {'version': 1, 'scope': 'runtimeFinal',
+      'coreCheck': 'passed', 'changes': ['private_listener_added']}});
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('preparation-report')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+  }
+  testWidgets('each startup displays its report and rejection clears stale success',
+      (tester) async {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    const channel = MethodChannel('flutter_vless');
+    const status = MethodChannel('flutter_vless/status');
+    const canary = 'CANARY-private-native-configuration';
+    var starts = 0;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'getCoreVersion') return '26.10.17';
+      if (call.method == 'requestPermission') return true;
+      if (call.method != 'startVless') return null;
+      starts++;
+      if (starts == 2) {
+        throw PlatformException(code: 'CORE_CONFIG_ERROR', message: canary,
+          details: {'stage': 'build', 'section': 'outbounds', 'index': 0,
+            'raw': canary});
+      }
+      return {'preparationReport': {'version': 1, 'scope': 'host',
+        'coreCheck': 'passed', 'changes': ['private_logging_applied'],
+        'raw': canary}};
+    });
+    messenger.setMockMethodCallHandler(status, (_) async => null);
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(channel, null);
+      messenger.setMockMethodCallHandler(status, null);
+    });
+    await tester.pumpWidget(const MyApp());
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first,
+        '{"outbounds":[{"protocol":"freedom"}]}');
+    await tester.tap(find.text('Connect'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('preparation-report')), findsOneWidget);
+    expect(find.text('App configuration · Xray check passed'), findsOneWidget);
+    expect(find.textContaining(canary), findsNothing);
+    await tester.tap(find.text('Connect'));
+    await tester.pumpAndSettle();
+    expect(starts, 2);
+    expect(find.byKey(const Key('preparation-report')), findsNothing);
+    expect(find.text('Xray could not build the configuration. Outbound 1.'),
+        findsOneWidget);
+    expect(find.textContaining(canary), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
   testWidgets(
     'profile delay passes the full editor profile and handles errors',
     (tester) async {

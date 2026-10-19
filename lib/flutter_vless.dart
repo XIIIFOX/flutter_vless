@@ -175,7 +175,6 @@ class FlutterVless {
     String? notificationDisconnectButtonName,
   }) async {
     final normalizedConfig = _normalizeConfigString(config);
-
     await VlessPlatform.instance.startVless(
       remark: remark,
       config: normalizedConfig,
@@ -190,6 +189,51 @@ class FlutterVless {
       notificationDisconnectButtonName:
           notificationDisconnectButtonName ?? options.notification.buttonLabel,
     );
+  }
+
+  /// Starts with the same validation and routing behavior as [startVless],
+  /// returning a safe per-invocation preparation report. Legacy native backends
+  /// report unavailability. A passed Core check is not network readiness.
+  Future<VlessPreparationReport> startVlessWithReport({
+    required String remark,
+    required String config,
+    List<String>? blockedApps,
+    List<String>? bypassSubnets,
+    bool proxyOnly = false,
+    String? geoAssetsDirectory,
+    String? certificateAssetsDirectory,
+    AndroidDnsPolicy androidDnsPolicy = AndroidDnsPolicy.config,
+    String? androidDnsProxyOutboundTag,
+    VpnRoutingOptions? vpnRouting,
+    String? notificationDisconnectButtonName,
+  }) async {
+    final changes = <VlessPreparationChange>{};
+    final decoded = _configValidator.validateJsonString(config);
+    final normalizedConfig = jsonEncode(
+        sanitizeXrayJson(decoded, preserveStructure: true, onChange: (change) {
+      changes.add(switch (change) {
+        XrayJsonChange.tlsOverrideRemoved =>
+          VlessPreparationChange.tlsOverrideRemoved,
+        XrayJsonChange.streamAliasNormalized =>
+          VlessPreparationChange.streamAliasNormalized,
+      });
+    }));
+
+    final report = await VlessPlatform.instance.startVlessWithReport(
+      remark: remark,
+      config: normalizedConfig,
+      blockedApps: blockedApps,
+      proxyOnly: proxyOnly,
+      bypassSubnets: bypassSubnets,
+      geoAssetsDirectory: geoAssetsDirectory,
+      certificateAssetsDirectory: certificateAssetsDirectory,
+      androidDnsPolicy: androidDnsPolicy,
+      androidDnsProxyOutboundTag: androidDnsProxyOutboundTag,
+      vpnRouting: vpnRouting,
+      notificationDisconnectButtonName:
+          notificationDisconnectButtonName ?? options.notification.buttonLabel,
+    );
+    return report.withChanges(changes);
   }
 
   /// Native capabilities and system-managed always-on/lockdown state.

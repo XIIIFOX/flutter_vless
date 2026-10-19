@@ -5,6 +5,7 @@ import 'package:flutter_vless_example/routing.dart';
 import 'options.dart';
 import 'options_storage.dart';
 import 'profile_import.dart';
+import 'preparation_report.dart';
 import 'vpn_routing.dart';
 
 Future<void> main() async {
@@ -50,6 +51,9 @@ class _HomePageState extends State<HomePage> {
       ValueNotifier<VlessStatus>(VlessStatus());
 
   late VlessOptions pluginOptions = widget.options;
+  VlessPreparationReport? preparationReport;
+  int preparationRequest = 0;
+  late String reportEditorText;
   late FlutterVless flutterVless = FlutterVless(
     options: pluginOptions,
     onStatusChanged: (status) {
@@ -73,8 +77,22 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    reportEditorText = config.text;
+    config.addListener(_configurationEdited);
+    certificateDirectory.addListener(_invalidatePreparation);
 
     _initializePlugin(flutterVless);
+  }
+
+  void _invalidatePreparation() {
+    preparationRequest++;
+    if (preparationReport != null) setState(() => preparationReport = null);
+  }
+
+  void _configurationEdited() {
+    if (reportEditorText == config.text) return;
+    reportEditorText = config.text;
+    _invalidatePreparation();
   }
 
   Future<void> _initializePlugin(FlutterVless plugin) async {
@@ -100,6 +118,7 @@ class _HomePageState extends State<HomePage> {
                 onAddTile: () => flutterVless.requestAddQuickTile(),
                 onClearProfile: () => flutterVless.clearQuickAccessProfile(),
                 onApply: (options) async {
+                  _invalidatePreparation();
                   final replacement = FlutterVless(
                       options: options,
                       onStatusChanged: (status) {
@@ -123,7 +142,9 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    config.removeListener(_configurationEdited);
     config.dispose();
+    certificateDirectory.removeListener(_invalidatePreparation);
     certificateDirectory.dispose();
     vlessStatus.dispose();
     super.dispose();
@@ -138,6 +159,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _connect() async {
+    _invalidatePreparation();
+    final request = preparationRequest;
     if (!proxyOnly && !await flutterVless.requestPermission()) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -146,7 +169,8 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    await flutterVless.startVless(
+    if (!mounted || request != preparationRequest) return;
+    final report = await flutterVless.startVlessWithReport(
       remark: remark,
       config: config.text,
       proxyOnly: proxyOnly,
@@ -157,9 +181,13 @@ class _HomePageState extends State<HomePage> {
           ? null
           : certificateDirectory.text,
     );
+    if (mounted && request == preparationRequest) {
+      setState(() => preparationReport = report);
+    }
   }
 
   Future<void> _disconnect() async {
+    _invalidatePreparation();
     await flutterVless.stopVless();
   }
 
@@ -307,6 +335,7 @@ class _HomePageState extends State<HomePage> {
                   .map((s) => s.trim())
                   .where((s) => s.isNotEmpty)
                   .toList();
+              _invalidatePreparation();
               setState(() {
                 bypassSubnets = list;
               });
@@ -355,9 +384,14 @@ class _HomePageState extends State<HomePage> {
                       blockedApps: blockedApps,
                       blockedDomains: blockedDomains,
                       onApplyConfig: (String c) => config.text = c,
-                      onApplyApps: (List<String> apps) => blockedApps = apps,
-                      onApplyDomains: (List<String> domains) =>
-                          blockedDomains = domains)),
+                      onApplyApps: (List<String> apps) {
+                        _invalidatePreparation();
+                        blockedApps = apps;
+                      },
+                      onApplyDomains: (List<String> domains) {
+                        _invalidatePreparation();
+                        blockedDomains = domains;
+                      })),
             ),
             tooltip: 'Routing / Rules',
           ),
@@ -376,6 +410,10 @@ class _HomePageState extends State<HomePage> {
                       _buildConfigCard(),
                       const SizedBox(height: 12),
                       _buildStatusCard(),
+                      if (preparationReport case final report?) ...[
+                        const SizedBox(height: 12),
+                        PreparationReportCard(report: report),
+                      ],
                       const SizedBox(height: 12),
                       _buildControls(),
                       const SizedBox(height: 52),
@@ -398,8 +436,7 @@ class _HomePageState extends State<HomePage> {
           } on PlatformException catch (error) {
             if (!context.mounted) return;
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text(error.message ??
-                  'The system could not change the VPN connection.'),
+              content: Text(configurationFailureMessage(error)),
             ));
           } on ArgumentError {
             if (!context.mounted) return;
@@ -465,7 +502,10 @@ class _HomePageState extends State<HomePage> {
                 config: draft.text,
                 proxyOnly: proxyOnly,
                 value: vpnRouting,
-                onChanged: (value) => setState(() => vpnRouting = value),
+                onChanged: (value) {
+                  _invalidatePreparation();
+                  setState(() => vpnRouting = value);
+                },
               ),
             ),
             ExpansionTile(
@@ -576,7 +616,10 @@ class _HomePageState extends State<HomePage> {
               label: const Text('Bypass Subnets'),
             ),
             ElevatedButton.icon(
-              onPressed: () => setState(() => proxyOnly = !proxyOnly),
+              onPressed: () {
+                _invalidatePreparation();
+                setState(() => proxyOnly = !proxyOnly);
+              },
               icon: const Icon(Icons.swap_horiz),
               label: Text(proxyOnly ? 'Proxy Only' : 'VPN Mode'),
             ),

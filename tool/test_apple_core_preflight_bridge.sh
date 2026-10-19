@@ -198,8 +198,9 @@ probe='''private final class StartProbe {
  let proxyOnlyRunner = Proxy()
  let packetTunnelManager: Manager? = Manager()
  let controlGroup: String? = nil
- func start(proxyOnly: Bool) -> Task<Void, Error> {
- let effectiveConfigData = Data("new".utf8)
+ func start(proxyOnly: Bool, data: Data = Data("new".utf8), changes: [NativePreparationReport.Change] = []) -> Task<NativePreparationReport, Error> {
+ let effectiveConfigData = data
+ let preparationChanges = changes
  let vpnRouting: NativeRoutingIntent? = nil
  let preparedProxyConfig: Proxy.Prepared? = proxyOnly ? Proxy.Prepared(data: Data("prepared-new".utf8)) : nil
  let geoAssetsDirectory: String? = nil
@@ -211,6 +212,20 @@ probe='''private final class StartProbe {
  }
 }
 '''
+success_start=sources[0].read_text().index('\n            do {', sources[0].read_text().index('\n        Task {', sources[0].read_text().index('        let operation = commands.submit {\n            // Do not replace the app-process singleton')))+len('\n            do {')
+success_end=sources[0].read_text().index('\n            } catch let error as CorePreflightError', success_start)
+success=sources[0].read_text()[success_start:success_end]
+probe=probe.replace('\n}\n', '''
+ func refreshRuntimePolling(reason: String) {}
+ func startReply(proxyOnly: Bool) async throws -> Any? {
+ let operation = start(proxyOnly: proxyOnly)
+ var response: Any?
+ let result: (Any?) -> Void = { response = $0 }
+'''+success+'''
+ return response
+ }
+}
+''', 1)
 fixture=(root/'tool/fixtures/apple_preflight_transaction.swift').read_text()
 for index, path in enumerate(sources):
  source=path.read_text()
@@ -236,11 +251,11 @@ for index, path in enumerate(sources):
         proxyCounterLock.lock(); defer { proxyCounterLock.unlock() }
         return (previousUpload, previousDownload)
     }
-    fileprivate static func buildProxyOnlyConfigData(configData: Data) throws -> Data {
+    fileprivate static func buildProxyOnlyConfigData(configData: Data, onChange: ((NativePreparationReport.Change) -> Void)? = nil) throws -> Data {
         prepareCount += 1
         // Preserve admission sentinels; JSON counter cases use real preparation.
         if configData == Data("new".utf8) { return Data("prepared-new".utf8) }
-        return try fixtureRealProxyPreparation(configData: configData)
+        return try fixtureRealProxyPreparation(configData: configData, onChange: onChange)
     }
     private static func findDelayEndpoint(_ data: Data) throws -> (protocolName: String, port: Int, credentials: LocalProxyCredentials?)? {
         if data == Data("prepared-new".utf8) { return nil }

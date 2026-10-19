@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Add optional startVlessWithReport, immutable closed preparation reports and safe configuration failure locations. Keep older platform implementations working with an explicit unavailable report.
+
 * Add optional `VpnRoutingOptions` to `startVless`, with capability checks, original inbound indices and an exact default outbound tag. Keep ordinary calls unchanged and reject proxy-only requests.
 * Add optional `certificateAssetsDirectory` to start and profile-delay calls. Require the native capability before forwarding the directory so older implementations cannot silently ignore it.
 * Add validated `VlessOptions.fromMap` for application-owned settings persistence.

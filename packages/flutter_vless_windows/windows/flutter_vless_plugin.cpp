@@ -44,6 +44,31 @@ flutter_vless::NativeOptions::Json OptionJson(const flutter::EncodableValue& val
   throw std::invalid_argument("Option type");
 }
 
+
+flutter::EncodableValue StartupSuccessValue(const flutter_vless::preparation::StartupOutcome& outcome) {
+  const auto report = outcome.report.value_or(flutter_vless::preparation::Report{}).Json();
+  flutter::EncodableList changes;
+  for (const auto& value : report["changes"]) changes.emplace_back(value.get<std::string>());
+  return flutter::EncodableValue(flutter::EncodableMap{{flutter::EncodableValue("preparationReport"),
+      flutter::EncodableValue(flutter::EncodableMap{
+          {flutter::EncodableValue("version"), flutter::EncodableValue(1)},
+          {flutter::EncodableValue("scope"), flutter::EncodableValue(report["scope"].get<std::string>())},
+          {flutter::EncodableValue("coreCheck"), flutter::EncodableValue(report["coreCheck"].get<std::string>())},
+          {flutter::EncodableValue("changes"), flutter::EncodableValue(changes)}})}});
+}
+flutter::EncodableValue StartupErrorValue(const flutter_vless::preparation::StartupOutcome& outcome) {
+  return flutter::EncodableValue(flutter::EncodableMap{
+      {flutter::EncodableValue("version"), flutter::EncodableValue(1)},
+      {flutter::EncodableValue("stage"), flutter::EncodableValue(outcome.Details()["stage"].get<std::string>())}});
+}
+void CompleteStartup(flutter::MethodResult<flutter::EncodableValue>& result, bool ready, bool protecting,
+    const flutter_vless::preparation::StartupOutcome& outcome) {
+  if (ready) result.Success(StartupSuccessValue(outcome));
+  else result.Error("VPN_START_FAILED", protecting
+      ? "VPN forwarding is unavailable; traffic protection remains active. Check diagnostics, retry or explicitly stop."
+      : "VPN setup failed. Check configuration, administrator rights and bundled runtime files.", StartupErrorValue(outcome));
+}
+
 /**
  * @brief Helper function to log messages to console and Windows debug output.
  * 
@@ -407,6 +432,7 @@ void FlutterVlessPlugin::HandleMethodCall(
       if (remark_it != arguments->end() && config_it != arguments->end()) {
         std::string remark = std::get<std::string>(remark_it->second);
         std::string config = std::get<std::string>(config_it->second);
+        flutter_vless::preparation::Report preparation_changes;
         bool proxy_only = false;
         flutter_vless::asset_location::Root assets;
         const auto assets_it = arguments->find(flutter::EncodableValue("geo_assets_directory"));
@@ -420,8 +446,9 @@ void FlutterVlessPlugin::HandleMethodCall(
         if (certificates_it != arguments->end() && !certificates_it->second.IsNull()) {
           const auto* value = std::get_if<std::string>(&certificates_it->second);
           const auto wide = value ? flutter_vless::native::Wide(*value) : std::wstring();
-          if (!value || wide.empty() || !flutter_vless::xray_config::BindCertificatePaths(config, fs::path(wide))) {
-            result->Error("INVALID_ARGUMENTS", "Invalid certificate asset directory or TLS file configuration"); return;
+          if (!value || wide.empty() || !flutter_vless::xray_config::BindCertificatePaths(config, fs::path(wide), &preparation_changes)) {
+            result->Error("INVALID_ARGUMENTS", "Invalid certificate asset directory or TLS file configuration",
+                StartupErrorValue(flutter_vless::preparation::StartupOutcome{})); return;
           }
         }
         
@@ -476,10 +503,11 @@ void FlutterVlessPlugin::HandleMethodCall(
         
         const auto options = native_options_;
         const auto generation = options_generation_.load();
-        operations_.Submit([this, config, proxy_only, assets, routing, shared_result, options, generation]() {
+        operations_.Submit([this, config, proxy_only, assets, routing, shared_result, options, generation, preparation_changes]() {
           std::lock_guard<std::mutex> lock(lifecycle_mutex_);
           LogMessage("Starting Xray...");
-          const bool ready = V2rayManager::GetInstance().Start(config, proxy_only, options, assets, routing);
+          flutter_vless::preparation::StartupOutcome outcome;
+          const bool ready = V2rayManager::GetInstance().Start(config, proxy_only, options, assets, routing, &outcome, preparation_changes);
           const bool protecting = V2rayManager::GetInstance().IsProtecting();
           is_running_ = V2rayManager::GetInstance().IsRunning() || protecting;
           if (ready && proxy_only) quick_profile_.reset();
@@ -488,12 +516,9 @@ void FlutterVlessPlugin::HandleMethodCall(
             start_time_ = std::chrono::steady_clock::now();
             StartStatusTimer();
           }
-          RunOnUIThread([this, shared_result, ready, protecting]() {
+          RunOnUIThread([this, shared_result, ready, protecting, outcome]() {
             RefreshTray();
-            if (ready) shared_result->Success(flutter::EncodableValue(nullptr));
-            else shared_result->Error("VPN_START_FAILED", protecting
-                ? "VPN forwarding is unavailable; traffic protection remains active. Check diagnostics, retry or explicitly stop."
-                : "VPN setup failed. Check configuration, administrator rights and bundled runtime files.");
+            CompleteStartup(*shared_result, ready, protecting, outcome);
           });
         });
 

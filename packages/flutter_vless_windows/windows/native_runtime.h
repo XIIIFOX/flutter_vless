@@ -2,6 +2,7 @@
 #define FLUTTER_VLESS_NATIVE_RUNTIME_H_
 #include "proxy_service.h"
 #include "asset_location.h"
+#include "preparation_report.h"
 #include <functional>
 
 namespace flutter_vless::native {
@@ -27,17 +28,17 @@ void RemovePrivateConfig(fs::path& path);
 // Raw child output is discarded. No active service is stopped by this function.
 enum class ConfigCheckStorage { currentUser, administrators };
 bool CheckConfig(const std::string& config, const fs::path& executable,
-    ConfigCheckStorage storage, const asset_location::Root& assets = std::nullopt);
+    ConfigCheckStorage storage, const asset_location::Root& assets = std::nullopt, preparation::Stage* failure = nullptr);
 // Final VPN check: no normalization, reserialization or executable copy.
 // The caller owns the returned private file on both success and failure and
 // launches this same file with this same protected executable after success.
 class ProtectedRuntime;
 bool CheckPreparedConfig(const std::string& config, ProtectedRuntime& runtime,
-    fs::path& path, const asset_location::Root& assets = std::nullopt);
+    fs::path& path, const asset_location::Root& assets = std::nullopt, preparation::Stage* failure = nullptr);
 bool RoutingCapability(const ProtectedRuntime& runtime, const asset_location::Root& assets = std::nullopt);
 bool CheckRoutingPreparedConfig(const std::string& config, const std::string& metadata,
     ProtectedRuntime& runtime, fs::path& config_path, fs::path& metadata_path,
-    const asset_location::Root& assets = std::nullopt);
+    const asset_location::Root& assets = std::nullopt, preparation::Stage* failure = nullptr);
 bool SocksReady(uint16_t port, const std::string& user = {}, const std::string& password = {});
 // A point-in-time TCP loopback bind check; closes its socket before returning.
 // It neither reserves the port for Core nor changes caller-owned listeners.

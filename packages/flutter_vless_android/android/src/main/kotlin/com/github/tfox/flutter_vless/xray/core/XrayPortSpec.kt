@@ -5,13 +5,14 @@ import org.json.JSONObject
 
 /** Derive private-listener reservations and freeze runtime listen env; imported source stays intact. */
 internal object XrayPortSpec {
-    fun bindListenEnvironment(value: String, environment: (String) -> String? = System::getenv): String =
-        bindAddressEnvironment(value, environment)
+    fun bindListenEnvironment(value: String, environment: (String) -> String? = System::getenv,
+                              onBound: () -> Unit = {}): String = bindAddressEnvironment(value, environment, onBound)
 
     /** Freeze typed Address env syntax before the child adds its private
      * environment. Like Core, expand once, prefer an exact existing empty value,
      * then try the normalized name; a missing address becomes an empty string. */
-    fun bindAddressEnvironment(value: String, environment: (String) -> String? = System::getenv): String {
+    fun bindAddressEnvironment(value: String, environment: (String) -> String? = System::getenv,
+                               onBound: () -> Unit = {}): String {
         if (!value.startsWith("env:")) return value
         val name = value.substring(4)
         val alternate = normalizedEnvName(name)
@@ -19,6 +20,7 @@ internal object XrayPortSpec {
         // The original Address decoder expands once. Materializing another
         // env: token would make the child's decoder expand it a second time.
         require(!resolved.startsWith("env:")) { "Nested environment address is unavailable" }
+        onBound()
         return resolved
     }
 

@@ -16,14 +16,15 @@ enum Kernel {
  static func reset() { busy=[]; exhausted=false; attempts=[]; entries=[]; captures=0 }
 }
 final class Probe {
- var reachedQueue=false, errorCode:String?, source:[String:Any], queuedData:Data?
- init(_ source:[String:Any]) { self.source=source }
- func result(_ error:FlutterError) { errorCode=error.code }
+ var reachedQueue=false, errorCode:String?, source:[String:Any], queuedData:Data?, queuedChanges:[NativePreparationReport.Change]=[]
+ var errorDetails:Any?, arguments:[String:Any]
+ init(_ source:[String:Any], arguments:[String:Any]=[:]) { self.source=source;self.arguments=arguments }
+ func result(_ error:FlutterError) { errorCode=error.code;errorDetails=error.details }
  func start() {
- let tcpPortAvailable: (Int)->Bool = Kernel.available\n let captureEnvironment = Kernel.capture\n let arguments:[String:Any]=[:]
+ let tcpPortAvailable: (Int)->Bool = Kernel.available\n let captureEnvironment = Kernel.capture\n let arguments=self.arguments
  let configData=try! JSONSerialization.data(withJSONObject:source)
  // ACTUAL_PREFIX
- queuedData=effectiveConfigData; reachedQueue=true
+ queuedData=effectiveConfigData;queuedChanges=preparationChanges; reachedQueue=true
  }
 }
 @main struct Main {
@@ -32,7 +33,7 @@ final class Probe {
   let ordinary:[String:Any]=["inbounds":[["listen":"127.0.0.1","port":19080,"protocol":"socks"]],"outbounds":[["protocol":"freedom","tag":"direct"]]]
   Kernel.reset(); Kernel.busy=[10808]
   let busy=Probe(ordinary);busy.start()
-  let busyOK=busy.reachedQueue && Kernel.attempts == [10808,10809]
+  let busyOK=busy.reachedQueue && Kernel.attempts == [10808,10809] && busy.queuedChanges.isEmpty
   print("CASE=occupied-private;PASS=\\(busyOK);CALLS=\\(Kernel.attempts.count);QUEUE=\\(busy.reachedQueue)")
   if !busyOK { failures += 1 }
   Kernel.reset();Kernel.exhausted=true
@@ -65,6 +66,14 @@ final class Probe {
    ((image["dns"] as! [String:Any])["servers"] as! [String]) == ["tcp://9.9.9.9"]
   print("CASE=byte-environment-before-allocation-and-persistence;PASS=\\(snapshotOK);CAPTURES=\\(Kernel.captures)")
   if !snapshotOK { failures += 1 }
+  let reported=Set(frozen.queuedChanges)==Set([NativePreparationReport.Change.portEnvironmentBound,.addressEnvironmentBound])
+  print("CASE=actual-host-typed-preparation-changes;PASS=\(reported)")
+  if !reported { failures += 1 }
+  let invalid=Probe(ordinary,arguments:["certificate_assets_directory":"secret-canary-relative"]);invalid.start()
+  let rejected = !invalid.reachedQueue && invalid.errorCode == "CERTIFICATE_ASSETS_ERROR" &&
+   (invalid.errorDetails as? [String:String]) == ["stage":"certificate-assets"]
+  print("CASE=preparation-failure-fixed-redacted-stage;PASS=\(rejected)")
+  if !rejected { failures += 1 }
   exit(failures == 0 ? 0 : 7)
  }
 }
@@ -73,7 +82,7 @@ results={}
 source_hashes={}
 for platform,path in paths.items():
  privacy=privacy_paths[platform]
- inputs=[privacy/p for p in ['VlessNativeOptions.swift','NativeRoutingSpec.swift','LocalProxyAccessPolicy.swift','XrayAddressEnvironment.swift','XrayCertificatePaths.swift','XrayConfigKeys.swift','XrayServiceTags.swift','XrayPrivacyConfig.swift']]
+ inputs=[privacy/p for p in ['VlessNativeOptions.swift','NativeRoutingSpec.swift','LocalProxyAccessPolicy.swift','XrayAddressEnvironment.swift','XrayCertificatePaths.swift','XrayConfigKeys.swift','XrayServiceTags.swift','XrayPrivacyConfig.swift','CorePreflightPolicy.swift']]
  if platform=='macos':inputs.append(privacy/'DesktopBypassPolicy.swift')
  s=path.read_text();assert 'manager.xrayConfig = effectiveConfigData' in s
  a=s.index('        let proxyOnly = arguments["proxy_only"]');b=s.index('        let operation = commands.submit',a)

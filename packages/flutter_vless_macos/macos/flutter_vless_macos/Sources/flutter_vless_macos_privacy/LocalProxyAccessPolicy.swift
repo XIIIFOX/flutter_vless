@@ -436,9 +436,15 @@ public enum LocalProxyAccessPolicy {
     }
 
     public static func bindingPortEnvironment(configData: Data, environmentSnapshot: XrayEnvironmentSnapshot) throws -> Data {
+        try bindingPortEnvironment(configData: configData, environmentSnapshot: environmentSnapshot, onBinding: nil)
+    }
+
+    public static func bindingPortEnvironment(configData: Data, environmentSnapshot: XrayEnvironmentSnapshot, onBinding: (() -> Void)?) throws -> Data {
         var config = try normalizedConfig(configData: configData)
         guard try bindPortEnvironment(&config, environment: environmentSnapshot) else { return configData }
-        return try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+        let result = try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+        onBinding?()
+        return result
     }
 
     private static func bindPortEnvironment(_ config: inout [String: Any], environment: XrayEnvironmentSnapshot) throws -> Bool {

@@ -1,14 +1,41 @@
 import Foundation
 
+/// A closed summary of this invocation's checked candidate, never config data.
+public struct NativePreparationReport: Sendable {
+    public enum Change: String, Hashable, Sendable {
+        case certificateRefsBound = "certificate_refs_bound"
+        case privateListenerAdded = "private_listener_added"
+        case systemDNSGuardAdded = "system_dns_guard_added"
+        case privateLoggingApplied = "private_logging_applied"
+        case portEnvironmentBound = "port_environment_bound"
+        case addressEnvironmentBound = "address_environment_bound"
+    }
+    public let scope: String
+    public let coreCheck: String
+    public let changes: [Change]
+
+    public init(proxyOnly: Bool, coreCheckPassed: Bool, changes: [Change]) {
+        scope = proxyOnly && coreCheckPassed ? "runtimeFinal" : "host"
+        coreCheck = coreCheckPassed ? "passed" : "unavailable"
+        self.changes = Array(Set(changes)).sorted { $0.rawValue < $1.rawValue }
+    }
+    public var flutterResult: [String: Any] {
+        ["preparationReport": ["version": 1, "scope": scope, "coreCheck": coreCheck,
+                               "changes": changes.map(\.rawValue)]]
+    }
+}
+
 /// Closed bridge errors never contain Core text, configuration values or paths.
 public struct CorePreflightError: LocalizedError {
     public let stage: String
     public let section: String?
     public let index: Int?
 
+    public static let assetPreparation = CorePreflightError(stage: "prepare", section: nil, index: nil)
     public static let activeProxySession = CorePreflightError(stage: "active-session", section: nil, index: nil)
 
     public var errorDescription: String? {
+        if stage == "prepare" { return "Unable to prepare Xray runtime assets." }
         if stage == "active-session" { return "Stop the active proxy-only session before starting another configuration." }
         if stage == "environment-policy" { return "Xray Env configuration cannot be checked safely in this process yet." }
         if let section, let index {

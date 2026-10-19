@@ -49,7 +49,8 @@ def source_snapshot():
     paths = [Path(__file__).resolve(), ROOT / 'tool/test_native_dns_preservation_runner.py', ROOT / 'tool/test_native_dns_context_runtime.py',
              ROOT / 'third_party/xray-native-dns/pin-manifest.json', MOBILE / 'go.mod', MOBILE / 'go.sum',
              WINDOWS / 'xray_config.h', WINDOWS / 'desktop_security_test.cpp',
-             WINDOWS / 'xray_config_test.cpp', WINDOWS / 'asset_location.h', WINDOWS / 'third_party/nlohmann/json.hpp']
+             WINDOWS / 'xray_config_test.cpp', WINDOWS / 'asset_location.h', WINDOWS / 'preparation_report.h',
+             WINDOWS / 'third_party/nlohmann/json.hpp']
     paths.append(ROOT / 'tool/fixtures/compatibility/protocols.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/full-config.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/traffic-counters.json')

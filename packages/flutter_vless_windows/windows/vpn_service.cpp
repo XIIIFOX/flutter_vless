@@ -67,8 +67,10 @@ VpnService::VpnService() = default;
 VpnService::~VpnService() { Shutdown(); }
 bool VpnService::Start(const std::string& config, const flutter_vless::NativeOptions& options,
     flutter_vless::asset_location::Root assets,
-    std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing, std::function<void()> admitted) {
+    std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing, std::function<void()> admitted,
+    flutter_vless::preparation::StartupOutcome* outcome, flutter_vless::preparation::Report changes) {
   using namespace flutter_vless;
+  if (outcome) outcome->Fail(preparation::Stage::prepare);
   if (!asset_location::Valid(assets)) return false;
   // Validate before retiring an existing session. No setup failure is reported
   // as connected, and reconnect never releases the independent WFP barrier.
@@ -100,7 +102,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   };
   xray_config::VpnRoutingProvenance provenance;
   auto prepared = underlay ? xray_config::PrepareProtectedVpn(config, user, password, *underlay, resolve,
-      &provenance, native::TcpPortAvailable) : std::nullopt;
+      &provenance, native::TcpPortAvailable, &changes) : std::nullopt;
   if (!prepared) {
     Event("VPN configuration rejected or endpoint bootstrap unavailable");
     if (!protection_.Active()) protection_.Release();
@@ -112,14 +114,17 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   }
   const auto owned_api_port = xray_config::OwnedApiPort(config, *prepared).value_or(0);
   auto runtime = std::make_unique<native::ProtectedRuntime>();
+  if (outcome) outcome->Fail(preparation::Stage::persist);
   if (!runtime->Create(*xray, !assets.has_value())) {
     Event("Cannot create private administrator-owned VPN runtime");
     if (!protection_.Active()) protection_.Release();
     return false;
   }
   const auto managed_port = xray_config::Port(xray_config::Parse(*prepared)["inbounds"][0]);
-  auto candidate = managed_port ? PrepareWorkerCandidate(*prepared, *managed_port, *runtime, assets, routing, provenance, user) : nullptr;
+  auto failure = preparation::Stage::prepare;
+  auto candidate = managed_port ? PrepareWorkerCandidate(*prepared, *managed_port, *runtime, assets, routing, provenance, user, changes, &failure) : nullptr;
   if (!candidate) {
+    if (outcome) outcome->Fail(failure);
     Event("Xray configuration check rejected final VPN document; active session preserved");
     return false;
   }
@@ -135,6 +140,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   asset_directory_ = std::move(assets);
   socks_port_ = *managed_port;
   api_port_ = owned_api_port;
+  if (outcome) outcome->Fail(preparation::Stage::start);
   // WFP must exist before native workers, resolver configuration or capture.
   if (!protection_.Install(xray_executable_path_)) {
     Event(("Could not install mandatory Windows traffic protection, code=" + std::to_string(protection_.Error())).c_str());
@@ -143,11 +149,13 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   }
   Event("Mandatory Windows traffic protection installed");
   requested_.store(true); ready_.store(false);
-  { std::lock_guard<std::mutex> lock(state_mutex_); first_attempt_finished_ = false; }
-  vpn_thread_ = std::thread(&VpnService::RunVpn, this);
+  auto startup = std::make_shared<preparation::StartupCompletion>();
+  vpn_thread_ = std::thread(&VpnService::RunVpn, this, startup);
   std::unique_lock<std::mutex> lock(state_mutex_);
-  state_changed_.wait_for(lock, std::chrono::seconds(40), [&] { return first_attempt_finished_; });
-  return ready_.load();
+  state_changed_.wait_for(lock, std::chrono::seconds(40), [&] { return startup->finished; });
+  const bool ready = startup->finished && startup->ready && ready_.load();
+  if (outcome) { if (ready) outcome->Succeed(startup->report); else outcome->Fail(startup->stage); }
+  return ready;
 }
 void VpnService::StopSession(bool release) {
   {
@@ -170,13 +178,20 @@ void VpnService::StopSession(bool release) {
 void VpnService::Stop() { StopSession(true); }
 void VpnService::Shutdown() { StopSession(false); }
 bool VpnService::IsRunning() const { return ready_.load(); }
-void VpnService::RunVpn() {
+void VpnService::RunVpn(std::shared_ptr<flutter_vless::preparation::StartupCompletion> startup) {
   int failures = 0;
   while (requested_.load()) {
     bool started = false;
-    try { started = StartWorkers(); } catch (...) { Event("Native VPN setup failed"); }
+    flutter_vless::preparation::Report report;
+    auto failure = flutter_vless::preparation::Stage::start;
+    try { started = StartWorkers(&report, &failure); } catch (...) { Event("Native VPN setup failed"); }
     ready_.store(started && requested_.load());
-    { std::lock_guard<std::mutex> lock(state_mutex_); first_attempt_finished_ = true; }
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      if (!startup->finished) {
+        startup->ready = ready_.load(); startup->report = report; startup->stage = failure; startup->finished = true;
+      }
+    }
     state_changed_.notify_all();
     if (started) { failures = 0; Event("Protected VPN forwarding ready"); }
     unsigned ticks = 0;
@@ -209,7 +224,9 @@ std::unique_ptr<VpnService::WorkerCandidate> VpnService::PrepareWorkerCandidate(
     const std::string& base, uint16_t managed_port, flutter_vless::native::ProtectedRuntime& runtime,
     const flutter_vless::asset_location::Root& assets,
     const std::optional<flutter_vless::native_routing::NativeRoutingIntent>& routing,
-    const flutter_vless::xray_config::VpnRoutingProvenance& provenance, const std::string& auth_user) {
+    const flutter_vless::xray_config::VpnRoutingProvenance& provenance, const std::string& auth_user,
+    flutter_vless::preparation::Report changes, flutter_vless::preparation::Stage* failure) {
+  if (failure) *failure = flutter_vless::preparation::Stage::prepare;
   if (routing && !flutter_vless::native::RoutingCapability(runtime, assets)) {
     Event("Bundled runtime does not support native VPN routing"); return nullptr;
   }
@@ -222,7 +239,7 @@ std::unique_ptr<VpnService::WorkerCandidate> VpnService::PrepareWorkerCandidate(
       [ports = *excluded] { return std::make_unique<flutter_vless::PacketPathProbe>(ports); },
       [&](const std::string& bytes, fs::path& path, std::string& metadata, fs::path& metadata_path,
           const std::vector<int64_t>& probe_guards) {
-        if (!routing) return flutter_vless::native::CheckPreparedConfig(bytes, runtime, path, assets);
+        if (!routing) return flutter_vless::native::CheckPreparedConfig(bytes, runtime, path, assets, failure);
         std::vector<int64_t> guards = probe_guards;
         // PacketPathProbe owns one prepended rule; provenance comes from its
         // actual Configure call, and from the protected preparer's insertions.
@@ -234,8 +251,8 @@ std::unique_ptr<VpnService::WorkerCandidate> VpnService::PrepareWorkerCandidate(
             provenance.managed_tag, auth_user, routing, mapped, guards);
         if (frozen.error != flutter_vless::native_routing::NativeRoutingError::none || !frozen.envelope) return false;
         metadata = frozen.envelope->metadata_data();
-        return flutter_vless::native::CheckRoutingPreparedConfig(bytes, metadata, runtime, path, metadata_path, assets);
-      }, flutter_vless::native::RemovePrivateConfig);
+        return flutter_vless::native::CheckRoutingPreparedConfig(bytes, metadata, runtime, path, metadata_path, assets, failure);
+      }, flutter_vless::native::RemovePrivateConfig, changes);
   // A slow check must not admit a snapshot whose adapter already changed.
   UINT64 current_identity = 0;
   const auto current = Underlay(&current_identity);
@@ -243,8 +260,9 @@ std::unique_ptr<VpnService::WorkerCandidate> VpnService::PrepareWorkerCandidate(
       || current_identity != candidate->Identity()) return nullptr;
   return candidate;
 }
-bool VpnService::StartWorkers() {
+bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutter_vless::preparation::Stage* failure) {
   using namespace flutter_vless;
+  if (failure) *failure = preparation::Stage::start;
   auto fail = [](const char* stage) { Event(stage); return false; };
   // A previous adapter can outlive its child. Keep cleanup ownership and deny
   // a replacement until its exact address is retired or verified absent.
@@ -361,7 +379,10 @@ bool VpnService::StartWorkers() {
   worker_candidate_->RemoveFile();
   native::RemovePrivateConfig(tun_config_path_);
   for (int i = 0; i < 10 && requested_.load() && xray_process_->IsRunning() && tun2socks_process_->IsRunning(); ++i) {
-    if (worker_candidate_->PacketProbe().Check()) return true;
+    if (worker_candidate_->PacketProbe().Check()) {
+      if (report) *report = worker_candidate_->PreparationReport();
+      return true;
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
   return fail("Private packet-path challenge did not complete");

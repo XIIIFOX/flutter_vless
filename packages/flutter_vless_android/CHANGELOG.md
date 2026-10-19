@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Match Core environment alias casing and whitespace for ports and addresses, and pass the captured environment into private port reservation. Cover the shared corpus through the actual runtime builder with fake availability callbacks.
+
 * Preserve root routing-rule attribute dictionaries during normalization and protected-feature checks, including literal values that resemble DNS or transport settings.
 
 * Preserve the remaining typed transport header maps, including XHTTP `extra`/download streams and TCP HTTP header lists, through runtime normalization and protected-feature admission. Keep inherited XHTTP download socket options unchanged in proxy-DNS mode and validate its active transport before bootstrap.

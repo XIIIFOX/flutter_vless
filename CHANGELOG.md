@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve Core environment aliases for imported port lists and addresses using the pinned simple Unicode case mapping. Keep exact empty values and Core whitespace semantics; add shared public/native regressions.
+
 * Preserve routing-rule `attrs` keys and case-sensitive expressions through full-JSON import, startup and delay on all platform adapters. Keep dictionary data separate from Android protected-feature admission.
 
 * Preserve typed HTTPUpgrade, XHTTP/SplitHTTP, MASQUE, TCP/RAW HTTP and Hysteria masquerade header dictionaries, including lists and effective download streams. Add a shared ten-profile corpus and controlled XHTTP wire-header checks. Align protected proxy-DNS preparation with XHTTP socket inheritance while validating the active download transport.

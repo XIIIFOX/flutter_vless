@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Match Core Unicode environment aliases for port allocation and addresses. Read the Windows process environment through UTF-16 APIs with UTF-8 conversion, retaining present-empty values and caller last-error state.
+
 * Validate the effective immediate XHTTP download transport before proxy-DNS bootstrap. Retain dormant grandchild settings and apply preparation only to the HTTP clients Core actually consumes.
 
 * Accept remote DoH URLs containing `+local` in their path or query while retaining the exact transport-scheme checks. Add shared DNS dictionary and URL preservation controls.

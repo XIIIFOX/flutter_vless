@@ -2,6 +2,83 @@ import XCTest
 import flutter_vless_macos_tunnel_support
 
 final class XrayPortSpecTests: XCTestCase {
+    private func portEnvironmentCorpus() throws -> [[String: Any]] {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/port-env.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf:
+            root.appendingPathComponent("tool/fixtures/compatibility/port-env.json"))) as? [[String: Any]])
+        XCTAssertEqual(cases.count, 8)
+        return cases
+    }
+
+    func testSharedPortEnvironmentAliasesFreezeActualListenersWithoutChangingSource() throws {
+        for item in try portEnvironmentCorpus() {
+            let name = try XCTUnwrap(item["name"] as? String)
+            let value = try XCTUnwrap(item["value"] as? String)
+            let environment = try XCTUnwrap(item["environment"] as? [String: String])
+            let input: [String: Any] = ["protocol": "socks", "listen": "127.0.0.1", "port": value,
+                "settings": ["auth": "password", "accounts": [["user": "caller", "pass": "caller-password"]]]]
+            let source = try JSONSerialization.data(withJSONObject: ["inbounds": [input]], options: [.sortedKeys])
+            if item["invalid"] as? Bool == true {
+                XCTAssertThrowsError(try XrayPortSpec.reservedPorts(value, environment: { environment[$0] }), name)
+                XCTAssertThrowsError(try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: environment), name)
+            } else {
+                let ports = try XCTUnwrap(item["ports"] as? [Int])
+                do {
+                    XCTAssertEqual(try XrayPortSpec.reservedPorts(value, environment: { environment[$0] }), Set(ports), name)
+                    let bound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: environment)
+                    let config = try XCTUnwrap(JSONSerialization.jsonObject(with: bound) as? [String: Any])
+                    let actual = try XCTUnwrap((config["inbounds"] as? [[String: Any]])?.first)
+                    var expected = input; expected["port"] = ports.map(String.init).joined(separator: ",")
+                    XCTAssertEqual(actual as NSDictionary, expected as NSDictionary, name)
+                    XCTAssertEqual(try LocalProxyAccessPolicy.bindingPortEnvironment(configData: bound, environment: [:]), bound, name)
+                } catch { XCTFail("\(name): valid Core environment alias was rejected: \(error)") }
+            }
+            let original = try XCTUnwrap(JSONSerialization.jsonObject(with: source) as? [String: Any])
+            XCTAssertEqual((original["inbounds"] as? [[String: Any]])?.first as? NSDictionary, input as NSDictionary, name)
+        }
+    }
+
+    func testSharedEnvironmentAliasesAlsoBindAddressesWithExactEmptyPrecedence() throws {
+        for item in try portEnvironmentCorpus() {
+            let name = try XCTUnwrap(item["name"] as? String)
+            let value = try XCTUnwrap(item["value"] as? String)
+            let portsEnvironment = try XCTUnwrap(item["environment"] as? [String: String])
+            let environment = portsEnvironment.mapValues { value in
+                value.isEmpty ? "" : "[ 127.0.0.\(Int(value)! - 10800) ]"
+            }
+            let expected = (item["ports"] as? [Int])?.first.map { "[ 127.0.0.\($0 - 10800) ]" } ?? ""
+            do {
+                XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment(value, environment: environment), expected, name)
+                let source = try JSONSerialization.data(withJSONObject: ["inbounds": [["protocol": "socks", "listen": value, "port": 10808]]], options: [.sortedKeys])
+                let bound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: environment)
+                let config = try XCTUnwrap(JSONSerialization.jsonObject(with: bound) as? [String: Any])
+                XCTAssertEqual((config["inbounds"] as? [[String: Any]])?.first?["listen"] as? String, expected, name)
+                let original = try XCTUnwrap(JSONSerialization.jsonObject(with: source) as? [String: Any])
+                XCTAssertEqual((original["inbounds"] as? [[String: Any]])?.first?["listen"] as? String, value, name)
+            } catch { XCTFail("\(name): valid Core address environment lookup was rejected: \(error)") }
+        }
+    }
+
+    func testGoWhitespaceAndSimpleUppercaseAreSharedWithoutTrimmingAddressPrefix() throws {
+        let cases = [("\u{0085}fixture.ß.port\u{3000}", "FIXTURE_ß_PORT"),
+                     ("\u{001c}fixture.port", "\u{001c}FIXTURE_PORT"),
+                     ("\u{feff}fixture.port", "\u{feff}FIXTURE_PORT")]
+        for (name, alias) in cases {
+            do {
+                XCTAssertEqual(try XrayPortSpec.reservedPorts("\u{0085}env:" + name,
+                    environment: { $0 == alias ? "10807" : nil }), [10807])
+                XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:" + name,
+                    environment: [alias: "127.0.0.1"]), "127.0.0.1")
+            } catch { XCTFail("Go whitespace/simple-uppercase lookup was rejected: \(error)") }
+        }
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment(" env:fixture.port",
+            environment: ["FIXTURE_PORT": "127.0.0.1"]), " env:fixture.port")
+    }
+
     func testEnvironmentUnixListenerIsFrozenBeforePersistenceAndPortAllocation() throws {
         let input: [String: Any] = ["protocol": "socks", "listen": "env:flutter.vless.fixture.listen", "port": "0-65535", "settings": ["auth": "password", "accounts": [["user": "caller", "pass": "caller-password"]]], "sniffing": ["enabled": true, "routeOnly": false]]
         let source = try JSONSerialization.data(withJSONObject: ["inbounds": [input]], options: [.sortedKeys])
@@ -78,11 +155,16 @@ final class XrayPortSpecTests: XCTestCase {
         }
     }
 
-    func testUnicodeListenerEnvironmentKeysRequireExactLookupInsteadOfExpandingAnAlias() throws {
+    func testUnicodeListenerEnvironmentUsesSimpleAliasAndNeverFullUppercaseExpansion() throws {
         let source = try JSONSerialization.data(withJSONObject: ["inbounds": [["protocol": "socks", "listen": "env:listen.ß", "port": "0-65535"]]])
-        XCTAssertThrowsError(try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: ["LISTEN_SS": "127.0.0.1"]))
+        let absent = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: ["LISTEN_SS": "127.0.0.1"])
+        let missing = try XCTUnwrap(JSONSerialization.jsonObject(with: absent) as? [String: Any])
+        XCTAssertEqual(((missing["inbounds"] as? [[String: Any]])?.first)?["listen"] as? String, "")
         let path = "/tmp/flutter-vless-unicode-env-listen.sock"
-        let bound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: ["listen.ß": path, "LISTEN_SS": "127.0.0.1"])
+        let simple = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: ["LISTEN_ß": path, "LISTEN_SS": "127.0.0.1"])
+        let simpleConfig = try XCTUnwrap(JSONSerialization.jsonObject(with: simple) as? [String: Any])
+        XCTAssertEqual(((simpleConfig["inbounds"] as? [[String: Any]])?.first)?["listen"] as? String, path)
+        let bound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source, environment: ["listen.ß": path, "LISTEN_ß": "127.0.0.2", "LISTEN_SS": "127.0.0.1"])
         var config = try XCTUnwrap(JSONSerialization.jsonObject(with: bound) as? [String: Any])
         XCTAssertEqual(((config["inbounds"] as? [[String: Any]])?.first)?["listen"] as? String, path)
         let privatePort = try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: LocalProxyCredentials(username: "private", password: "private-password"))

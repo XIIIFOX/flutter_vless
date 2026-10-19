@@ -82,6 +82,31 @@ void main() {
     expect(jsonEncode(config), source);
   });
 
+  test('Environment port names survive example import without host lookup', () {
+    final cases =
+        jsonDecode(
+              File(
+                '../tool/fixtures/compatibility/port-env.json',
+              ).readAsStringSync(),
+            )
+            as List<dynamic>;
+    for (final entry in cases.cast<Map<String, dynamic>>()) {
+      final config = {
+        'inbounds': [
+          {'protocol': 'http', 'listen': '127.0.0.1', 'port': entry['value']},
+        ],
+        'outbounds': [
+          {'protocol': 'freedom'},
+        ],
+      };
+      final source = jsonEncode(config);
+      for (final input in [source, '[$source]']) {
+        expect(jsonDecode(importProfile(input).config), config);
+      }
+      expect(jsonEncode(config), source);
+    }
+  });
+
   test('Raw JSON retains existing remark aliases', () {
     for (final key in ['remarks', 'remark', 'ps']) {
       final input = jsonEncode({

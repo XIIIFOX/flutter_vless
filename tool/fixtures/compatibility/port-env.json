@@ -1,0 +1,92 @@
+[
+  {
+    "name": "ascii_alias",
+    "value": "env:flutter.vless.port",
+    "alias": "FLUTTER_VLESS_PORT",
+    "environment": {
+      "FLUTTER_VLESS_PORT": "10807"
+    },
+    "ports": [
+      10807
+    ]
+  },
+  {
+    "name": "sharp_s_simple_not_full",
+    "value": "env:flutter.vless.ß.port",
+    "alias": "FLUTTER_VLESS_ß_PORT",
+    "environment": {
+      "FLUTTER_VLESS_ß_PORT": "10807",
+      "FLUTTER_VLESS_SS_PORT": "10809"
+    },
+    "ports": [
+      10807
+    ]
+  },
+  {
+    "name": "latin_simple_upper",
+    "value": "env:flutter.vless.ü.port",
+    "alias": "FLUTTER_VLESS_Ü_PORT",
+    "environment": {
+      "FLUTTER_VLESS_Ü_PORT": "10807"
+    },
+    "ports": [
+      10807
+    ]
+  },
+  {
+    "name": "supplementary_simple_upper",
+    "value": "env:flutter.vless.𐐨.port",
+    "alias": "FLUTTER_VLESS_𐐀_PORT",
+    "environment": {
+      "FLUTTER_VLESS_𐐀_PORT": "10807"
+    },
+    "ports": [
+      10807
+    ]
+  },
+  {
+    "name": "greek_simple_not_full",
+    "value": "env:flutter.vless.ᾀ.port",
+    "alias": "FLUTTER_VLESS_ᾈ_PORT",
+    "environment": {
+      "FLUTTER_VLESS_ᾈ_PORT": "10807",
+      "FLUTTER_VLESS_ἈΙ_PORT": "10809"
+    },
+    "ports": [
+      10807
+    ]
+  },
+  {
+    "name": "exact_value_wins",
+    "value": "env:flutter.vless.ß.port",
+    "alias": "FLUTTER_VLESS_ß_PORT",
+    "environment": {
+      "flutter.vless.ß.port": "10811",
+      "FLUTTER_VLESS_ß_PORT": "10807",
+      "FLUTTER_VLESS_SS_PORT": "10809"
+    },
+    "ports": [
+      10811
+    ]
+  },
+  {
+    "name": "exact_empty_wins",
+    "value": "env:flutter.vless.ß.port",
+    "alias": "FLUTTER_VLESS_ß_PORT",
+    "environment": {
+      "flutter.vless.ß.port": "",
+      "FLUTTER_VLESS_ß_PORT": "10807",
+      "FLUTTER_VLESS_SS_PORT": "10809"
+    },
+    "invalid": true
+  },
+  {
+    "name": "file_separator_is_not_go_whitespace",
+    "value": "env:\u001cflutter.vless.port",
+    "alias": "\u001cFLUTTER_VLESS_PORT",
+    "environment": {
+      "FLUTTER_VLESS_PORT": "10807"
+    },
+    "invalid": true
+  }
+]

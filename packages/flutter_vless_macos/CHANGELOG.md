@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Use Core-compatible Unicode environment aliases and whitespace for imported ports and addresses. Share validation and frozen port binding while preserving exact-value and empty-value precedence.
+
 * Validate the effective immediate XHTTP download transport in proxy-DNS preparation. Preserve inactive nested downloads and keep the immediate client's own socket policy separate from explicit parent inheritance.
 
 * Preserve caller `useSystemHosts` for numeric remote DNS instead of rejecting the flag before Core can read the hosts file. Keep named resolver and local transport admission unchanged; add shared DNS preservation controls.

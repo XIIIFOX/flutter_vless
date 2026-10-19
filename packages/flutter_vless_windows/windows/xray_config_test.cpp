@@ -9,6 +9,58 @@ using namespace flutter_vless::xray_config;
 void Check(bool ok, const char* message) {
   if (!ok) throw std::runtime_error(message);
 }
+void PortEnvironmentCases() {
+  std::ifstream input("tool/fixtures/compatibility/port-env.json");
+  Check(input.good(), "shared port environment corpus required");
+  Json cases; input >> cases;
+  Check(cases.size() == 8, "shared port environment corpus changed");
+  unsigned failures = 0;
+  for (const auto& item : cases) {
+    const auto environment = item["environment"];
+    Check(EnvironmentAlias(item["value"].get<std::string>().substr(4)) == item["alias"], "environment alias scalar mapping differs from Core");
+    PortEnvironmentReader read = [&](const std::string& name) -> std::optional<std::string> {
+      return environment.contains(name) ? std::optional<std::string>{environment[name].get<std::string>()} : std::nullopt;
+    };
+    const auto ports = ReservedPorts(item["value"], read);
+    const bool invalid = item.value("invalid", false);
+    const bool ports_match = invalid ? !ports : ports && *ports == item["ports"].get<std::set<unsigned>>();
+    const auto address = ResolveAddress(item["value"].get<std::string>(), read);
+    const auto expected_address = invalid ? std::string() : std::to_string(item["ports"][0].get<unsigned>());
+    const bool address_match = address && *address == expected_address;
+    const Json profile = {{"inbounds", Json::array({{{"protocol", "http"}, {"listen", "127.0.0.1"}, {"port", item["value"]}}})}};
+    const auto original = profile.dump();
+    const auto available = AvailablePort(profile, 10807, read);
+    const bool allocation_match = invalid ? !available : available == (item["ports"][0] == 10807 ? 10808 : 10807);
+    const bool source_unchanged = profile.dump() == original;
+    std::cout << "PORT_ENV_CASE=" << item["name"].get<std::string>() << " ports=" << ports_match
+              << " address=" << address_match << " allocation=" << allocation_match << '\n';
+    if (!ports_match || !address_match || !allocation_match || !source_unchanged) ++failures;
+  }
+  Check(failures == 0, "Core port/address environment aliases differ");
+  const auto missing = [](const std::string&) -> std::optional<std::string> { return std::nullopt; };
+  Check(ResolveAddress("env:missing", missing) == "", "missing Address env changed Core AnyIP behavior");
+  Check(ResolveAddress(" env:missing", missing) == " env:missing", "Address env prefix was eagerly trimmed");
+  const auto nested = [](const std::string&) -> std::optional<std::string> { return "env:second"; };
+  Check(!ResolveAddress("env:first", nested), "nested Address env was decoded twice");
+#ifdef _WIN32
+  const std::wstring key = L"flutter.vless.\u00fc.\U00010428.runtime";
+  const std::string utf8_key = u8"flutter.vless.ü.𐐨.runtime";
+  SetLastError(ERROR_SUCCESS);
+  const auto size = GetEnvironmentVariableW(key.c_str(), nullptr, 0);
+  const bool present = size != 0 || GetLastError() == ERROR_SUCCESS;
+  std::wstring old_value(size ? size : 1, L'\0');
+  if (size) Check(GetEnvironmentVariableW(key.c_str(), old_value.data(), size) < size, "cannot snapshot owned Unicode environment variable");
+  struct RestoreEnvironment {
+    std::wstring key, value; bool present;
+    ~RestoreEnvironment() { SetEnvironmentVariableW(key.c_str(), present ? value.c_str() : nullptr); }
+  } restore{key, old_value, present};
+  Check(SetEnvironmentVariableW(key.c_str(), L"\u00fc\U00010400") != 0, "cannot set process-only Unicode environment value");
+  SetLastError(0xfeed);
+  Check(PortEnvironment(utf8_key) == u8"ü𐐀" && GetLastError() == 0xfeed, "Windows Unicode environment lookup used CRT encoding or changed last error");
+  Check(SetEnvironmentVariableW(key.c_str(), L"") != 0 && PortEnvironment(utf8_key) == "", "present empty Unicode environment value was lost");
+  Check(SetEnvironmentVariableW(key.c_str(), nullptr) != 0 && !PortEnvironment(utf8_key), "absent Unicode environment value was invented");
+#endif
+}
 void CertificatePathCases() {
   namespace fs = std::filesystem;
   const auto root = fs::temp_directory_path() / ("vless-certificates-" +
@@ -238,11 +290,11 @@ void ListenAddressCases() {
     };
     auto profile = Parse(R"({"inbounds":[{"protocol":"http","port":"10807-10809"}],"outbounds":[{"protocol":"freedom"}]})");
     profile["inbounds"][0]["listen"] = "env:" + name;
-    Check(!AvailablePort(profile, 10807, unsupported), "unqualified Unicode env alias silently acquired a bind address");
-    Check(lookups == std::vector<std::string>{name}, "unqualified Unicode alias was looked up approximately");
+    Check(AvailablePort(profile, 10807, unsupported) == 10810, "missing Unicode env alias differs from Core AnyIP listener");
+    Check(lookups == std::vector<std::string>{name, u8"ß"}, "Unicode alias used full uppercase instead of simple scalar mapping");
     lookups.clear();
-    Check(!Normalize(profile, unsupported), "unqualified Unicode env alias became an AnyIP listener");
-    Check(lookups == std::vector<std::string>{name}, "Unicode normalization performed an alias lookup");
+    Check(Normalize(profile, unsupported) && profile["inbounds"][0]["listen"] == "", "missing Unicode env alias was not frozen as Core AnyIP");
+    Check(lookups == std::vector<std::string>{name, u8"ß"}, "Unicode normalization used an approximate alias");
   }
   PortEnvironmentReader exact_unicode = [](const std::string& name) -> std::optional<std::string> {
     return name == u8"ß" ? std::optional<std::string>{"@exact-unicode-key"} : std::nullopt;
@@ -289,6 +341,10 @@ void AssetLocationCases() {
   Check(entries(assets::ChildEnvironment({}, L"", std::nullopt)).empty(), "empty environment block is not valid");
 }
 int main(int argc, char** argv) {
+  if (argc == 2 && std::string(argv[1]) == "--port-env") {
+    try { PortEnvironmentCases(); return 0; }
+    catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+  }
   if (argc == 2 && std::string(argv[1]) == "--certificate-paths") {
     try { CertificatePathCases(); return 0; }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
@@ -313,6 +369,7 @@ int main(int argc, char** argv) {
   UnixInputProxyPreparationCases();
   ListenAddressCases();
   AssetLocationCases();
+  PortEnvironmentCases();
   CertificatePathCases();
   std::ifstream api_input("tool/fixtures/compatibility/api-listeners.json");
   Check(api_input.good(), "shared API listener corpus is required");

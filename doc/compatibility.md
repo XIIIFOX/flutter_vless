@@ -147,6 +147,7 @@ Track the small delivery gates separately from the eight full requirements:
 | Routing attribute dictionary data | Preparation qualified | Shared literal regex corpus, all four public import/start/delay adapters, Android producer and actual pinned-Core attribute matching pass. Both native preparers retain the exact compiled rule; this is separate from system-VPN traffic. |
 | Imported API/services/stats/policy | Qualified | Shared preparation and API/traffic gates, including Windows service acceptance. |
 | Port/address syntax and explicit data/certificate roots | Qualified baseline | Shared Core/native controls and the targeted runtime cases below; OS allocation/reload and managed import lifetime remain open. |
+| Environment aliases in ports and addresses | Preparation qualified; Windows OS acceptance pending | Shared eight-case Core/native corpus, four public adapters, actual Android builder and both Apple port binders pass. Generated Unicode casing matches pinned Go; the Windows UTF-16 process reader still requires execution in Actions. |
 | Source inbound and explicit VPN default | Qualified controlled baseline | Shared Core, Android TUN, Windows 2022/2025 and both enabled Apple SDK runtimes pass controlled source/default selection. Physical/system-VPN acceptance remains separately tracked. |
 | Occupied private TCP listeners | Qualified controlled baseline | Bounded selection, held-port traffic and Android/Windows probe exclusions pass the targeted runtime gates below. Atomic ownership transfer and reload remain separate. |
 | Session-owned traffic counters | Qualified controlled baseline | At f5acbbc, Windows passes 460 rows and Android passes 41 native tests plus three Flutter tests with no skips, including enabled/disabled counter generations. At 02136f1, both enabled Apple SDKs pass counters, all twelve ordinary modes, routing and cleanup. Apple VPN keeps HEV accounting; physical-device acceptance remains separate. |
@@ -395,6 +396,39 @@ Ordinary Core acceptance passes on all three desktop systems at
 [9361270](https://github.com/XIIIFOX/flutter_vless/actions/runs/39184191040).
 This does not qualify device-wide encrypted DNS, DoQ, ECH
 background lookups or additional production certificate/import APIs.
+
+### Environment names in imported ports and addresses
+
+The [eight-case environment corpus](../tool/fixtures/compatibility/port-env.json)
+compares Core port decoding with native reservation and Address lookup. Go uses
+simple uppercase one Unicode scalar at a time: `ß` stays `ß`, `ü` becomes `Ü`,
+and Greek and supplementary characters retain their upstream alias semantics.
+Full Unicode uppercase and ASCII-only conversion can select another variable.
+The native adapters use a generated Unicode 17 mapping from the pinned Go
+reference, checked against every code point. A read-only generator gate checks
+all four emitted regions, including CRLF checkouts, before native compilation.
+Port tokens and alias names also use Core's explicit whitespace set.
+
+An existing exact variable, including an empty value, keeps precedence over its
+alias. Empty or missing port values remain invalid; missing Address values keep
+Core's empty-address behavior. Nested Address `env:` values remain refused to
+prevent a second expansion after materialization. Android forwards the same
+captured environment into imported port reservation before choosing its private
+listener. Apple validation and frozen port binding share one lookup. Windows
+reads process variables through UTF-16 APIs instead of the CRT codepage.
+
+The increment passes 204 root Flutter, 46 example and 303 Android JVM tests,
+15 targeted port methods for each Apple package, C++ sanitizer checks and MinGW
+compile/link checks. The file-only Core/native aggregate passes thirteen phases,
+including the eight-case upstream oracle and generator controls. Actual Windows
+Unicode-environment execution and regression traffic are pending Actions;
+physical-device and service-name/race/recovery acceptance remain separate.
+Apple's current String-keyed environment snapshots still compare canonically
+equivalent Unicode spellings as the same key. A separate pure counterexample
+shows a composed key hiding an absent decomposed exact key and its valid alias.
+A byte-keyed snapshot before Swift dictionary bridging remains open; this
+increment qualifies the shared eight cases and casing/whitespace mapping.
+This does not complete the full port/address requirement.
 
 ### Minimum protocol and transport adaptation
 
@@ -1414,7 +1448,7 @@ Current implementation/acceptance status (1.1.7, unreleased):
 | 2. IPv6 | Partial; physical iOS packet gate pending | IPv6 TCP/UDP with preserved AAAA policy passes ordinary Core on all three desktop systems, actual Android TUN and Windows 2022/2025 TUN/recovery/physical-interface controls. Actual shipped macOS HEV packet controls pass remotely; iOS simulator HEV is a verified link-only stub and physical iOS remains pending. Full macOS system-VPN acceptance, IPv6-only endpoints, NAT64, cross-family handover and broader physical bypass qualification remain open. |
 | 3. Protocol/transport matrix | Partial; controlled XHTTP increment qualified | Supplied VLESS TCP/Reality profiles work on devices. Minimum MASQUE/internal-handler/alias/XHTTP and null legacy-endpoint preparation fixes pass a nine-case pinned Core build corpus with native preparation, including shared XHTTP upload/download socket policy. At cdc5b94, ordinary Core on all three desktop systems carries actual XHTTP HTTP/1.1 packet-up payloads with and without a caller SOCKS chain; both Apple and Windows preparers pass on macOS. The additional ten-profile header corpus preserves 18 raw maps; at 025ff2f, all three ordinary Core OS gates pass literal-header traffic and the independent-download/inactive-grandchild case. Further protocol handshakes, XHTTP TLS/HTTP3/QUIC, physical iOS packets and the full matrix remain open. |
 | 4. Passthrough and VPN routing context | Partial | Imported listeners/authentication remain intact; private DNS/probe rules are scoped to their adapters. API/services/stats/policy preservation passes shared preparation and ordinary Core traffic checks on all three desktop systems; Windows service acceptance passes on 2022/2025. Nonempty selector prefixes pass shared component, ordinary Core and native platform traffic gates at a475374. Per-session source/default selection passes Android TUN at 2f74f13, both enabled Apple SDK runtimes at e5f9fc6 and Windows 2022/2025 at fb2eb75. Session-owned counters pass Android/Windows again at f5acbbc and both complete enabled Apple controlled gates at 02136f1. Public full-JSON startup/delay/import now also preserves explicit nulls and empty containers through all four platform message adapters; DNS hosts, known typed transport header dictionaries and routing-rule attribute dictionaries are exempt from legacy cleanup, and Android protected-feature checks respect those exact data dictionaries. The ten-profile header corpus adds preparation coverage without qualifying every transport handshake. Other caller data dictionaries, broader schema-scoped feature guards, wildcard isolation and physical/system-VPN acceptance remain open. |
-| 5. Ports/addresses | Partial | Shared port/service/tag fixtures and Android/iPhone list/range/env/Unix and collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. Bounded OS-aware generated TCP admission passes Android TUN at 2f74f13, both enabled Apple SDK held-port runtimes at e5f9fc6 and Windows 2022/2025 at fb2eb75. Android/Windows probe exclusion passes targeted runtime acceptance. Recovery relocation, service-name resolution, wildcard isolation, bind races and broader proxy-only parity remain open. |
+| 5. Ports/addresses | Partial | Shared port/service/tag fixtures and Android/iPhone list/range/env/Unix and collision cases pass; iPhone also avoids simultaneous API/metrics ports with fresh browser traffic. Bounded OS-aware generated TCP admission passes Android TUN at 2f74f13, both enabled Apple SDK held-port runtimes at e5f9fc6 and Windows 2022/2025 at fb2eb75. Android/Windows probe exclusion passes targeted runtime acceptance. The additional eight-case env corpus aligns simple Unicode casing and whitespace across native adapters; Windows OS acceptance is pending. Recovery relocation, service-name resolution, wildcard isolation, bind races and broader proxy-only parity remain open. |
 | 6. Assets/import syntax | Partial; data-root increment qualified | The shared 22-case syntax corpus covers comments/BOM with Core decoding. Explicit roots propagate across native backends; custom GeoSite traffic passes Android TUN, both Apple preview runtimes and Windows 2022/2025. Explicit TLS certificate/key directory binding passes shared native/Core regressions; controlled CA-file TLS traffic passes ordinary Core on all three desktop systems at ca96891 (four variants per preparer, 16 markers). Physical Apple access/reload, managed asset import/lifetime, specialized certificate features and explicit multi-document merging remain open. |
 | 7. Preflight/errors | Partial | [All-platform CI](https://github.com/XIIIFOX/flutter_vless/actions/runs/39088987119) and [Windows native/runtime validation](https://github.com/XIIIFOX/flutter_vless/actions/runs/39089712376) pass for the preflight/storage changes, including working traffic after a rejected candidate. Apple preview/legacy distinctions above still apply; safe diffs and later-startup rollback remain open. |
 | 8. Runtime corpus | Partial | Shared port/syntax fixtures and platform/device HTTP, DNS, routing and recovery checks exist. The complete ECH/DoH/QUIC/protocol corpus and remaining physical options acceptance are not complete. |

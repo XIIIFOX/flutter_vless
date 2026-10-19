@@ -223,7 +223,7 @@ object XrayCoreManager {
             val unixSocket = XrayPortSpec.isUnixListen(listen)
             // Xray also accepts string port lists/ranges. Reserve every port
             // before allocating the private VPN listener.
-            if (!unixSocket && inbound.has("port")) used.addAll(XrayPortSpec.reservedPorts(inbound.get("port")))
+            if (!unixSocket && inbound.has("port")) used.addAll(XrayPortSpec.reservedPorts(inbound.get("port"), environment))
             if (!unixSocket && inbound.optString("protocol") == "socks" && port == config.LOCAL_SOCKS5_PORT) hasSocks = true
         }
         // A full Xray profile may contain several intentional SOCKS/HTTP or

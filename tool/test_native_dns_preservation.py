@@ -62,6 +62,9 @@ def source_snapshot():
     paths.append(ROOT / 'tool/fixtures/compatibility/selector-prefixes.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/selector-traffic.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/listen-addresses.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/port-env.json')
+    paths.append(ROOT / 'tool/generate_core_env_case.go')
+    paths.append(ROOT / 'tool/generate_core_env_case_test.go')
     paths.append(ROOT / 'tool/fixtures/compatibility/endpoint-addresses.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/dns-addresses.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/dns-mapped-addresses.json')
@@ -163,6 +166,9 @@ def main():
         checked = lambda name, command, seconds=60, cwd=ROOT, env=environment: common.checked(
             name, command, cwd=cwd, environment=env, seconds=seconds, results=results)
         checked('runner-guards', [sys.executable, str(ROOT / 'tool/test_native_dns_preservation_runner.py')], 40)
+        checked('environment-case-generator-pure', [arguments.go, 'test',
+                str(ROOT / 'tool/generate_core_env_case.go'), str(ROOT / 'tool/generate_core_env_case_test.go')], 30)
+        checked('environment-case-generated', [arguments.go, 'run', str(ROOT / 'tool/generate_core_env_case.go'), '-check'], 30)
         exporter = EVIDENCE / ('dns-preparer.exe' if os.name == 'nt' else 'dns-preparer')
         config_test = EVIDENCE / ('config-pure.exe' if os.name == 'nt' else 'config-pure')
         if os.name == 'nt':
@@ -202,7 +208,7 @@ def main():
         pure_tests = [PROTOCOL_TEST, 'TestProtocolCorpusBuilds', MATERIAL_TEST, 'TestNativeSelectorPrefixAllocation',
                       'TestNativeCertificatePaths', 'TestNativeRoutingContextTailCatchall',
                       'TestNativeRoutingContextLoopbackDNS', 'TestNativeRoutingContextCandidate',
-                      'TestRoutingAttrsBuilds', 'TestNativeRoutingAttrsPreservation']
+                      'TestRoutingAttrsBuilds', 'TestNativeRoutingAttrsPreservation', 'TestPortEnvironmentAliases']
         checked('protocol-preparation-pure', [str(binary), '-test.run', '^(' + '|'.join(pure_tests) + ')$',
                 '-test.v', '-test.timeout=60s'], 75, MOBILE, runtime_environment)
         output = (EVIDENCE / 'protocol-preparation-pure.log').read_text(encoding='utf-8')

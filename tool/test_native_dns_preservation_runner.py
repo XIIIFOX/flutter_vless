@@ -16,6 +16,14 @@ spec.loader.exec_module(runner)
 
 
 class PreservationRunnerGuards(unittest.TestCase):
+    def test_snapshot_binds_port_environment_oracle_and_generator(self):
+        with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
+                mock.patch.object(runner.platform, 'system', return_value='Linux'):
+            snapshot = runner.source_snapshot()
+        for path in ['tool/fixtures/compatibility/port-env.json',
+                     'tool/generate_core_env_case.go', 'tool/generate_core_env_case_test.go']:
+            self.assertEqual(snapshot.get(path), 'synthetic-digest', path)
+
     def test_snapshot_binds_shared_fakedns_corpus(self):
         with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
                 mock.patch.object(runner.platform, 'system', return_value='Linux'):
@@ -148,6 +156,7 @@ class PreservationRunnerGuards(unittest.TestCase):
                         '--- PASS: TestNativeCertificatePaths (0.01s)\n--- PASS: TestNativeRoutingContextTailCatchall (0.01s)\n--- PASS: TestNativeRoutingContextLoopbackDNS (0.01s)\n--- PASS: TestNativeRoutingContextCandidate (0.01s)\n')
                     with (evidence / 'protocol-preparation-pure.log').open('a') as output:
                         output.write('--- PASS: TestRoutingAttrsBuilds (0.01s)\n--- PASS: TestNativeRoutingAttrsPreservation (0.01s)\n')
+                        output.write('--- PASS: TestPortEnvironmentAliases (0.01s)\n')
 
             with mock.patch.object(runner, 'EVIDENCE', evidence), mock.patch.object(runner.sys, 'argv', ['runner']), \
                     mock.patch.object(runner.platform, 'system', return_value='Linux'), \
@@ -158,7 +167,10 @@ class PreservationRunnerGuards(unittest.TestCase):
                 self.assertEqual(runner.main(), 0)
             self.assertTrue(any('test' in command and '-c' in command for command in commands))
             selections = [command[command.index('-test.run') + 1] for command in commands if '-test.run' in command]
-            self.assertEqual(selections, ['^(TestNativeProtocolPreparation|TestProtocolCorpusBuilds|TestNativeDoHMaterialOnly|TestNativeSelectorPrefixAllocation|TestNativeCertificatePaths|TestNativeRoutingContextTailCatchall|TestNativeRoutingContextLoopbackDNS|TestNativeRoutingContextCandidate|TestRoutingAttrsBuilds|TestNativeRoutingAttrsPreservation)$'])
+            self.assertEqual(selections, ['^(TestNativeProtocolPreparation|TestProtocolCorpusBuilds|TestNativeDoHMaterialOnly|TestNativeSelectorPrefixAllocation|TestNativeCertificatePaths|TestNativeRoutingContextTailCatchall|TestNativeRoutingContextLoopbackDNS|TestNativeRoutingContextCandidate|TestRoutingAttrsBuilds|TestNativeRoutingAttrsPreservation|TestPortEnvironmentAliases)$'])
+            self.assertIn(['go', 'test', str(runner.ROOT / 'tool/generate_core_env_case.go'),
+                           str(runner.ROOT / 'tool/generate_core_env_case_test.go')], commands)
+            self.assertIn(['go', 'run', str(runner.ROOT / 'tool/generate_core_env_case.go'), '-check'], commands)
             self.assertFalse(any(runner.SELECTED_TEST in selection for selection in selections))
             report = json.loads((evidence / 'result.json').read_text())
             self.assertFalse(report['runtime_requested'])

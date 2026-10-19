@@ -38,6 +38,9 @@ elif a[:2]==['list','-m'] or a and a[0]=='list' and '-m' in a:
  if os.environ.get('WRONG_SELECTION'):data['Replace']={'Dir':'/wrong-copy'}
  print(json.dumps(data))
 elif a and a[0]=='list':
+ if os.environ.get('GRAPH_FAIL_STAGE')==cwd.name:
+  print(os.environ['GRAPH_STDERR'],file=sys.stderr)
+  raise SystemExit(int(os.environ.get('GRAPH_EXIT','1')))
  if os.environ.get('GRAPH_FAIL'):print('go: updates to go.mod needed; to update it:\n\tgo mod tidy');raise SystemExit(1)
 elif a and a[0]=='build':
  if os.environ.get('EXPECT_ROUTING'):
@@ -182,6 +185,22 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
         self.assertNotEqual(self.run_builder(routing=True,GRAPH_FAIL='1').returncode,0)
         self.assertFalse(any(c['tool']=='go' and (c['args'][0]=='build' or c['args'][:2]==['mod','tidy']) for c in self.recorded()))
         self.assertFalse(list(self.output.glob('routing-preview-*.json')))
+
+    def test_failed_mobile_graph_surfaces_bounded_stderr_and_original_status(self):
+        for message, absent in [('fixture-nativecli-graph-primary-error', ''),
+                                ('private-prefix-not-replayed-' + 'x' * 20000 + '\nfixture-nativecli-graph-tail',
+                                 'private-prefix-not-replayed-')]:
+            with self.subTest(large=bool(absent)):
+                result = self.run_builder(routing=True, GRAPH_FAIL_STAGE='mobile', GRAPH_EXIT='7', GRAPH_STDERR=message)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('ROUTING_GRAPH_FAILURE stage=mobile exit=7', result.stderr)
+                self.assertIn(message.splitlines()[-1], result.stderr)
+                if absent:
+                    self.assertNotIn(absent, result.stderr)
+                    self.assertIn('tail_bytes=8192', result.stderr)
+                self.assertIn('CalledProcessError', result.stderr)
+                self.assertFalse(any(c['tool']=='go' and (c['args'][0]=='build' or c['args'][:2]==['mod','tidy']) for c in self.recorded()))
+                self.assertFalse(list(self.output.glob('routing-preview-*.json')))
 
     def test_wrong_selected_module_copy_refused_before_build(self):
         self.assertNotEqual(self.run_builder(routing=True,WRONG_SELECTION='1').returncode,0)

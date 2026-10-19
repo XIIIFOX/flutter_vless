@@ -110,8 +110,19 @@ shutil.copytree(mobile/'nativecli', copied/'nativecli')
 subprocess.run(['go','mod','edit','-require='+mobile_module+'@v0.0.0','-replace='+mobile_module+'='+str(copied)], cwd=core, check=True, timeout=30)
 subprocess.run(['go','mod','edit','-replace='+module+'='+str(core)], cwd=copied, check=True, timeout=30)
 for name, directory, target in [('core',core,'./main'),('mobile',copied,'./nativecli')]:
-    with (work/(name+'-graph-readonly.log')).open('wb') as log:
-        subprocess.run(['go','list','-mod=readonly','-tags='+tags,'-deps',target], cwd=directory, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180)
+    graph_log = work/(name+'-graph-readonly.log')
+    try:
+        with graph_log.open('wb') as log:
+            subprocess.run(['go','list','-mod=readonly','-tags='+tags,'-deps',target], cwd=directory, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180)
+    except subprocess.CalledProcessError as error:
+        with graph_log.open('rb') as log:
+            log.seek(0, os.SEEK_END)
+            log.seek(max(0, log.tell()-8192))
+            tail = log.read(8192)
+        print(f'ROUTING_GRAPH_FAILURE stage={name} exit={error.returncode} tail_bytes={len(tail)}', file=sys.stderr, flush=True)
+        sys.stderr.buffer.write(tail + (b'' if tail.endswith(b'\n') else b'\n'))
+        sys.stderr.flush()
+        raise
 for directory, selected_module, selected_version, replacement in [(core,mobile_module,'v0.0.0',copied),(copied,module,version,core)]:
     selected = json.loads(subprocess.check_output(['go','list','-mod=readonly','-m','-json',selected_module], cwd=directory, text=True, timeout=30))
     if selected.get('Path') != selected_module or selected.get('Version') != selected_version or Path(selected.get('Replace',{}).get('Dir','')).resolve() != replacement.resolve():

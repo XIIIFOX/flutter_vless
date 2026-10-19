@@ -145,7 +145,7 @@ Track the small delivery gates separately from the eight full requirements:
 | Port/address syntax and explicit data/certificate roots | Qualified baseline | Shared Core/native controls and the targeted runtime cases below; OS allocation/reload and managed import lifetime remain open. |
 | Source inbound and explicit VPN default | Qualified controlled baseline | Shared Core, Android TUN, Windows 2022/2025 and both enabled Apple SDK runtimes pass controlled source/default selection. Physical/system-VPN acceptance remains separately tracked. |
 | Occupied private TCP listeners | Qualified controlled baseline | Bounded selection, held-port traffic and Android/Windows probe exclusions pass the targeted runtime gates below. Atomic ownership transfer and reload remain separate. |
-| Session-owned traffic counters | Windows qualified; Android/Apple runtime pending | Actual-consumer regressions pass across Android, Apple proxy-only and Windows; Windows also passes its controlled payload gates. Apple VPN keeps HEV accounting. |
+| Session-owned traffic counters | Controlled counter cases pass; full harness follow-ups open | Windows passes 442 rows; Android and iOS pass their new counter cases. The prior Apple job also passes the macOS counter gate. Android reporting and a later iOS delay-mode interruption still need complete follow-up runs. Apple VPN keeps HEV accounting. |
 
 Each qualified row refers to the specific checks recorded below. It does not
 mark an entire long-term requirement complete.
@@ -372,9 +372,23 @@ claim exact HTTP-only byte attribution.
 [Windows acceptance at 2775207](https://github.com/XIIIFOX/flutter_vless/actions/runs/39256146812)
 passes all six jobs and 442 result rows on Windows 2022/2025, including the
 new 4/11/12 native consumer markers and 2/2/4 proxy/portable/VPN counter gates
-per system. Android and the new Apple counter gates remain pending. The first
-Android attempt stops after successful APK installation but before Flutter
-test entry, so it does not qualify any of the 40 native runtime cases.
+per system. The new iOS three-case counter gate and joined origin counts pass
+at [7bf540e](https://github.com/XIIIFOX/flutter_vless/actions/runs/39258113463),
+but that job later stops in `delay/none` with only 11 of 12 ordinary modes
+recorded; the console process's zero status does not identify the app's exit.
+The earlier 6dfb96f Apple job passes all steps, including the macOS counter
+qualifier, with the same production sources.
+
+Android's first attempt stops after successful APK installation but before
+Flutter test entry and qualifies none of the 40 native runtime cases. At
+[b7d2126](https://github.com/XIIIFOX/flutter_vless/actions/runs/39259088156),
+Flutter passes all three tests, 27 native cases pass the strict harness and
+the new counter method itself passes JUnit: both totals grow with enabled
+policy and remain zero for two fresh disabled-policy samples. The harness
+then rejects extra completion-status messages used for diagnostics, leaving
+12 later native cases unexecuted. Diagnostic values now use separate result
+bundle keys; the strict completion count remains unchanged. Complete follow-up
+runs are still required, and neither failed run is classified as successful.
 
 The inert pinned-Core Router regressions explain why those two options need a
 runtime seam: an appended default rule prevents `IPIfNonMatch` from reaching its

@@ -56,6 +56,145 @@ class AppleCounterRuntimeWiringTest(unittest.TestCase):
         self.assertIn('assert text.splitlines().count(marker) == 1', qualifier)
 
 
+class ApplePhaseMetadataTest(unittest.TestCase):
+    simulator = '01234567-89AB-CDEF-0123-456789ABCDEF'
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name); self.container = self.root / 'data'
+        self.file = self.container / 'Library/Caches/flutter-vless-probe-phase.json'
+        self.file.parent.mkdir(parents=True)
+        self.log = self.root / 'runtime.log'; self.log.write_text('PROBE_APP_PID=27841\n')
+        self.launched = time.time() - 5
+        self.calls = []
+
+    def fake_run(self, command, **kwargs):
+        self.calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, (str(self.container) + '\n').encode())
+
+    def receipt(self, **changes):
+        value = dict(schema=1, pid=27841, phase=1, completed_modes=11)
+        value.update(changes); self.file.write_text(json.dumps(value))
+        return value
+
+    def collect(self):
+        return probe.collect_ios_phase(self.log, self.simulator, self.launched, run=self.fake_run)
+
+    def test_valid_numeric_phases_are_identity_matched_bounded_and_redacted(self):
+        for phase in range(1, 9):
+            self.receipt(phase=phase, completed_modes=12 if phase >= 7 else 11, private='PRIVATE_PHASE_CANARY')
+            value = self.collect()
+            self.assertEqual(dict(state='matched', schema=1, pid=27841, phase=phase,
+                                  completed_modes=12 if phase >= 7 else 11), value)
+            self.assertNotIn('CANARY', json.dumps(value))
+        for command, options in self.calls:
+            self.assertEqual(['xcrun', 'simctl', 'get_app_container', self.simulator, probe.IOS_BUNDLE, 'data'], command)
+            self.assertEqual(10, options['timeout']); self.assertIs(options['stderr'], subprocess.DEVNULL)
+
+    def test_stdout_pid_is_exact_unique_and_corroborates_console_if_present(self):
+        self.receipt()
+        for text in ('PROBE_PROCESS_STARTED=owned-child;pid=27841\n', 'quoted PROBE_APP_PID=27841\n',
+                     'PROBE_APP_PID=27841\nPROBE_APP_PID=27841\n', 'PROBE_APP_PID=27841\nPROBE_APP_PID=12345\n',
+                     'PROBE_APP_PID=2147483648\n', 'PROBE_APP_PID=27841\n' + probe.IOS_BUNDLE + ': 7\n'):
+            with self.subTest(text=text):
+                self.log.write_text(text); self.calls.clear()
+                self.assertEqual('unavailable', self.collect()['state']); self.assertFalse(self.calls)
+        self.log.write_text('PROBE_APP_PID=27841\n' + probe.IOS_BUNDLE + ': 27841\n')
+        self.assertEqual('matched', self.collect()['state'])
+
+    def test_receipt_types_ranges_pid_malformed_duplicate_and_size_refuse(self):
+        for changes in ({'schema': True}, {'schema': 2}, {'pid': 7}, {'pid': True},
+                        {'phase': True}, {'phase': 0}, {'phase': 9}, {'phase': '1'},
+                        {'completed_modes': -1}, {'completed_modes': 13}, {'completed_modes': True}):
+            with self.subTest(changes=changes):
+                self.receipt(**changes); self.assertEqual('unavailable', self.collect()['state'])
+        for raw in ('{bad', '[' * 1000 + '0' + ']' * 1000, ' ' * 2049,
+                    '{"schema":1,"pid":27841,"pid":7,"phase":1,"completed_modes":11}'):
+            self.file.write_text(raw); self.assertEqual('unavailable', self.collect()['state'])
+
+    def test_receipt_freshness_regular_file_single_link_and_no_follow(self):
+        self.receipt(); os.utime(self.file, (self.launched - 1, self.launched - 1))
+        self.assertEqual('unavailable', self.collect()['state'])
+        self.receipt(); os.utime(self.file, (time.time() + 600, time.time() + 600))
+        self.assertEqual('unavailable', self.collect()['state'])
+        self.file.unlink(); outside = self.root / 'outside.json'
+        outside.write_text(json.dumps(dict(schema=1, pid=27841, phase=1, completed_modes=11)))
+        self.file.symlink_to(outside); self.assertEqual('unavailable', self.collect()['state'])
+        self.file.unlink(); os.link(outside, self.file); self.assertEqual('unavailable', self.collect()['state'])
+        self.file.unlink(); self.file.mkdir(); self.assertEqual('unavailable', self.collect()['state'])
+        self.file.rmdir(); os.mkfifo(self.file); self.assertEqual('unavailable', self.collect()['state'])
+        self.file.unlink(); caches = self.file.parent; caches.rmdir()
+        caches.symlink_to(self.root); self.assertEqual('unavailable', self.collect()['state'])
+
+    def test_invalid_launch_or_container_output_is_bounded_unavailable(self):
+        self.receipt()
+        for launched in (0, -1, float('nan'), float('inf')):
+            with self.subTest(launched=launched):
+                with mock.patch.object(probe.subprocess, 'run') as command:
+                    self.assertEqual('unavailable', probe.collect_ios_phase(self.log, self.simulator, launched)['state'])
+                    command.assert_not_called()
+        for output in (b'relative/path\n', b'/PRIVATE_PATH_CANARY\x00\n', b'/' + b'x' * 4096):
+            def fake(command, **kwargs): return subprocess.CompletedProcess(command, 0, output)
+            value = probe.collect_ios_phase(self.log, self.simulator, self.launched, run=fake)
+            self.assertEqual('unavailable', value['state']); self.assertNotIn('CANARY', json.dumps(value))
+        def timeout(command, **kwargs): raise subprocess.TimeoutExpired(command, 10, output=b'PRIVATE_OUTPUT')
+        value = probe.collect_ios_phase(self.log, self.simulator, self.launched, run=timeout)
+        self.assertEqual('unavailable', value['state']); self.assertNotIn('PRIVATE', json.dumps(value))
+
+    def test_appended_phase_is_diagnostic_only_and_preserves_log(self):
+        self.receipt(); previous = self.log.read_text()
+        with mock.patch.object(probe, 'collect_ios_phase', return_value=self.collect()), contextlib.redirect_stdout(io.StringIO()) as console:
+            self.assertTrue(probe.append_ios_phase(self.log, self.simulator, self.launched))
+        self.assertTrue(self.log.read_text().startswith(previous))
+        self.assertLessEqual(len(console.getvalue().encode()), 2048)
+        self.assertIn('PROBE_IOS_PHASE=', console.getvalue()); self.assertNotIn('MODE_PASS', console.getvalue())
+        self.assertNotIn(str(self.container), console.getvalue())
+
+    def test_nonregular_log_append_cannot_wait_for_a_pipe_reader(self):
+        self.log.unlink(); os.mkfifo(self.log)
+        original_open = probe.os.open
+        def guarded_open(path, flags, *args, **kwargs):
+            if str(path) == str(self.log) and flags & os.O_WRONLY:
+                self.assertTrue(flags & os.O_NONBLOCK, 'Append could block on an unrelated FIFO')
+            return original_open(path, flags, *args, **kwargs)
+        with mock.patch.object(probe.os, 'open', side_effect=guarded_open), contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(probe.append_ios_phase(self.log, self.simulator, self.launched))
+
+    def test_actual_writer_and_shell_keep_phase_diagnostic_outside_qualification(self):
+        root = Path(probe.__file__).resolve().parent.parent
+        swift = AppleCounterRuntimeWiringTest().generated('ios')
+        self.assertEqual(1, swift.count('print("PROBE_APP_PID='))
+        self.assertIn('enum Phase: Int', swift)
+        self.assertIn('case sleepEnter = 1, sleepReturn, closeEnter, closeReturn', swift)
+        self.assertIn('case stopEnter, stopReturn, modePass, complete', swift)
+        self.assertIn('.cachesDirectory', swift)
+        self.assertIn('flutter-vless-probe-phase.json', swift)
+        self.assertIn('data.count <= 512', swift); self.assertIn('options: .atomic', swift)
+        self.assertIn('.posixPermissions: 0o600', swift)
+        shell = (root / 'tool/test_ios_privacy_runtime.sh').read_text()
+        function = shell[shell.index('collect_probe_phase() {'):shell.index('cleanup_probe() {')]
+        self.assertIn('PHASE_COLLECTED=1', function)
+        self.assertLess(function.index('PHASE_COLLECTED=1'), function.index('--collect-ios-phase'))
+        self.assertIn('|| true', function)
+        cleanup = shell[shell.index('cleanup_probe() {'):shell.index('trap cleanup_probe EXIT')]
+        self.assertLess(cleanup.index('collect_probe_phase'), cleanup.index('simctl uninstall'))
+        self.assertIn('exit "$status"', cleanup)
+        normal = shell[shell.index('xcrun simctl launch --console'):]
+        qualifier_start = normal.index('python3 - "$OUT/runtime.log"')
+        self.assertLess(normal.index('collect_probe_phase'), qualifier_start)
+        self.assertNotIn('PROBE_IOS_PHASE', normal[qualifier_start:])
+        self.assertIn('Missing mode', normal[qualifier_start:])
+
+    def test_cli_collects_phase_without_launch_and_rejects_mixed_modes(self):
+        argv = ['probe', '--collect-ios-phase', str(self.log), '--ios-simulator', self.simulator, '--launched-at', str(self.launched)]
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(probe, 'append_ios_phase', return_value=True) as append, mock.patch.object(probe, 'run_probe') as launch:
+            self.assertEqual(0, probe.main()); launch.assert_not_called(); append.assert_called_once()
+        for bad in (['probe', '--collect-ios-phase', str(self.log)],
+                    argv + ['--collect-ios-termination', str(self.log)], argv + ['--', 'PRIVATE_COMMAND']):
+            with mock.patch.object(sys, 'argv', bad), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit): probe.main()
+
+
 class AppleTerminationMetadataTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -156,7 +295,7 @@ class AppleTerminationMetadataTest(unittest.TestCase):
     def test_failure_only_shell_trap_preserves_primary_exit_and_uninstall(self):
         root = Path(probe.__file__).resolve().parent.parent
         source = (root / 'tool/test_ios_privacy_runtime.sh').read_text()
-        trap = source[source.index('cleanup_probe() {'):source.index('trap cleanup_probe EXIT')]
+        trap = source[source.index('PHASE_COLLECTED=0'):source.index('trap cleanup_probe EXIT')]
         fake_bin = self.root / 'bin'
         fake_bin.mkdir()
         fake_xcrun = fake_bin / 'xcrun'

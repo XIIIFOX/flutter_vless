@@ -10,11 +10,115 @@ import signal
 import stat
 import subprocess
 import sys
+import time
 
 IOS_BUNDLE = 'dev.tfox.security-runtime-probe'
 STOP_SECONDS = 5
 MAX_IPS_BYTES = 2 * 1024 * 1024
 MAX_IPS_REPORTS = 16
+MAX_PHASE_BYTES = 2048
+
+
+def _phase_app_pid(log_path, launched_at):
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    with os.fdopen(os.open(log_path, flags), 'rb') as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_mtime < launched_at:
+            return None
+        # The app emits this marker at entry, before the runtime fixtures.
+        text = source.read(65536).decode('utf-8', errors='replace')
+    matches = re.findall(r'^PROBE_APP_PID=([1-9][0-9]{0,9})\r?$', text, re.MULTILINE)
+    if len(matches) != 1 or int(matches[0]) > 2147483647:
+        return None
+    pid = int(matches[0])
+    console = re.findall(r'^' + re.escape(IOS_BUNDLE) + r': ([1-9][0-9]{0,9})\r?$', text, re.MULTILINE)
+    return pid if all(int(value) == pid for value in console) else None
+
+
+def _unique_phase_fields(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate-phase-field')
+        result[key] = value
+    return result
+
+
+def _read_phase_receipt(container, launched_at):
+    descriptors = []
+    directory_flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        descriptors.append(os.open(container, directory_flags))
+        for component in ('Library', 'Caches'):
+            descriptors.append(os.open(component, directory_flags, dir_fd=descriptors[-1]))
+        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+        descriptor = os.open('flutter-vless-probe-phase.json', flags, dir_fd=descriptors[-1])
+        with os.fdopen(descriptor, 'rb') as source:
+            info = os.fstat(source.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > MAX_PHASE_BYTES
+                    or info.st_mtime < launched_at or info.st_mtime > time.time()):
+                return None
+            raw = source.read(MAX_PHASE_BYTES + 1)
+        if len(raw) > MAX_PHASE_BYTES:
+            return None
+        return json.loads(raw.decode('utf-8'), object_pairs_hook=_unique_phase_fields)
+    finally:
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def collect_ios_phase(log_path, simulator, launched_at, run=None):
+    """Read one fixed app receipt; this is diagnostic data, never acceptance."""
+    def unavailable(reason):
+        return {'state': 'unavailable', 'reason': reason}
+    if not math.isfinite(launched_at) or launched_at <= 0:
+        return unavailable('invalid-launch-time')
+    if re.fullmatch(r'[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}', simulator) is None:
+        return unavailable('invalid-simulator')
+    try:
+        pid = _phase_app_pid(log_path, launched_at)
+        if pid is None:
+            return unavailable('app-pid-unavailable')
+        command = ['xcrun', 'simctl', 'get_app_container', simulator, IOS_BUNDLE, 'data']
+        result = (run or subprocess.run)(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                         timeout=10, check=False)
+        raw_path = result.stdout
+        if result.returncode != 0 or not isinstance(raw_path, bytes) or len(raw_path) > 4096:
+            return unavailable('container-unavailable')
+        container = raw_path.decode('utf-8').rstrip('\r\n')
+        if not os.path.isabs(container) or any(char in container for char in ('\0', '\r', '\n')):
+            return unavailable('container-unavailable')
+        receipt = _read_phase_receipt(container, launched_at)
+        if (not isinstance(receipt, dict) or type(receipt.get('schema')) is not int or receipt['schema'] != 1
+                or type(receipt.get('pid')) is not int or receipt['pid'] != pid
+                or type(receipt.get('phase')) is not int or not 1 <= receipt['phase'] <= 8
+                or type(receipt.get('completed_modes')) is not int or not 0 <= receipt['completed_modes'] <= 12):
+            return unavailable('invalid-receipt')
+        return {'state': 'matched', 'schema': 1, 'pid': pid, 'phase': receipt['phase'],
+                'completed_modes': receipt['completed_modes']}
+    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError, RecursionError):
+        return unavailable('receipt-unavailable')
+
+
+def append_ios_phase(log_path, simulator, launched_at):
+    metadata = collect_ios_phase(log_path, simulator, launched_at)
+    line = 'PROBE_IOS_PHASE=' + json.dumps(metadata, separators=(',', ':'), sort_keys=True)
+    assert len(line.encode('ascii')) <= 2048
+    appended = False
+    try:
+        flags = os.O_WRONLY | os.O_APPEND | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+        with os.fdopen(os.open(log_path, flags), 'a', encoding='utf-8') as output:
+            if not stat.S_ISREG(os.fstat(output.fileno()).st_mode):
+                raise OSError('nonregular-runtime-log')
+            output.write('\n' + line + '\n')
+            appended = True
+    except OSError:
+        pass
+    print(line, flush=True)
+    return metadata['state'] == 'matched' and appended
 
 
 def _ips_documents(path, launched_at):
@@ -194,9 +298,15 @@ def main():
     parser.add_argument('--timeout', type=float, default=600)
     parser.add_argument('--ios-simulator')
     parser.add_argument('--collect-ios-termination', metavar='RUNTIME_LOG')
+    parser.add_argument('--collect-ios-phase', metavar='RUNTIME_LOG')
     parser.add_argument('--launched-at', type=float)
     parser.add_argument('command', nargs=argparse.REMAINDER)
     arguments = parser.parse_args()
+    if arguments.collect_ios_phase is not None:
+        if (arguments.launched_at is None or arguments.ios_simulator is None or arguments.command
+                or arguments.collect_ios_termination is not None):
+            parser.error('Phase metadata requires only a runtime log, simulator and launch time')
+        return 0 if append_ios_phase(arguments.collect_ios_phase, arguments.ios_simulator, arguments.launched_at) else 1
     if arguments.collect_ios_termination is not None:
         if arguments.launched_at is None or arguments.command or arguments.ios_simulator is not None:
             parser.error('Termination metadata requires only a runtime log and launch time')

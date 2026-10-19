@@ -8,9 +8,18 @@ OUT="$ROOT/build/ios_privacy_runtime_probe"
 BUNDLE=dev.tfox.security-runtime-probe
 mkdir -p "$OUT/modules" "$OUT/Probe.app"
 PROBE_LAUNCHED_AT=
+PHASE_COLLECTED=0
+collect_probe_phase() {
+    if [ "$PHASE_COLLECTED" -eq 0 ] && [ -n "$PROBE_LAUNCHED_AT" ]; then
+        PHASE_COLLECTED=1
+        python3 "$ROOT/tool/run_apple_runtime_probe.py" --collect-ios-phase "$OUT/runtime.log" \
+            --ios-simulator "$SIMULATOR_UDID" --launched-at "$PROBE_LAUNCHED_AT" || true
+    fi
+}
 cleanup_probe() {
     local status=$?
     trap - EXIT
+    collect_probe_phase
     if [ "$status" -ne 0 ] && [ -n "$PROBE_LAUNCHED_AT" ]; then
         python3 "$ROOT/tool/run_apple_runtime_probe.py" --collect-ios-termination "$OUT/runtime.log" --launched-at "$PROBE_LAUNCHED_AT" || true
     fi
@@ -58,6 +67,7 @@ SIMCTL_CHILD_REQUIRE_CORE_PREFLIGHT="${REQUIRE_CORE_PREFLIGHT:-0}" \
 SIMCTL_CHILD_REQUIRE_VPN_ROUTING="${REQUIRE_VPN_ROUTING:-0}" \
     python3 "$ROOT/tool/run_apple_runtime_probe.py" --timeout 600 --ios-simulator "$SIMULATOR_UDID" -- \
     xcrun simctl launch --console "$SIMULATOR_UDID" "$BUNDLE" 2>&1 | tee "$OUT/runtime.log"
+collect_probe_phase
 echo 'PROBE_PHASE=ios-runtime-complete'
 python3 - "$OUT/runtime.log" <<'PY'
 import os, sys

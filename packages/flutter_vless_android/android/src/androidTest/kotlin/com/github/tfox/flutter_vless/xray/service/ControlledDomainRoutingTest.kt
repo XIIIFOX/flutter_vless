@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.ResultReceiver
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.filters.SdkSuppress
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
@@ -151,6 +152,7 @@ class ControlledDomainRoutingTest {
         }
     }
 
+    @SdkSuppress(minSdkVersion = 26)
     @Test fun publicOwnedInputTrafficSurvivesCustomDefaultTagAndDisabledCallerPolicy() {
         stopPublicCounterSession()
         for (enabled in listOf(true, false)) {
@@ -230,8 +232,9 @@ class ControlledDomainRoutingTest {
                     assertTrue("Owned public download did not grow after controlled HTTP", after.download > before.download)
                 } else assertEquals("Two fresh disabled-policy status ticks are required", 2, zeroTicks)
                 assertEquals(original, source.toString())
-                InstrumentationRegistry.getInstrumentation().sendStatus(0, Bundle().apply {
-                    putString("stream", "PUBLIC_OWNED_TRAFFIC enabled=${if (enabled) 1 else 0} before_up=${before.upload} " +
+                InstrumentationRegistry.getInstrumentation().addResults(Bundle().apply {
+                    putString(if (enabled) "PUBLIC_OWNED_TRAFFIC_ENABLED" else "PUBLIC_OWNED_TRAFFIC_DISABLED",
+                        "PUBLIC_OWNED_TRAFFIC enabled=${if (enabled) 1 else 0} before_up=${before.upload} " +
                         "before_down=${before.download} after_up=${after.upload} after_down=${after.download} zero_ticks=$zeroTicks\n")
                 })
             } finally {

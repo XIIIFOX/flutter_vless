@@ -3,6 +3,38 @@ final class ProbeLogger: NSObject, XRayLoggerProtocol {
     func logInput(_ s: String?) { print("CALLBACK=\(s ?? "nil")") }
 }
 let canary = "privacy-canary.invalid"
+private enum ProbePhaseReceipt {
+    enum Phase: Int {
+        case sleepEnter = 1, sleepReturn, closeEnter, closeReturn
+        case stopEnter, stopReturn, modePass, complete
+    }
+#if os(iOS)
+    private static var file: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("flutter-vless-probe-phase.json")
+    }
+#endif
+    static func start() {
+#if os(iOS)
+        if let file { try? FileManager.default.removeItem(at: file) }
+        print("PROBE_APP_PID=\(getpid())")
+        fflush(stdout)
+#endif
+    }
+    static func record(_ phase: Phase, completedModes: Int) {
+#if os(iOS)
+        // Diagnostic only: never change an operation, its assertion, or exit.
+        guard (0...12).contains(completedModes), let file,
+              let data = try? JSONSerialization.data(withJSONObject: [
+                "schema": 1, "pid": Int(getpid()), "phase": phase.rawValue,
+                "completed_modes": completedModes]), data.count <= 512 else { return }
+        do {
+            try data.write(to: file, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        } catch { /* The strict stdout qualifier remains the authority. */ }
+#endif
+    }
+}
 private func runtimeProbeSocket() -> Int32 {
     let fd = socket(AF_INET, SOCK_STREAM, 0)
     guard fd >= 0 else { print("PROBE_SOCKET_FAILED=create"); exit(1) }
@@ -45,6 +77,7 @@ extension ProxyOnlyRunner { static func prepared(_ data: Data) throws -> Data { 
 extension ServerDelayRunner { static func prepared(_ data: Data) throws -> Data { try buildDelayConfigData(config: String(decoding: data, as: UTF8.self), proxyPort: 18095, credentials: LocalProxyCredentials.generate()) } }
 func runModes() async {
     setbuf(stdout, nil)
+    ProbePhaseReceipt.start()
     print("MODES_BEGIN")
     runRawRuntimeProbe()
     do { try await runLocalAuthRuntimeChecks() } catch { print("AUTH_RUNTIME_FAILED"); exit(1) }
@@ -57,6 +90,7 @@ func runModes() async {
     }
     let markers = ["privacy-canary.invalid", "d2719f44-f51f-4c35-aeae-246230d21f38", "synthetic-password-canary"]
     let logger = ProbeLogger()
+    var completedModes = 0
     for level in ["debug", "warning", "error", "none"] {
         let raw: [String:Any] = ["log": ["loglevel": level, "access": "", "error": "", "dnsLog": true],
             "inbounds": [["listen":"127.0.0.1","port":18095,"protocol":"socks","tag":"probe"]],
@@ -76,6 +110,12 @@ func runModes() async {
                 func stage(_ name: String, _ detail: String = "") {
                     print("MODE_STAGE=\(name);MODE=\(mode);LEVEL=\(level)\(detail)")
                     fflush(stdout)
+                    if mode == "delay" && level == "none",
+                       let phase = ["close-enter": ProbePhaseReceipt.Phase.closeEnter,
+                                    "close-return": .closeReturn, "stop-enter": .stopEnter,
+                                    "stop-return": .stopReturn][name] {
+                        ProbePhaseReceipt.record(phase, completedModes: completedModes)
+                    }
                 }
                 var error: NSError?
                 stage("start-enter")
@@ -97,10 +137,14 @@ func runModes() async {
                 let sent = request.withUnsafeBytes { send(fd,$0.baseAddress,$0.count,0) }
                 let sendError = errno
                 stage("send-return", ";RESULT=\(sent);ERRNO=\(sendError)")
+                if mode == "delay" && level == "none" { ProbePhaseReceipt.record(.sleepEnter, completedModes: completedModes) }
                 try await Task.sleep(nanoseconds: 100_000_000)
+                if mode == "delay" && level == "none" { ProbePhaseReceipt.record(.sleepReturn, completedModes: completedModes) }
                 stage("close-enter");close(fd);stage("close-return")
                 stage("stop-enter");XRayStop();stage("stop-return")
                 print("MODE_PASS=\(mode);LEVEL=\(level)")
+                completedModes += 1
+                if mode == "delay" && level == "none" { ProbePhaseReceipt.record(.modePass, completedModes: completedModes) }
             }
             // Exercise real app-process start/stop/snapshot and async delay runner.
             if level == "warning" {
@@ -114,7 +158,9 @@ func runModes() async {
             }
         } catch { print("MODE_TEST_FAILED");exit(1) }
     }
-    fflush(stdout);exit(0)
+    fflush(stdout)
+    ProbePhaseReceipt.record(.complete, completedModes: completedModes)
+    exit(0)
 }
 class ModeDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey:Any]?) -> Bool {

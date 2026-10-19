@@ -43,6 +43,62 @@ type xhttpSpec struct {
 
 func xhttpPayload() []byte { return bytes.Repeat([]byte("XHTTP_SHARED_SOCKET_PAYLOAD_"), 2048) }
 
+// Observe the bytes actually read by the forwarding transport without buffering
+// or changing the original reader's Read/Close results.
+type xhttpObservedBody struct {
+	io.ReadCloser
+	consumed atomic.Int64
+	finished atomic.Bool
+	observe  func(string, int64, error)
+}
+
+func (b *xhttpObservedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.consumed.Add(int64(n))
+	if err != nil && b.finished.CompareAndSwap(false, true) {
+		b.observe("read-end", b.consumed.Load(), err)
+	}
+	return n, err
+}
+
+func (b *xhttpObservedBody) Close() error {
+	err := b.ReadCloser.Close()
+	if b.finished.CompareAndSwap(false, true) {
+		b.observe("close", b.consumed.Load(), err)
+	}
+	return err
+}
+
+func xhttpLogFailure(t *testing.T, path string) {
+	t.Helper()
+	log, err := os.Open(path)
+	if err != nil {
+		t.Logf("XHTTP_BACKEND_LOG unavailable error-class=%T", err)
+		return
+	}
+	defer log.Close()
+	info, err := log.Stat()
+	if err != nil {
+		t.Logf("XHTTP_BACKEND_LOG stat error-class=%T", err)
+		return
+	}
+	if info.Size() > 64<<10 {
+		if _, err := log.Seek(info.Size()-(64<<10), io.SeekStart); err != nil {
+			t.Logf("XHTTP_BACKEND_LOG seek error-class=%T", err)
+			return
+		}
+	}
+	data, err := io.ReadAll(io.LimitReader(log, 64<<10))
+	if err != nil {
+		t.Logf("XHTTP_BACKEND_LOG read error-class=%T", err)
+		return
+	}
+	if len(data) > 8<<10 {
+		data = data[len(data)-(8<<10):]
+	}
+	t.Logf("XHTTP_BACKEND_LOG tail=%s", data)
+}
+
 func testNativeXHTTPPenetrate(t *testing.T) {
 	var systemAttempts atomic.Int64
 	previous, previousCore := net.DefaultResolver, xnet.DefaultResolver
@@ -60,6 +116,9 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 	observations := new(fixture)
 	var stopping atomic.Bool
 	complete := false
+	// Register this directory before the final observer so the log survives
+	// until every later Core/server cleanup has completed.
+	backendLog := filepath.Join(t.TempDir(), "backend.log")
 	// This runs after all owned engines and servers have drained.
 	t.Cleanup(func() {
 		events, failures := observations.snapshot()
@@ -67,19 +126,21 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 		for _, event := range events {
 			counts[event]++
 		}
-		if !complete {
-			t.Logf("XHTTP_FIXTURE_FAILURE events=%d trace=%v failures=%v", len(events), events[:min(len(events), 32)], failures[:min(len(failures), 8)])
-			return
-		}
-		if counts["origin"] != 2 || counts["upload POST"] < 2 || counts["download GET"] < 2 || len(failures) != 0 {
+		if complete && (counts["origin"] != 2 || counts["upload POST"] < 2 || counts["download GET"] < 2 || len(failures) != 0) {
 			t.Error("XHTTP did not carry both payloads through the controlled fronts", counts, failures)
+		}
+		if !complete || t.Failed() {
+			t.Logf("XHTTP_FIXTURE_FAILURE events=%d trace=%v failures=%v", len(events), events[:min(len(events), 48)], failures[:min(len(failures), 8)])
+			xhttpLogFailure(t, backendLog)
 		}
 	})
 	payload := xhttpPayload()
 	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observations.record(fmt.Sprintf("origin-entry content-length=%d", r.ContentLength))
 		body, err := io.ReadAll(io.LimitReader(r.Body, int64(len(payload)+1)))
 		if err != nil || r.Method != "POST" || r.Host != "payload.invalid" || !bytes.Equal(body, payload) {
-			observations.fail(errors.New("XHTTP origin request/payload changed"))
+			observations.fail(fmt.Errorf("XHTTP origin mismatch bytes=%d expected=%d error-class=%T method-match=%t host-match=%t payload-match=%t",
+				len(body), len(payload), err, r.Method == "POST", r.Host == "payload.invalid", bytes.Equal(body, payload)))
 			http.Error(w, "fixture mismatch", http.StatusBadRequest)
 			return
 		}
@@ -106,7 +167,7 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 	carrierPort := reservations[1].Addr().(*net.TCPAddr).Port
 	identity := "11111111-1111-4111-8111-111111111111"
 	serverSource := map[string]any{
-		"log": map[string]any{"loglevel": "none"},
+		"log": map[string]any{"loglevel": "info", "access": "none", "error": backendLog, "dnsLog": false},
 		"dns": map[string]any{"hosts": map[string]any{"endpoint.invalid": "127.0.0.1"}, "queryStrategy": "UseIPv4"},
 		"inbounds": []any{
 			map[string]any{"listen": "127.0.0.1", "port": serverPort, "protocol": "vless",
@@ -171,6 +232,18 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 			observations.record(role + " " + r.Method)
 			parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"+role+"/"), "/")
 			observations.record(fmt.Sprintf("%s session=%x", role, sha256.Sum256([]byte(parts[0]))))
+			if role == "upload" {
+				seq := int64(-1)
+				if len(parts) > 1 {
+					if value, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+						seq = value
+					}
+				}
+				observations.record(fmt.Sprintf("upload seq=%d content-length=%d", seq, r.ContentLength))
+				r.Body = &xhttpObservedBody{ReadCloser: r.Body, observe: func(stage string, count int64, err error) {
+					observations.record(fmt.Sprintf("upload-body seq=%d stage=%s consumed=%d error-class=%T", seq, stage, count, err))
+				}}
+			}
 			proxy.ServeHTTP(w, r)
 		}))
 		server.Config.ReadHeaderTimeout = 5 * time.Second
@@ -260,7 +333,7 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 			if err != nil || truncated || !bytes.Contains(output, []byte(marker)) || !bytes.Contains(output, []byte("--- PASS: TestNativeXHTTPChild")) {
 				events, failures := observations.snapshot()
 				t.Fatalf("isolated XHTTP client failed: %v; events=%d trace=%v failures=%v; child=%s", err,
-					len(events), events[:min(len(events), 32)], failures[:min(len(failures), 8)], output)
+					len(events), events[:min(len(events), 48)], failures[:min(len(failures), 8)], output)
 			}
 			t.Logf("XHTTP_PENETRATE_PAYLOAD_PASS chained=%t bytes=%d", chained, len(payload))
 		})

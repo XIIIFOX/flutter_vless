@@ -1,6 +1,6 @@
 ## 1.1.7
 
-* Isolate controlled XHTTP clients from the backend and later tests in bounded processes. Preserve strict payload/DNS checks and retain bounded front-end failure evidence after transport errors.
+* Isolate controlled XHTTP clients from the backend and later tests in bounded processes. Preserve strict payload/DNS checks and retain bounded packet sequence, body length, origin entry and backend failure evidence after transport errors.
 * Record bounded, content-free HTTP fixture stages and response lengths in Android CI when protected system DNS tests fail. Retain the original error and request behavior; add pure failure-path controls.
 * Prepare XHTTP upload/download with parent `sockopt.penetrate` on Apple and Windows. Share one closed endpoint pin scope or retain the caller's parent chain, preserve inactive child socket settings, and add shared preparation and controlled payload regressions.
 * Match Core's missing, null and empty localhost DNS server tags on Apple and Windows. Retain other caller DNS fields and reject malformed non-null tags before preparation; add shared cross-platform regressions.

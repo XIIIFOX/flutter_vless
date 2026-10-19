@@ -1,5 +1,10 @@
 // Concatenated with the production runners and localhost fixture helpers.
-func runMacCounterChecks() async throws {
+func runAppleProxyCounterChecks() async throws {
+#if os(iOS)
+    let markerPrefix = "IOS_COUNTERS_"
+#else
+    let markerPrefix = "MACOS_COUNTERS_"
+#endif
     let origin = LocalProbeOrigin(port: 18096)
     defer { origin.stop() }
     let raw: [String: Any] = [
@@ -30,7 +35,7 @@ func runMacCounterChecks() async throws {
     close(api)
     precondition(frame.count == 9 && frame[3] == 4 && frame.suffix(4).allSatisfy { $0 == 0 },
                  "Imported management API must remain available alongside native counters")
-    print("MACOS_COUNTERS_AND_API_PASSTHROUGH_PASS")
+    print(markerPrefix + "AND_API_PASSTHROUGH_PASS")
     runner.stop()
 
     // A real payload does not make unavailable input counters available.
@@ -48,7 +53,7 @@ func runMacCounterChecks() async throws {
         let stats = runner.queryTrafficStats()
         precondition(stats.upload == 0 && stats.download == 0 && stats.uploadSpeed == 0 && stats.downloadSpeed == 0)
         runner.stop()
-        print(disabled ? "MACOS_COUNTERS_DISABLED_UNAVAILABLE_PASS" : "MACOS_COUNTERS_UNTAGGED_UNAVAILABLE_PASS")
+        print(markerPrefix + (disabled ? "DISABLED_UNAVAILABLE_PASS" : "UNTAGGED_UNAVAILABLE_PASS"))
     }
     origin.stop()
     let observed = origin.state()

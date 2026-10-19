@@ -14,6 +14,48 @@ from unittest import mock
 import run_apple_runtime_probe as probe
 
 
+class AppleCounterRuntimeWiringTest(unittest.TestCase):
+    root = Path(__file__).resolve().parents[1]
+
+    def generated(self, platform):
+        script = (self.root / ('tool/test_' + platform + '_privacy_runtime.sh')).read_text()
+        begin = 'python3 - "$ROOT" "$OUT" <<\'PY\'\n'
+        self.assertEqual(1, script.count(begin))
+        body = script.split(begin, 1)[1].split('\nPY\n', 1)[0]
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder)
+            (output / 'Probe.app').mkdir()
+            # Execute only the actual file-generation block. Swift is text;
+            # none of its SDK/Core calls, nor any shell step, are executed.
+            with mock.patch.object(sys, 'argv', ['-', str(self.root), str(output)]):
+                exec(compile(body, 'counter-harness-generation', 'exec'), {})
+            return (output / 'main.swift').read_text()
+
+    def assert_one_gate(self, platform):
+        generated = self.generated(platform)
+        names = [name for name in ('runMacCounterChecks', 'runAppleProxyCounterChecks')
+                 if 'func ' + name + '() async throws' in generated]
+        self.assertEqual(1, len(names), 'Actual harness must include exactly one counter fixture')
+        name = names[0]
+        self.assertEqual(1, generated.count('func ' + name + '() async throws'))
+        self.assertEqual(1, generated.count('try await ' + name + '()'))
+        modes = generated[generated.index('func runModes()'):]
+        self.assertLess(modes.index('try await ' + name + '()'), modes.index('    let markers = ['))
+
+    def test_ios_generated_runtime_has_one_counter_gate_before_modes(self):
+        self.assert_one_gate('ios')
+
+    def test_macos_generated_runtime_keeps_one_counter_gate_before_modes(self):
+        self.assert_one_gate('macos')
+
+    def test_ios_qualifier_requires_all_three_fixed_counter_markers(self):
+        script = (self.root / 'tool/test_ios_privacy_runtime.sh').read_text()
+        qualifier = script.rsplit('python3 - "$OUT/runtime.log" <<\'PY\'\n', 1)[1]
+        for suffix in ('AND_API_PASSTHROUGH_PASS', 'UNTAGGED_UNAVAILABLE_PASS', 'DISABLED_UNAVAILABLE_PASS'):
+            self.assertIn('IOS_COUNTERS_' + suffix, qualifier)
+        self.assertIn('assert text.splitlines().count(marker) == 1', qualifier)
+
+
 class AppleTerminationMetadataTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

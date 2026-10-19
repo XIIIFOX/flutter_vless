@@ -363,8 +363,8 @@ matches the pinned Core CLI encoder without starting a Core instance. Local
 actual-consumer checks pass 15 Android tests, 92 checks per Apple platform and
 Windows source/wire/consumer gates of 4/11/12, plus 47 Windows fixture tests.
 These are inert checks and compile/link evidence. New remote runtime gates
-require Android enabled/disabled TUN payload sessions, three macOS proxy
-payload cases and Windows counter samples after the existing proxy, portable
+require Android enabled/disabled TUN payload sessions, three proxy payload
+cases on each Apple SDK and Windows counter samples after the existing proxy, portable
 and VPN HTTP requests. Windows enabled cases require an available snapshot
 before the requests and a fresh increase in both directions afterwards; the
 observation window can also include managed health probes, so it does not

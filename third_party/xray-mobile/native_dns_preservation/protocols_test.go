@@ -23,7 +23,7 @@ func protocolCorpus(t *testing.T) []protocolCase {
 }
 
 func fullConfigCorpus(t *testing.T) []protocolCase {
-	return preparationCorpus(t, "full-config.json", 4)
+	return preparationCorpus(t, "full-config.json", 5)
 }
 
 func directOnlyCorpus(t *testing.T) []protocolCase {

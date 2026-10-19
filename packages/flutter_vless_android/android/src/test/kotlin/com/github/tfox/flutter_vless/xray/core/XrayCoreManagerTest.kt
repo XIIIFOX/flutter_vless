@@ -74,12 +74,14 @@ class XrayCoreManagerTest {
 
     @Test fun sharedFullConfigCorpusPreservesCallerApiStatsPolicyAndPrivateAdapter() {
         val cases = JSONArray(requireNotNull(javaClass.getResource("/full-config.json")).readText())
-        assertEquals(4, cases.length())
+        assertEquals(5, cases.length())
         for (index in 0 until cases.length()) {
             val item = cases.getJSONObject(index); val label = item.getString("name")
             val source = item.getJSONObject("config"); val before = source.toString()
             val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = before)
             val output = XrayCoreManager.buildRuntimeConfigJson(profile, File("build/test-files/shared-full-config"), credentials)
+            assertEquals("$label/caller outbound order, protocol or tag changed", source.getJSONArray("outbounds").toString(),
+                output.getJSONArray("outbounds").toString())
             fun field(key: String) = key.replace('\u017f', 's').replace('\u212a', 'k').lowercase(java.util.Locale.ROOT)
             for (key in source.keys()) if (field(key) in setOf("api", "stats", "policy"))
                 assertEquals("$label/$key", source.get(key).toString(), output.get(field(key)).toString())
@@ -91,6 +93,21 @@ class XrayCoreManagerTest {
             } else {
                 assertTrue(label, profile.LOCAL_API_PORT > 0)
                 assertEquals(label, "StatsService", output.getJSONObject("api").getJSONArray("services").getString(0))
+            }
+            if (label == "untagged_direct_null_preserves_default_and_caller_dns") {
+                val prepared = AndroidTunnelDnsPolicy.prepare(before, "config") {
+                    error("Caller-root DNS must not bootstrap a direct-only endpoint")
+                }
+                val dnsOutput = JSONObject(prepared.configJson)
+                val expected = source.getJSONArray("outbounds"); val actual = dnsOutput.getJSONArray("outbounds")
+                assertEquals(expected.length() + 1, actual.length())
+                for (outbound in 0 until expected.length())
+                    assertEquals("$label/DNS preparation changed caller outbound order", expected.get(outbound).toString(),
+                        actual.get(outbound).toString())
+                assertTrue(actual.getJSONObject(0).has("tag")); assertTrue(actual.getJSONObject(0).isNull("tag"))
+                assertEquals("freedom", actual.getJSONObject(0).getString("protocol"))
+                assertEquals(source.getJSONObject("dns").toString(), dnsOutput.getJSONObject("dns").toString())
+                assertTrue(prepared.bootstrapHostnames.isEmpty()); assertTrue(prepared.bootstrapAddresses.isEmpty())
             }
             assertEquals(label, before, source.toString())
         }

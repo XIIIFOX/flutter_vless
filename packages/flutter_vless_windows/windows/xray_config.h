@@ -602,7 +602,7 @@ inline bool EffectiveBootstrapChains(Json stream, std::vector<std::string>& chai
 inline bool ValidBootstrapChains(const Json& outbounds) {
   std::map<std::string, size_t> names;
   for (size_t i = 0; i < outbounds.size(); ++i) {
-    if (!outbounds[i].contains("tag")) continue;
+    if (!outbounds[i].contains("tag") || outbounds[i]["tag"].is_null()) continue;
     if (!outbounds[i]["tag"].is_string()) return false;
     const auto tag = outbounds[i]["tag"].get<std::string>();
     if (!tag.empty() && !names.emplace(tag, i).second) return false;
@@ -863,7 +863,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
       continue;
     }
     if (!std::set<std::string>{"vless","vmess","trojan","shadowsocks","socks","http","hysteria","masque","wireguard"}.count(protocol)) return std::nullopt;
-    if (!outbound.contains("tag") || outbound["tag"] == "") {
+    if (!outbound.contains("tag") || outbound["tag"].is_null() || outbound["tag"] == "") {
       outbound["tag"] = service_tags.Next("flutter-vless-proxy");
     }
     if (proxy.empty() || outbound["tag"] == "proxy") proxy = outbound["tag"].get<std::string>();

@@ -134,6 +134,39 @@ void ProtocolCompatibilityCases(const std::string& only = "") {
     throw std::runtime_error("protocol case references missing handler");
   };
   std::map<std::string, std::function<void()>> cases;
+  cases["null-direct-tag"] = [&] {
+    auto profile = source;
+    profile["outbounds"].erase(profile["outbounds"].begin());
+    profile["outbounds"][0]["tag"] = nullptr;
+    const auto output = prepare(profile);
+    Require(output.has_value(), "Core-valid null tag on the default direct handler rejected");
+    const auto config = Parse(*output);
+    Require(config["outbounds"][0]["protocol"] == "freedom" && config["outbounds"][0]["tag"].is_null()
+        && config["outbounds"][1] == profile["outbounds"][1] && config["dns"] == profile["dns"],
+        "null direct tag, caller default/order or DNS changed");
+  };
+  cases["null-remote-tag"] = [&] {
+    auto profile = source;
+    profile["outbounds"][0]["tag"] = nullptr;
+    const auto output = prepare(profile);
+    Require(output.has_value(), "Core-valid null remote tag was not treated like an absent tag");
+    const auto config = Parse(*output);
+    Require(config["outbounds"][0]["tag"] == "flutter-vless-proxy"
+        && config["outbounds"][0]["protocol"] == profile["outbounds"][0]["protocol"]
+        && config["outbounds"][0]["settings"] == profile["outbounds"][0]["settings"]
+        && config["outbounds"][1]["tag"] == profile["outbounds"][1]["tag"]
+        && profile["outbounds"][0]["tag"].is_null(), "null remote tag changed logical endpoint, source or handler order");
+  };
+  cases["invalid-outbound-tag"] = [&] {
+    for (const auto& invalid : {Json(false), Json(true), Json(7), Json::array(), Json::object()}) {
+      auto profile = source;
+      profile["outbounds"][0]["tag"] = invalid;
+      Require(!prepare(profile), "invalid non-null outbound tag admitted");
+      profile["outbounds"].erase(profile["outbounds"].begin());
+      profile["outbounds"][0]["tag"] = invalid;
+      Require(!prepare(profile), "invalid non-null direct tag admitted");
+    }
+  };
   cases["loopback"] = [&] {
     auto profile = source;
     const Json loop = {{"tag", "caller-loop"}, {"protocol", "loopback"}, {"settings", {{"inboundTag", "caller-loop-context"},

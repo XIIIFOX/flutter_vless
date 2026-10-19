@@ -41,6 +41,12 @@ func testNativeDirectOnly(t *testing.T) {
 	}
 }
 
+func testNativeNullDirectTag(t *testing.T) {
+	profile := directOnlyCorpus(t)[0].Config
+	profile["outbounds"].([]any)[0].(map[string]any)["tag"] = nil
+	runNativeDirectOnly(t, profile)
+}
+
 func runNativeDirectOnly(t *testing.T, original map[string]any) {
 	var systemAttempts atomic.Int64
 	previous, previousCore := net.DefaultResolver, xnet.DefaultResolver

@@ -45,5 +45,14 @@
       "stats": {},
       "policy": {"levels": {"8": {"bufferSize": 3, "handshake": 4}}}
     }
+  },
+  {
+    "name": "untagged_direct_null_preserves_default_and_caller_dns",
+    "config": {
+      "log": {"loglevel": "none"},
+      "inbounds": [],
+      "outbounds": [{"tag": null, "protocol": "freedom"}, {"tag": "blocked", "protocol": "blackhole"}],
+      "dns": {"queryStrategy": "UseIPv4", "servers": ["tcp://9.9.9.9"]}
+    }
   }
 ]

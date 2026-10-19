@@ -27,6 +27,8 @@ final class LocalProbeOrigin: @unchecked Sendable {
             }
         } == 0)
         precondition(listen(fd, 16) == 0)
+        let flags = fcntl(fd, F_GETFL, 0)
+        precondition(flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0)
         workers.enter()
         DispatchQueue.global().async { [self] in
             defer { workers.leave() }
@@ -34,9 +36,22 @@ final class LocalProbeOrigin: @unchecked Sendable {
                 lock.lock(); let active = !stopped; lock.unlock()
                 guard active else { break }
                 let client = accept(fd, nil, nil)
-                if client < 0 { break }
+                if client < 0 {
+                    if errno == EINTR { continue }
+                    precondition(errno == EAGAIN || errno == EWOULDBLOCK, "Owned HTTP accept failed")
+                    var ready = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                    let result = poll(&ready, 1, 100)
+                    precondition(result >= 0 || errno == EINTR, "Owned HTTP listener poll failed")
+                    continue
+                }
                 lock.lock(); accepted += 1
                 guard !stopped else { close(client); lock.unlock(); break }
+                // BSD accept may inherit the listener's nonblocking status.
+                // Keep the existing blocking receive/timeout behavior on clients.
+                let flags = fcntl(client, F_GETFL, 0)
+                guard flags >= 0, fcntl(client, F_SETFL, flags & ~O_NONBLOCK) == 0 else {
+                    close(client); lock.unlock(); preconditionFailure("Owned HTTP client flags failed")
+                }
                 clients.insert(client); workers.enter(); lock.unlock()
                 DispatchQueue.global().async { [self] in
                     defer {
@@ -52,7 +67,8 @@ final class LocalProbeOrigin: @unchecked Sendable {
         lock.lock()
         if !stopped {
             stopped = true
-            shutdown(fd, SHUT_RDWR)
+            // Listening TCP sockets reject shutdown with ENOTCONN on Darwin.
+            // Poll is bounded; retain this descriptor until the accept loop exits.
             for client in clients { shutdown(client, SHUT_RDWR) }
         }
         lock.unlock()

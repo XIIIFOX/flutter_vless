@@ -73,7 +73,7 @@ class VpnRoutingPanel extends StatelessWidget {
         ),
         if (!proxyOnly && value != null) ...[
           DropdownButtonFormField<int>(
-            key: ValueKey(('vpn-routing-input', config, input)),
+            key: ValueKey(('vpn-routing-input', input)),
             initialValue: input,
             isExpanded: true,
             decoration: const InputDecoration(
@@ -92,7 +92,7 @@ class VpnRoutingPanel extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
-            key: ValueKey(('vpn-routing-output', config, output)),
+            key: ValueKey(('vpn-routing-output', output)),
             initialValue: output,
             isExpanded: true,
             decoration: const InputDecoration(labelText: 'Default outbound'),

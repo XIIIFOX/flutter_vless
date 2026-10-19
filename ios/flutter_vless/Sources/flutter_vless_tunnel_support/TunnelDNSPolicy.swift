@@ -41,11 +41,12 @@ public enum TunnelDNSPolicy {
 
     static func apply(to config: inout [String: Any], managedInboundTag: String,
                       generatedRuleCount: ((Int) -> Void)? = nil,
+                      environmentSnapshot: XrayEnvironmentSnapshot = .capture(),
                       resolveIPv4: (String) -> String?) -> [String]? {
         // Admission is transactional: a failed bootstrap must not partially
         // rewrite a caller dictionary which might be retried.
         guard var output = TunnelConfigKeys.normalize(config) else { return nil }
-        do { try bindEndpointEnvironment(to: &output, environment: ProcessInfo.processInfo.environment) }
+        do { try XrayAddressEnvironment.bind(to: &output, environmentSnapshot: environmentSnapshot) }
         catch { return nil }
         guard TunnelFakeDNSPolicy.active(in: output) != nil else { return nil }
         guard var outbounds = output["outbounds"] as? [[String: Any]], !outbounds.isEmpty else { return nil }

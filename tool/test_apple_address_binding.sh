@@ -19,7 +19,7 @@ for platform, relative, module in [
     assert len(matches) == 1, 'expected exactly one production app Address binding expression'
     (out / platform / 'AppBinding.swift').write_text(
         'import Foundation\nimport ' + module + '\n'
-        'func actualAppBinding(_ listenerBound: Data) throws -> Data {\n'
+        'func actualAppBinding(_ listenerBound: Data, environment: XrayEnvironmentSnapshot) throws -> Data {\n'
         '    return try ' + matches[0] + '\n}\n')
 PY
 status=0
@@ -43,6 +43,18 @@ for platform in ios macos; do
     status=1
     continue
   fi
+  if ! python3 - "$OUT/$platform/probe" <<'PY_CAPTURE'
+import subprocess, sys
+# Explicit child environment only; never read or mutate parent environment.
+environment = {"\u00e9.port": "10810", "e\u0301.port": "10808",
+               "e\u0301.empty": "", "E\u0301_EMPTY": "wrong",
+               "\u00e9.endpoint": "wrong.invalid", "E\u0301_ENDPOINT": "127.0.0.7"}
+result = subprocess.run([sys.argv[1], "--capture-only"], env=environment,
+                        capture_output=True, text=True, timeout=10)
+assert result.returncode == 0 and result.stdout.splitlines() == ["ADDRESS_ENVIRONMENT_RAW_CAPTURE_PASS=1"], result.stderr
+print(result.stdout, end="")
+PY_CAPTURE
+  then status=1; fi
   if ! "$OUT/$platform/probe" "$ROOT" "$platform"; then status=1; fi
 done
 exit "$status"

@@ -4,6 +4,40 @@ import Darwin
 
 final class TunnelDNSPolicyTests: XCTestCase {
     private static let credentials = try! LocalProxyCredentials(username: "test-session", password: "test-session-password")
+    func testByteEnvironmentSnapshotIsFrozenBeforeAllocationAndAcrossStartupRetries() async throws {
+        let decomposed = "e\u{301}", composed = "\u{e9}"
+        var entries = ["\(composed).port=10810", "\(decomposed).port=10808", "\(decomposed).listen=127.0.0.1",
+            "\(composed).endpoint=wrong.invalid", "E\u{301}_ENDPOINT=frozen.invalid",
+            "\(decomposed).dns=tcp://9.9.9.9", "\(decomposed).client=192.0.2.7", "\(decomposed).host=127.0.0.7"].map { Data($0.utf8) }
+        var captures = 0
+        func capture() -> XrayEnvironmentSnapshot { captures += 1; return XrayEnvironmentSnapshot(rawEntries: entries) }
+        let source: [String: Any] = ["inbounds": [["tag": "caller", "protocol": "socks", "port": "env:\(decomposed).port", "listen": "env:\(decomposed).listen"]],
+            "dns": ["servers": ["env:\(decomposed).dns"], "clientIp": "env:\(decomposed).client", "hosts": ["owned.invalid": "env:\(decomposed).host"]],
+            "outbounds": [["tag": "proxy", "protocol": "socks", "settings": ["servers": [["address": "env:\(decomposed).endpoint", "port": 443]]]]]]
+        let data = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+        var hosts: [String] = [], allocations: [Int] = [], pauses = 0
+        let prepared = try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: data, credentials: Self.credentials,
+            tcpPortAvailable: { port in allocations.append(port); entries = [Data("E\u{301}_ENDPOINT=changed.invalid".utf8)]; return true },
+            environmentSnapshot: capture(), resolveIPv4: { host in
+                hosts.append(host); return hosts.count == 1 ? nil : "203.0.113.7"
+            }, attempts: 2, retryDelay: { pauses += 1; entries = [] })
+        XCTAssertEqual(captures, 1)
+        XCTAssertEqual(hosts, ["frozen.invalid", "frozen.invalid"])
+        XCTAssertEqual(allocations, [10809, 10809])
+        XCTAssertEqual(pauses, 1)
+        let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+        let inputs = try XCTUnwrap(output["inbounds"] as? [[String: Any]])
+        XCTAssertEqual(inputs[1]["port"] as? String, "10808")
+        XCTAssertEqual(inputs[1]["listen"] as? String, "127.0.0.1")
+        let dns = try XCTUnwrap(output["dns"] as? [String: Any])
+        XCTAssertEqual(dns["clientIp"] as? String, "192.0.2.7")
+        XCTAssertEqual((dns["hosts"] as? [String: Any])?["owned.invalid"] as? String, "127.0.0.7")
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), data)
+        XCTAssertFalse(String(decoding: prepared.data, as: UTF8.self).contains("env:"))
+        XCTAssertEqual(try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: prepared.data,
+            environmentSnapshot: XrayEnvironmentSnapshot(rawEntries: entries)), prepared.data)
+    }
+
     func testStartupRetriesEndpointResolutionAndProducesRecoverableRuntime() async throws {
         let data = Data(#"{"inbounds":[{"protocol":"socks","port":10808}],"outbounds":[{"protocol":"http","settings":{"address":"bootstrap.invalid","port":443}}]}"#.utf8)
         var attempts = 0
@@ -928,7 +962,7 @@ final class TunnelDNSPolicyTests: XCTestCase {
         XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:ABSENT", environment: [:]), "")
         XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment(" env:ENDPOINT ", environment: ["ENDPOINT": "wrong.invalid"]), " env:ENDPOINT ")
         XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:ß", environment: ["ß": "endpoint.invalid", "SS": "wrong.invalid"]), "endpoint.invalid")
-        XCTAssertThrowsError(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:ß", environment: ["SS": "wrong.invalid"]))
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:ß", environment: ["SS": "wrong.invalid"]), "")
         XCTAssertThrowsError(try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: source, environment: ["ENDPOINT": "env:SECOND", "SECOND": "wrong.invalid"]))
         let empty = try TunnelXrayConfigPreparer.bindingEndpointEnvironment(configData: source, environment: [:])
         XCTAssertNil(TunnelXrayConfigPreparer.prepare(jsonData: empty, credentials: Self.credentials, resolveIPv4: { _ in XCTFail("Empty effective endpoint must reject before lookup"); return nil }))

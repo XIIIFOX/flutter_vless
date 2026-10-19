@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Freeze Apple port, listener and endpoint environment values using byte-exact native names before validation, persistence and startup retries. Preserve canonically distinct Unicode keys, exact empty values and Core alias precedence; add isolated reader and actual host-admission regressions.
+
 * Preserve unknown full-profile JSON fields at every depth. Limit legacy transport/TLS compatibility edits to their Core schema owners, including effective XHTTP downloads and mask TLS settings. Keep opaque data separate from Android protected-feature admission; add shared native/Core and public import/start/delay regressions.
 
 * Accept Core-folded JSON schema fields through full-profile import, startup and delay without rewriting caller data. Defer string transport semantics to Core preflight so an explicit method can override a dormant empty network.

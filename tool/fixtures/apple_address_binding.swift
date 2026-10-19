@@ -1,5 +1,10 @@
 import Foundation
 import Darwin
+#if canImport(flutter_vless_privacy)
+import flutter_vless_privacy
+#else
+import flutter_vless_macos_privacy
+#endif
 
 // Calls the binding expression extracted verbatim from the real Runner plugin,
 // linked only with its production privacy module. This imports no support,
@@ -19,6 +24,17 @@ struct AppAddressBindingProbe {
     }
 
     static func main() throws {
+        if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--capture-only" {
+            let snapshot = XrayEnvironmentSnapshot.capture()
+            precondition(snapshot.value(for: "\u{e9}.port") == "10810")
+            precondition(snapshot.value(for: "e\u{301}.port") == "10808")
+            let empty = try LocalProxyAccessPolicy.bindingAddressEnvironment("env:e\u{301}.empty", environmentSnapshot: snapshot)
+            let alias = try LocalProxyAccessPolicy.bindingAddressEnvironment("env:e\u{301}.endpoint", environmentSnapshot: snapshot)
+            precondition(empty == "" && alias == "127.0.0.7")
+            precondition(snapshot.description == "XrayEnvironmentSnapshot(<private>)")
+            print("ADDRESS_ENVIRONMENT_RAW_CAPTURE_PASS=1")
+            return
+        }
         let root = URL(fileURLWithPath: CommandLine.arguments[1])
         var passed = 0
         for (fixture, count) in [("endpoint-addresses", 3), ("dns-addresses", 3), ("logical-addresses", 4)] {
@@ -27,9 +43,7 @@ struct AppAddressBindingProbe {
             precondition(cases.count == count)
             for item in cases {
                 let environment = item["environment"] as! [String: String]
-                let previous = environment.keys.map { ($0, getenv($0).map { String(cString: $0) }) }
-                for (key, value) in environment { setenv(key, value, 1) }
-                defer { for (key, value) in previous { if let value { setenv(key, value, 1) } else { unsetenv(key) } } }
+                let snapshot = XrayEnvironmentSnapshot(environment: environment)
                 let original = item["config"] as! [String: Any]
                 let source = try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys])
                 var expected: Any = original
@@ -42,11 +56,10 @@ struct AppAddressBindingProbe {
                         expected = replace(expected, path: ArraySlice(path.split(separator: ".").map(String.init)), value: value)
                     }
                 }
-                let frozen = try actualAppBinding(source)
+                let frozen = try actualAppBinding(source, environment: snapshot)
                 let frozenObject = try JSONSerialization.jsonObject(with: frozen) as! NSDictionary
                 precondition(frozenObject == (expected as! NSDictionary))
-                for key in environment.keys { setenv(key, "different.invalid", 1) }
-                let repeated = try actualAppBinding(frozen)
+                let repeated = try actualAppBinding(frozen, environment: XrayEnvironmentSnapshot(rawEntries: []))
                 let retained = try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys])
                 precondition(repeated == frozen)
                 precondition(retained == source)
@@ -54,10 +67,9 @@ struct AppAddressBindingProbe {
             }
         }
         let nested = Data(#"{"outbounds":[{"protocol":"dns","settings":{"address":"env:FLUTTER_VLESS_ADDRESS_BOUNDARY_NESTED"}}]}"#.utf8)
-        setenv("FLUTTER_VLESS_ADDRESS_BOUNDARY_NESTED", "env:SECOND", 1)
-        defer { unsetenv("FLUTTER_VLESS_ADDRESS_BOUNDARY_NESTED") }
+        let nestedEnvironment = XrayEnvironmentSnapshot(environment: ["FLUTTER_VLESS_ADDRESS_BOUNDARY_NESTED": "env:SECOND"])
         do {
-            _ = try actualAppBinding(nested)
+            _ = try actualAppBinding(nested, environment: nestedEnvironment)
             preconditionFailure("Nested effective Address references must be rejected")
         } catch {}
         print("ADDRESS_BINDING_MODULE_PASS=\(CommandLine.arguments[2]);CASES=\(passed);REJECTED=1")

@@ -2,6 +2,47 @@ import XCTest
 import flutter_vless_macos_tunnel_support
 
 final class XrayPortSpecTests: XCTestCase {
+    func testByteExactDictionaryEnvironmentBindingDoesNotUseCanonicalEquality() throws {
+        let requested = "e\u{301}.port", composed = "\u{e9}.port", alias = "E\u{301}_PORT"
+        XCTAssertFalse(requested.utf8.elementsEqual(composed.utf8))
+        let source = Data(#"{"inbounds":[{"protocol":"socks","listen":"127.0.0.1","port":"env:e\u0301.port"}]}"#.utf8)
+        let frozen = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source,
+            environment: [composed: "10810", alias: "10808"])
+        var config = try XCTUnwrap(JSONSerialization.jsonObject(with: frozen) as? [String: Any])
+        XCTAssertEqual((config["inbounds"] as? [[String: Any]])?.first?["port"] as? String, "10808")
+        XCTAssertEqual(try LocalProxyAccessPolicy.applyVPN(to: &config,
+            credentials: LocalProxyCredentials(username: "private", password: "private-password")), 10809)
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:" + requested,
+            environment: [composed: "127.0.0.9", alias: "127.0.0.7"]), "127.0.0.7")
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:" + requested,
+            environment: [composed: "127.0.0.9"]), "")
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:" + requested,
+            environment: [composed: "127.0.0.9", alias: ""]), "")
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:" + requested,
+            environment: [requested: "", alias: "127.0.0.7"]), "")
+        XCTAssertThrowsError(try LocalProxyAccessPolicy.bindingPortEnvironment(configData: source,
+            environment: [requested: "", alias: "10808"]))
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingPortEnvironment(configData: frozen, environment: [:]), frozen)
+    }
+
+    func testRawEnvironmentSnapshotRetainsCanonicalVariantsAndFirstExactDuplicate() throws {
+        let composed = "\u{e9}", decomposed = "e\u{301}", alias = "E\u{301}"
+        var entries = ["\(composed)=composed", "\(decomposed)=decomposed", "\(decomposed)=wrong-duplicate",
+                       "\(alias)=alias", "empty=", "EMPTY=wrong", "value=a=b"].map { Data($0.utf8) }
+        let snapshot = XrayEnvironmentSnapshot(rawEntries: entries)
+        entries = [Data("\(decomposed)=changed".utf8)]
+        XCTAssertEqual(snapshot.value(for: composed), "composed")
+        XCTAssertEqual(snapshot.value(for: decomposed), "decomposed")
+        XCTAssertEqual(snapshot.value(for: "value"), "a=b")
+        XCTAssertNil(snapshot.value(for: ""))
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:empty", environmentSnapshot: snapshot), "")
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:" + decomposed, environmentSnapshot: snapshot), "decomposed")
+        let aliasOnly = XrayEnvironmentSnapshot(rawEntries: [Data("\(composed)=wrong".utf8), Data("\(alias)=127.0.0.7".utf8)])
+        XCTAssertEqual(try LocalProxyAccessPolicy.bindingAddressEnvironment("env:" + decomposed, environmentSnapshot: aliasOnly), "127.0.0.7")
+        XCTAssertEqual(snapshot.description, "XrayEnvironmentSnapshot(<private>)")
+        XCTAssertEqual(snapshot.debugDescription, snapshot.description)
+    }
+
     private func portEnvironmentCorpus() throws -> [[String: Any]] {
         var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         for _ in 0..<10 {

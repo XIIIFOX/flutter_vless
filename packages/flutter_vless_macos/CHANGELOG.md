@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Capture byte-exact environment names once for port/address binding, allocation and startup retries. Preserve distinct Unicode spellings and exact empty values, with isolated native-reader and host-admission checks.
+
 * Use Core-compatible Unicode environment aliases and whitespace for imported ports and addresses. Share validation and frozen port binding while preserving exact-value and empty-value precedence.
 
 * Validate the effective immediate XHTTP download transport in proxy-DNS preparation. Preserve inactive nested downloads and keep the immediate client's own socket policy separate from explicit parent inheritance.

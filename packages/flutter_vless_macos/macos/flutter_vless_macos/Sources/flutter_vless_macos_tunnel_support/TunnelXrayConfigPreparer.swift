@@ -47,6 +47,7 @@ public enum TunnelXrayConfigPreparer {
         credentials: LocalProxyCredentials,
         routingIntent: NativeRoutingIntent? = nil,
         tcpPortAvailable: ((Int) -> Bool)? = nil,
+        environmentSnapshot: XrayEnvironmentSnapshot = .capture(),
         resolveIPv4: (String) async throws -> String?,
         attempts: Int = 5,
         retryDelay: () async throws -> Void = { try await Task.sleep(nanoseconds: 3_000_000_000) }
@@ -61,7 +62,7 @@ public enum TunnelXrayConfigPreparer {
             while true {
                 guard clock.now < deadline else { throw StartupError.endpointUnavailable }
                 var missingHost: String?
-                let prepared = prepare(jsonData: jsonData, credentials: credentials, routingIntent: routingIntent, tcpPortAvailable: tcpPortAvailable) { host in
+                let prepared = prepare(jsonData: jsonData, credentials: credentials, routingIntent: routingIntent, tcpPortAvailable: tcpPortAvailable, environmentSnapshot: environmentSnapshot) { host in
                     if let address = resolved[host] { return address }
                     missingHost = host
                     return nil
@@ -82,9 +83,16 @@ public enum TunnelXrayConfigPreparer {
 
     /// Resolve typed Address references before persisting a session for a
     /// separate provider process. Keep the editor's original JSON separately.
-    public static func bindingEndpointEnvironment(configData: Data,
-        environment: [String: String] = ProcessInfo.processInfo.environment) throws -> Data {
+    public static func bindingEndpointEnvironment(configData: Data) throws -> Data {
+        try XrayAddressEnvironment.bind(configData: configData)
+    }
+
+    public static func bindingEndpointEnvironment(configData: Data, environment: [String: String]) throws -> Data {
         try XrayAddressEnvironment.bind(configData: configData, environment: environment)
+    }
+
+    public static func bindingEndpointEnvironment(configData: Data, environmentSnapshot: XrayEnvironmentSnapshot) throws -> Data {
+        try XrayAddressEnvironment.bind(configData: configData, environmentSnapshot: environmentSnapshot)
     }
 
     public static func parseConfig(jsonData: Data) -> TunnelParsedConfig? {
@@ -105,10 +113,13 @@ public enum TunnelXrayConfigPreparer {
         credentials: LocalProxyCredentials,
         routingIntent: NativeRoutingIntent? = nil,
         tcpPortAvailable: ((Int) -> Bool)? = nil,
+        environmentSnapshot: XrayEnvironmentSnapshot = .capture(),
         resolveIPv4: (String) -> String? = { _ in nil }
     ) -> TunnelPreparedConfig? {
         do {
-            guard let input = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
+            let listenerBound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: jsonData, environmentSnapshot: environmentSnapshot)
+            let bound = try XrayAddressEnvironment.bind(configData: listenerBound, environmentSnapshot: environmentSnapshot)
+            guard let input = try JSONSerialization.jsonObject(with: bound, options: []) as? [String: Any],
                   var configJSON = TunnelConfigKeys.normalize(input) else {
                 return nil
             }
@@ -119,7 +130,7 @@ public enum TunnelXrayConfigPreparer {
                 guard index >= 0 && index < importedCount else { return nil }
             }
 
-            try LocalProxyAccessPolicy.applyVPN(to: &configJSON, credentials: credentials, tcpPortAvailable: tcpPortAvailable)
+            try LocalProxyAccessPolicy.applyVPN(to: &configJSON, credentials: credentials, tcpPortAvailable: tcpPortAvailable, environmentSnapshot: environmentSnapshot)
             guard let managedTag = (configJSON["inbounds"] as? [[String: Any]])?.first?["tag"] as? String else { return nil }
             messages.append("Applied session authentication to the managed loopback SOCKS inbound")
 
@@ -154,7 +165,7 @@ public enum TunnelXrayConfigPreparer {
 
             var dnsPrefixCount = 0
             guard let bootstrapAddresses = TunnelDNSPolicy.apply(to: &configJSON, managedInboundTag: managedTag,
-                generatedRuleCount: { dnsPrefixCount = $0 }, resolveIPv4: resolveIPv4) else {
+                generatedRuleCount: { dnsPrefixCount = $0 }, environmentSnapshot: environmentSnapshot, resolveIPv4: resolveIPv4) else {
                 return nil
             }
             messages.append("Configured system address DNS through the caller Core DNS policy")

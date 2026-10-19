@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import Darwin
+import Darwin.crt_externs
 
 /// Credentials belong to a native running session, never to an exported profile.
 public struct LocalProxyCredentials: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
@@ -47,6 +48,52 @@ public enum LocalProxyAccessError: Error, LocalizedError {
         case .portEnvironment(let index): return "Unable to resolve inbounds[\(index)].port from the application environment."
         }
     }
+}
+
+/// One immutable native environment image. Byte keys preserve names which
+/// Swift String equality treats as canonically equivalent. Never persist it.
+public struct XrayEnvironmentSnapshot: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
+    private let values: [Data: String]
+
+    /// Raw KEY=VALUE entries, also usable by pure callers without process access.
+    /// Like Go's Unix environment map, the first byte-identical key wins.
+    public init(rawEntries: [Data]) {
+        var output: [Data: String] = [:]
+        for entry in rawEntries {
+            guard let separator = entry.firstIndex(of: 61), separator > entry.startIndex else { continue }
+            let key = Data(entry[..<separator])
+            if output[key] == nil {
+                output[key] = String(decoding: entry[entry.index(after: separator)...], as: UTF8.self)
+            }
+        }
+        values = output
+    }
+
+    /// Preserve the existing injection API. A dictionary cannot recover keys
+    /// already collapsed by its caller, but lookup adds no canonical matching.
+    public init(environment: [String: String]) {
+        values = Dictionary(uniqueKeysWithValues: environment.map { (Data($0.key.utf8), $0.value) })
+    }
+
+    public func value(for name: String) -> String? {
+        guard !name.isEmpty else { return nil }
+        return values[Data(name.utf8)]
+    }
+
+    public static func capture() -> Self {
+        var entries: [Data] = []
+        if let environment = _NSGetEnviron().pointee {
+            var index = 0
+            while let entry = environment[index] {
+                entries.append(Data(bytes: entry, count: strlen(entry)))
+                index += 1
+            }
+        }
+        return Self(rawEntries: entries)
+    }
+
+    public var description: String { "XrayEnvironmentSnapshot(<private>)" }
+    public var debugDescription: String { description }
 }
 
 /// Reserve imported listener ports without rewriting their Core syntax.
@@ -330,8 +377,16 @@ public enum XrayPortSpec {
         return ports
     }
 
+    public static func reservedPorts(_ value: Any) throws -> Set<Int> {
+        try reservedPorts(value, environmentSnapshot: .capture())
+    }
+
+    public static func reservedPorts(_ value: Any, environmentSnapshot: XrayEnvironmentSnapshot) throws -> Set<Int> {
+        try reservedPorts(value, environment: environmentSnapshot.value)
+    }
+
     public static func reservedPorts(_ value: Any,
-        environment: (String) -> String? = { ProcessInfo.processInfo.environment[$0] }) throws -> Set<Int> {
+        environment: (String) -> String?) throws -> Set<Int> {
         if let number = value as? NSNumber {
             guard CFGetTypeID(number) != CFBooleanGetTypeID(),
                   !["f", "d"].contains(String(cString: number.objCType)),
@@ -372,22 +427,34 @@ public enum LocalProxyAccessPolicy {
     /// saving the immutable session, so system/control restarts keep their
     /// effective listener type and port list.
     /// The caller's source JSON remains available in its own editor/model.
-    public static func bindingPortEnvironment(configData: Data,
-        environment: [String: String] = ProcessInfo.processInfo.environment) throws -> Data {
+    public static func bindingPortEnvironment(configData: Data) throws -> Data {
+        try bindingPortEnvironment(configData: configData, environmentSnapshot: .capture())
+    }
+
+    public static func bindingPortEnvironment(configData: Data, environment: [String: String]) throws -> Data {
+        try bindingPortEnvironment(configData: configData, environmentSnapshot: XrayEnvironmentSnapshot(environment: environment))
+    }
+
+    public static func bindingPortEnvironment(configData: Data, environmentSnapshot: XrayEnvironmentSnapshot) throws -> Data {
         var config = try normalizedConfig(configData: configData)
+        guard try bindPortEnvironment(&config, environment: environmentSnapshot) else { return configData }
+        return try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+    }
+
+    private static func bindPortEnvironment(_ config: inout [String: Any], environment: XrayEnvironmentSnapshot) throws -> Bool {
         var changed = try bindListenerEnvironment(&config, environment: environment)
-        guard var inputs = config["inbounds"] as? [[String: Any]] else { return configData }
+        guard var inputs = config["inbounds"] as? [[String: Any]] else { return changed }
         for index in inputs.indices {
             guard let value = inputs[index]["port"] as? String else { continue }
             let parts = value.split(separator: ",", omittingEmptySubsequences: false)
             guard parts.contains(where: { XrayPortSpec.trimCoreWhitespace(String($0)).hasPrefix("env:") }) else { continue }
             do {
-                _ = try XrayPortSpec.reservedPorts(value, environment: { environment[$0] })
+                _ = try XrayPortSpec.reservedPorts(value, environmentSnapshot: environment)
                 inputs[index]["port"] = try parts.map { raw -> String in
                     let part = XrayPortSpec.trimCoreWhitespace(String(raw))
                     guard part.hasPrefix("env:") else { return String(raw) }
                     let name = String(part.dropFirst(4))
-                    guard let resolved = XrayPortSpec.environmentValue(name, environment: { environment[$0] }) else { throw LocalProxyAccessError.portEnvironment(index) }
+                    guard let resolved = XrayPortSpec.environmentValue(name, environment: environment.value) else { throw LocalProxyAccessError.portEnvironment(index) }
                     // Validation above uses this same immutable environment.
                     // Canonical decimal tokens also retain env: leading-zero
                     // semantics when Core parses the resulting ordinary list.
@@ -396,9 +463,8 @@ public enum LocalProxyAccessPolicy {
                 changed = true
             } catch { throw LocalProxyAccessError.portEnvironment(index) }
         }
-        guard changed else { return configData }
-        config["inbounds"] = inputs
-        return try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+        if changed { config["inbounds"] = inputs }
+        return changed
     }
 
     public static func normalizedConfig(configData: Data) throws -> [String: Any] {
@@ -429,10 +495,11 @@ public enum LocalProxyAccessPolicy {
 
     public static let managedTagPrefix = "flutter-vless-tun"
 
-    public static func validateVPN(configData: Data, tcpPortAvailable: ((Int) -> Bool)? = nil) throws {
+    public static func validateVPN(configData: Data, tcpPortAvailable: ((Int) -> Bool)? = nil,
+                                   environmentSnapshot: XrayEnvironmentSnapshot = .capture()) throws {
         var object = try normalizedConfig(configData: configData)
-        _ = try bindListenerEnvironment(&object, environment: ProcessInfo.processInfo.environment)
-        _ = try privatePort(configuration: object, tcpPortAvailable: tcpPortAvailable)
+        _ = try bindPortEnvironment(&object, environment: environmentSnapshot)
+        _ = try privatePort(configuration: object, tcpPortAvailable: tcpPortAvailable, environment: environmentSnapshot)
     }
 
     /// Add a private authenticated adapter without changing imported listeners.
@@ -440,11 +507,12 @@ public enum LocalProxyAccessPolicy {
     /// persisted or fed back into this function during recovery.
     @discardableResult
     public static func applyVPN(to config: inout [String: Any], credentials: LocalProxyCredentials,
-                                tcpPortAvailable: ((Int) -> Bool)? = nil) throws -> Int {
+                                tcpPortAvailable: ((Int) -> Bool)? = nil,
+                                environmentSnapshot: XrayEnvironmentSnapshot = .capture()) throws -> Int {
         try normalizeLocalFields(&config)
-        _ = try bindListenerEnvironment(&config, environment: ProcessInfo.processInfo.environment)
+        _ = try bindPortEnvironment(&config, environment: environmentSnapshot)
         let imported = config["inbounds"] as? [[String: Any]] ?? []
-        let port = try privatePort(configuration: config, tcpPortAvailable: tcpPortAvailable)
+        let port = try privatePort(configuration: config, tcpPortAvailable: tcpPortAvailable, environment: environmentSnapshot)
         var tags = XrayServiceTags(configuration: config)
         let tag = tags.next(managedTagPrefix)
         let managed: [String: Any] = [
@@ -462,12 +530,12 @@ public enum LocalProxyAccessPolicy {
     /// whether listen is a Unix path or an IP. Freeze that same effective value
     /// before port allocation and cross-process profile persistence.
     private static func bindListenerEnvironment(_ config: inout [String: Any],
-                                                environment: [String: String]) throws -> Bool {
+                                                environment: XrayEnvironmentSnapshot) throws -> Bool {
         guard var inputs = config["inbounds"] as? [[String: Any]] else { return false }
         var changed = false
         for index in inputs.indices {
             guard let listen = inputs[index]["listen"] as? String, listen.hasPrefix("env:") else { continue }
-            let resolved = try bindingAddressEnvironment(listen, environment: environment)
+            let resolved = try bindingAddressEnvironment(listen, environmentSnapshot: environment)
             inputs[index]["listen"] = resolved
             changed = true
         }
@@ -477,11 +545,18 @@ public enum LocalProxyAccessPolicy {
 
     /// Match Core's one-time Address.UnmarshalJSON environment lookup. Keep
     /// raw expanded text so a later Core decode performs ParseAddress once.
-    public static func bindingAddressEnvironment(_ raw: String,
-        environment: [String: String] = ProcessInfo.processInfo.environment) throws -> String {
+    public static func bindingAddressEnvironment(_ raw: String) throws -> String {
+        try bindingAddressEnvironment(raw, environmentSnapshot: .capture())
+    }
+
+    public static func bindingAddressEnvironment(_ raw: String, environment: [String: String]) throws -> String {
+        try bindingAddressEnvironment(raw, environmentSnapshot: XrayEnvironmentSnapshot(environment: environment))
+    }
+
+    public static func bindingAddressEnvironment(_ raw: String, environmentSnapshot: XrayEnvironmentSnapshot) throws -> String {
         guard raw.hasPrefix("env:") else { return raw }
         let name = String(raw.dropFirst(4))
-        let resolved = XrayPortSpec.environmentValue(name, environment: { environment[$0] }) ?? ""
+        let resolved = XrayPortSpec.environmentValue(name, environment: environmentSnapshot.value) ?? ""
         // Emitting a raw env: result would perform another lookup when saved
         // JSON is decoded. Refuse it instead of changing Core's one-lookup meaning.
         guard !resolved.hasPrefix("env:") else { throw LocalProxyAccessError.malformedConfiguration }
@@ -522,7 +597,7 @@ public enum LocalProxyAccessPolicy {
         }
     }
 
-    private static func privatePort(configuration: [String: Any], tcpPortAvailable: ((Int) -> Bool)? = nil) throws -> Int {
+    private static func privatePort(configuration: [String: Any], tcpPortAvailable: ((Int) -> Bool)? = nil, environment: XrayEnvironmentSnapshot) throws -> Int {
         let inbounds = configuration["inbounds"] as? [[String: Any]] ?? []
         var used = XrayPortSpec.serviceListenerPorts(configuration: configuration)
         for inbound in inbounds {
@@ -533,7 +608,7 @@ public enum LocalProxyAccessPolicy {
             // Core ignores PortList when this input listens on a Unix socket.
             if isUnixListener(listen) { continue }
             guard let value = inbound["port"] else { continue } // Unix/listener-free inputs.
-            used.formUnion(try XrayPortSpec.reservedPorts(value))
+            used.formUnion(try XrayPortSpec.reservedPorts(value, environmentSnapshot: environment))
         }
         var attempts = 0
         let candidates = sequence(first: 10808) { $0 == 65535 ? 1024 : ($0 == 10807 ? nil : $0 + 1) }

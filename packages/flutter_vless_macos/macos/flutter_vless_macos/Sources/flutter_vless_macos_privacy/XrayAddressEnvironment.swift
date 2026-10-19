@@ -3,12 +3,19 @@ import Foundation
 /// Freeze only schema-selected Core Address environment references before a
 /// profile crosses native processes. This layer has no Core or tunnel dependency.
 public enum XrayAddressEnvironment {
-    public static func bind(configData: Data,
-        environment: [String: String] = ProcessInfo.processInfo.environment) throws -> Data {
+    public static func bind(configData: Data) throws -> Data {
+        try bind(configData: configData, environmentSnapshot: .capture())
+    }
+
+    public static func bind(configData: Data, environment: [String: String]) throws -> Data {
+        try bind(configData: configData, environmentSnapshot: XrayEnvironmentSnapshot(environment: environment))
+    }
+
+    public static func bind(configData: Data, environmentSnapshot: XrayEnvironmentSnapshot) throws -> Data {
         guard var config = try JSONSerialization.jsonObject(with: configData) as? [String: Any] else {
             throw LocalProxyAccessError.malformedConfiguration
         }
-        guard try bind(to: &config, environment: environment) else { return configData }
+        guard try bind(to: &config, environmentSnapshot: environmentSnapshot) else { return configData }
         return try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
     }
 
@@ -30,11 +37,16 @@ public enum XrayAddressEnvironment {
 
     @discardableResult
     public static func bind(to config: inout [String: Any], environment: [String: String]) throws -> Bool {
+        try bind(to: &config, environmentSnapshot: XrayEnvironmentSnapshot(environment: environment))
+    }
+
+    @discardableResult
+    public static func bind(to config: inout [String: Any], environmentSnapshot: XrayEnvironmentSnapshot) throws -> Bool {
         guard var output = XrayConfigKeys.normalize(config) else { throw LocalProxyAccessError.malformedConfiguration }
         var changed = false
         func bindValue(_ value: Any) throws -> Any {
             guard let raw = value as? String, raw.hasPrefix("env:") else { return value }
-            let bound = try LocalProxyAccessPolicy.bindingAddressEnvironment(raw, environment: environment)
+            let bound = try LocalProxyAccessPolicy.bindingAddressEnvironment(raw, environmentSnapshot: environmentSnapshot)
             changed = true
             return bound
         }
@@ -96,7 +108,7 @@ public enum XrayAddressEnvironment {
         }
         func bind(_ object: inout [String: Any]) throws {
             guard let raw = object["address"] as? String, raw.hasPrefix("env:") else { return }
-            object["address"] = try LocalProxyAccessPolicy.bindingAddressEnvironment(raw, environment: environment)
+            object["address"] = try LocalProxyAccessPolicy.bindingAddressEnvironment(raw, environmentSnapshot: environmentSnapshot)
             changed = true
         }
         func bindDownload(_ stream: inout [String: Any]) throws {

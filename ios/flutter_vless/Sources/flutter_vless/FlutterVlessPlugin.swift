@@ -692,7 +692,8 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     }
 
     private func startVless(call: FlutterMethodCall, result: @escaping FlutterResult,
-                            tcpPortAvailable: @escaping (Int) -> Bool = LocalProxyAccessPolicy.isTCPPortAvailable) {
+                            tcpPortAvailable: @escaping (Int) -> Bool = LocalProxyAccessPolicy.isTCPPortAvailable,
+                            captureEnvironment: () -> XrayEnvironmentSnapshot = XrayEnvironmentSnapshot.capture) {
         guard let arguments = call.arguments as? [String: Any],
               let remark = arguments["remark"] as? String,
               let config = arguments["config"] as? String,
@@ -730,14 +731,15 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         let effectiveConfigData: Data
         let preparedProxyConfig: ProxyOnlyRunner.Prepared?
         do {
+            let environment = captureEnvironment()
             let certificateBound = try XrayCertificatePaths.bind(configData: configData, directory: certificateAssetsDirectory)
-            let listenerBound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: certificateBound)
-            effectiveConfigData = try XrayAddressEnvironment.bind(configData: listenerBound)
+            let listenerBound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: certificateBound, environmentSnapshot: environment)
+            effectiveConfigData = try XrayAddressEnvironment.bind(configData: listenerBound, environmentSnapshot: environment)
             try NativeRoutingSpec.validateSource(effectiveConfigData, intent: vpnRouting)
             if proxyOnly {
                 preparedProxyConfig = try ProxyOnlyRunner.prepare(configData: effectiveConfigData)
             } else {
-                try LocalProxyAccessPolicy.validateVPN(configData: effectiveConfigData, tcpPortAvailable: tcpPortAvailable)
+                try LocalProxyAccessPolicy.validateVPN(configData: effectiveConfigData, tcpPortAvailable: tcpPortAvailable, environmentSnapshot: environment)
                 preparedProxyConfig = nil
             }
         } catch is NativeRoutingSpecError {

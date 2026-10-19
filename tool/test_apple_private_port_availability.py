@@ -10,16 +10,17 @@ fixture='''
 struct FlutterError { let code:String; let message:String; let details:Any? }
 func FLVlessCoreRoutingCapability() -> Int64 { 1 }
 enum Kernel {
- static var busy=Set<Int>(), exhausted=false, attempts:[Int]=[]
- static func available(_ port:Int) -> Bool { attempts.append(port); return !exhausted && !busy.contains(port) }
- static func reset() { busy=[]; exhausted=false; attempts=[] }
+ static var busy=Set<Int>(), exhausted=false, attempts:[Int]=[], entries:[Data]=[], captures=0
+ static func available(_ port:Int) -> Bool { attempts.append(port); entries=[]; return !exhausted && !busy.contains(port) }
+ static func capture() -> XrayEnvironmentSnapshot { captures += 1; return XrayEnvironmentSnapshot(rawEntries:entries) }
+ static func reset() { busy=[]; exhausted=false; attempts=[]; entries=[]; captures=0 }
 }
 final class Probe {
  var reachedQueue=false, errorCode:String?, source:[String:Any], queuedData:Data?
  init(_ source:[String:Any]) { self.source=source }
  func result(_ error:FlutterError) { errorCode=error.code }
  func start() {
- let tcpPortAvailable: (Int)->Bool = Kernel.available\n let arguments:[String:Any]=[:]
+ let tcpPortAvailable: (Int)->Bool = Kernel.available\n let captureEnvironment = Kernel.capture\n let arguments:[String:Any]=[:]
  let configData=try! JSONSerialization.data(withJSONObject:source)
  // ACTUAL_PREFIX
  queuedData=effectiveConfigData; reachedQueue=true
@@ -49,6 +50,21 @@ final class Probe {
    (try! JSONSerialization.jsonObject(with:guarded.queuedData!) as! NSDictionary) == reserved as NSDictionary
   print("CASE=caller-range-api-metrics-preserved;PASS=\\(guardedOK);CALLS=\\(Kernel.attempts.count);QUEUE=\\(guarded.reachedQueue)")
   if !guardedOK { failures += 1 }
+  Kernel.reset()
+  let decomp="e\\u{301}", composed="\\u{e9}"
+  Kernel.entries=["\\(composed).port=10810", "\\(decomp).port=10808", "\\(decomp).listen=127.0.0.1",
+                  "\\(composed).endpoint=wrong.invalid", "E\\u{301}_ENDPOINT=198.51.100.7", "DNS=tcp://9.9.9.9"].map { Data($0.utf8) }
+  let raw:[String:Any]=["inbounds":[["protocol":"socks","listen":"env:\\(decomp).listen","port":"env:\\(decomp).port"]],
+   "dns":["servers":["env:DNS"]], "outbounds":[["tag":"proxy","protocol":"socks","settings":["servers":[["address":"env:\\(decomp).endpoint","port":443]]]]]]
+  let frozen=Probe(raw);frozen.start()
+  let image=(try! JSONSerialization.jsonObject(with:frozen.queuedData!)) as! [String:Any]
+  let inputs=image["inbounds"] as! [[String:Any]], outputs=image["outbounds"] as! [[String:Any]]
+  let endpoint=(((outputs[0]["settings"] as! [String:Any])["servers"] as! [[String:Any]])[0]["address"] as! String)
+  let snapshotOK=frozen.reachedQueue && Kernel.captures == 1 && Kernel.entries.isEmpty && Kernel.attempts == [10809] &&
+   inputs[0]["port"] as? String == "10808" && inputs[0]["listen"] as? String == "127.0.0.1" && endpoint == "198.51.100.7" &&
+   ((image["dns"] as! [String:Any])["servers"] as! [String]) == ["tcp://9.9.9.9"]
+  print("CASE=byte-environment-before-allocation-and-persistence;PASS=\\(snapshotOK);CAPTURES=\\(Kernel.captures)")
+  if !snapshotOK { failures += 1 }
   exit(failures == 0 ? 0 : 7)
  }
 }
@@ -59,7 +75,8 @@ for platform,path in paths.items():
  privacy=privacy_paths[platform]
  inputs=[privacy/p for p in ['VlessNativeOptions.swift','NativeRoutingSpec.swift','LocalProxyAccessPolicy.swift','XrayAddressEnvironment.swift','XrayCertificatePaths.swift','XrayConfigKeys.swift','XrayServiceTags.swift','XrayPrivacyConfig.swift']]
  if platform=='macos':inputs.append(privacy/'DesktopBypassPolicy.swift')
- s=path.read_text();a=s.index('        let proxyOnly = arguments["proxy_only"]');b=s.index('        let operation = commands.submit',a)
+ s=path.read_text();assert 'manager.xrayConfig = effectiveConfigData' in s
+ a=s.index('        let proxyOnly = arguments["proxy_only"]');b=s.index('        let operation = commands.submit',a)
  runner=s.index('private final class ProxyOnlyRunner {')
  helper_start=s.index('    fileprivate static func buildProxyOnlyConfigData',runner);helper_end=s.index('\n    }\n',helper_start)+6
  delay_start=s.index('    private static func findDelayEndpoint',runner);delay_end=s.index('\n    }\n',delay_start)+6

@@ -22,6 +22,7 @@ private final class Proxy {
 private final class Manager {
     var remark = "old", xrayConfig = Data("old".utf8), bypassSubnets: [String] = []
     var proxyOnly = false, geoAssetsDirectory: String?
+    var certificateAssetsDirectory: String? = "/fixture/old-certificate-assets"
     func stop(waitForDisconnect: Bool) async throws { precondition(waitForDisconnect); events.append("vpn-stop") }
     func start() async throws { events.append("vpn-start") }
 }
@@ -41,6 +42,7 @@ private final class Manager {
                     preconditionFailure("Rejected candidate was started")
                 } catch {}
                 precondition(subject.packetTunnelManager!.xrayConfig == Data("old".utf8))
+                precondition(subject.packetTunnelManager!.certificateAssetsDirectory == "/fixture/old-certificate-assets")
                 precondition(!events.contains { $0.contains("start") || $0.contains("stop") || $0.contains("clear") })
                 precondition(events == (failure == "core" ? ["assets", "check"] : failure == "assets" ? ["assets"] : []))
             }
@@ -50,6 +52,7 @@ private final class Manager {
         try await subject.start(proxyOnly: false).value
         precondition(events == ["assets", "check", "proxy-stop", "clear-diagnostics", "vpn-start"])
         precondition(subject.packetTunnelManager!.xrayConfig == Data("new".utf8))
+        precondition(subject.packetTunnelManager!.certificateAssetsDirectory == "/fixture/new-certificate-assets")
         events = []; available = false
         try await StartProbe().start(proxyOnly: true).value
         precondition(events == ["unavailable", "vpn-stop", "proxy-start"])

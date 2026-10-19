@@ -66,6 +66,7 @@ probe='''private final class StartProbe {
  func start(proxyOnly: Bool) -> Task<Void, Error> {
  let effectiveConfigData = Data("new".utf8)
  let geoAssetsDirectory: String? = nil
+ let certificateAssetsDirectory: String? = "/fixture/new-certificate-assets"
  let bypassSubnets: [String]? = []
  let remark = "new"
 '''+bodies[0]+'''

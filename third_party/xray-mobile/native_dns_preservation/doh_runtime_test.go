@@ -240,6 +240,61 @@ type dohSpec struct {
 	Port                                  int
 }
 
+func assertDoHProxyTLS(t *testing.T, source, effective map[string]any, directory string) {
+	t.Helper()
+	sourceTLS := source["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)["tlsSettings"].(map[string]any)
+	effectiveTLS := effective["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)["tlsSettings"].(map[string]any)
+	encoded, err := json.Marshal(sourceTLS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expected map[string]any
+	if err := json.Unmarshal(encoded, &expected); err != nil {
+		t.Fatal(err)
+	}
+	if expected["certificates"].([]any)[0].(map[string]any)["certificateFile"] != "proxy-ca.pem" {
+		t.Fatal("source certificate path was not retained")
+	}
+	expected["certificates"].([]any)[0].(map[string]any)["certificateFile"] = filepath.Join(directory, "proxy-ca.pem")
+	// This is the existing mandatory privacy adaptation in both preparers.
+	// Continue comparing every other TLS field, including verification flags.
+	expected["masterKeyLog"] = ""
+	if !reflect.DeepEqual(expected, effectiveTLS) {
+		t.Fatal("effective TLS fields differ beyond the certificate path and private key-log policy")
+	}
+}
+
+// The same whole-TLS assertion as the child, exercised before any runtime.
+// Only native file exporters and Core Decode/Build execute here.
+func testDoHProxyCertificatePreparation(t *testing.T) {
+	material := makeDoHMaterial(t)
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "proxy-ca.pem"), material.ca, 0600); err != nil {
+		t.Fatal(err)
+	}
+	source := dohDocument(18071, "127.0.0.1:18072", "https://resolver.invalid:18073/dns-query", "tls-probe.invalid")
+	source["outbounds"].([]any)[0].(map[string]any)["streamSettings"] = map[string]any{
+		"security": "tls", "tlsSettings": map[string]any{
+			"serverName": "resolver.invalid", "disableSystemRoot": true,
+			"certificates": []any{map[string]any{"certificateFile": "proxy-ca.pem", "usage": "verify", "oneTimeLoading": true}},
+		},
+	}
+	document, err := json.Marshal(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound := certificateDocument(t, bindCertificateFixture(t, document, directory))
+	prepared, _ := prepare(t, bound)
+	assertDoHProxyTLS(t, source, certificateDocument(t, prepared), directory)
+	if _, err := certificateBuild(prepared); err != nil {
+		t.Fatal("prepared TLS file profile failed Core Build")
+	}
+	after, _ := json.Marshal(source)
+	if !bytes.Equal(document, after) {
+		t.Fatal("TLS assertion changed the source profile")
+	}
+}
+
 func testNativeHTTPSDoH(t *testing.T) {
 	if !strings.EqualFold(os.Getenv("CI"), "true") || runtime.GOOS == "darwin" && !strings.EqualFold(os.Getenv("GITHUB_ACTIONS"), "true") {
 		t.Fatal("HTTPS DoH runtime is CI-only")
@@ -536,15 +591,7 @@ func TestNativeHTTPSDoHChild(t *testing.T) {
 	if !reflect.DeepEqual(source["dns"], effective["dns"]) || !reflect.DeepEqual(source["outbounds"].([]any)[0].(map[string]any)["settings"], effective["outbounds"].([]any)[0].(map[string]any)["settings"]) {
 		t.Fatal("DoH source DNS/proxy settings changed")
 	}
-	sourceTLS := source["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)["tlsSettings"].(map[string]any)
-	effectiveTLS := effective["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)["tlsSettings"].(map[string]any)
-	if sourceTLS["certificates"].([]any)[0].(map[string]any)["certificateFile"] != "proxy-ca.pem" {
-		t.Fatal("source certificate path was not retained")
-	}
-	sourceTLS["certificates"].([]any)[0].(map[string]any)["certificateFile"] = filepath.Join(filepath.Dir(spec.Prepared), "proxy-ca.pem")
-	if !reflect.DeepEqual(sourceTLS, effectiveTLS) {
-		t.Fatal("effective TLS fields differ beyond the selected certificate path")
-	}
+	assertDoHProxyTLS(t, source, effective, filepath.Dir(spec.Prepared))
 	configuration, err := serial.DecodeJSONConfig(bytes.NewReader(prepared))
 	if err != nil {
 		t.Fatal(err)

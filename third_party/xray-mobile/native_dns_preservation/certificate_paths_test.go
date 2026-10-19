@@ -235,8 +235,12 @@ func TestNativeCertificatePaths(t *testing.T) {
 	if os.Getenv("NATIVE_DNS_PREPARER") == "" {
 		t.Fatal("production native certificate exporter required")
 	}
-	t.Run("WindowsPreparer", func(t *testing.T) { testCertificatePaths(t, true) })
+	t.Run("WindowsPreparer", func(t *testing.T) { testCertificatePaths(t, true); testDoHProxyCertificatePreparation(t) })
 	if apple := os.Getenv("NATIVE_DNS_PREPARER_APPLE"); apple != "" {
-		t.Run("ApplePreparer", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testCertificatePaths(t, true) })
+		t.Run("ApplePreparer", func(t *testing.T) {
+			t.Setenv("NATIVE_DNS_PREPARER", apple)
+			testCertificatePaths(t, true)
+			testDoHProxyCertificatePreparation(t)
+		})
 	}
 }

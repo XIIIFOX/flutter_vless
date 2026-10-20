@@ -2,6 +2,7 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <iphlpapi.h>
+#include <netioapi.h>
 #include <optional>
 #include <string>
 #include <cstdint>

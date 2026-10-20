@@ -46,7 +46,8 @@ void StaticDnsAliasCases() {
     auto source = cases[0]["config"];
     source["dns"]["hosts"] = hosts;
     source["dns"]["servers"] = Json::array({"https://doh.example/dns-query"});
-    source["outbounds"][0]["settings"]["servers"][0]["address"] = "endpoint.invalid";
+    // Keep the numeric proxy so this case tests DNS admission independently
+    // of the platform's separate physical endpoint bootstrap order.
     const auto before = source.dump();
     unsigned lookups = 0;
     Check(!PrepareProtectedVpn(before, "alias-user", "synthetic-alias-token", "Ethernet",

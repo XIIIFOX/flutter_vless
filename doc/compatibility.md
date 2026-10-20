@@ -1935,7 +1935,7 @@ physical endpoint families, IPv6 UDP endpoints, NAT64 and handover remain open.
 Apple and Windows DNS admission follows at most five caller static hosts
 aliases to a numeric IPv4/IPv6 leaf. Caller DNS, resolver URL, TLS name and opaque
 full-profile data remain unchanged. Cycles, unresolved aliases, RCODE mappings
-and unproven Unicode aliases are refused before physical endpoint lookup.
+and unproven Unicode aliases are refused during configuration preparation.
 
 All four public adapters cancel an older capability-gated start after Stop or
 a newer Start, returning `VPN_START_CANCELLED` without private error details.

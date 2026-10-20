@@ -3,6 +3,8 @@ import Security
 
 @main struct MacManagerPolicyProbe {
     static func main() async throws {
+        try await verifyHostStartStaging()
+        if ProcessInfo.processInfo.environment["MANAGER_STAGING_ONLY"] == "1" { return }
         let keychain = FixtureKeychain()
         let manager = PacketTunnelManager(providerBundleIdentifier: "fixture.XrayTunnel", groupIdentifier: "fixture",
             keychainAccessGroup: "TEAM.fixture.shared", keychainClient: keychain)
@@ -12,6 +14,8 @@ import Security
         let permission = await manager.testSaveAndLoadProfile()
         precondition(permission && keychain.records.isEmpty)
         try await manager.start()
+        precondition(!manager.isRecoveryEnabled && SDK.profile?.isOnDemandEnabled == false)
+        try SDK.simulateProviderAdmission()
         let profile = SDK.profile!
         let policy = profile.protocolConfiguration!
         precondition(manager.isRecoveryEnabled && policy.includeAllNetworks && !policy.excludeLocalNetworks)

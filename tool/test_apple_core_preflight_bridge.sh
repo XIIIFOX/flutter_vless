@@ -285,3 +285,6 @@ python3 "$ROOT/tool/test_apple_private_port_availability.py"
 
 # Reinitialization cannot redirect a queued start into another options/profile owner.
 python3 "$ROOT/tool/test_apple_start_owner.py"
+
+# Fresh On Demand starts arm only after preparation; rollback owns its save.
+python3 "$ROOT/tool/test_apple_cold_start_policy.py" --receipts

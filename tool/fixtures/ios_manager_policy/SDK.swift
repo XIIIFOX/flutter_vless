@@ -21,7 +21,12 @@ class NETunnelProviderProtocol: NEVPNProtocol {
 class NEVPNConnection {
     var status = NEVPNStatus.disconnected
     var connectedDate: Date?
-    func startVPNTunnel() throws { status = .connecting }
+    func startVPNTunnel() throws {
+        SDK.startCalls += 1
+        SDK.startWasDisarmed.append(SDK.profile?.isOnDemandEnabled == false && SDK.profile?.onDemandRules == nil)
+        if SDK.failNextStart { SDK.failNextStart = false; throw SDKError.unavailable }
+        status = .connecting
+    }
     func stopVPNTunnel() {
         SDK.stopCalls += 1
         if SDK.delayedStop {
@@ -58,8 +63,29 @@ enum SDK {
     static var notifyTemporaryConnections = false
     static var saves = 0
     static var stopCalls = 0
+    static var startCalls = 0
+    static var startWasDisarmed: [Bool] = []
+    static var failNextStart = false
     static var delayedStop = false
     static var providerResponse: Data?
+
+    // Explicit external provider-admission boundary. Host start never invokes
+    // this; the real provider's admission/rollback helper has separate tests.
+    static func simulateProviderAdmission() throws {
+        let profile = profile!
+        let metadata = (profile.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+        let options = try VlessNativeOptions(metadata["options"] as? [String: Any])
+        profile.isOnDemandEnabled = options.enableOnDemand
+        profile.onDemandRules = options.enableOnDemand ? [NEOnDemandRuleConnect()] : nil
+    }
+
+    static func reset() {
+        profile = nil; routingCapability = 0; failAllLoads = false
+        failAfterNextSave = false; failNextRefresh = false; rearmOnNextRefresh = false
+        failNextSave = false; loads = 0; notifyTemporaryConnections = false
+        saves = 0; stopCalls = 0; startCalls = 0; startWasDisarmed = []; failNextStart = false
+        delayedStop = false; providerResponse = nil
+    }
 }
 func FLVlessCoreRoutingCapability() -> Int64 { SDK.routingCapability }
 class NETunnelProviderManager {

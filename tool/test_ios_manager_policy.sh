@@ -34,7 +34,9 @@ prepared_start=s.index('    struct Prepared {',s.index('private final class Prox
 prepared_end=s.index('    // Direct callers share the host admission order:',prepared_start)
 helper='enum ProxyOnlyRunner {\n'+s[prepared_start:prepared_end]+'\n'+s[delay_start:delay_end]+'\n'+s[helper_start:helper_end]+'\n}\n'
 a=s.index('        let proxyOnly = arguments["proxy_only"]')
-b=s.index('        let operation = commands.submit',a)
+# Host admission ends before plugin-owner capture and the asynchronous queue.
+# The extracted probe deliberately has no live plugin manager or control group.
+b=s.index('        let startManager = packetTunnelManager',a,s.index('        let operation = commands.submit',a))
 (out/'NativeStart.swift').write_text('import Foundation\n'+helper+'struct FlutterError { let code: String; let message: String; let details: Any? }\nfinal class NativeStartEntryProbe {\n var reachedQueue = false\n var lastErrorCode: String?\n func result(_ error: FlutterError) { lastErrorCode = error.code }\n func start(arguments: [String: Any]) {\n let tcpPortAvailable: (Int) -> Bool = { _ in true }\n let captureEnvironment = { XrayEnvironmentSnapshot(rawEntries: []) }\n let configData = try! JSONSerialization.data(withJSONObject: ["inbounds": [["protocol": "socks", "listen": "127.0.0.1", "port": 10808]]])\n'+s[a:b]+'        reachedQueue = true\n    }\n}\n')
 PYTHON
 xcrun swiftc -O -parse-as-library \
@@ -49,6 +51,7 @@ xcrun swiftc -O -parse-as-library \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/XrayServiceTags.swift" \
   "$ROOT_DIR/ios/flutter_vless/Sources/flutter_vless_privacy/XrayPrivacyConfig.swift" \
   "$ROOT_DIR/tool/fixtures/ios_manager_policy/Keychain.swift" \
+  "$ROOT_DIR/tool/fixtures/ios_manager_policy/HostStartStaging.swift" \
   "$PROBE_DIR/Manager.swift" \
   "$PROBE_DIR/Provider.swift" \
   "$PROBE_DIR/NativeStart.swift" \

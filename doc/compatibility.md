@@ -172,10 +172,10 @@ preparation retain their separate behavior.
 
 Apple transport endpoint lookup happens before installing VPN routes and stays
 separate from caller DNS. Both Apple platforms use cancellable, bounded system
-IPv4 lookup, then HTTPS bootstrap to `1.1.1.1` for public hostnames
-only. The fallback retains normal TLS validation and refuses redirects. The
+IPv4 lookup, then bounded system IPv6 lookup, then HTTPS IPv4 bootstrap to
+`1.1.1.1` for public hostnames only. The fallback retains normal TLS validation and refuses redirects. The
 physical iPhone check at `78a68c7` used system lookup successfully; it does not
-qualify the encrypted fallback branch or IPv6-only endpoint bootstrap.
+qualify the encrypted fallback branch or the later named-IPv6 endpoint changes.
 
 Caller DNS admission now accepts numeric IPv6 addresses as well as IPv4 and
 mapped addresses. It preserves the DNS object, query strategy and caller route;
@@ -1989,6 +1989,40 @@ no Core, SDK, resolver, socket or VPN. Android and Windows retain their existing
 implementation and qualified gates for this Apple-specific increment.
 IPv6-only/NAT64 networks, address-candidate failover, active path re-preparation
 and new physical-device acceptance of these provider changes remain open.
+
+### Fresh Apple startup and On Demand
+
+An explicit new Start stores its candidate with On Demand disabled. The provider
+arms recovery after endpoint resolution, configuration/assets/Core preflight
+and network settings succeed, immediately before runtime admission. A failed
+fresh preparation therefore cannot arm automatic recovery. Migration of an
+existing profile retains its recovery policy; host storage rollback restores
+the prior profile and its prior policy together.
+If candidate storage succeeds but the later OS Start call throws, that candidate
+remains disarmed for manual retry; this branch does not restore the previous
+disconnected profile. Replacement of an active session is still refused.
+
+Failed-start cleanup tracks only saves attempted by that start and checks the
+immutable profile reference and provider ownership. An already armed recovery
+profile is preserved. A pending or failed OS preference save has an uncertain
+outcome: reading an earlier disabled snapshot cannot prove that the older save
+will not commit later. This path reports a fixed, content-free cleanup error
+instead of claiming successful rollback. It does not establish cancellation of
+in-flight OS saves across processes or qualify physical failure recovery.
+
+The actual provider entry and recovery helper pass 17 inert cases per Apple
+platform, including an independently stored late-commit snapshot. The existing
+injected preference suite passes 11 cases per module. Actual host-manager
+fixtures add 12 controls per platform for staging, failed OS Start, storage
+rollback, active identity, migration and explicit Stop. These checks use fake
+Core, preferences and network settings and do not qualify physical VPN recovery.
+
+The preceding Apple/Android CI run at `55f1a11` passed Android native/runtime
+checks and Apple helper, shared Core corpus and unpublished SDK construction.
+Its Apple manager fixture failed to extract the newly captured Start owner;
+later Apple runtime/example steps were skipped. The fixture boundary is repaired
+alongside the fresh-start changes; this failed run does not qualify those later
+gates.
 
 Current implementation/acceptance status (1.1.7, unreleased):
 

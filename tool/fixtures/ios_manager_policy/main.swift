@@ -3,6 +3,8 @@ import Security
 
 @main struct Probe {
     static func main() async throws {
+        try await verifyHostStartStaging()
+        if ProcessInfo.processInfo.environment["MANAGER_STAGING_ONLY"] == "1" { return }
         let keychain = FixtureKeychain()
         let manager = PacketTunnelManager(providerBundleIdentifier: "fixture.XrayTunnel", groupIdentifier: "fixture",
                                           keychainAccessGroup: "TEAM.fixture.shared", keychainClient: keychain)
@@ -14,6 +16,8 @@ import Security
         precondition((SDK.profile?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["xrayConfig"] == nil)
         precondition(SDK.profile?.isEnabled == false && SDK.profile?.isOnDemandEnabled == false)
         try await manager.start()
+        precondition(!manager.isRecoveryEnabled && SDK.profile?.isOnDemandEnabled == false)
+        try SDK.simulateProviderAdmission()
         precondition(manager.isRecoveryEnabled)
         let protected = SDK.profile!.protocolConfiguration!
         precondition(protected.includeAllNetworks && !protected.excludeLocalNetworks)
@@ -58,7 +62,10 @@ import Security
         precondition(!manager.isRecoveryEnabled && SDK.stopCalls == 1)
         SDK.failAfterNextSave = true
         do { try await manager.start(); preconditionFailure("Expected post-save refresh failure") } catch SDKError.unavailable {}
-        precondition(manager.isRecoveryEnabled, "An error after saving must retain the activated policy")
+        precondition(!manager.isRecoveryEnabled && SDK.profile?.isOnDemandEnabled == false,
+                     "A failed fresh start must not activate recovery")
+        try await manager.start()
+        try SDK.simulateProviderAdmission()
         SDK.profile?.connection.status = .connected
         SDK.providerResponse = Data("ready".utf8)
         await manager.refreshForwardingState()
@@ -80,6 +87,7 @@ import Security
         SDK.profile?.protocolConfiguration = legacy
         manager.bypassSubnets = []
         try await manager.start()
+        try SDK.simulateProviderAdmission()
         precondition(manager.isRecoveryEnabled)
         let migrated = SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol
         precondition(migrated.includeAllNetworks && !migrated.excludeLocalNetworks)
@@ -239,6 +247,7 @@ func verifySecretTransactions() async throws {
     while manager.isProcessing { await Task.yield() }
     manager.xrayConfig = Data("{\"remote-password\":\"old-secret\"}".utf8)
     try await manager.start()
+    try SDK.simulateProviderAdmission()
     let firstMetadata = (SDK.profile!.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
     let first = try TunnelSecretProfile.reference(in: firstMetadata)
     precondition(firstMetadata["xrayConfig"] == nil)

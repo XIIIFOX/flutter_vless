@@ -22,5 +22,6 @@ xcrun swiftc -O -parse-as-library \
   "$SOURCE/flutter_vless_macos_privacy/DesktopBypassPolicy.swift" \
   "$SOURCE/flutter_vless_macos/NativeOperationQueue.swift" \
   "$ROOT/tool/fixtures/ios_manager_policy/Keychain.swift" \
+  "$ROOT/tool/fixtures/ios_manager_policy/HostStartStaging.swift" \
   "$ROOT/tool/fixtures/macos_manager_policy.swift" "$OUT/Manager.swift" -o "$OUT/probe"
 "$OUT/probe"

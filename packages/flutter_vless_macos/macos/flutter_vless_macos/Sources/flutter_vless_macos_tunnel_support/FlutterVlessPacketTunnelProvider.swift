@@ -174,22 +174,9 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         let epoch = sessionAdmission.begin()
         setForwardingReady(false, epoch: epoch)
         rememberTunnelLog("Starting Xray packet tunnel")
-        // A system-initiated Connect after a manual Stop must rearm crash
-        // recovery even when the containing application is not running.
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            TunnelOnDemandPolicy.enableForStart(configuration: configuration,
-                isCancelled: { !self.sessionAdmission.isCurrent(epoch) }) { result in
-                switch result {
-                case .success:
-                    rememberTunnelLog("On-demand recovery policy applied: enabled=\(options.enableOnDemand)")
-                    continuation.resume()
-                case .failure:
-                    rememberTunnelLog("Unable to arm on-demand recovery for tunnel session")
-                    continuation.resume(throwing: self.tunnelError("Unable to enable VPN recovery; reconnect from the app"))
-                }
-            }
-        }
-        guard sessionAdmission.isCurrent(epoch) else { throw CancellationError() }
+        let armingReceipt = try TunnelOnDemandPolicy.StartArmingReceipt(configuration: configuration)
+        var runtimeAdmitted = false
+        do {
         // Endpoint bootstrap precedes virtual DNS installation. Reuse the
         // prepared endpoints when restarting workers within this same tunnel.
         let credentials = try LocalProxyCredentials.generate()
@@ -263,13 +250,49 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         guard sessionAdmission.isCurrent(epoch), !preparation.isCancelled else { throw CancellationError() }
         rememberTunnelLog("Protected tunnel routes and virtual DNS installed")
 
+        // Arm only the fully prepared startup, never an unresolved cold profile.
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            TunnelOnDemandPolicy.enableForStart(configuration: configuration, armingReceipt: armingReceipt,
+                isCancelled: { !self.sessionAdmission.isCurrent(epoch) }) { result in
+                switch result {
+                case .success:
+                    rememberTunnelLog("On-demand recovery policy applied: enabled=\(options.enableOnDemand)")
+                    continuation.resume()
+                case .failure:
+                    rememberTunnelLog("Unable to arm on-demand recovery for tunnel session")
+                    continuation.resume(throwing: self.tunnelError("Unable to enable VPN recovery; reconnect from the app"))
+                }
+            }
+        }
+        guard sessionAdmission.isCurrent(epoch) else { throw CancellationError() }
+
         let spec = RuntimeSpec(epoch: epoch, options: options, config: prepared.routingEnvelope?.configurationData ?? prepared.data, port: parsed.inboundPort,
             geoAssetsDirectory: providerConfiguration["geoAssetsDirectory"] as? String, credentials: credentials,
             routingMetadata: prepared.routingEnvelope?.metadataData)
         guard startTunnelWatchdog(spec) else { throw CancellationError() }
+        runtimeAdmitted = true
         // NE connected only means the routes are installed. The plugin
         // queries forwarding readiness before publishing CONNECTED.
         watchdogQueue.async { self.scheduleNativeRecovery(after: 0, epoch: epoch) }
+        } catch {
+            guard !runtimeAdmitted else { throw error }
+            // An explicit Stop may already have revoked this epoch. Cleanup is
+            // still safe with no owner, but must not touch a newer same-ref start.
+            let replaced = { self.sessionAdmission.currentEpoch.map { $0 != epoch } ?? false }
+            if replaced() { throw CancellationError() }
+            let cleanup = await withCheckedContinuation { continuation in
+                TunnelOnDemandPolicy.rollbackFailedStart(configuration: configuration,
+                    armingReceipt: armingReceipt, isCancelled: replaced) { continuation.resume(returning: $0) }
+            }
+            if case .failure(let cleanupError) = cleanup {
+                if replaced() || (cleanupError as? TunnelOnDemandPolicy.Failure) == .profileChanged {
+                    throw CancellationError()
+                }
+                rememberTunnelLog("Failed-start recovery cleanup could not be verified")
+                throw tunnelError("Unable to verify VPN recovery cleanup; disconnect from the app")
+            }
+            throw error
+        }
     }
 
     open override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {

@@ -1140,35 +1140,27 @@ final class PacketTunnelManager: ObservableObject {
         manager.localizedDescription = remark
         if !preserveRecoveryPolicy {
             manager.isEnabled = activate
-            if activate && nativeOptions.enableOnDemand {
-                let rule = NEOnDemandRuleConnect()
-                rule.interfaceTypeMatch = .any
-                manager.onDemandRules = [rule]
-                manager.isOnDemandEnabled = true
-            } else {
-                manager.isOnDemandEnabled = false
-                manager.onDemandRules = nil
-            }
+            // The provider arms the requested recovery policy only after its
+            // preparation, Core and network settings have been admitted.
+            manager.isOnDemandEnabled = false
+            manager.onDemandRules = nil
         }
-        var persisted = false
         do {
             try await manager.saveToPreferences()
-            persisted = true
             self.manager = manager
             try await manager.loadFromPreferences()
             let readback = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
             guard try TunnelSecretProfile.reference(in: readback) == reference,
                   try store.read(reference) == config else { throw TunnelSecretError.profileVerificationFailed }
         } catch {
-            // Restore the prior version. Keep an already activated protective
-            // policy armed even when the SDK refresh fails after saving it.
+            // Roll back the prior reference and its policy together. A fresh
+            // failed start stays disarmed; an established prior profile keeps
+            // its exact recovery policy when this rollback is saved.
             manager.protocolConfiguration = previousProtocol
             manager.localizedDescription = previousDescription
-            if !persisted {
-                manager.isEnabled = previousEnabled
-                manager.isOnDemandEnabled = previousOnDemand
-                manager.onDemandRules = previousRules
-            }
+            manager.isEnabled = previousEnabled
+            manager.isOnDemandEnabled = previousOnDemand
+            manager.onDemandRules = previousRules
             do { try await manager.saveToPreferences() }
             catch {
                 // Even a failed save callback can have an uncertain outcome.

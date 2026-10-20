@@ -3,23 +3,93 @@ import NetworkExtension
 import flutter_vless_privacy
 
 /// Changes recovery policy from the provider process, including when its app
-/// is suspended or terminated. Only an explicit user stop disarms recovery.
+/// is suspended or terminated. Failed fresh startup may undo only its own arming.
 public enum TunnelOnDemandPolicy {
     public enum Outcome: Equatable {
         case updated, unchanged, preservedForRecovery
     }
 
     public enum Failure: Error {
-        case invalidIdentity, profileChanged, ambiguousProfile, timedOut, verificationFailed, cancelled
+        case invalidIdentity, profileChanged, ambiguousProfile, timedOut, verificationFailed, cancelled, cleanupUncertain
+    }
+
+    /// Per-start evidence. A pending/failed save is never cancelled by observing
+    /// an earlier OFF snapshot: the OS may still commit that save afterwards.
+    public final class StartArmingReceipt: @unchecked Sendable {
+        private let lock = NSLock()
+        private let identifier: String
+        private let reference: Data
+        private var attempted = false
+        private var pending = 0
+        private var uncertain = false
+
+        public init(configuration: NETunnelProviderProtocol) throws {
+            guard let identifier = configuration.providerBundleIdentifier, !identifier.isEmpty,
+                  let reference = configuration.providerConfiguration?["xrayConfigReference"] as? Data,
+                  !reference.isEmpty else { throw Failure.invalidIdentity }
+            self.identifier = identifier; self.reference = reference
+        }
+        fileprivate func matches(_ configuration: NETunnelProviderProtocol) -> Bool {
+            configuration.providerBundleIdentifier == identifier
+                && configuration.providerConfiguration?["xrayConfigReference"] as? Data == reference
+        }
+        fileprivate func beginSave() {
+            lock.lock(); attempted = true; pending += 1; lock.unlock()
+        }
+        fileprivate func endSave(_ error: Error?) {
+            lock.lock(); pending -= 1; uncertain = uncertain || error != nil; lock.unlock()
+        }
+        fileprivate var state: (attempted: Bool, unsettled: Bool) {
+            lock.lock(); defer { lock.unlock() }
+            return (attempted, pending != 0 || uncertain)
+        }
     }
 
     public static func enableForStart(configuration: NETunnelProviderProtocol,
+                                      armingReceipt: StartArmingReceipt? = nil,
                                       isCancelled: @escaping () -> Bool = { false },
                                       completion: @escaping (Result<Outcome, Error>) -> Void) {
+        enableForStart(configuration: configuration, armingReceipt: armingReceipt,
+            preferences: .system, isCancelled: isCancelled, completion: completion)
+    }
+
+    static func enableForStart(configuration: NETunnelProviderProtocol,
+                               armingReceipt: StartArmingReceipt? = nil,
+                               preferences: Preferences, timeout: TimeInterval = 4,
+                               isCancelled: @escaping () -> Bool = { false },
+                               completion: @escaping (Result<Outcome, Error>) -> Void) {
         do {
             let options = try VlessNativeOptions(configuration.providerConfiguration?["options"] as? [String: Any])
-            apply(enabled: options.enableOnDemand, configuration: configuration, isCancelled: isCancelled, completion: completion)
+            if let armingReceipt, !armingReceipt.matches(configuration) { throw Failure.profileChanged }
+            apply(enabled: options.enableOnDemand, configuration: configuration, preferences: preferences,
+                timeout: timeout, isCancelled: isCancelled,
+                armingReceipt: armingReceipt) { result in
+                if case .success = result, armingReceipt?.state.unsettled == true {
+                    completion(.failure(Failure.cleanupUncertain))
+                } else { completion(result) }
+            }
         } catch { completion(.failure(error)) }
+    }
+
+    public static func rollbackFailedStart(configuration: NETunnelProviderProtocol,
+                                           armingReceipt: StartArmingReceipt,
+                                           isCancelled: @escaping () -> Bool = { false },
+                                           completion: @escaping (Result<Outcome, Error>) -> Void) {
+        rollbackFailedStart(configuration: configuration, armingReceipt: armingReceipt,
+            preferences: .system, isCancelled: isCancelled, completion: completion)
+    }
+
+    static func rollbackFailedStart(configuration: NETunnelProviderProtocol,
+                                    armingReceipt: StartArmingReceipt, preferences: Preferences,
+                                    timeout: TimeInterval = 4,
+                                    isCancelled: @escaping () -> Bool = { false },
+                                    completion: @escaping (Result<Outcome, Error>) -> Void) {
+        guard armingReceipt.matches(configuration) else { completion(.failure(Failure.profileChanged)); return }
+        let state = armingReceipt.state
+        guard !state.unsettled else { completion(.failure(Failure.cleanupUncertain)); return }
+        guard state.attempted else { completion(.success(.unchanged)); return }
+        apply(enabled: false, configuration: configuration, preferences: preferences,
+            timeout: timeout, isCancelled: isCancelled, completion: completion)
     }
 
     public static func disableForUserStop(reason: NEProviderStopReason,
@@ -47,6 +117,7 @@ public enum TunnelOnDemandPolicy {
     static func apply(enabled: Bool, configuration: NETunnelProviderProtocol,
                       preferences: Preferences = .system, timeout: TimeInterval = 4,
                       isCancelled: @escaping () -> Bool = { false },
+                      armingReceipt: StartArmingReceipt? = nil,
                       completion: @escaping (Result<Outcome, Error>) -> Void) {
         guard let identifier = configuration.providerBundleIdentifier, !identifier.isEmpty,
               let reference = configuration.providerConfiguration?["xrayConfigReference"] as? Data,
@@ -55,7 +126,7 @@ public enum TunnelOnDemandPolicy {
             return
         }
         let operation = Operation(enabled: enabled, identifier: identifier, reference: reference,
-                                  preferences: preferences, isCancelled: isCancelled, completion: completion)
+                                  preferences: preferences, isCancelled: isCancelled, armingReceipt: armingReceipt, completion: completion)
         DispatchQueue.main.async { operation.start(timeout: timeout) }
     }
 
@@ -65,18 +136,21 @@ public enum TunnelOnDemandPolicy {
         let reference: Data
         let preferences: Preferences
         let isCancelled: () -> Bool
+        let armingReceipt: StartArmingReceipt?
         var completion: ((Result<Outcome, Error>) -> Void)?
         var timeoutWork: DispatchWorkItem?
         var staleRetries = 0
 
         init(enabled: Bool, identifier: String, reference: Data, preferences: Preferences,
              isCancelled: @escaping () -> Bool,
+             armingReceipt: StartArmingReceipt?,
              completion: @escaping (Result<Outcome, Error>) -> Void) {
             self.enabled = enabled
             self.identifier = identifier
             self.reference = reference
             self.preferences = preferences
             self.isCancelled = isCancelled
+            self.armingReceipt = armingReceipt
             self.completion = completion
         }
 
@@ -122,6 +196,8 @@ public enum TunnelOnDemandPolicy {
                 finish(.success(.unchanged))
                 return
             }
+            let newlyArming = enabled && (!manager.isOnDemandEnabled || rules.isEmpty)
+            if newlyArming { armingReceipt?.beginSave() }
             manager.isOnDemandEnabled = enabled
             if enabled {
                 let rule = NEOnDemandRuleConnect()
@@ -134,6 +210,9 @@ public enum TunnelOnDemandPolicy {
             // the user can also reconnect from the system VPN control.
             preferences.save(manager) { error in
                 DispatchQueue.main.async {
+                    // Settle the receipt even after timeout. A late callback
+                    // never starts another operation or reports cleanup success.
+                    if newlyArming { self.armingReceipt?.endSave(error) }
                     guard self.completion != nil else { return }
                     if let error {
                         let failure = error as NSError

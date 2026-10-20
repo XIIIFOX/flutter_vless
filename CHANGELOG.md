@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Stage new Apple VPN profiles with On Demand disabled. Arm recovery after endpoint/configuration preflight and network settings succeed; scope failed-start cleanup to that start's immutable profile and report uncertain preference saves without claiming rollback.
+
 * Accept system-resolved IPv6 transport endpoints on iOS/macOS while preserving caller DNS, endpoint names and TLS identity. Discard endpoint results and failures after session cancellation; retain the IPv4-only resolver API.
 
 * Freeze the Apple options/profile owner for each queued Start. Cancel a start superseded by successful reinitialization before touching the replacement profile; preserve the active owner after invalid options.

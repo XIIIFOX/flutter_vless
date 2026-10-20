@@ -1341,6 +1341,44 @@ void OpaqueFieldCases() {
   Require(!prepare(source, calls) && calls == 0 && source == unsafe, "actual local QUIC DNS was admitted or mutated source");
 }
 
+void NumericOuterIPv6Cases() {
+  const auto source = Parse(R"({"inbounds":[],"outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"fd00:85:2::2","port":18443,"users":[{"id":"00000000-0000-0000-0000-000000000001","encryption":"none"}]}]},"streamSettings":{"network":"tcp","security":"tls","tlsSettings":{"serverName":"peer.invalid","allowInsecure":false}}},{"tag":"direct","protocol":"freedom"}],"dns":{"servers":["1.1.1.1"]}})");
+  const auto bytes = source.dump();
+  unsigned calls = 0;
+  VpnRoutingProvenance provenance;
+  auto prepare = [&](const Json& input) {
+    return PrepareProtectedVpn(input.dump(), "session-user", "session-password", "Owned IPv6", [&](const std::string&) {
+      ++calls; return std::string();
+    }, &provenance, [](uint16_t) { return true; });
+  };
+  const auto result = prepare(source);
+  Require(result.has_value(), "numeric IPv6 TCP endpoint was refused");
+  const auto actual = Parse(*result);
+  Require(calls == 0 && source.dump() == bytes, "numeric IPv6 performed DNS or changed source");
+  Require(actual["outbounds"][0]["settings"] == source["outbounds"][0]["settings"], "logical IPv6 endpoint changed");
+  Require(actual["outbounds"][0]["streamSettings"]["tlsSettings"]["serverName"] == "peer.invalid", "IPv6 changed TLS identity");
+  Require(actual["outbounds"][0]["streamSettings"]["sockopt"]["domainStrategy"] == "ForceIPv6"
+      && actual["outbounds"][0]["streamSettings"]["sockopt"]["interface"] == "Owned IPv6", "IPv6 socket family/interface lost");
+  Require(provenance.ipv6_tcp_endpoints.size() == 1 && provenance.ipv6_tcp_endpoints[0].port == 18443
+      && flutter_vless::ValidOuterIpv6(provenance.ipv6_tcp_endpoints[0].address), "finite IPv6 WFP scope missing");
+  for (const auto* invalid : {"::", "::1", "::ffff:192.0.2.1", "ff02::1", "fe80::1", "fd00:85:2::2%3", "2001:db8:::1"}) {
+    auto bad = source; bad["outbounds"][0]["settings"]["vnext"][0]["address"] = invalid;
+    Require(!prepare(bad), "non-underlay IPv6 endpoint was accepted");
+  }
+  for (const auto* transport : {"quic", "xhttp"}) {
+    auto bad = source; bad["outbounds"][0]["streamSettings"]["network"] = transport;
+    Require(!prepare(bad), "unqualified IPv6 transport was accepted");
+  }
+  auto mixed = source;
+  auto second = source["outbounds"][0]; second["tag"] = "second";
+  second["settings"]["vnext"][0]["address"] = "192.0.2.1"; mixed["outbounds"].push_back(second);
+  Require(!prepare(mixed), "mixed physical families were accepted");
+  auto chained = source;
+  chained["outbounds"][0]["streamSettings"]["sockopt"] = {{"dialerProxy", "direct"}};
+  Require(prepare(chained).has_value() && provenance.ipv6_tcp_endpoints.empty(), "logical chained IPv6 opened physical scope");
+  std::cout << "WINDOWS_NUMERIC_IPV6_PREPARATION_PASS=1\n";
+}
+
 int main(int argc, char** argv) try {
   if (argc == 3 && std::string(argv[1]) == "--inactive-tls-case") { InactiveTLSCases(argv[2]); return 0; }
   if (argc == 2 && std::string(argv[1]) == "--opaque-fields") { OpaqueFieldCases(); return 0; }
@@ -1389,6 +1427,7 @@ int main(int argc, char** argv) try {
     output << *result;
     return output.good() ? 0 : 4;
   }
+  NumericOuterIPv6Cases();
   IPv6PayloadCases();
   DirectOnlyCases();
   ProtocolCompatibilityCases();
@@ -1622,7 +1661,7 @@ int main(int argc, char** argv) try {
   Require(protected_references["inbounds"][0]["tag"] == std::string(kManagedInbound) + "-2", "adapter inherited user reference/API tag");
   Require(protected_references["routing"]["rules"][2]["outboundTag"] == std::string(kIpv6Block) + "-1", "closed bootstrap service inherited reverse tag");
   Require(protected_references["routing"]["rules"][0]["outboundTag"] == std::string(kDnsRelay) + "-1", "DNS service inherited user reference");
-  bad = source; bad["outbounds"][0]["settings"]["vnext"][0]["address"] = "2001:db8::1"; Require(!prepare(bad), "unsupported IPv6 endpoint accepted");
+  bad = source; bad["outbounds"][0]["settings"]["vnext"][0]["address"] = "2001:db8:::1"; Require(!prepare(bad), "malformed IPv6 endpoint accepted");
   bad = source; bad["outbounds"][0]["streamSettings"]["sockopt"] = {{"addressPortStrategy", "srv"}}; Require(!prepare(bad), "system SRV resolver accepted");
   auto aliases = source;
   aliases["INBOUNDS"] = aliases["inbounds"]; aliases.erase("inbounds");

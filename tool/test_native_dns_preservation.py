@@ -165,7 +165,7 @@ def prepare_lifetime_core(source, destination, manifest, *, classic_apply=None, 
 def source_snapshot():
     paths = [Path(__file__).resolve(), ROOT / 'tool/test_native_dns_preservation_runner.py', ROOT / 'tool/test_native_dns_context_runtime.py',
              ROOT / 'third_party/xray-native-dns/pin-manifest.json', MOBILE / 'go.mod', MOBILE / 'go.sum',
-             WINDOWS / 'xray_config.h', WINDOWS / 'desktop_security_test.cpp',
+             WINDOWS / 'xray_config.h', WINDOWS / 'ipv6_tcp_scope.h', WINDOWS / 'desktop_security_test.cpp',
              WINDOWS / 'xray_config_test.cpp', WINDOWS / 'asset_location.h', WINDOWS / 'preparation_report.h',
              WINDOWS / 'third_party/nlohmann/json.hpp']
     paths.append(CLASSIC_PATCH)
@@ -180,6 +180,7 @@ def source_snapshot():
     paths.append(ROOT / 'tool/fixtures/compatibility/direct-only.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/dns-default-tags.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/dns-data-maps.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/dns-static-aliases.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/transport-data-maps.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/routing-attrs.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/selector-prefixes.json')

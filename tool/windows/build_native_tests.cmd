@@ -3,11 +3,26 @@ setlocal
 for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
 if not exist build\windows-runtime mkdir build\windows-runtime
 set "S=packages\flutter_vless_windows\windows"
+cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX tool\windows\ipv6_tcp_challenge_peer_test.cpp /Fe:build\windows-runtime\ipv6_tcp_challenge_peer_test.exe /Fo:build\windows-runtime\ipv6_tcp_challenge_peer_test.obj
+if errorlevel 1 exit /b 1
+build\windows-runtime\ipv6_tcp_challenge_peer_test.exe
+if errorlevel 1 exit /b 1
+python tool\test_windows_numeric_ipv6_callers.py --generate build\windows-runtime\numeric_ipv6_callers_test.cpp
+if errorlevel 1 exit /b 1
+cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX /Ibuild\windows-runtime\numeric_ipv6_callers_test-headers build\windows-runtime\numeric_ipv6_callers_test.cpp /Fe:build\windows-runtime\numeric_ipv6_callers_test.exe /Fo:build\windows-runtime\numeric_ipv6_callers_test.obj
+if errorlevel 1 exit /b 1
+build\windows-runtime\numeric_ipv6_callers_test.exe
+if errorlevel 1 exit /b 1
+
 python tool\test_platform_status_dispatch.py --generate-windows --output build\windows-runtime
 if errorlevel 1 exit /b 1
 cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX build\windows-runtime\status_dispatch_test.cpp /Fe:build\windows-runtime\status_dispatch_test.exe /Fo:build\windows-runtime\status_dispatch_test.obj /link user32.lib
 if errorlevel 1 exit /b 1
 build\windows-runtime\status_dispatch_test.exe
+if errorlevel 1 exit /b 1
+cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX %S%\windows_underlay_test.cpp /Fe:build\windows-runtime\windows_underlay_test.exe /Fo:build\windows-runtime\windows_underlay_test.obj
+if errorlevel 1 exit /b 1
+build\windows-runtime\windows_underlay_test.exe
 if errorlevel 1 exit /b 1
 cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX %S%\native_options_test.cpp /Fe:build\windows-runtime\native_options_test.exe /Fo:build\windows-runtime\native_options_test.obj
 if errorlevel 1 exit /b 1

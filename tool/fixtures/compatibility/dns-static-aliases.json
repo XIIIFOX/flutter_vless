@@ -1,0 +1,271 @@
+[
+  {
+    "name": "doh_alias_ipv4",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "192.0.2.7",
+                "port": 1080
+              }
+            ]
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "routing": {
+        "rules": []
+      },
+      "custom": {
+        "canary": "static-alias-caller-data",
+        "type": "xicmp",
+        "url": "quic+local://literal.invalid",
+        "null": null,
+        "empty": []
+      },
+      "remarks": "doh_alias_ipv4",
+      "dns": {
+        "servers": [
+          {
+            "address": "https://doh.example/dns-query?caller=kept",
+            "tag": "caller-dns",
+            "domains": [
+              "full:private.example"
+            ],
+            "skipFallback": true,
+            "timeoutMs": 1200
+          }
+        ],
+        "hosts": {
+          "full:doh.example": "alias.example",
+          "full:alias.example": "192.0.2.53"
+        },
+        "queryStrategy": "UseIP",
+        "disableCache": true,
+        "custom": {
+          "network": "MiXeD",
+          "allowInsecure": "^literal$"
+        }
+      }
+    }
+  },
+  {
+    "name": "tcp_alias_ipv6",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "192.0.2.7",
+                "port": 1080
+              }
+            ]
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "routing": {
+        "rules": []
+      },
+      "custom": {
+        "canary": "static-alias-caller-data",
+        "type": "xicmp",
+        "url": "quic+local://literal.invalid",
+        "null": null,
+        "empty": []
+      },
+      "remarks": "tcp_alias_ipv6",
+      "dns": {
+        "servers": [
+          {
+            "address": "tcp://resolver.example:5353",
+            "tag": "caller-dns",
+            "domains": [
+              "full:private.example"
+            ],
+            "skipFallback": true,
+            "timeoutMs": 1200
+          }
+        ],
+        "hosts": {
+          "resolver.example": [
+            "next.example"
+          ],
+          "full:next.example": "2001:db8::53"
+        },
+        "queryStrategy": "UseIP",
+        "disableCache": true,
+        "custom": {
+          "network": "MiXeD",
+          "allowInsecure": "^literal$"
+        }
+      }
+    }
+  },
+  {
+    "name": "h2c_five_aliases",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "192.0.2.7",
+                "port": 1080
+              }
+            ]
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "routing": {
+        "rules": []
+      },
+      "custom": {
+        "canary": "static-alias-caller-data",
+        "type": "xicmp",
+        "url": "quic+local://literal.invalid",
+        "null": null,
+        "empty": []
+      },
+      "remarks": "h2c_five_aliases",
+      "dns": {
+        "servers": [
+          {
+            "address": "h2c://resolver.example:8053/dns-query",
+            "tag": "caller-dns",
+            "domains": [
+              "full:private.example"
+            ],
+            "skipFallback": true,
+            "timeoutMs": 1200
+          }
+        ],
+        "hosts": {
+          "full:resolver.example": "hop1.example",
+          "full:hop1.example": "hop2.example",
+          "full:hop2.example": "hop3.example",
+          "full:hop3.example": "hop4.example",
+          "full:hop4.example": "hop5.example",
+          "full:hop5.example": "[2001:db8::53]"
+        },
+        "queryStrategy": "UseIP",
+        "disableCache": true,
+        "custom": {
+          "network": "MiXeD",
+          "allowInsecure": "^literal$"
+        }
+      }
+    }
+  },
+  {
+    "name": "bare_alias_ipv4",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "192.0.2.7",
+                "port": 1080
+              }
+            ]
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "routing": {
+        "rules": []
+      },
+      "custom": {
+        "canary": "static-alias-caller-data",
+        "type": "xicmp",
+        "url": "quic+local://literal.invalid",
+        "null": null,
+        "empty": []
+      },
+      "remarks": "bare_alias_ipv4",
+      "dns": {
+        "servers": [
+          {
+            "address": "resolver.example",
+            "tag": "caller-dns",
+            "domains": [
+              "full:private.example"
+            ],
+            "skipFallback": true,
+            "timeoutMs": 1200
+          }
+        ],
+        "hosts": {
+          "full:resolver.example": "ALIAS.example",
+          "alias.example": [
+            "192.0.2.53",
+            "192.0.2.54"
+          ]
+        },
+        "queryStrategy": "UseIP",
+        "disableCache": true,
+        "custom": {
+          "network": "MiXeD",
+          "allowInsecure": "^literal$"
+        }
+      }
+    }
+  }
+]

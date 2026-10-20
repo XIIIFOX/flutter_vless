@@ -1,5 +1,11 @@
 ## 1.1.7
 
+* Cancel pending capability-gated starts after Stop or a newer Start on every platform. Return the fixed `VPN_START_CANCELLED` code without private configuration or native error details.
+
+* Follow bounded static DNS hosts aliases when admitting named remote resolvers on Apple and Windows. Preserve the complete caller DNS document, resolver URL and TLS identity.
+
+* Admit finite numeric IPv6 TCP proxy endpoints on Windows with family-aware interface selection and an exact Core/interface/address/port firewall exception. Keep recovery scoped to the checked interface; add native and controlled packet-path regression gates.
+
 * Add unpublished CI-only Android runtime previews with four freshly compiled ABIs, exact AAR/source verification and 16 KiB ELF checks. Qualify a signed development example APK and verify all three original full JSON profiles with real browser traffic, domain split routing in both directions and Stop recovery in an owned Android emulator. Keep published runtime pins unchanged.
 
 * Add an unpublished CI-only iOS SDK preview with source, archive and ABI checks. Verify its signed example on the physical iPhone with all three original full JSON profiles, matching browser proxy exits, Stop and ordinary internet recovery.

@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Admit bounded static DNS hosts aliases for remote named resolvers without rewriting caller DNS or TLS identity. Cancel obsolete Dart startup capability checks after Stop or a newer Start.
+
 * Include XHTTP HTTP/3 socket-first teardown in Apple Core source and preview preparation, with guarded pinned-source validation. Published SDK pins remain unchanged.
 
 * Exclude loopback-owned dormant socket edges from chain validation while retaining active chain errors and sender settings. Add shared preparation and controlled XHTTP redispatch regressions.

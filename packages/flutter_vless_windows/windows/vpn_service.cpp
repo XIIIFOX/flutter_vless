@@ -3,38 +3,14 @@
 #include "diagnostics_log.h"
 #include "xray_config.h"
 #include "owned_address.h"
+#include "windows_underlay.h"
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 
 namespace {
 void Event(const char* message) { flutter_vless::DiagnosticsLog::Instance().Append("vpn", message); }
-std::optional<std::string> Underlay(UINT64* identity = nullptr) {
-  // Select a usable default without allowing our own more-specific capture
-  // routes to become the next transport's underlay. Include adapter metrics.
-  MIB_IPFORWARD_TABLE2* routes = nullptr;
-  if (GetIpForwardTable2(AF_INET, &routes) != NO_ERROR) return std::nullopt;
-  std::optional<std::string> result;
-  uint64_t best = UINT64_MAX;
-  for (ULONG i = 0; i < routes->NumEntries; ++i) {
-    const auto& route = routes->Table[i];
-    if (route.DestinationPrefix.PrefixLength != 0) continue;
-    MIB_IF_ROW2 row{}; row.InterfaceLuid = route.InterfaceLuid;
-    if (GetIfEntry2(&row) != NO_ERROR || row.OperStatus != IfOperStatusUp
-        || std::wstring(row.Alias) == L"flutter_vless_tun") continue;
-    MIB_IPINTERFACE_ROW ip{}; InitializeIpInterfaceEntry(&ip);
-    ip.Family = AF_INET; ip.InterfaceLuid = row.InterfaceLuid;
-    if (GetIpInterfaceEntry(&ip) != NO_ERROR) continue;
-    const uint64_t metric = static_cast<uint64_t>(route.Metric) + ip.Metric;
-    if (metric >= best) continue;
-    int size = WideCharToMultiByte(CP_UTF8, 0, row.Alias, -1, nullptr, 0, nullptr, nullptr);
-    if (size <= 1) continue;
-    std::string name(size, 0);
-    WideCharToMultiByte(CP_UTF8, 0, row.Alias, -1, name.data(), size, nullptr, nullptr);
-    name.pop_back(); result = name; best = metric;
-    if (identity) *identity = row.InterfaceLuid.Value;
-  }
-  FreeMibTable(routes);
-  return result;
+std::optional<std::string> Underlay(UINT64* identity = nullptr, ADDRESS_FAMILY family = AF_INET) {
+  return flutter_vless::native::SelectUnderlay(family, identity);
 }
 std::string Bootstrap(const std::string& name) {
   WSADATA data{}; if (WSAStartup(MAKEWORD(2,2), &data)) return {};
@@ -85,6 +61,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     Event("Native VPN routing selection rejected; active session preserved"); return false;
   }
   auto underlay = Underlay();
+  if (!underlay) underlay = Underlay(nullptr, AF_INET6); // preparation only; checked candidate chooses its required family
   auto user = native::RandomHex(16), password = native::RandomHex(32);
   auto cache = bootstrap_cache_;
   auto resolve = [&](const std::string& name) {
@@ -122,7 +99,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   }
   const auto managed_port = xray_config::Port(xray_config::Parse(*prepared)["inbounds"][0]);
   auto failure = preparation::Stage::prepare;
-  auto candidate = managed_port ? PrepareWorkerCandidate(*prepared, *managed_port, *runtime, assets, routing, provenance, user, changes, &failure) : nullptr;
+  auto candidate = managed_port ? PrepareWorkerCandidate(*prepared, *managed_port, *runtime, assets, routing, provenance, user, nullptr, changes, &failure) : nullptr;
   if (!candidate) {
     if (outcome) outcome->Fail(failure);
     Event("Xray configuration check rejected final VPN document; active session preserved");
@@ -141,8 +118,12 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   socks_port_ = *managed_port;
   api_port_ = owned_api_port;
   if (outcome) outcome->Fail(preparation::Stage::start);
+  underlay_family_ = routing_provenance_.ipv6_tcp_endpoints.empty() ? AF_INET : AF_INET6;
+  underlay_name_ = pending_candidate_->Underlay(); underlay_luid_ = pending_candidate_->Identity();
+  ipv6_tcp_scope_.reset();
+  if (underlay_family_ == AF_INET6) ipv6_tcp_scope_ = flutter_vless::Ipv6TcpScope{underlay_luid_, routing_provenance_.ipv6_tcp_endpoints};
   // WFP must exist before native workers, resolver configuration or capture.
-  if (!protection_.Install(xray_executable_path_)) {
+  if (!protection_.Install(xray_executable_path_, nullptr, ipv6_tcp_scope_ ? &*ipv6_tcp_scope_ : nullptr)) {
     Event(("Could not install mandatory Windows traffic protection, code=" + std::to_string(protection_.Error())).c_str());
     pending_candidate_.reset(); private_runtime_.reset();
     return false;
@@ -172,6 +153,7 @@ void VpnService::StopSession(bool release) {
   username_.clear(); password_.clear(); current_config_.clear(); api_port_ = 0;
   routing_intent_.reset(); routing_provenance_ = {};
   asset_directory_.reset();
+  ipv6_tcp_scope_.reset(); underlay_luid_ = 0; underlay_name_.clear(); underlay_family_ = AF_INET;
   if (release) bootstrap_cache_.clear();
   std::lock_guard<std::mutex> lock(stats_mutex_); traffic_sample_ = {};
 }
@@ -197,7 +179,7 @@ void VpnService::RunVpn(std::shared_ptr<flutter_vless::preparation::StartupCompl
     unsigned ticks = 0;
     while (ready_.load() && requested_.load()) {
       UINT64 identity = 0;
-      const auto current_interface = Underlay(&identity);
+      const auto current_interface = Underlay(&identity, underlay_family_);
       if (!current_interface || *current_interface != underlay_name_ || identity != underlay_luid_) {
         Event("Outbound interface changed; rebuilding the protected VPN path");
         break;
@@ -226,14 +208,16 @@ std::unique_ptr<VpnService::WorkerCandidate> VpnService::PrepareWorkerCandidate(
     const flutter_vless::asset_location::Root& assets,
     const std::optional<flutter_vless::native_routing::NativeRoutingIntent>& routing,
     const flutter_vless::xray_config::VpnRoutingProvenance& provenance, const std::string& auth_user,
+    const flutter_vless::Ipv6TcpScope* retained_scope,
     flutter_vless::preparation::Report changes, flutter_vless::preparation::Stage* failure) {
   if (failure) *failure = flutter_vless::preparation::Stage::prepare;
   if (routing && !flutter_vless::native::RoutingCapability(runtime, assets)) {
     Event("Bundled runtime does not support native VPN routing"); return nullptr;
   }
   UINT64 identity = 0;
-  const auto underlay = Underlay(&identity);
-  if (!underlay) return nullptr;
+  const auto family = provenance.ipv6_tcp_endpoints.empty() ? AF_INET : AF_INET6;
+  const auto underlay = Underlay(&identity, static_cast<ADDRESS_FAMILY>(family));
+  if (!underlay || (retained_scope && identity != retained_scope->interface_luid)) return nullptr; // no IPv6 handover in this increment
   const auto excluded = flutter_vless::xray_config::ListenerPortExclusions(flutter_vless::xray_config::Parse(base));
   if (!excluded) return nullptr;
   auto candidate = WorkerCandidate::Prepare(base, *underlay, identity, managed_port,
@@ -256,7 +240,7 @@ std::unique_ptr<VpnService::WorkerCandidate> VpnService::PrepareWorkerCandidate(
       }, flutter_vless::native::RemovePrivateConfig, changes);
   // A slow check must not admit a snapshot whose adapter already changed.
   UINT64 current_identity = 0;
-  const auto current = Underlay(&current_identity);
+  const auto current = Underlay(&current_identity, static_cast<ADDRESS_FAMILY>(family));
   if (!candidate || !current || *current != candidate->Underlay()
       || current_identity != candidate->Identity()) return nullptr;
   return candidate;
@@ -270,10 +254,10 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   if (!RetireIPv6Address()) return fail("Previous owned Wintun IPv6 address cleanup remains pending");
   if (!private_runtime_) return fail("Private VPN runtime is unavailable");
   worker_candidate_ = pending_candidate_ ? std::move(pending_candidate_)
-      : PrepareWorkerCandidate(current_config_, socks_port_, *private_runtime_, asset_directory_, routing_intent_, routing_provenance_, username_);
+      : PrepareWorkerCandidate(current_config_, socks_port_, *private_runtime_, asset_directory_, routing_intent_, routing_provenance_, username_, ipv6_tcp_scope_ ? &*ipv6_tcp_scope_ : nullptr);
   if (!worker_candidate_) return fail("Final VPN recovery configuration check failed");
   UINT64 current_identity = 0;
-  const auto current_underlay = Underlay(&current_identity);
+  const auto current_underlay = Underlay(&current_identity, underlay_family_);
   if (!current_underlay || *current_underlay != worker_candidate_->Underlay()
       || current_identity != worker_candidate_->Identity()) return fail("Checked VPN underlay changed before launch");
   underlay_name_ = worker_candidate_->Underlay();
@@ -379,7 +363,7 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
     if (status != NO_ERROR) { Event(("Cannot install an owned IPv6 capture route, code=" + std::to_string(status)).c_str()); return false; }
     capture_routes_.push_back(row);
   }
-  if (!protection_.Install(xray_executable_path_, &luid)) { Event(("Cannot authorize the Wintun interface, code=" + std::to_string(protection_.Error())).c_str()); return false; }
+  if (!protection_.Install(xray_executable_path_, &luid, ipv6_tcp_scope_ ? &*ipv6_tcp_scope_ : nullptr)) { Event(("Cannot authorize the Wintun interface, code=" + std::to_string(protection_.Error())).c_str()); return false; }
   Event("Wintun capture and virtual DNS ready; checking packet forwarding");
   worker_candidate_->RemoveFile();
   native::RemovePrivateConfig(tun_config_path_);

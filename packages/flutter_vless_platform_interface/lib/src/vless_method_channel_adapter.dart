@@ -23,6 +23,7 @@ class VlessMethodChannelAdapter extends VlessPlatform {
   final EventChannel eventChannel;
 
   StreamSubscription<dynamic>? _statusSubscription;
+  int _startGeneration = 0;
   static final Object _reportCaptureKey = Object();
 
   @override
@@ -151,18 +152,20 @@ class VlessMethodChannelAdapter extends VlessPlatform {
             androidDnsProxyOutboundTag.trim().isEmpty)) {
       throw ArgumentError('A non-empty DNS outbound tag requires proxy DNS.');
     }
+    if (androidDnsPolicy == AndroidDnsPolicy.proxy && proxyOnly) {
+      throw ArgumentError('System DNS policy requires an Android VPN session.');
+    }
+    // Capability replies may arrive after Stop or a newer Start. They may not
+    // turn that older request into a new native session afterward.
+    final generation = ++_startGeneration;
     if (androidDnsPolicy == AndroidDnsPolicy.proxy) {
-      if (proxyOnly) {
-        throw ArgumentError(
-            'System DNS policy requires an Android VPN session.');
-      }
-      await _requireSecurityCapability('androidProxyDns');
+      await _requireStartupCapability('androidProxyDns', generation);
     }
     if (certificateAssetsDirectory != null) {
-      await _requireSecurityCapability('certificateAssetsDirectory');
+      await _requireStartupCapability('certificateAssetsDirectory', generation);
     }
     if (vpnRouting != null) {
-      await _requireSecurityCapability('vpnRouting');
+      await _requireStartupCapability('vpnRouting', generation);
     }
     final arguments = <String, Object?>{
       'remark': remark,
@@ -183,6 +186,7 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     if (certificateAssetsDirectory != null) {
       arguments['certificate_assets_directory'] = certificateAssetsDirectory;
     }
+    _checkStartGeneration(generation);
     final capture = Zone.current[_reportCaptureKey] as _StartReportCapture?;
     capture?.begin();
     final reply =
@@ -235,8 +239,28 @@ class VlessMethodChannelAdapter extends VlessPlatform {
     throw UnsupportedError('Native backend does not support $capability.');
   }
 
+  void _checkStartGeneration(int generation) {
+    if (generation != _startGeneration) {
+      throw PlatformException(
+        code: 'VPN_START_CANCELLED',
+        message: 'Startup was cancelled by a newer start or stop request.',
+      );
+    }
+  }
+
+  Future<void> _requireStartupCapability(
+      String capability, int generation) async {
+    try {
+      await _requireSecurityCapability(capability);
+    } finally {
+      // Cancellation owns the old request even when its capability check fails.
+      _checkStartGeneration(generation);
+    }
+  }
+
   @override
   Future<void> stopVless() async {
+    ++_startGeneration;
     await methodChannel.invokeMethod('stopVless');
   }
 

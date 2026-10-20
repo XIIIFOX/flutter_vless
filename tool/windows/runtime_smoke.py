@@ -1326,11 +1326,317 @@ def native_routing_gate(probe, directory, address, dns, origin, results):
     print("WINDOWS_NATIVE_ROUTING_TRAFFIC_PASS=2", flush=True)
 
 
+
+
+def numeric_ipv6_packets(text):
+    rows=[]
+    for line in text.splitlines():
+        if line.startswith("IPV6_SCOPE_PACKET="):
+            fields=line.partition("=")[2].split(",")
+            assert len(fields)==5
+            row=tuple(map(int,fields))
+            assert row[0] in (6,17) and row[1] in (2,3) and row[2] in (18443,18444) and 1<=row[3]<=65535 and 0<=row[4]<=255
+            rows.append(row)
+    return rows
+
+
+def numeric_ipv6_observation(rows,spec,source_port,sender,begin):
+    label,remote,port,protocol=spec
+    matching=[row for row in rows[begin:] if row[:4]==(protocol,int(remote.rsplit(":",1)[1]),port,source_port)]
+    return dict(case=label,remote=remote,port=port,protocol=protocol,sourcePort=source_port,senderPID=sender,
+                syn_packets=sum(bool(row[4]&2) for row in matching) if protocol==6 else 0,
+                udp_packets=len(matching) if protocol==17 else 0)
+
+
+def numeric_ipv6_refusal(event, spec, core_pid, owned, after_record):
+    # Exact current-attempt event, not a recent unrelated Security record.
+    _, remote, port, protocol = spec
+    return (type(event) is dict and event.get("ProcessID") == core_pid
+            and event.get("remote") == remote and event.get("port") == port and event.get("protocol") == protocol
+            and type(event.get("RecordId")) is int and event["RecordId"] > after_record
+            and type(event.get("SourcePort")) is int and 0 < event["SourcePort"] <= 65535
+            and event.get("FilterRTID") in owned)
+
+
+def numeric_ipv6_gate(probe, directory, results, variant="routing"):
+    # Existing cases have already closed their adapters in main's finally.
+    # This fresh adapter epoch has one codec/nonce, no retry and no public peer.
+    assert os.name == "nt" and os.environ.get("GITHUB_ACTIONS") == "true"
+    nonce = uuid.uuid4().hex
+    case = directory / ("numeric-ipv6-" + nonce)
+    case.mkdir(exist_ok=False)
+    source_interface.cache_clear()  # old owned adapter2 is closed; never reuse its index
+    build_path = directory / "numeric-ipv6-build-results.json"
+    from verify_numeric_ipv6_qualification import load_json, source_vector
+    build = load_json(build_path)
+    repository = Path(__file__).resolve().parents[2]
+    assert build["version"] == 1 and build["head"] == os.environ["GITHUB_SHA"] and build["run_id"] == os.environ["GITHUB_RUN_ID"]
+    assert hashlib.sha256(probe.read_bytes()).hexdigest() == build["runtime_probe_sha256"]
+    assert build["source_sha256"] == source_vector(repository)
+    assert variant in ("official", "routing")
+    assert hashlib.sha256((directory / "xray.exe").read_bytes()).hexdigest() == build["core_binaries_sha256"][variant]
+    proof = dict(version=1, binary_variant=variant, run_id=build["run_id"], head=build["head"], source_sha256=build["source_sha256"],
+                 build_receipt_sha256=hashlib.sha256(build_path.read_bytes()).hexdigest(), nonce=nonce, peer_nonce="",
+                 scope={}, positive=dict(controlled_packets=dict(baseline=[], protected=[])), denied=[],
+                 cleanup=dict(service_exit0=False, policy_filters=-1, capture_routes=-1, owned_adapter_absent=False,
+                              owned_helpers_remaining=-1), passed=False, skipped=False)
+    specs = [("wrong_address", "fd00:85:2::3", 18443, 6), ("wrong_port", "fd00:85:2::2", 18444, 6),
+             ("udp", "fd00:85:2::2", 18443, 17), ("wrong_image", "fd00:85:2::2", 18443, 6)]
+    peer_stop, arm = case / "peer.stop", case / "peer.arm"
+    stop, state, guard_stop = case / "service.stop", case / "service.state.json", case / "guard.stop"
+    peer_log, service_log = case / "peer.log", case / "service.log"
+    peer, service, guard = None, None, None
+    alias = "FlutterVlessNumericIPv6-" + nonce[:8]
+    luid = None
+    deadline = time.monotonic() + 60
+    cleanup_errors = []
+
+    def limit(seconds=15):
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, "Numeric IPv6 work cutoff reached"
+        return min(seconds, remaining)
+
+    def native_call(*args):
+        result = subprocess.run([str(probe), *map(str, args)], cwd=directory, capture_output=True, text=True, timeout=limit(3))
+        assert result.returncode == 0, "Numeric IPv6 native metadata command failed"
+        return result.stdout.strip()
+
+    def ps(script):
+        return subprocess.check_output(["powershell", "-NoProfile", "-Command", "$ErrorActionPreference='Stop'; " + script],
+                                       text=True, timeout=limit(3))
+
+    def packets():
+        return numeric_ipv6_packets(peer_log.read_text(errors="replace"))
+
+    def observation(spec,source_port,sender,begin):
+        return numeric_ipv6_observation(packets(),spec,source_port,sender,begin)
+
+    def baseline(spec):
+        _, remote, port, protocol = spec
+        begin = len(packets())
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM if protocol == 17 else socket.SOCK_STREAM) as sender:
+            sender.settimeout(limit(0.5)); pin_interface(sender, "fd00:85:2::1", True)
+            source_port = sender.getsockname()[1]
+            if protocol == 17:
+                sender.sendto(("numeric-scope-udp-" + nonce).encode("ascii"), (remote, port))
+            else:
+                try: sender.connect((remote, port))
+                except (TimeoutError, ConnectionRefusedError): pass
+        observe_until = time.monotonic() + limit(2)
+        while True:
+            row = observation(spec, source_port, os.getpid(), begin)
+            if row["syn_packets"] + row["udp_packets"] > 0: return row
+            assert time.monotonic() < observe_until and peer.poll() is None, "Controlled pre-policy sender/observer failed"
+            time.sleep(0.02)
+
+    def security_record_id():
+        return int(ps("$e=Get-WinEvent -LogName Security -MaxEvents 1; if($null -eq $e){throw 'Security baseline missing'}; [long]$e.RecordId").strip())
+
+    def core_block(spec, core_pid, begin, after_record):
+        label, remote, port, protocol = spec
+        owned = set(proof["scope"]["owned_filter_ids"])
+        scan_until = time.monotonic() + limit(5)
+        script = f"""
+$events = Get-WinEvent -FilterHashtable @{{LogName='Security';Id=5157;StartTime=(Get-Date).AddSeconds(-15)}} -MaxEvents 256 -ErrorAction SilentlyContinue
+foreach ($event in $events) {{
+  $v=@{{}}; ([xml]$event.ToXml()).Event.EventData.Data | ForEach-Object {{ $v[$_.Name]=$_.'#text' }}
+  if ($event.RecordId -gt {after_record} -and [long]$v.ProcessID -eq {core_pid} -and $v.DestAddress -eq '{remote}' -and [int]$v.DestPort -eq {port} -and [int]$v.Protocol -eq {protocol}) {{
+    [pscustomobject]@{{ProcessID=[long]$v.ProcessID;SourcePort=[int]$v.SourcePort;FilterRTID=[long]$v.FilterRTID;RecordId=[long]$event.RecordId;remote=$v.DestAddress;port=[int]$v.DestPort;protocol=[int]$v.Protocol}} | ConvertTo-Json -Compress
+  }}
+}}
+"""
+        while True:
+            assert peer.poll() is None and service.poll() is None, "Owned sender/observer exited before deny proof"
+            for line in ps(script).splitlines():
+                event = json.loads(line)
+                if numeric_ipv6_refusal(event, spec, core_pid, owned, after_record):
+                    row = observation(spec, event["SourcePort"], core_pid, begin)
+                    assert row["syn_packets"] + row["udp_packets"] == 0, "Denied tuple reached the raw observer"
+                    return row, dict(kind="owned_filter_event_5157", ProcessID=event["ProcessID"], SourcePort=event["SourcePort"],
+                                     FilterRTID=event["FilterRTID"], RecordId=event["RecordId"], AfterRecordId=after_record)
+            assert time.monotonic() < scan_until, "No exact same-Core owned-filter refusal"
+            time.sleep(0.1)
+
+    try:
+        with peer_log.open("x") as log:
+            peer = subprocess.Popen([str(probe), "adapter-v6-peer", alias, "2", str(peer_stop), nonce, str(arm)],
+                                    cwd=directory, stdout=log, stderr=log)
+        while "ADAPTER_READY=" not in peer_log.read_text(errors="replace"):
+            assert peer.poll() is None and time.monotonic() < deadline, "Owned non-loopback adapter setup failed"
+            time.sleep(0.1)
+        text = peer_log.read_text()
+        luid = int(next(line.partition("=")[2] for line in text.splitlines() if line.startswith("ADAPTER_READY=")))
+        assert "IPV6_PEER_OWNERSHIP=source-owned,remote-unassigned,default-owned" in text
+        assert int(native_call("underlay-v6")) == luid
+        proof["positive"]["controlled_packets"]["baseline"] = [baseline(spec) for spec in specs]
+        # CREATE_NEW and exact nonce arm only the designated protected exchange.
+        with arm.open("x") as marker: marker.write(nonce)
+        profile = dict(inbounds=[], outbounds=[
+            dict(tag="proxy", protocol="socks", settings=dict(servers=[dict(address="fd00:85:2::2", port=18443,
+                 users=[dict(user="scope-user", **{"pass": "scope-password"})])]), streamSettings=dict(network="tcp"))],
+            routing=dict(rules=[]), dns=dict(servers=["1.1.1.1"], queryStrategy="UseIPv4"))
+        for spec, logical in zip(specs[:3], (78, 79, 80)):
+            label, remote, port, protocol = spec
+            profile["outbounds"].append(dict(tag=label, protocol="freedom", settings=dict(redirect=f"[{remote}]:{port}")))
+            profile["routing"]["rules"].append(dict(type="field", ip=[f"198.18.0.{logical}/32"], network="udp" if protocol == 17 else "tcp", outboundTag=label))
+        path = case / "source.json"; path.write_text(json.dumps(profile))
+        deadline = time.monotonic() + 80  # manual Stop wrapper target, not OFF guarantee
+        with service_log.open("x") as log:
+            service = subprocess.Popen([str(probe), "run-vpn-no-reconnect", str(path), "90", str(stop), str(state)],
+                                       cwd=directory, stdout=log, stderr=log)
+            guard = subprocess.Popen([str(probe), "guard", str(service.pid), "90", str(guard_stop)],
+                                     cwd=directory, stdout=log, stderr=log)
+        ready_until = time.monotonic() + limit(45)
+        while "START_RETURN=1" not in service_log.read_text(errors="replace"):
+            assert service.poll() is None and time.monotonic() < ready_until, "Numeric IPv6 service did not become ready"
+            time.sleep(0.1)
+        core = json.loads(ps(f"$p=@(Get-CimInstance Win32_Process | Where-Object {{ $_.ParentProcessId -eq {service.pid} -and $_.Name -eq 'xray.exe' }}); if($p.Count -ne 1){{throw 'Owned Core identity ambiguous'}}; $p | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress"))
+        core_pid = int(core["ProcessId"])
+        core_hash = hashlib.sha256(Path(core["ExecutablePath"]).read_bytes()).hexdigest()
+        assert core_hash == hashlib.sha256((directory / "xray.exe").read_bytes()).hexdigest()
+        owned_ids = sorted({int(value) for value in native_call("policy-ids").split()})
+        assert owned_ids
+        proof["scope"] = dict(remote="fd00:85:2::2", port=18443, protocol=6, LUID=luid, CorePID=core_pid, ServicePID=service.pid, CoreParentPID=service.pid,
+                              Core_image=core["ExecutablePath"], Core_image_sha256=core_hash,
+                              controllerPID=os.getpid(), owned_filter_ids=owned_ids)
+        request = ("numeric-ipv6-" + nonce + "\n").encode("ascii")
+        response = b"accepted-" + request
+        with socket.create_connection(("198.18.0.77", 18080), timeout=limit(4)) as application:
+            assert application.getsockname()[0] == "10.0.85.2", "Challenge bypassed VPN capture"
+            established_until = time.monotonic() + limit(3)
+            while "IPV6_TCP_PEER_READY=" not in peer_log.read_text():
+                assert peer.poll() is None and time.monotonic() < established_until, "Owned SOCKS handshake did not complete"
+                time.sleep(0.02)
+            owner = json.loads(ps(f"$c=@(Get-NetTCPConnection -OwningProcess {core_pid} -RemoteAddress 'fd00:85:2::2' -RemotePort 18443 -State Established); if($c.Count -ne 1){{throw 'Core TCP tuple ambiguous'}}; $c | Select-Object OwningProcess,LocalAddress,LocalPort,RemoteAddress,RemotePort | ConvertTo-Json -Compress"))
+            proof["positive"]["tcp_owner"] = dict(PID=int(owner["OwningProcess"]), local_address=owner["LocalAddress"],
+                local_port=int(owner["LocalPort"]), remote_address=owner["RemoteAddress"], remote_port=int(owner["RemotePort"]))
+            application.settimeout(limit(3)); application.sendall(request)
+            assert exact(application, len(response)) == response and application.recv(1) == b"", "Owned nonce response/FIN failed"
+            proof["positive"]["source"] = application.getsockname()[0]
+            proof["positive"]["response_exact"] = True
+        complete_until = time.monotonic() + limit(3)
+        while "IPV6_TCP_PEER_COMPLETE=" not in peer_log.read_text():
+            assert peer.poll() is None and time.monotonic() < complete_until, "Peer final ACK/FIN did not drain"
+            time.sleep(0.02)
+        final = next(line.partition("=")[2] for line in peer_log.read_text().splitlines() if line.startswith("IPV6_TCP_PEER_COMPLETE="))
+        fields = final.split(","); assert len(fields) == 7
+        proof["peer_nonce"] = fields[0]
+        proof["positive"]["peer"] = dict(syn_count=int(fields[1]), authentication_count=int(fields[2]), connect_count=int(fields[3]),
+            challenge_count=int(fields[4]), client_port=int(fields[5]), error=int(fields[6]), complete=True)
+        assert proof["peer_nonce"] == nonce and all(int(v) == 1 for v in fields[1:5]) and fields[6] == "0"
+        assert int(fields[5]) == proof["positive"]["tcp_owner"]["local_port"]
+        for spec, logical in zip(specs[:3], (78, 79, 80)):
+            begin = len(packets())
+            after_record = security_record_id()  # captured BEFORE this one sender attempt
+            if spec[3] == 17:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+                    sender.sendto(("denied-" + nonce).encode(), (f"198.18.0.{logical}", 18080))
+            else:
+                try:
+                    with socket.create_connection((f"198.18.0.{logical}", 18080), timeout=limit(2)) as sender:
+                        sender.settimeout(limit(2)); sender.sendall(("denied-" + nonce).encode()); sender.recv(1)
+                except (TimeoutError, ConnectionError): pass
+            row, kernel = core_block(spec, core_pid, begin, after_record)
+            proof["positive"]["controlled_packets"]["protected"].append(row)
+            proof["denied"].append(dict(case=spec[0], SenderPID=core_pid, CorePID=core_pid, sender_attempted=True,
+                protocol=spec[3], remote=spec[1], port=spec[2], observer_baseline_positive=True, matching_packets_after=0, kernel=kernel))
+        spec = specs[3]; begin = len(packets())
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as sender:
+            pin_interface(sender, "fd00:85:2::1", True); sender.settimeout(limit(2)); source_port = sender.getsockname()[1]
+            try: sender.connect((spec[1], spec[2]))
+            except OSError as error: assert getattr(error, "winerror", None) == 10013, "Wrong-image block lacks WSAEACCES"
+            else: raise AssertionError("Wrong-image matched allowed Core tuple")
+        row = observation(spec, source_port, os.getpid(), begin)
+        assert row["syn_packets"] == 0 and peer.poll() is None
+        proof["positive"]["controlled_packets"]["protected"].append(row)
+        proof["denied"].append(dict(case=spec[0], SenderPID=os.getpid(), CorePID=None, sender_attempted=True,
+            protocol=6, remote=spec[1], port=spec[2], observer_baseline_positive=True, matching_packets_after=0,
+            kernel=dict(kind="WSAEACCES", ProcessID=os.getpid(), SourcePort=source_port, FilterRTID=None, RecordId=None, AfterRecordId=None)))
+        proof["passed"] = True
+    finally:
+        primary = sys.exc_info()[1]
+        if service is not None:
+            stop.touch()  # always request actual service Stop before any guard disposal
+            try:
+                code = service.wait(timeout=15)
+                proof["cleanup"]["service_exit0"] = code == 0
+            except subprocess.TimeoutExpired:
+                cleanup_errors.append("service_stop_timeout")
+                try: service.kill(); service.wait(timeout=5)
+                except BaseException: cleanup_errors.append("service_reap")
+            except BaseException: cleanup_errors.append("service_stop")
+            try:
+                count = int(subprocess.check_output(["powershell", "-NoProfile", "-Command",
+                    f"@(Get-CimInstance Win32_Process | Where-Object {{ $_.ParentProcessId -eq {service.pid} -and $_.Name -in @('xray.exe','tun2socks.exe') }}).Count"], text=True, timeout=10).strip())
+                assert count == 0, "Owned workers survived Stop"
+                native(probe, "release-protection")
+                proof["cleanup"]["policy_filters"] = int(native(probe, "policy-count"))
+            except BaseException: cleanup_errors.append("service_or_policy_cleanup")
+        if guard is not None and proof["cleanup"]["service_exit0"] and proof["cleanup"]["policy_filters"] == 0:
+            guard_stop.touch()
+            try: guard.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                cleanup_errors.append("guard_reap")
+                try: guard.kill(); guard.wait(timeout=5)
+                except BaseException: cleanup_errors.append("guard_reap_failed")
+            except BaseException: cleanup_errors.append("guard_wait")
+        elif guard is not None:
+            # Manual Stop unqualified: retain independent guard until its own
+            # deadline, never cancel it just because the owner was terminated.
+            try: guard.wait(timeout=100)
+            except subprocess.TimeoutExpired:
+                cleanup_errors.append("guard_deadline")
+                try: guard.kill(); guard.wait(timeout=5)
+                except BaseException: cleanup_errors.append("guard_reap_failed")
+            except BaseException: cleanup_errors.append("guard_wait")
+        if peer is not None:
+            peer_stop.touch()
+            try:
+                peer_code = peer.wait(timeout=10)
+                if peer_code != 0: cleanup_errors.append("peer_exit")
+            except subprocess.TimeoutExpired:
+                cleanup_errors.append("peer_reap")
+                try: peer.kill(); peer.wait(timeout=5)
+                except BaseException: cleanup_errors.append("peer_reap_failed")
+            except BaseException: cleanup_errors.append("peer_wait")
+        if peer is not None:
+            try:
+                # The exact LUID was published immediately after owned creation,
+                # even if readiness failed. No broad route/adapter cleanup.
+                if luid is None:
+                    created = [int(line.partition("=")[2]) for line in peer_log.read_text().splitlines()
+                               if line.startswith("PEER_ADAPTER_CREATED=")]
+                    assert len(created) <= 1
+                    if created: luid = created[0]
+                if luid is not None: native(probe, "cleanup-peer-default", luid, alias)
+            except BaseException: cleanup_errors.append("peer_default_cleanup")
+        try:
+            remaining = json.loads(subprocess.check_output(["powershell", "-NoProfile", "-Command",
+                "$ErrorActionPreference='Stop'; [pscustomobject]@{Capture=@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object {$_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1','::/1','8000::/1')}).Count; "
+                f"Peer=@(Get-NetAdapter -Name '{alias}' -ErrorAction SilentlyContinue).Count}} | ConvertTo-Json -Compress"], text=True, timeout=10))
+            proof["cleanup"]["capture_routes"] = int(remaining["Capture"])
+            proof["cleanup"]["owned_adapter_absent"] = remaining["Peer"] == 0
+            proof["cleanup"]["owned_helpers_remaining"] = sum(p.poll() is None for p in (peer, service, guard) if p is not None)
+        except BaseException: cleanup_errors.append("cleanup_inventory")
+        source_interface.cache_clear()
+        clean = not cleanup_errors and proof["cleanup"] == dict(service_exit0=True, policy_filters=0, capture_routes=0,
+                                                               owned_adapter_absent=True, owned_helpers_remaining=0)
+        proof["passed"] = proof["passed"] and clean and primary is None
+        (directory / "numeric-ipv6-results.json").write_text(json.dumps(proof, indent=2))
+        results.append(dict(mode="numeric-ipv6-outer-tcp", check="finite numeric IPv6 TCP peer and scoped WFP", passed=proof["passed"]))
+        (directory / "vpn-results.json").write_text(json.dumps(results, indent=2))
+        if primary is None and not proof["passed"]: raise AssertionError("Numeric IPv6 cleanup/proof incomplete")
+    print("WINDOWS_NUMERIC_IPV6_OUTER_TCP_PASS=1", flush=True)
+    print("WINDOWS_NUMERIC_IPV6_SCOPE_DENY_PASS=4", flush=True)
+
+
 def main():
     global PROBE, REAL_DNS
     parser = argparse.ArgumentParser()
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--vpn", action="store_true")
+    parser.add_argument("--numeric-ipv6-only", action="store_true")
+    parser.add_argument("--numeric-ipv6-variant", choices=("official", "routing"), default="routing")
     parser.add_argument("--native-routing", action="store_true", help="Append the separate native-routing profile; requires --vpn and an optional factory binary")
     parser.add_argument("--wine-bottle", help="CrossOver bottle for proxy-only tests on macOS")
     args = parser.parse_args()
@@ -1338,10 +1644,16 @@ def main():
         raise SystemExit("Native routing acceptance requires the disposable VPN runner")
     if args.vpn and (os.name != "nt" or os.environ.get("GITHUB_ACTIONS") != "true"):
         raise SystemExit("Full VPN tests require a disposable GitHub Windows runner")
+    if args.numeric_ipv6_only and not args.vpn:
+        raise SystemExit("Numeric IPv6 acceptance requires the disposable VPN runner")
     REAL_DNS = args.vpn
     directory = args.directory.resolve()
     probe = directory / "runtime_probe.exe"
     PROBE = probe
+    if args.numeric_ipv6_only:
+        isolated_results=[]
+        numeric_ipv6_gate(probe,directory,isolated_results,args.numeric_ipv6_variant)
+        return
     servers = []
     started_servers = []
     adapters = []
@@ -1737,6 +2049,8 @@ def main():
             raise server_cleanup_error
     if not results or not all(row["passed"] for row in results):
         raise SystemExit(1)
+    if args.vpn:
+        numeric_ipv6_gate(probe,directory,results,"routing")
     counter_gates = sum(row.get("check") == "owned traffic counter sample" for row in results)
     assert counter_gates == 2 + (2 if args.native_routing else 0), "Owned traffic counter gate count changed"
     print("WINDOWS_TRAFFIC_COUNTER_RUNTIME_PASS=" + str(counter_gates), flush=True)

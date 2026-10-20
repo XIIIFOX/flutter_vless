@@ -168,21 +168,37 @@ public enum TunnelDNSPolicy {
               !systemStrategy(field(dns, "queryStrategy")) else { return false }
         let hosts = field(dns, "hosts") as? [String: Any] ?? [:]
         func staticIP(_ host: String) -> Bool {
-            let keys = hosts.keys.filter { key in
-                // Core recognizes the literal lowercase rule prefix before
-                // folding only the domain body; FULL: is not a full rule.
-                let domain = key.hasPrefix("full:") ? String(key.dropFirst(5)) : key
-                // Go's simple lowercase maps U+0130 to ASCII i; Foundation's
-                // full mapping expands it. Keep decomposed sequences distinct.
-                let folded = domain.replacingOccurrences(of: "İ", with: "i", options: .literal).lowercased()
-                return folded == hostKey(host)
+            func domainLower(_ value: String) -> String {
+                value.replacingOccurrences(of: "İ", with: "i", options: .literal).lowercased()
             }
-            guard keys.count == 1, let value = hosts[keys[0]] else { return false }
-            if let ip = value as? String { return isLiteral(LocalProxyAccessPolicy.coreAddressText(ip)) }
-            if let ips = value as? [String] {
-                return !ips.isEmpty && ips.allSatisfy { isLiteral(LocalProxyAccessPolicy.coreAddressText($0)) }
+            func visit(_ query: String, remaining: Int) -> Bool {
+                let keys = hosts.keys.filter { key in
+                    // Rule prefixes are case-sensitive; map keys retain their
+                    // terminal dot. Only the initial query trims its FQDN dot.
+                    let domain = key.hasPrefix("full:") ? String(key.dropFirst(5)) : key
+                    return domainLower(domain) == query
+                }
+                guard keys.count == 1, let value = hosts[keys[0]] else { return false }
+                func address(_ raw: String) -> Bool {
+                    let parsed = LocalProxyAccessPolicy.coreAddressText(raw)
+                    if isLiteral(parsed) { return true }
+                    // Core StaticHosts.Lookup unwraps at most five aliases.
+                    // Prove a numeric leaf without querying native/OS DNS.
+                    // New alias admission is ASCII-only: Swift canonical equality
+                    // and contextual case mapping must not invent a Core match.
+                    return remaining > 0 && !parsed.isEmpty && !parsed.hasPrefix("#")
+                        && parsed.utf8.allSatisfy({ $0 < 0x80 })
+                        && visit(domainLower(parsed), remaining: remaining - 1)
+                }
+                if let scalar = value as? String { return address(scalar) }
+                if let values = value as? [String], !values.isEmpty {
+                    if values.count == 1 { return address(values[0]) }
+                    // Keep mixed or ambiguous replacements outside admission.
+                    return values.allSatisfy { isLiteral(LocalProxyAccessPolicy.coreAddressText($0)) }
+                }
+                return false
             }
-            return false
+            return visit(domainLower(hostKey(host)), remaining: 5)
         }
         let serverKeys = dns.keys.filter { XrayJSONField.matches($0, "servers") }
         let original = serverKeys.first.flatMap { dns[$0] }

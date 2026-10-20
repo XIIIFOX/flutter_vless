@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Cancel obsolete capability-gated starts after Stop or a newer Start. Use the redacted `VPN_START_CANCELLED` error consistently across all four platform adapters.
+
 * Add optional startVlessWithReport, immutable closed preparation reports and safe configuration failure locations. Keep older platform implementations working with an explicit unavailable report.
 
 * Add optional `VpnRoutingOptions` to `startVless`, with capability checks, original inbound indices and an exact default outbound tag. Keep ordinary calls unchanged and reject proxy-only requests.

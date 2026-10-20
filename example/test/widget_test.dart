@@ -10,6 +10,60 @@ import 'package:flutter_vless_example/main.dart';
 import 'package:flutter_vless_example/routing.dart';
 
 void main() {
+  testWidgets('an obsolete start cannot show an error over a newer report',
+      (tester) async {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    const channel = MethodChannel('flutter_vless');
+    const status = MethodChannel('flutter_vless/status');
+    final pending = Completer<Object?>();
+    var checks = 0;
+    var starts = 0;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'getCoreVersion') return '26.10.17';
+      if (call.method == 'requestPermission') return true;
+      if (call.method == 'getSecurityCapabilities') {
+        if (++checks == 1) return pending.future;
+        return {'certificateAssetsDirectory': true};
+      }
+      if (call.method == 'startVless') {
+        starts++;
+        return {'preparationReport': {'version': 1, 'scope': 'runtimeFinal',
+          'coreCheck': 'passed', 'changes': ['private_listener_added']}};
+      }
+      return null;
+    });
+    messenger.setMockMethodCallHandler(status, (_) async => null);
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(channel, null);
+      messenger.setMockMethodCallHandler(status, null);
+    });
+    await tester.pumpWidget(const MyApp());
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first,
+        '{"outbounds":[{"protocol":"freedom"}]}');
+    await tester.ensureVisible(find.text('Certificate files'));
+    await tester.tap(find.text('Certificate files'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextField,
+        'Certificate directory (optional)'), '/private/synthetic-certificates');
+    await tester.tap(find.text('Connect'));
+    await tester.pump();
+    expect(checks, 1);
+    expect(starts, 0);
+    await tester.tap(find.text('Connect'));
+    await tester.pumpAndSettle();
+    expect(starts, 1);
+    expect(find.byKey(const Key('preparation-report')), findsOneWidget);
+    pending.completeError(PlatformException(code: 'private-old-check',
+        message: 'synthetic-private-configuration'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SnackBar), findsNothing);
+    expect(find.byKey(const Key('preparation-report')), findsOneWidget);
+    expect(starts, 1);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final edit in ['JSON', 'certificates', 'VPN routing', 'mode', 'bypass', 'apps']) {
   testWidgets('$edit edits cannot receive an older pending report',
       (tester) async {

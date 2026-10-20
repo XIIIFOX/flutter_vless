@@ -8,6 +8,7 @@
 #include <atomic>
 #include <functional>
 #include <vector>
+#include "ipv6_tcp_scope.h"
 
 namespace flutter_vless {
 // A non-dynamic WFP policy survives worker/application crashes. Only an explicit
@@ -17,7 +18,8 @@ class TrafficProtection {
  public:
   explicit TrafficProtection(std::function<std::wstring()> dhcp_sid = {}) : dhcp_sid_(std::move(dhcp_sid)) {}
   ~TrafficProtection();
-  bool Install(const std::filesystem::path& xray, const NET_LUID* tunnel = nullptr);
+  bool Install(const std::filesystem::path& xray, const NET_LUID* tunnel = nullptr,
+      const Ipv6TcpScope* ipv6_tcp = nullptr);
   bool Inspect();
   bool Release();
   bool Active() const { return active_.load(); }

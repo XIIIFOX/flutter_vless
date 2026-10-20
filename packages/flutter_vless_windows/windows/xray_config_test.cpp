@@ -9,6 +9,57 @@ using namespace flutter_vless::xray_config;
 void Check(bool ok, const char* message) {
   if (!ok) throw std::runtime_error(message);
 }
+void StaticDnsAliasCases() {
+  std::ifstream input("tool/fixtures/compatibility/dns-static-aliases.json");
+  Check(input.good(), "shared static DNS alias corpus required");
+  Json cases; input >> cases;
+  Check(cases.size() == 4, "shared static DNS alias cases changed");
+  for (const auto& item : cases) {
+    const auto source = item["config"];
+    const auto before = source.dump();
+    unsigned lookups = 0;
+    const auto result = PrepareProtectedVpn(before, "alias-user", "synthetic-alias-token", "Ethernet",
+        [&](const std::string&) { ++lookups; return std::string("192.0.2.7"); },
+        nullptr, [](uint16_t) { return true; });
+    Check(result.has_value(), item["name"].get<std::string>().c_str());
+    const auto effective = Parse(*result);
+    Check(lookups == 0 && source.dump() == before, "static DNS aliases reached native lookup or changed source");
+    Check(effective["dns"] == source["dns"] && effective["custom"] == source["custom"],
+        "static DNS URL/hosts/metadata changed during preparation");
+  }
+  Json too_deep = {{"full:doh.example", "hop1.example"}};
+  for (unsigned index = 1; index <= 5; ++index)
+    too_deep["full:hop" + std::to_string(index) + ".example"] = "hop" + std::to_string(index + 1) + ".example";
+  too_deep["full:hop6.example"] = "192.0.2.53";
+  for (const auto& hosts : std::vector<Json>{
+      {{"full:doh.example", "missing.example"}},
+      {{"full:doh.example", "#0"}, {"full:#0", "192.0.2.53"}},
+      {{"full:doh.example", ""}, {"full:", "192.0.2.53"}},
+      {{"full:doh.example", u8"á.example"}, {u8"full:á.example", "192.0.2.53"}},
+      {{"full:doh.example", u8"ΟΣ.example"}, {u8"full:ος.example", "192.0.2.53"}},
+      {{"full:doh.example", "alias.example"}, {"alias.example", "doh.example"}},
+      {{"full:doh.example", "alias.example."}, {"alias.example", "192.0.2.53"}},
+      {{"full:doh.example", "alias.example"}, {"full:alias.example", true}},
+      {{"full:doh.example", "alias.example"}, {"full:alias.example", Json::array({"192.0.2.53", "unresolved.example"})}},
+      {{"full:doh.example", "alias.example"}, {"full:alias.example", "192.0.2.53"}, {"alias.example", "unresolved.example"}},
+      too_deep}) {
+    auto source = cases[0]["config"];
+    source["dns"]["hosts"] = hosts;
+    source["dns"]["servers"] = Json::array({"https://doh.example/dns-query"});
+    source["outbounds"][0]["settings"]["servers"][0]["address"] = "endpoint.invalid";
+    const auto before = source.dump();
+    unsigned lookups = 0;
+    Check(!PrepareProtectedVpn(before, "alias-user", "synthetic-alias-token", "Ethernet",
+        [&](const std::string&) { ++lookups; return std::string("192.0.2.7"); },
+        nullptr, [](uint16_t) { return true; }), "unproven DNS alias bootstrap accepted");
+    Check(lookups == 0 && source.dump() == before, "rejected DNS aliases reached bootstrap or changed source");
+  }
+  Check(ProtectedDnsAddress("https://doh.example/dns-query",
+      {{"full:doh.example", "192.0.2.53"}, {"doh.example", Json::array({"192.0.2.54", "2001:db8::53"})}}),
+      "preexisting all-numeric matching hosts aggregate was narrowed");
+  std::cout << "WINDOWS_STATIC_DNS_ALIAS_PASS=4\n";
+}
+
 void PortEnvironmentCases() {
   std::ifstream input("tool/fixtures/compatibility/port-env.json");
   Check(input.good(), "shared port environment corpus required");
@@ -413,6 +464,10 @@ void AssetLocationCases() {
   Check(entries(assets::ChildEnvironment({}, L"", std::nullopt)).empty(), "empty environment block is not valid");
 }
 int main(int argc, char** argv) {
+  if (argc == 2 && std::string(argv[1]) == "--static-dns-aliases") {
+    try { StaticDnsAliasCases(); return 0; }
+    catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+  }
   if (argc == 2 && std::string(argv[1]) == "--port-env") {
     try { PortEnvironmentCases(); return 0; }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
@@ -440,6 +495,7 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::string(argv[1]) == "--unix-inputs") { UnixInputProxyPreparationCases(); return 0; }
   if (argc == 2 && std::string(argv[1]) == "--listen-addresses") { ListenAddressCases(); return 0; }
   if (argc == 2 && std::string(argv[1]) == "--asset-location") { AssetLocationCases(); return 0; }
+  StaticDnsAliasCases();
   CallerServicePreservationCases();
   OwnedApiPortCases();
   UnixInputProxyPreparationCases();

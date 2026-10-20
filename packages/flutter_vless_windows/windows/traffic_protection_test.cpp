@@ -16,13 +16,14 @@ GUID foreign_provider = {0xdec0de,0x1234,0x5678,{1,2,3,4,5,6,7,8}};
 size_t enumeration_offset = 0;
 struct Rule {
   GUID layer{}; FWP_ACTION_TYPE action{}; UINT64 weight=0, interface_=0, id=0;
-  bool loop=false, app=false, service_app=false, elevated=false, service=false; UINT8 protocol=0; UINT16 local=0, remote=0;
+  bool loop=false, app=false, service_app=false, elevated=false, service=false, has_address=false; UINT8 protocol=0; UINT16 local=0, remote=0;
+  std::array<uint8_t, 16> address{};
 };
 std::vector<Rule> live, pending;
 int fail_add = -1, additions = 0;
 bool transaction = false;
 bool same(const GUID& a,const GUID& b) { return std::memcmp(&a,&b,sizeof(a))==0; }
-struct Flow { bool v6=false, inbound=false, loop=false, xray=false; UINT64 interface_=0; bool elevated=false, service_app=false, service=false; UINT8 protocol=IPPROTO_TCP; UINT16 local=50000, remote=443; };
+struct Flow { bool v6=false, inbound=false, loop=false, xray=false; UINT64 interface_=0; bool elevated=false, service_app=false, service=false; UINT8 protocol=IPPROTO_TCP; UINT16 local=50000, remote=443; std::array<uint8_t, 16> address{}; };
 bool permits(Flow flow) {
   GUID layer = flow.v6 ? (flow.inbound ? FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6 : FWPM_LAYER_ALE_AUTH_CONNECT_V6)
       : (flow.inbound ? FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4 : FWPM_LAYER_ALE_AUTH_CONNECT_V4);
@@ -30,7 +31,8 @@ bool permits(Flow flow) {
   for (const auto& rule:live) {
     if (!same(rule.layer,layer) || (rule.loop&&!flow.loop) || (rule.app&&!flow.xray) || (rule.service_app&&!flow.service_app) || (rule.elevated&&!flow.elevated) || (rule.service&&!flow.service)
         || (rule.interface_&&rule.interface_!=flow.interface_) || (rule.protocol&&rule.protocol!=flow.protocol)
-        || (rule.local&&rule.local!=flow.local) || (rule.remote&&rule.remote!=flow.remote)) continue;
+        || (rule.local&&rule.local!=flow.local) || (rule.remote&&rule.remote!=flow.remote)
+        || (rule.has_address&&rule.address!=flow.address)) continue;
     if(!chosen||rule.weight>chosen->weight) chosen=&rule;
   }
   return !chosen || chosen->action==FWP_ACTION_PERMIT;
@@ -131,6 +133,10 @@ DWORD WINAPI FwpmFilterAdd0(HANDLE,const FWPM_FILTER0* filter,PSECURITY_DESCRIPT
     else if(same(c.fieldKey,FWPM_CONDITION_IP_PROTOCOL))rule.protocol=c.conditionValue.uint8;
     else if(same(c.fieldKey,FWPM_CONDITION_IP_LOCAL_PORT))rule.local=c.conditionValue.uint16;
     else if(same(c.fieldKey,FWPM_CONDITION_IP_REMOTE_PORT))rule.remote=c.conditionValue.uint16;
+    else if(same(c.fieldKey,FWPM_CONDITION_IP_REMOTE_ADDRESS)) {
+      assert(c.conditionValue.type==FWP_BYTE_ARRAY16_TYPE); rule.has_address=true;
+      std::copy_n(c.conditionValue.byteArray16->byteArray16,16,rule.address.begin());
+    }
     else assert(false);
   }
   pending.push_back(rule);if(id)*id=rule.id;return ERROR_SUCCESS;
@@ -171,6 +177,43 @@ int main() {
     assert(recovery.Inspect() && recovery.Active());
     assert(recovery.Release()); // explicit stop after application crash
     assert(live.empty() && permits({}));
+  }
+  {
+    flutter_vless::TrafficProtection protection;
+    flutter_vless::Ipv6TcpScope scope; scope.interface_luid = 99;
+    flutter_vless::Ipv6TcpEndpoint endpoint; endpoint.address = {0xfd,0,0,0x85,0,2,0,0,0,0,0,0,0,0,0,2}; endpoint.port = 18443;
+    scope.endpoints.push_back(endpoint);
+    assert(protection.Install(L"C:\\app\\xray.exe", nullptr, &scope));
+    Flow allowed; allowed.v6=true; allowed.xray=true; allowed.elevated=true;
+    allowed.interface_=scope.interface_luid; allowed.address=endpoint.address; allowed.remote=endpoint.port;
+    assert(permits(allowed));
+    for (int variant=0; variant<7; ++variant) {
+      auto denied=allowed;
+      if(variant==0)denied.xray=false;
+      if(variant==1)denied.elevated=false;
+      if(variant==2)denied.interface_=100; // new/different underlay
+      if(variant==3)denied.address[15]=3; // dynamic direct IPv6 cannot borrow the grant
+      if(variant==4)denied.remote=53;
+      if(variant==5)denied.protocol=IPPROTO_UDP;
+      if(variant==6)denied.inbound=true; // no passive physical Core listener grant
+      assert(!permits(denied));
+    }
+    NET_LUID tun{}; tun.Value=42;
+    assert(protection.Install(L"C:\\app\\xray.exe", &tun, &scope) && permits(allowed));
+    Flow captured;captured.v6=true;captured.interface_=42;assert(permits(captured));
+    const auto count=live.size();
+    for(int failure=0;failure<static_cast<int>(count);++failure) {
+      fail_add=failure;assert(!protection.Install(L"C:\\app\\xray.exe", &tun, &scope));
+      assert(live.size()==count && permits(allowed));
+      auto other=allowed;other.address[15]=3;assert(!permits(other));
+    }
+    fail_add=-1;
+    auto bad=scope;bad.interface_luid=0;assert(!protection.Install(L"C:\\app\\xray.exe", &tun, &bad));
+    bad=scope;bad.interface_luid=tun.Value;assert(!protection.Install(L"C:\\app\\xray.exe", &tun, &bad));
+    bad=scope;bad.endpoints[0].port=0;assert(!protection.Install(L"C:\\app\\xray.exe", &tun, &bad));
+    bad=scope;bad.endpoints[0].address={};assert(!protection.Install(L"C:\\app\\xray.exe", &tun, &bad));
+    assert(permits(allowed) && protection.Release() && live.empty());
+    std::cout<<"WINDOWS_NUMERIC_IPV6_WFP_PASS=1\n";
   }
   std::cout<<"PASS WFP policy, IPv4/IPv6/DNS, new adapters, atomic failure rollback and explicit-stop recovery (recording backend)\n";
 }

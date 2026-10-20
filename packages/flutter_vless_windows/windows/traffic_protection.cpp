@@ -3,6 +3,7 @@
 #include <fwpmtypes.h>
 #include "wfp_compat.h"
 #include <vector>
+#include <algorithm>
 #include <sddl.h>
 
 namespace flutter_vless {
@@ -70,7 +71,13 @@ bool TrafficProtection::DeleteFilters() {
   for (auto id : ids) if (!Check(FwpmFilterDeleteById0(engine_, id))) return false;
   return true;
 }
-bool TrafficProtection::Install(const std::filesystem::path& xray, const NET_LUID* tunnel) {
+bool TrafficProtection::Install(const std::filesystem::path& xray, const NET_LUID* tunnel, const Ipv6TcpScope* ipv6_tcp) {
+  if (ipv6_tcp) {
+    if (!ipv6_tcp->interface_luid || (tunnel && tunnel->Value == ipv6_tcp->interface_luid)
+        || ipv6_tcp->endpoints.empty() || ipv6_tcp->endpoints.size() > 128) return false;
+    for (const auto& endpoint : ipv6_tcp->endpoints)
+      if (!endpoint.port || !ValidOuterIpv6(endpoint.address)) return false;
+  }
   if (!Open() || !Check(FwpmTransactionBegin0(engine_, 0))) return false;
   FWPM_PROVIDER0 p{}; p.providerKey = provider;
   p.displayData.name = const_cast<wchar_t*>(L"Flutter Vless traffic protection");
@@ -149,9 +156,25 @@ bool TrafficProtection::Install(const std::filesystem::path& xray, const NET_LUI
     if (allow_dhcp) add(where, FWP_ACTION_PERMIT, 70, {protocol, local, remote, service_image, service});
     add(where, FWP_ACTION_BLOCK, 1, {});
   }
-  // No physical IPv6 exception for Xray, sniffed names, applications binding
-  // their own interface, or a newly attached adapter. IPv6 payload is permitted
-  // only through the exact owned TUN; the outer transport remains IPv4.
+  // Only finite numeric outer TCP clients may use the selected physical V6
+  // interface. No passive listener, UDP, DNS or dynamic direct exception.
+  if (ipv6_tcp) {
+    UINT64 selected = ipv6_tcp->interface_luid;
+    auto underlay = interface_; underlay.conditionValue.uint64 = &selected;
+    FWPM_FILTER_CONDITION0 protocol{};
+    protocol.fieldKey = FWPM_CONDITION_IP_PROTOCOL; protocol.matchType = FWP_MATCH_EQUAL;
+    protocol.conditionValue.type = FWP_UINT8; protocol.conditionValue.uint8 = IPPROTO_TCP;
+    for (const auto& endpoint : ipv6_tcp->endpoints) {
+      FWP_BYTE_ARRAY16 address{}; std::copy(endpoint.address.begin(), endpoint.address.end(), address.byteArray16);
+      FWPM_FILTER_CONDITION0 remote{}, port{};
+      remote.fieldKey = FWPM_CONDITION_IP_REMOTE_ADDRESS; remote.matchType = FWP_MATCH_EQUAL;
+      remote.conditionValue.type = FWP_BYTE_ARRAY16_TYPE; remote.conditionValue.byteArray16 = &address;
+      port.fieldKey = FWPM_CONDITION_IP_REMOTE_PORT; port.matchType = FWP_MATCH_EQUAL;
+      port.conditionValue.type = FWP_UINT16; port.conditionValue.uint16 = endpoint.port;
+      add(FWPM_LAYER_ALE_AUTH_CONNECT_V6, FWP_ACTION_PERMIT, 90, {application, elevated, underlay, protocol, remote, port});
+    }
+  }
+  // All other V6 traffic remains loopback/exact-owned-TUN only.
   for (auto where : {FWPM_LAYER_ALE_AUTH_CONNECT_V6, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6}) {
     add(where, FWP_ACTION_PERMIT, 100, {loop});
     if (tunnel) add(where, FWP_ACTION_PERMIT, 80, {interface_});

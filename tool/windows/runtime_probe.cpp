@@ -21,6 +21,10 @@
 #include "traffic_protection.h"
 #include "native_runtime.h"
 #include "windows_network.h"
+#include "windows_underlay.h"
+#include "ipv6_tcp_challenge_peer.h"
+#include <algorithm>
+#include <cstring>
 int main(int argc,char** argv) {
   int wide_count = 0;
   auto wide = CommandLineToArgvW(GetCommandLineW(), &wide_count);
@@ -82,6 +86,27 @@ int main(int argc,char** argv) {
     std::cout << gateway << std::endl;
     return gateway.empty() ? 5 : 0;
   }
+  if (action == "cleanup-peer-default") {
+    if (!isolated || arguments.size()!=4) return 20;
+    NET_LUID luid{}; luid.Value=std::stoull(arguments[2]);
+    if (!luid.Value || arguments[3].rfind(L"FlutterVlessNumericIPv6-",0)!=0) return 20;
+    MIB_IF_ROW2 adapter{}; adapter.InterfaceLuid=luid;
+    const auto lookup=GetIfEntry2(&adapter);
+    if (lookup!=NO_ERROR && lookup!=ERROR_NOT_FOUND && lookup!=ERROR_FILE_NOT_FOUND) return 25;
+    if (lookup==NO_ERROR && arguments[3]!=adapter.Alias) return 25;
+    MIB_IPFORWARD_ROW2 row{}; InitializeIpForwardEntry(&row); row.InterfaceLuid=luid;
+    row.DestinationPrefix.Prefix.si_family=AF_INET6; row.DestinationPrefix.PrefixLength=0; row.NextHop.si_family=AF_INET6;
+    const auto found=GetIpForwardEntry2(&row);
+    if (found!=NO_ERROR && found!=ERROR_NOT_FOUND) return 25;
+    if (found==NO_ERROR && DeleteIpForwardEntry2(&row)!=NO_ERROR) return 25;
+    return GetIpForwardEntry2(&row)==ERROR_NOT_FOUND ? 0 : 25;
+  }
+  if (action == "underlay-v6") {
+    if (!isolated) return 20;
+    UINT64 luid=0; const auto selected=flutter_vless::native::SelectUnderlay(AF_INET6, &luid);
+    if (!selected || !luid) return 25;
+    std::cout<<luid<<std::endl; return 0;
+  }
   if (action == "source-interface") {
     if (arguments.size() < 3) return 2;
     MIB_UNICASTIPADDRESS_TABLE* table = nullptr;
@@ -101,8 +126,14 @@ int main(int argc,char** argv) {
     std::cout << index << std::endl;
     return 0;
   }
-  if (action == "adapter") {
-    if (!isolated || arguments.size() < 5) return 20;
+  const bool ipv6_peer_mode = action == "adapter-v6-peer";
+  if (action == "adapter" || ipv6_peer_mode) {
+    if (!isolated || arguments.size() < 5 || (ipv6_peer_mode && arguments.size() != 7)) return 20;
+    if (ipv6_peer_mode) {
+      const std::string nonce(arguments[5].begin(), arguments[5].end());
+      if (nonce.size()!=32 || nonce.find_first_not_of("0123456789abcdef")!=std::string::npos
+          || std::filesystem::exists(std::filesystem::path(arguments[6]))) return 20;
+    }
     const auto path = flutter_vless::native::FindBundledFile(L"wintun.dll");
     HMODULE dll = path ? LoadLibraryExW(path->c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32) : nullptr;
     if (!dll) return 30;
@@ -119,15 +150,22 @@ int main(int argc,char** argv) {
     using Release = void (WINAPI*)(void*,const BYTE*);
     auto receive = reinterpret_cast<Receive>(GetProcAddress(dll,"WintunReceivePacket"));
     auto release = reinterpret_cast<Release>(GetProcAddress(dll,"WintunReleaseReceivePacket"));
-    if (!create || !close || !start || !end || !get_luid || !receive || !release) return 31;
+    using Allocate = BYTE* (WINAPI*)(void*, DWORD);
+    using Send = void (WINAPI*)(void*, const BYTE*);
+    const auto allocate = reinterpret_cast<Allocate>(GetProcAddress(dll,"WintunAllocateSendPacket"));
+    const auto send = reinterpret_cast<Send>(GetProcAddress(dll,"WintunSendPacket"));
+    if (!create || !close || !start || !end || !get_luid || !receive || !release
+        || (ipv6_peer_mode && (!allocate || !send))) return 31;
     void* adapter = create(arguments[2].c_str(), L"FlutterVlessValidation", nullptr);
     if (!adapter) return 32;
     void* session = start(adapter, 0x400000);
     if (!session) { close(adapter); return 33; }
     NET_LUID luid{}; get_luid(adapter, &luid);
+    if (ipv6_peer_mode) std::cout << "PEER_ADAPTER_CREATED=" << luid.Value << std::endl;
     const auto subnet = std::stoi(arguments[3]);
-    if (subnet != 2 && subnet != 3) { end(session); close(adapter); return 34; }
+    if ((subnet != 2 && subnet != 3) || (ipv6_peer_mode && subnet != 2)) { end(session); close(adapter); return 34; }
     bool ok = true;
+    MIB_IPFORWARD_ROW2 peer_default{}; bool owned_default = false;
     for (auto family : {AF_INET, AF_INET6}) {
       MIB_UNICASTIPADDRESS_ROW row{}; InitializeUnicastIpAddressEntry(&row);
       row.InterfaceLuid = luid; row.Address.si_family = static_cast<ADDRESS_FAMILY>(family);
@@ -157,13 +195,97 @@ int main(int argc,char** argv) {
       }
       if (!ready) { std::cout << "ADAPTER_DAD_NOT_READY=" << family << std::endl; ok = false; break; }
     }
+    if (ok && ipv6_peer_mode) {
+      // Both local-address ownership and absence of the synthetic remote are
+      // verified before the codec may be armed. This is never a loopback peer.
+      MIB_UNICASTIPADDRESS_TABLE* addresses = nullptr;
+      bool source_owned = false, remote_absent = true, no_duplicate_source = true;
+      if (GetUnicastIpAddressTable(AF_INET6, &addresses) != NO_ERROR) ok = false;
+      if (addresses) {
+        for (ULONG i=0; i<addresses->NumEntries; ++i) {
+          const auto& row = addresses->Table[i];
+          const auto* bytes = reinterpret_cast<const uint8_t*>(&row.Address.Ipv6.sin6_addr);
+          if (std::equal(flutter_vless::wireproof::server_address.begin(), flutter_vless::wireproof::server_address.end(), bytes)) remote_absent = false;
+          if (std::equal(flutter_vless::wireproof::client_address.begin(), flutter_vless::wireproof::client_address.end(), bytes)) {
+            if (row.InterfaceLuid.Value == luid.Value && row.DadState == IpDadStatePreferred) source_owned = true;
+            else no_duplicate_source = false;
+          }
+        }
+        FreeMibTable(addresses);
+      }
+      ok = ok && source_owned && remote_absent && no_duplicate_source;
+      MIB_IPINTERFACE_ROW ip{}; InitializeIpInterfaceEntry(&ip); ip.Family=AF_INET6; ip.InterfaceLuid=luid;
+      if (ok) {
+        ok = GetIpInterfaceEntry(&ip) == NO_ERROR;
+        ip.UseAutomaticMetric = FALSE; ip.Metric = 1;
+        if (ok) ok = SetIpInterfaceEntry(&ip) == NO_ERROR;
+      }
+      InitializeIpForwardEntry(&peer_default); peer_default.InterfaceLuid=luid;
+      peer_default.DestinationPrefix.Prefix.si_family=AF_INET6;
+      peer_default.DestinationPrefix.PrefixLength=0; peer_default.NextHop.si_family=AF_INET6;
+      peer_default.Metric=0; peer_default.Protocol=static_cast<NL_ROUTE_PROTOCOL>(MIB_IPPROTO_NETMGMT);
+      if (ok) {
+        const auto status=CreateIpForwardEntry2(&peer_default);
+        owned_default=status==NO_ERROR; ok=owned_default; // never delete a pre-existing row
+      }
+      if (ok) std::cout << "IPV6_PEER_OWNERSHIP=source-owned,remote-unassigned,default-owned" << std::endl;
+    }
     if (ok) {
       std::cout << "ADAPTER_READY=" << luid.Value << std::endl;
-      const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);
+      const auto deadline = std::chrono::steady_clock::now() + (ipv6_peer_mode ? std::chrono::seconds(90) : std::chrono::seconds(600));
+      const std::string nonce = ipv6_peer_mode ? std::string(arguments[5].begin(), arguments[5].end()) : std::string();
+      const auto arm_file = ipv6_peer_mode ? std::filesystem::path(arguments[6]) : std::filesystem::path();
+      std::optional<flutter_vless::wireproof::Peer> peer;
+      bool peer_complete=false, peer_error=false, peer_ready=false; unsigned controlled=0;
+      const auto now_ms=[] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count()); };
+      auto inject = [&](flutter_vless::wireproof::Result result) {
+        if (!result.packet.empty()) {
+          auto* target=allocate(session, static_cast<DWORD>(result.packet.size()));
+          if (!target) { ok=false; return; }
+          std::copy(result.packet.begin(), result.packet.end(), target); send(session,target);
+        }
+        if (result.error != flutter_vless::wireproof::Error::none && !peer_error) {
+          peer_error=true; ok=false; std::cout<<"IPV6_TCP_PEER_ERROR="<<static_cast<int>(result.error)<<std::endl;
+        }
+        const auto stats=peer->Inspect();
+        if (stats.connect_count == 1 && !peer_ready) {
+          peer_ready=true; std::cout<<"IPV6_TCP_PEER_READY="<<stats.client_port<<std::endl;
+        }
+        if (result.complete && !peer_complete) {
+          peer_complete=true;
+          std::cout<<"IPV6_TCP_PEER_COMPLETE="<<nonce<<","<<stats.syn_count<<","<<stats.authentication_count
+              <<","<<stats.connect_count<<","<<stats.challenge_count<<","<<stats.client_port<<","<<static_cast<int>(stats.error)<<std::endl;
+        }
+      };
       while (!std::filesystem::exists(std::filesystem::path(arguments[4])) && std::chrono::steady_clock::now() < deadline) {
+        if (ipv6_peer_mode && !peer && std::filesystem::exists(arm_file)) {
+          std::ifstream arm(arm_file, std::ios::binary); std::array<char,33> input{};
+          arm.read(input.data(),static_cast<std::streamsize>(input.size()));
+          const std::string bytes(input.data(),static_cast<size_t>(arm.gcount()));
+          if (bytes != nonce) { ok=false; break; }
+          peer.emplace(nonce); std::cout<<"IPV6_TCP_PEER_ARMED="<<nonce<<std::endl;
+        }
+        if (peer) inject(peer->Poll(now_ms()));
         DWORD size = 0;
         BYTE* packet = receive(session, &size);
         if (!packet) { Sleep(10); continue; }
+        // Observe only the owned synthetic prefix/ports, BEFORE Peer filtering.
+        // Metadata only: no arbitrary packet payload or user traffic is logged.
+        if (ipv6_peer_mode && size>=48 && (packet[0]>>4)==6 && (packet[6]==6 || packet[6]==17)
+            && std::equal(flutter_vless::wireproof::client_address.begin(), flutter_vless::wireproof::client_address.end(), packet+8)
+            && std::equal(flutter_vless::wireproof::server_address.begin(), flutter_vless::wireproof::server_address.end()-1, packet+24)
+            && (packet[39]==2 || packet[39]==3)) {
+          const auto port=static_cast<unsigned>((static_cast<unsigned>(packet[42])<<8)|packet[43]);
+          const auto source=static_cast<unsigned>((static_cast<unsigned>(packet[40])<<8)|packet[41]);
+          if (port==18443 || port==18444) {
+            if (++controlled>128) ok=false;
+            else std::cout<<"IPV6_SCOPE_PACKET="<<static_cast<unsigned>(packet[6])<<","<<static_cast<unsigned>(packet[39])
+                <<","<<port<<","<<source<<","<<(packet[6]==6 && size>=60 ? static_cast<unsigned>(packet[53]) : 0)<<std::endl;
+          }
+        }
+        std::optional<flutter_vless::wireproof::Result> reply;
+        if (peer) reply=peer->Receive(packet,size,now_ms());
         // Record only our random control marker, never unrelated packet data.
         const std::string bytes(reinterpret_cast<char*>(packet), size);
         const std::string prefix = "wfp-adapter-control-";
@@ -173,8 +295,16 @@ int main(int argc,char** argv) {
           if (token.find_first_not_of("0123456789abcdef") == std::string::npos)
             std::cout << "CONTROL_PACKET=" << token << std::endl;
         }
-        release(session, packet);
+        release(session, packet); // release receive allocation BEFORE injecting a response
+        if (reply) inject(std::move(*reply));
       }
+      if (ipv6_peer_mode && !peer_complete) ok=false;
+    }
+    if (owned_default) {
+      const auto status=DeleteIpForwardEntry2(&peer_default);
+      auto verify=peer_default;
+      const bool removed=(status==NO_ERROR || status==ERROR_NOT_FOUND) && GetIpForwardEntry2(&verify)==ERROR_NOT_FOUND;
+      ok=ok && removed; std::cout<<"IPV6_DEFAULT_REMOVED="<<removed<<std::endl;
     }
     end(session); close(adapter); FreeLibrary(dll);
     return ok ? 0 : 35;

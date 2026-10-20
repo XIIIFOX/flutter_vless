@@ -8,6 +8,32 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AndroidTunnelDnsPolicyTest {
+    @Test fun sharedStaticDnsAliasesRemainCallerDataThroughActualRuntimePreparation() {
+        val cases = JSONArray(requireNotNull(javaClass.getResource("/dns-static-aliases.json")).readText())
+        assertEquals(4, cases.length())
+        for (index in 0 until cases.length()) {
+            val item = cases.getJSONObject(index); val label = item.getString("name")
+            val source = item.getJSONObject("config"); val before = source.toString()
+            val prepared = AndroidTunnelDnsPolicy.prepare(before, "config", environment = {
+                error("Static DNS/numeric transport must not read environment")
+            }) { error("Caller static aliases must not invoke native bootstrap") }
+            val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = prepared.configJson, ANDROID_DNS_POLICY = "config")
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(profile, File("."),
+                LocalProxyCredentials("alias-user", "synthetic-alias-token"), prepared,
+                tcpAvailable = { true }, environment = { error("No listener environment lookup expected") })
+            for (output in listOf(JSONObject(prepared.configJson), runtime)) {
+                for (field in listOf("dns", "custom", "remarks"))
+                    assertEquals(label, source.get(field).toString(), output.get(field).toString())
+                assertEquals(label, source.getJSONArray("outbounds").getJSONObject(0).getJSONObject("settings").toString(),
+                    output.getJSONArray("outbounds").getJSONObject(0).getJSONObject("settings").toString())
+            }
+            assertTrue(label, prepared.bootstrapHostnames.isEmpty())
+            assertTrue(label, prepared.bootstrapAddresses.isEmpty())
+            assertEquals(label, prepared.configJson, profile.V2RAY_FULL_JSON_CONFIG)
+            assertEquals(label, before, source.toString())
+        }
+    }
+
     @Test fun fakeDnsBridgeUsesAnAddressOutsideTheDefaultFakePools() {
         val prepared = AndroidTunnelDnsPolicy.prepare(config(outbound()).toString())
         assertEquals(listOf("10.0.85.53"), prepared.systemDnsServers)

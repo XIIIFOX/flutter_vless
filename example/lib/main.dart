@@ -434,6 +434,7 @@ class _HomePageState extends State<HomePage> {
               await _connect();
             }
           } on PlatformException catch (error) {
+            if (error.code == 'VPN_START_CANCELLED') return;
             if (!context.mounted) return;
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
               content: Text(configurationFailureMessage(error)),

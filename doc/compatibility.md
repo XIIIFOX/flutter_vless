@@ -1922,6 +1922,27 @@ emulator and physical-device gates. Its first actual dispatch at `1fbece9` passe
 exactly the four selected jobs, including both full SwiftPM suites and final
 routing-pair checks; the unselected platform acceptance gates remain separate.
 
+### Numeric IPv6 endpoints, static DNS aliases and pending startup
+
+Windows preparation now admits finite numeric IPv6 outer TCP endpoints, selects
+the IPv6 default interface and limits the physical firewall grant to the owned
+Core image, elevated token, checked interface, destination and TCP port. Fresh
+starts do not inherit the previous session's interface; recovery retains its
+checked scope. The controlled Windows packet-path gate covers this increment
+separately for the official and optional routing runtime. AAAA bootstrap, mixed
+physical endpoint families, IPv6 UDP endpoints, NAT64 and handover remain open.
+
+Apple and Windows DNS admission follows at most five caller static hosts
+aliases to a numeric IPv4/IPv6 leaf. Caller DNS, resolver URL, TLS name and opaque
+full-profile data remain unchanged. Cycles, unresolved aliases, RCODE mappings
+and unproven Unicode aliases are refused before physical endpoint lookup.
+
+All four public adapters cancel an older capability-gated start after Stop or
+a newer Start, returning `VPN_START_CANCELLED` without private error details.
+The example ignores this obsolete completion and retains the newer report.
+This cancellation boundary precedes native dispatch; native worker shutdown
+and physical device acceptance remain separate checks.
+
 Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |

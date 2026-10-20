@@ -17,6 +17,7 @@
 #include "third_party/nlohmann/json.hpp"
 #include "asset_location.h"
 #include "preparation_report.h"
+#include "ipv6_tcp_scope.h"
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -1119,8 +1120,18 @@ inline bool Literal4(const std::string& value) {
   }
   return true;
 }
+inline std::optional<std::vector<unsigned>> IPv6Words(const std::string& value);
+inline std::optional<std::array<uint8_t,16>> PhysicalIpv6(const std::string& text) {
+  const auto words = IPv6Words(text);
+  if (!words) return std::nullopt;
+  std::array<uint8_t,16> bytes{};
+  for(size_t i=0;i<8;++i) { bytes[2*i]=static_cast<uint8_t>((*words)[i]>>8); bytes[2*i+1]=static_cast<uint8_t>((*words)[i]&255); }
+  return ValidOuterIpv6(bytes) ? std::optional<std::array<uint8_t,16>>(bytes) : std::nullopt;
+}
 struct BootstrapEndpoint { std::string host; uint16_t port; };
 struct BootstrapGraph {
+  bool physical_ipv4 = false;
+  std::vector<Ipv6TcpEndpoint> ipv6_tcp_endpoints;
   Json outbounds = Json::array();
   Json rules = Json::array();
   std::map<std::string, std::string> addresses;
@@ -1346,8 +1357,20 @@ inline bool BootstrapStream(Json& stream, const std::vector<BootstrapEndpoint>& 
     bool needs_pins = false;
     for (auto& endpoint : physical) {
       endpoint.host = ParsedAddressText(endpoint.host);
-      if (endpoint.host.empty() || endpoint.host.find(':') != std::string::npos || !endpoint.port) return false;
-      needs_pins = needs_pins || !Literal4(endpoint.host);
+      if (endpoint.host.empty() || !endpoint.port) return false;
+      if (endpoint.host.find(':') != std::string::npos) {
+        const auto bytes = PhysicalIpv6(endpoint.host);
+        if (!bytes || (network != "tcp" && network != "raw") || graph.physical_ipv4) return false;
+        const Ipv6TcpEndpoint item{*bytes, endpoint.port};
+        if (std::find(graph.ipv6_tcp_endpoints.begin(), graph.ipv6_tcp_endpoints.end(), item) == graph.ipv6_tcp_endpoints.end())
+          graph.ipv6_tcp_endpoints.push_back(item);
+        if (graph.ipv6_tcp_endpoints.size() > 128) return false;
+        options["domainStrategy"] = "ForceIPv6";
+      } else {
+        if (!graph.ipv6_tcp_endpoints.empty()) return false; // mixed outer families need separate underlay identity
+        graph.physical_ipv4 = true;
+        needs_pins = needs_pins || !Literal4(endpoint.host);
+      }
     }
     if (needs_pins) {
       const auto loopback = tags.Next("flutter-vless-bootstrap-loopback");
@@ -1589,21 +1612,44 @@ inline bool ProtectedDnsAddress(const std::string& address, const Json& hosts) {
   host = DnsDomainLower(host);
   if (!host.empty() && host.back() == '.') host.pop_back(); // Root LookupIP trims the FQDN suffix.
   if (!hosts.is_object()) return false;
-  bool found = false;
-  for (auto it = hosts.begin(); it != hosts.end(); ++it) {
-    auto domain = it.key();
-    // Core recognizes the prefix case-sensitively, then lowercases only its
-    // domain value. A mapping's terminal dot is not stripped by the matcher.
-    if (domain.rfind("full:", 0) == 0) domain.erase(0, 5);
-    if (DnsDomainLower(domain) != host) continue;
-    found = true;
-    if (it->is_string()) { if (!DnsIPLiteral(ParsedAddressText(it->get<std::string>()))) return false; }
-    else {
-      if (!it->is_array() || it->empty()) return false;
-      for (const auto& entry : *it) if (!entry.is_string() || !DnsIPLiteral(ParsedAddressText(entry.get<std::string>()))) return false;
+  std::function<bool(const std::string&, unsigned)> static_ip;
+  static_ip = [&](const std::string& query, unsigned remaining) {
+    std::vector<const Json*> mappings;
+    for (auto it = hosts.begin(); it != hosts.end(); ++it) {
+      auto domain = it.key();
+      // Prefixes are case-sensitive; alias lookups retain terminal dots.
+      if (domain.rfind("full:", 0) == 0) domain.erase(0, 5);
+      if (DnsDomainLower(domain) == query) mappings.push_back(&it.value());
     }
-  }
-  return found;
+    if (mappings.empty()) return false;
+    auto address = [&](const std::string& raw) {
+      const auto parsed = ParsedAddressText(raw);
+      if (DnsIPLiteral(parsed)) return true;
+      // Match StaticHosts.Lookup's five-hop limit without native DNS calls.
+      return remaining > 0 && !parsed.empty() && parsed.front() != '#'
+          && std::all_of(parsed.begin(), parsed.end(), [](unsigned char c) { return c < 0x80; })
+          && static_ip(DnsDomainLower(parsed), remaining - 1);
+    };
+    if (mappings.size() == 1) {
+      const auto& mapping = *mappings.front();
+      if (mapping.is_string()) return address(mapping.get<std::string>());
+      if (mapping.is_array() && mapping.size() == 1 && mapping[0].is_string())
+        return address(mapping[0].get<std::string>());
+    }
+    // Retain preexisting all-numeric aggregate admission. A mixed or multiple
+    // alias replacement cannot prove a static leaf through this bounded path.
+    for (const auto* mapping : mappings) {
+      if (mapping->is_string()) {
+        if (!DnsIPLiteral(ParsedAddressText(mapping->get<std::string>()))) return false;
+      } else {
+        if (!mapping->is_array() || mapping->empty()) return false;
+        for (const auto& entry : *mapping)
+          if (!entry.is_string() || !DnsIPLiteral(ParsedAddressText(entry.get<std::string>()))) return false;
+      }
+    }
+    return true;
+  };
+  return static_ip(host, 5);
 }
 
 inline bool ProtectedDns(Json& config, ServiceTags& tags, const std::string& proxy, Json& rules) {
@@ -1668,6 +1714,7 @@ inline bool ProtectedDns(Json& config, ServiceTags& tags, const std::string& pro
 }
 
 struct VpnRoutingProvenance {
+  std::vector<Ipv6TcpEndpoint> ipv6_tcp_endpoints;
   size_t original_inbound_count = 0;
   std::string managed_tag;
   std::vector<int64_t> guard_rule_indices;
@@ -1778,6 +1825,7 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
   const auto api_port = owned_api ? AvailablePort(config, 10086, PortEnvironment, tcp_available) : std::optional<uint16_t>{uint16_t{0}};
   if (!api_port || !AddApi(config, *api_port)) return std::nullopt;
   if (owned_api) config["api"]["tag"] = service_tags.Next("flutter-vless-stats");
+  generated.ipv6_tcp_endpoints = std::move(bootstrap.ipv6_tcp_endpoints);
   if (provenance) *provenance = std::move(generated);
   if (report) report->Merge(changes);
   return config.dump();

@@ -41,6 +41,7 @@ jobs:
           if ((Get-FileHash build/xray-windows.zip -Algorithm SHA256).Hash.ToLower() -ne 'c10a532a9271964f2aa2f4b4c0757605ff529222cb1d5d7ab88f8ecc52e67fb0') { throw 'Xray checksum mismatch' }
           Expand-Archive build/xray-windows.zip build/windows-runtime -Force
           Copy-Item example/windows/xray/tun2socks.exe,example/windows/xray/wintun.dll build/windows-runtime
+          Copy-Item build/windows-runtime/xray.exe build/windows-runtime/xray-official.exe
           Get-FileHash build/windows-runtime/*.exe,build/windows-runtime/*.dll | Format-Table | Out-File build/windows-runtime/binary-checksums.log
           & build/windows-runtime/xray.exe version
           if ($LASTEXITCODE) { throw 'Xray version failed' }
@@ -68,6 +69,7 @@ jobs:
         run: |
           $log = Get-Content build/windows-runtime/native-tests.log -Raw
           if ($log -match 'SKIP') { throw 'A required native Windows test was skipped' }
+          if ([regex]::Matches($log, '(?m)^WINDOWS_STATIC_DNS_ALIAS_PASS=4\r?$').Count -ne 1) { throw 'Static DNS alias preparation controls missing or duplicated' }
           if ($log -notmatch 'deny filtered same-user') { throw 'Filtered-token boundary was not tested' }
           if ($log -notmatch 'PASS pinned Core preflight') { throw 'Pinned Core preflight was not tested' }
           if ($log -notmatch 'PASS administrator-only Core preflight') { throw 'Administrator-only Core preflight was not tested' }
@@ -81,6 +83,17 @@ jobs:
           if ($log -notmatch 'WINDOWS_TRAFFIC_SOURCE_GUARD_PASS=4') { throw 'Actual traffic consumer wiring was not tested' }
           if ($log -notmatch 'WINDOWS_TRAFFIC_WIRE_PASS=11') { throw 'Shared Core counter wire cases were not tested' }
           if ($log -notmatch 'WINDOWS_TRAFFIC_CONSUMER_PASS=12') { throw 'Owned counter selection and status lifecycle were not tested' }
+      - name: Require numeric IPv6 native controls and bind compiled inputs
+        shell: pwsh
+        run: |
+          python tool/windows/test_numeric_ipv6_qualification.py
+          if ($LASTEXITCODE) { throw 'Numeric IPv6 qualification guards failed' }
+          $log = Get-Content build/windows-runtime/native-tests.log -Raw
+          foreach ($marker in @('WINDOWS_NUMERIC_IPV6_CALLERS_PASS=8', 'WINDOWS_NUMERIC_IPV6_PEER_CODEC_PASS=1', 'WINDOWS_NUMERIC_IPV6_PREPARATION_PASS=1', 'WINDOWS_NUMERIC_IPV6_UNDERLAY_PASS=1', 'WINDOWS_NUMERIC_IPV6_WFP_PASS=1')) {
+            if ([regex]::Matches($log, '(?m)^' + [regex]::Escape($marker) + '\r?$').Count -ne 1) { throw 'Numeric IPv6 native controls missing or duplicated' }
+          }
+          python tool/windows/verify_numeric_ipv6_qualification.py --directory build/windows-runtime --record-build
+          if ($LASTEXITCODE) { throw 'Numeric IPv6 compiled-input binding failed' }
       - name: Verify gateway selection through Windows APIs
         shell: pwsh
         run: |
@@ -217,6 +230,23 @@ jobs:
           if ($log -notmatch 'WINDOWS_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2') { throw 'VPN traffic with occupied preferred TCP ports was not tested' }
           if ([regex]::Matches($log, '(?m)^WINDOWS_TRAFFIC_COUNTER_RUNTIME_PASS=4\r?$').Count -ne 1) { throw 'VPN owned-counter acceptance is incomplete' }
           if ([regex]::Matches($log, '(?m)^WINDOWS_FAKEDNS_RUNTIME_PASS=2\r?$').Count -ne 1) { throw 'FakeDNS TCP/UDP and restart acceptance is incomplete' }
+      - name: Qualify numeric IPv6 routing runtime evidence
+        shell: pwsh
+        run: |
+          python tool/windows/verify_numeric_ipv6_qualification.py --directory build/windows-runtime --variant routing
+          if ($LASTEXITCODE) { throw 'Numeric IPv6 routing-runtime proof is incomplete' }
+      - name: Exercise numeric IPv6 with the verified official runtime
+        shell: pwsh
+        run: |
+          $ordinary = 'build/windows-runtime/numeric-ipv6-official'
+          if (Test-Path $ordinary) { throw 'Numeric IPv6 ordinary directory already exists' }
+          New-Item -ItemType Directory $ordinary | Out-Null
+          Copy-Item build/windows-runtime/runtime_probe.exe,build/windows-runtime/tun2socks.exe,build/windows-runtime/wintun.dll,build/windows-runtime/geoip.dat,build/windows-runtime/geosite.dat,build/windows-runtime/numeric-ipv6-build-results.json $ordinary
+          Copy-Item build/windows-runtime/xray-official.exe "$ordinary/xray.exe"
+          python tool/windows/runtime_smoke.py --directory $ordinary --vpn --numeric-ipv6-only --numeric-ipv6-variant official 2>&1 | Tee-Object -FilePath "$ordinary/numeric-ipv6-runtime.log"
+          if ($LASTEXITCODE) { throw 'Numeric IPv6 official-runtime acceptance failed' }
+          python tool/windows/verify_numeric_ipv6_qualification.py --directory $ordinary --variant official --log numeric-ipv6-runtime.log
+          if ($LASTEXITCODE) { throw 'Numeric IPv6 official-runtime proof is incomplete' }
       - name: Restore the disposable runner after any failure
         if: always()
         shell: pwsh
@@ -233,4 +263,6 @@ jobs:
           path: |
             build/windows-runtime/*.log
             build/windows-runtime/*results.json
+            build/windows-runtime/numeric-ipv6-official/*.log
+            build/windows-runtime/numeric-ipv6-official/*results.json
           retention-days: 7

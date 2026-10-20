@@ -100,6 +100,7 @@ class VpnService {
       const flutter_vless::asset_location::Root& assets,
       const std::optional<flutter_vless::native_routing::NativeRoutingIntent>& routing,
       const flutter_vless::xray_config::VpnRoutingProvenance& provenance, const std::string& auth_user,
+      const flutter_vless::Ipv6TcpScope* retained_scope = nullptr,
       flutter_vless::preparation::Report changes = {}, flutter_vless::preparation::Stage* failure = nullptr);
   void StopWorkers();
   bool RetireIPv6Address();
@@ -124,6 +125,8 @@ class VpnService {
   // the local TUN probe, which remains healthy when a physical adapter changes.
   std::string underlay_name_;
   UINT64 underlay_luid_ = 0;
+  ADDRESS_FAMILY underlay_family_ = AF_INET;
+  std::optional<flutter_vless::Ipv6TcpScope> ipv6_tcp_scope_;
   uint16_t socks_port_ = 0;
   // Zero means no library-owned statistics API for this session.
   uint16_t api_port_ = 0;

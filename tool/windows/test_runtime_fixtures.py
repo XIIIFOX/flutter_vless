@@ -22,6 +22,43 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    def test_numeric_ipv6_raw_observer_distinguishes_tuple_source_port_and_epoch(self):
+        # The positive Core connection must never satisfy wrong-image absence,
+        # and pre-policy observer controls must not count as protected packets.
+        text = "IPV6_SCOPE_PACKET=6,2,18443,50001,2\nIPV6_SCOPE_PACKET=6,2,18443,50002,2\nIPV6_SCOPE_PACKET=17,2,18443,50003,0\n"
+        rows = runtime.numeric_ipv6_packets(text)
+        spec = ("wrong_image", "fd00:85:2::2", 18443, 6)
+        positive = runtime.numeric_ipv6_observation(rows, spec, 50001, 100, 0)
+        self.assertEqual(1, positive["syn_packets"])
+        protected = runtime.numeric_ipv6_observation(rows, spec, 50004, 100, 1)
+        self.assertEqual(0, protected["syn_packets"])
+        self.assertEqual(0, protected["udp_packets"])
+        self.assertEqual(0, runtime.numeric_ipv6_observation(rows, spec, 50001, 100, 1)["syn_packets"])
+        self.assertEqual(0, runtime.numeric_ipv6_observation(rows, ("wrong_address", "fd00:85:2::3", 18443, 6), 50002, 100, 0)["syn_packets"])
+        udp = runtime.numeric_ipv6_observation(rows, ("udp", "fd00:85:2::2", 18443, 17), 50003, 200, 0)
+        self.assertEqual(1, udp["udp_packets"])
+        self.assertEqual(0, udp["syn_packets"])
+
+    def test_numeric_ipv6_observer_rejects_malformed_control_metadata(self):
+        for record in ("6,2,18443,1", "6,2,18443,0,2", "6,2,18443,65536,2",
+                       "6,2,18443,2,256", "1,2,18443,2,2", "6,4,18443,2,2",
+                       "6,2,18445,2,2", "6,2,18443,not-a-port,2"):
+            with self.subTest(record=record), self.assertRaises((AssertionError, ValueError)):
+                runtime.numeric_ipv6_packets("IPV6_SCOPE_PACKET=" + record + "\n")
+
+    def test_numeric_ipv6_refusal_requires_new_owned_exact_event(self):
+        spec = ("wrong_address", "fd00:85:2::3", 18443, 6)
+        event = dict(ProcessID=77, remote=spec[1], port=spec[2], protocol=spec[3],
+                     RecordId=101, SourcePort=50001, FilterRTID=900)
+        self.assertTrue(runtime.numeric_ipv6_refusal(event, spec, 77, {900}, 100))
+        for key, value in (("RecordId", 100), ("RecordId", 99), ("ProcessID", 78),
+                           ("remote", "fd00:85:2::2"), ("port", 18444), ("protocol", 17),
+                           ("SourcePort", 0), ("FilterRTID", 901)):
+            with self.subTest(key=key, value=value):
+                changed = dict(event); changed[key] = value
+                self.assertFalse(runtime.numeric_ipv6_refusal(changed, spec, 77, {900}, 100))
+
+
     def test_fakedns_socks_delivers_opaque_bytes_only_after_exact_domain_observation(self):
         name = b"fakedns-payload.invalid"
         payload = b"fakedns-payload-tcp-" + b"a" * 32

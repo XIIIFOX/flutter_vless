@@ -597,6 +597,58 @@ final class TunnelDNSPolicyTests: XCTestCase {
         }
     }
 
+    func testSharedStaticDnsAliasesPreserveCallerPolicyWithoutPhysicalLookup() throws {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        while !FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/dns-static-aliases.json").path) {
+            let parent = root.deletingLastPathComponent()
+            guard parent.path != root.path else { throw NSError(domain: "MissingFixture", code: 1) }
+            root = parent
+        }
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/dns-static-aliases.json"))) as? [[String: Any]])
+        XCTAssertEqual(cases.count, 4)
+        for item in cases {
+            let source = try XCTUnwrap(item["config"] as? [String: Any])
+            let name = try XCTUnwrap(item["name"] as? String)
+            let before = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            var output = source
+            let result = TunnelDNSPolicy.apply(to: &output, managedInboundTag: "static-alias-test", resolveIPv4: { _ in
+                XCTFail("Static caller DNS/numeric transport must not use physical lookup"); return nil
+            })
+            XCTAssertNotNil(result, name)
+            XCTAssertEqual(output["dns"] as? NSDictionary, source["dns"] as? NSDictionary, name)
+            XCTAssertEqual(output["custom"] as? NSDictionary, source["custom"] as? NSDictionary, name)
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), before)
+        }
+    }
+
+    func testStaticDnsAliasCyclesDepthAndAmbiguousValuesRefuseBeforeLookup() throws {
+        var tooDeep: [String: Any] = ["full:doh.example": "hop1.example"]
+        for index in 1...5 { tooDeep["full:hop\(index).example"] = "hop\(index + 1).example" }
+        tooDeep["full:hop6.example"] = "192.0.2.53"
+        for hosts: [String: Any] in [
+            ["full:doh.example": "missing.example"],
+            ["full:doh.example": "#0", "full:#0": "192.0.2.53"],
+            ["full:doh.example": "", "full:": "192.0.2.53"],
+            ["full:doh.example": "a\u{0301}.example", "full:á.example": "192.0.2.53"],
+            ["full:doh.example": "ΟΣ.example", "full:ος.example": "192.0.2.53"],
+            ["full:doh.example": "alias.example", "alias.example": "doh.example"],
+            ["full:doh.example": "alias.example.", "alias.example": "192.0.2.53"],
+            ["full:doh.example": "alias.example", "full:alias.example": true],
+            ["full:doh.example": "alias.example", "full:alias.example": ["192.0.2.53", "unresolved.example"]],
+            ["full:doh.example": "alias.example", "full:alias.example": "192.0.2.53", "alias.example": "unresolved.example"],
+            tooDeep
+        ] {
+            let source: [String: Any] = ["dns": ["hosts": hosts, "servers": ["https://doh.example/dns-query"]],
+                "outbounds": [["tag": "proxy", "protocol": "http", "settings": ["address": "endpoint.invalid", "port": 443]]]]
+            let before = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            var output = source
+            XCTAssertNil(TunnelDNSPolicy.apply(to: &output, managedInboundTag: "tun", resolveIPv4: { _ in
+                XCTFail("Unproven static bootstrap must reject before physical lookup"); return nil
+            }))
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys]), before)
+        }
+    }
+
     func testMappedDoHRejectsNonliteralFullPrefixBeforeBootstrap() throws {
         let badHosts: [[String: Any]] = [
             ["FULL:doh.example": "192.0.2.53"], ["Full:doh.example": "192.0.2.53"],

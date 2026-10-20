@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Add unpublished CI-only Android runtime previews with four freshly compiled ABIs, exact AAR/source verification and 16 KiB ELF checks. Qualify a signed development example APK and verify all three original full JSON profiles with real browser traffic, domain split routing in both directions and Stop recovery in an owned Android emulator. Keep published runtime pins unchanged.
+
 * Add an unpublished CI-only iOS SDK preview with source, archive and ABI checks. Verify its signed example on the physical iPhone with all three original full JSON profiles, matching browser proxy exits, Stop and ordinary internet recovery.
 
 * Close dial-owned XHTTP HTTP/3 UDP sockets before joining their QUIC transport, including immediate dial failures and later connection termination. Include the guarded fix in source builds; published binary pins remain unchanged.

@@ -384,3 +384,46 @@ regression and Stop recovery. They do not establish fresh TCP connections,
 new split-routing/options coverage, physical HTTP/3 negotiation or its
 same-process resource lifetime. Private evidence remains in ignored
 `h3-lifetime/iphone-original-new-sdk-01`, `-02` and `-03` artifacts.
+
+## Unpublished Android runtime regression, 2026-10-20
+
+The owned arm64 Android emulator runs signed example `1.1.7+117` with the
+unpublished runtime from
+[Android preview run 39409885444](https://github.com/XIIIFOX/flutter_vless/actions/runs/39409885444).
+The actual running Core executable matches the checked APK payload in every
+session. Published runtime pins remain unchanged, and the Mac VPN stays enabled.
+
+All three original full JSON profiles are entered through the example editor
+and checked for semantic equality. Both tfox.dev/ip and 2ip.ru (redirecting to
+2ip.io) load in separate cold browser processes for each connected profile:
+
+| Original profile | IP shown by both sites | Observed country |
+| --- | --- | --- |
+| 1 | 103.75.118.225 | Japan |
+| 2 | 91.224.75.190 | Poland |
+| 3 | 194.104.94.31 | Sweden |
+
+Each single Connect is followed by actual UI Disconnect and independent
+service, capture and Core/HEV absence. Ordinary OFF traffic returns to
+82.40.63.24 through the unchanged host VPN. That guest baseline is not the
+physical ISP address. Automatic reconnect stays off; required kill switch is
+retained, and system Always-on/lockdown remains inactive.
+
+The first original then passes two additional routing sessions using the actual
+example rules editor. With tfox.dev bypassed, tfox shows 82.40.63.24 and 2ip
+shows 103.75.118.225. With both 2ip.ru and 2ip.io bypassed, the two sites show
+the reverse split. Full editor readback permits only the expected owned rule
+and sniffing changes and retains the source profile. Both sessions explicitly
+stop and reach native OFF within their bounded active windows.
+
+A prior incomplete attempt left Android notification consent pending. The
+successful run completes the actual system request before Connect; no product
+or Core patch was required for that test-flow issue. Private evidence stays in
+ignored `h3-lifetime/android-runtime-preview/emulator-03` artifacts. These
+checks qualify ordinary VLESS/Reality traffic and domain routing on one arm64
+emulator. They do not qualify every ABI, additional options, fresh TCP/TLS
+connections, cache bypass or genuine HTTP/3 negotiation/resource lifetime.
+Final native Stop is acknowledged, both ordinary-network pages load again,
+and task-owned emulator, driver clients and VM forwarding are stopped. Temporary
+private input copies are removed; shared ADB and unrelated processes are preserved.
+Host DNS, proxy, route and VPN snapshots remain byte-identical.

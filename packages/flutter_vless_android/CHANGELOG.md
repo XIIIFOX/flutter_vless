@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Add a build-only CI preview that rebuilds all four ordinary Core ABIs and verifies their exact AAR bytes, source provenance, unchanged HEV/geodata and 16 KiB alignment. Qualify the development example APK, its exact three-architecture payloads and all three original full JSON profiles with real Android browser traffic, domain split routing in both directions and Stop recovery. Keep published runtime pins unchanged; physical HTTP/3 acceptance remains separate.
+
 * Include XHTTP HTTP/3 dial cleanup in source-built Android runtimes and previews, with patch-input and copied-source checks. Published runtime artifacts remain unchanged.
 
 * Preserve logical endpoint names behind caller proxy chains in explicit proxy DNS mode, including effective XHTTP download chains. Keep physical endpoint bootstrap and WireGuard peer lookup; add native regressions and an exact-output Core traffic gate.

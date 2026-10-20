@@ -297,6 +297,7 @@ class PreservationRunnerGuards(unittest.TestCase):
             with mock.patch.object(runner, 'EVIDENCE', evidence), \
                     mock.patch.object(runner.sys, 'argv', ['runner', '--run-runtime']), \
                     mock.patch.object(runner.platform, 'system', return_value='Linux'), \
+                    mock.patch.object(runner, 'os', SimpleNamespace(name='posix', environ=os.environ, sep=os.sep)), \
                     mock.patch.object(runner.common, 'runtime_authorized', return_value=True), \
                     mock.patch.object(runner.common, 'MANIFEST', manifest), \
                     mock.patch.object(runner, 'source_snapshot', return_value={'synthetic': 'hash'}), \

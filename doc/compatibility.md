@@ -195,13 +195,13 @@ run passes. That timeout remains unexplained. The third profile's displayed
 IP geolocation differs from its imported country label; profile labels are not
 used as evidence of exit location.
 
-A bounded recovery attempt stops before worker-loss injection because its
+An earlier bounded recovery attempt stops before worker-loss injection because its
 test-harness confirmation deadline expires. Native Stop succeeds and prior
 options are restored. Across these physical sessions, cross-process clock
 readings do not establish elapsed time from guard activation or qualify the
 driver's arm-relative deadlines. The independent guard retains its own local
 clock; page captures, native Stop acknowledgements, provider exit and option
-restoration are separate evidence. No fault is injected in the recovery attempt,
+restoration are separate evidence. No fault is injected in that recovery attempt,
 so it provides no new physical-device qualification for recovery, retry limits
 or kill-switch behavior.
 
@@ -218,6 +218,26 @@ an actual failed call still consumes it. Both providers' extracted methods pass
 the same sleep, drain, admission-boundary and exhaustion controls against inert
 workers. The explicit recovery pause is retained when drain cannot finish.
 Physical sleep/wake and retry-exhaustion acceptance remain separate.
+
+The signed iPhone example rebuilt from `28b8412` also passes one acknowledged
+Core-worker-loss case. The natural watchdog restarts Core and HEV inside the
+same concrete NetworkExtension process, with ordered failure, restart, healthy
+and forwarding-restored stages and no new tunnel start. A separate cold Safari
+session then loads `tfox.dev/ip/` through the same expected proxy exit. Native
+Stop is acknowledged, and provider exit is confirmed separately; the whole prior
+options are restored, diagnostics and On Demand are off, and ordinary Safari
+Internet access is confirmed. An earlier, shorter observation window saw only the worker restart
+before Stop; it remains inconclusive for full recovery. Neither result qualifies
+physical sleep/wake, retry exhaustion or universal kill-switch behavior.
+
+[The exact `28b8412` Actions run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39350945905)
+passes all four selected jobs. Both extracted Apple providers pass 13 admission
+controls each; the parent-clock controls pass 18 tests on each of Linux, macOS
+and Windows. Apple SwiftPM suites pass 176 iOS and 190 macOS tests, with one
+optional public encrypted-bootstrap check skipped per platform. Both unpublished
+SDK runtime gates and the shipped macOS HEV packet gate pass remotely, alongside
+the example and standalone plugin builds. iOS HEV simulator coverage remains
+compile/link only; these remote fixtures do not qualify the local Mac system VPN.
 
 Full JSON import, startup and delay normalization retain explicit `null`, empty
 objects/arrays and null array elements. In particular, an explicit `fakedns: []`

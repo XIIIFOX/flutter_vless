@@ -174,6 +174,33 @@ only. The fallback retains normal TLS validation and refuses redirects. The
 physical iPhone check at `78a68c7` used system lookup successfully; it does not
 qualify the encrypted fallback branch or IPv6-only endpoint bootstrap.
 
+The physical iPhone preview at `ae68d75` also checks A and AAAA requests from
+an actual app UDP socket to this virtual resolver with caller `UseIPv4` and no
+explicit DNS servers. The A reply contains the expected public address; AAAA
+returns successful NODATA. A cold Safari page then displays the proxy exit.
+The [development-only probe](../example/test_driver/acceptance_dns_probe.dart)
+changes no resolver configuration. Diagnostics enabled before startup return
+organic provider stages within the requested bounds; disabling them is confirmed
+through the native API and persisted options. The project retains its released
+SDK; this device product uses a separately built, unpublished preview. These
+checks do not establish the cause of earlier intermittent blank pages or a
+startup timeout, or qualify combined FakeDNS, broader IPv6 or recovery behavior.
+
+The same physical-device sequence checks all three supplied VLESS/Reality
+profiles in cold Safari sessions. Two domain-rule variants send `tfox.dev`
+direct and `2ip.io` through the proxy, then reverse those choices; the pages
+display the corresponding distinct direct/proxy addresses. The first reverse
+variant attempt times out before browser acceptance, while the later diagnostic
+run passes. That timeout remains unexplained. The third profile's displayed
+IP geolocation differs from its imported country label; profile labels are not
+used as evidence of exit location.
+
+A bounded recovery attempt stops before worker-loss injection because its
+test-harness confirmation deadline expires. Native Stop succeeds and prior
+options are restored. Its cross-process clock readings do not establish elapsed
+time from guard activation. No fault is injected, so this attempt provides no new
+physical-device qualification for recovery, retry limits or kill-switch behavior.
+
 Full JSON import, startup and delay normalization retain explicit `null`, empty
 objects/arrays and null array elements. In particular, an explicit `fakedns: []`
 must reach Core as an empty engine rather than becoming an absent engine with

@@ -239,6 +239,10 @@ jobs:
         run: |
           python3 tool/build_native_routing_cli.py --output build/android-native-routing-check
           build/android-native-routing-check/xray native-routing check --config "$RUNNER_TEMP/android-routing-pair/config.json" --spec "$RUNNER_TEMP/android-routing-pair/spec.json" > build/android-native-routing-check/android-pair-check.log
+      - name: Test native Android logical proxy chains with exact Core input
+        run: |
+          python3 tool/test_android_logical_chain_runtime.py --self-test
+          python3 tool/test_android_logical_chain_runtime.py --run-runtime
       - name: Test physical DNS capture verification and fragmented fixture requests
         run: |
           python3 tool/test_verify_android_dns_capture.py
@@ -264,6 +268,9 @@ jobs:
           path: |
             build/android-native-routing-check/*.log
             build/android-native-routing-check/result.json
+            build/android_logical_chain_runtime/*.log
+            build/android_logical_chain_runtime/result.json
+            build/android_logical_chain_runtime/*/metadata.json
           if-no-files-found: ignore
           retention-days: 7
 

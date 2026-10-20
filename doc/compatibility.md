@@ -1749,10 +1749,23 @@ and [Windows acceptance](https://github.com/XIIIFOX/flutter_vless/actions/runs/3
 use production-identical `74eacfb` sources. Physical-device acceptance of this
 increment, active ECH and XHTTP over TLS/HTTP3 remain open.
 
-Two source-audit candidates remain separate from that change: Apple validates
-a loopback handler's dormant stream chain, and Android's explicit proxy DNS mode
-bootstraps chained logical destinations as physical endpoints. Neither has a
-completed causal runtime regression yet; they remain work under item 3.
+The next chain increment reproduced both source-audit candidates before fixing
+them. Apple graph admission now ignores only a loopback handler's own socket
+edges: pinned Core's loopback redispatches without using its dialer, while its
+sender still builds normally. A shared six-profile corpus retains the dormant
+sender and caller routing exactly; three positive cases and three active
+missing-target/cycle controls cover both Apple preparers and Windows. Each Apple
+preparer failed two new methods before the fix and passes all three afterward.
+Android's explicit proxy DNS mode now preserves chained endpoint names and uses
+`AsIs` for their effective socket policy. Physical outer endpoints keep bootstrap
+and `ForceIP`; WireGuard retains its separate peer lookup. Immediate XHTTP
+downloads inherit the parent's chain only when Core's `penetrate` applies.
+Three causal Android failures and one physical/WireGuard control become green;
+all 55 affected native tests pass. Controlled Core wire acceptance is pending:
+the existing chained XHTTP payload now redispatches through caller loopback, and
+a separate Linux CI case consumes exact Android prepare/manager output for two
+nested SOCKS handshakes, a fresh payload and zero OS resolver calls. These are
+controlled chain checks, not a full protocol, TUN or physical-device qualification.
 
 For configuration-only increments, the manual `ci.yml` scope `native-config`
 selects four jobs: the existing complete Core pipeline on Linux/macOS/Windows

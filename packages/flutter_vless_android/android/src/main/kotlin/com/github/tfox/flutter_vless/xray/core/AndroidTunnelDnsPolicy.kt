@@ -124,6 +124,11 @@ internal object AndroidTunnelDnsPolicy {
             val settings = objectValue(outbound, "settings", required = true)!!
             canonicalize(settings, "address", "endpoint", "vnext", "servers", "peers", "port", "id", "encryption", "flow", "level")
             val proto = protocol(outbound)
+            val stream = objectValue(outbound, "streamSettings") ?: JSONObject()
+            // internet.DialSystem redirects a chained destination to its next
+            // handler. It remains a logical address, not a physical DNS target.
+            // WireGuard separately performs LookupIP for its peer endpoints.
+            val chained = proto != "wireguard" && streamIsChained(stream)
             val entries = when {
                 proto == "wireguard" -> objects(settings, "peers", required = true)
                 settings.has("address") && !settings.isNull("address") -> listOf(settings)
@@ -140,10 +145,10 @@ internal object AndroidTunnelDnsPolicy {
                         .also { entry.put("address", it) }
                 } ?: endpointHost(optionalString(entry, "endpoint"))
                 require(address != null) { "Proxy outbound has no endpoint address" }
-                pinEndpoint(address, typedAddress = proto != "wireguard")
+                if (!chained) pinEndpoint(address, typedAddress = proto != "wireguard")
             }
-            val stream = objectValue(outbound, "streamSettings") ?: JSONObject()
-            prepareStream(stream, { pinEndpoint(it, typedAddress = true) }, environment = environment, changes = changes)
+            prepareStream(stream, { pinEndpoint(it, typedAddress = true) }, effectiveChain = chained,
+                environment = environment, changes = changes)
             outbound.put("streamSettings", stream)
         }
         val routing = objectValue(config, "routing") ?: JSONObject()
@@ -370,9 +375,19 @@ internal object AndroidTunnelDnsPolicy {
         return FakePoolNetwork(address, prefix)
     }
 
+    private fun streamIsChained(stream: JSONObject): Boolean {
+        canonicalize(stream, "sockopt")
+        if (stream.isNull("sockopt")) return false
+        val options = objectValue(stream, "sockopt") ?: return false
+        canonicalize(options, "dialerProxy")
+        return !options.isNull("dialerProxy") && !optionalString(options, "dialerProxy").isNullOrEmpty()
+    }
+
     private fun prepareStream(stream: JSONObject, pinEndpoint: (String) -> Unit, independentDownload: Boolean = false,
-                              inheritedSocketPolicy: Boolean = false, environment: (String) -> String?, changes: PreparationChanges?) {
+                              inheritedSocketPolicy: Boolean = false, effectiveChain: Boolean? = null,
+                              environment: (String) -> String?, changes: PreparationChanges?) {
         canonicalize(stream, "sockopt", "address", "network", "method", "xhttpSettings", "splithttpSettings")
+        val chained = effectiveChain ?: streamIsChained(stream)
         // Core treats an absent or null SocketSettings as nil. The independent
         // download keeps its own policy; only Core's explicit penetrate flag
         // makes it inherit the parent at dial time.
@@ -383,7 +398,7 @@ internal object AndroidTunnelDnsPolicy {
             require(addressPortStrategy.isNullOrEmpty() || addressPortStrategy.equals("none", true)) {
                 "SRV/TXT endpoint overrides cannot use the protected system DNS policy"
             }
-            sockopt.put("domainStrategy", "ForceIP")
+            sockopt.put("domainStrategy", if (chained) "AsIs" else "ForceIP")
             stream.put("sockopt", sockopt)
             sockopt.opt("penetrate") == true
         }
@@ -401,7 +416,7 @@ internal object AndroidTunnelDnsPolicy {
             optionalString(stream, "address")?.let { raw ->
                 val address = XrayPortSpec.bindAddressEnvironment(raw, environment) { changes?.record(PreparationChange.ADDRESS_ENVIRONMENT_BOUND) }
                 stream.put("address", address)
-                pinEndpoint(address)
+                if (!chained) pinEndpoint(address)
             }
         // getHTTPClient consumes the immediate download's own address and TLS,
         // with either its own or inherited socket policy. It never recursively
@@ -419,10 +434,12 @@ internal object AndroidTunnelDnsPolicy {
             val extra = nullableObject(transport, "extra") ?: return
             canonicalize(extra, "downloadSettings")
             nullableObject(extra, "downloadSettings")?.let {
-                prepareStream(it, pinEndpoint, independentDownload = true, inheritedSocketPolicy = penetrating, environment = environment, changes = changes)
+                prepareStream(it, pinEndpoint, independentDownload = true, inheritedSocketPolicy = penetrating,
+                    effectiveChain = if (penetrating) chained else null, environment = environment, changes = changes)
             }
         } else nullableObject(transport, "downloadSettings")?.let {
-            prepareStream(it, pinEndpoint, independentDownload = true, inheritedSocketPolicy = penetrating, environment = environment, changes = changes)
+            prepareStream(it, pinEndpoint, independentDownload = true, inheritedSocketPolicy = penetrating,
+                    effectiveChain = if (penetrating) chained else null, environment = environment, changes = changes)
         }
     }
 

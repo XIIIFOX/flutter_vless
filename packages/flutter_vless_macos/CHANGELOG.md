@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Exclude loopback-owned dormant socket edges from chain validation while retaining active chain errors and sender settings. Add shared preparation and controlled XHTTP redispatch regressions.
+
 * Admit inactive TLS ECH settings in ordinary and immediate XHTTP download streams without rewriting them. Retain the active TLS fetch restriction and native bootstrap protection.
 
 * Close Classic DNS UDP channels and cleanup timers during Core shutdown, including concurrent requests and late EDNS retries.

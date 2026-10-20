@@ -5,6 +5,85 @@ import Darwin
 final class TunnelDNSPolicyTests: XCTestCase {
     private static let credentials = try! LocalProxyCredentials(username: "test-session", password: "test-session-password")
 
+    private func loopbackChainFixtures() throws -> [[String: Any]] {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/loopback-chains.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let fixtures = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/loopback-chains.json"))) as? [[String: Any]])
+        XCTAssertEqual(fixtures.count, 6)
+        return fixtures
+    }
+
+    func testDormantLoopbackChainsDoNotBecomeSocketDependencies() throws {
+        let fixtures = try loopbackChainFixtures().filter { $0["expectedNativeAccepted"] as? Bool == true }
+        XCTAssertEqual(fixtures.count, 3)
+        for fixture in fixtures {
+            let name = try XCTUnwrap(fixture["name"] as? String)
+            let source = try XCTUnwrap(fixture["config"] as? [String: Any])
+            let before = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            var allocations = 0
+            let prepared = TunnelXrayConfigPreparer.prepare(jsonData: before, credentials: Self.credentials,
+                tcpPortAvailable: { _ in allocations += 1; return true },
+                resolveIPv4: { _ in XCTFail("Numeric chain fixture must not resolve"); return nil })
+            XCTAssertNotNil(prepared, name)
+            if let prepared {
+                let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+                let originalOutbounds = try XCTUnwrap(source["outbounds"] as? [[String: Any]])
+                let actualOutbounds = try XCTUnwrap(output["outbounds"] as? [[String: Any]])
+                XCTAssertEqual(actualOutbounds.prefix(originalOutbounds.count).compactMap { $0["tag"] as? String },
+                               originalOutbounds.compactMap { $0["tag"] as? String })
+                let originalLoop = try XCTUnwrap(originalOutbounds.first { ($0["tag"] as? String) == "caller-loop" })
+                let actualLoop = try XCTUnwrap(actualOutbounds.first { ($0["tag"] as? String) == "caller-loop" })
+                XCTAssertEqual(actualLoop as NSDictionary, originalLoop as NSDictionary, name)
+                let rules = try XCTUnwrap((output["routing"] as? [String: Any])?["rules"] as? [[String: Any]])
+                let callerRules = try XCTUnwrap((source["routing"] as? [String: Any])?["rules"] as? [[String: Any]])
+                XCTAssertEqual(Array(rules.suffix(callerRules.count)) as NSArray, callerRules as NSArray, name)
+                let managed = try XCTUnwrap((output["inbounds"] as? [[String: Any]])?.first)
+                let settings = try XCTUnwrap(managed["settings"] as? [String: Any])
+                XCTAssertEqual(settings["auth"] as? String, "password")
+                XCTAssertEqual(settings["udp"] as? Bool, true)
+                XCTAssertGreaterThan(allocations, 0)
+            }
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), before)
+        }
+    }
+
+    func testActiveLoopbackReferencesStillRequireTargetsAndAcyclicSocketChains() throws {
+        let fixtures = try loopbackChainFixtures().filter { $0["expectedNativeAccepted"] as? Bool == false }
+        XCTAssertEqual(fixtures.count, 3)
+        for fixture in fixtures {
+            let source = try XCTUnwrap(fixture["config"] as? [String: Any])
+            let before = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            XCTAssertNil(TunnelXrayConfigPreparer.prepare(jsonData: before, credentials: Self.credentials,
+                tcpPortAvailable: { _ in true }, resolveIPv4: { _ in XCTFail("Invalid chain must not resolve"); return nil }), fixture["name"] as? String ?? "")
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), before)
+        }
+    }
+
+    func testDormantLoopbackChainExclusionKeepsSenderPrivacyConstruction() throws {
+        let fixture = try XCTUnwrap(try loopbackChainFixtures().first { ($0["name"] as? String) == "unused_loop_missing" })
+        var source = try XCTUnwrap(fixture["config"] as? [String: Any])
+        var outbounds = try XCTUnwrap(source["outbounds"] as? [[String: Any]])
+        let index = try XCTUnwrap(outbounds.firstIndex { ($0["tag"] as? String) == "caller-loop" })
+        var stream = try XCTUnwrap(outbounds[index]["streamSettings"] as? [String: Any])
+        var tls = try XCTUnwrap(stream["tlsSettings"] as? [String: Any])
+        tls["masterKeyLog"] = "private-sender-key-canary"
+        stream["tlsSettings"] = tls; outbounds[index]["streamSettings"] = stream; source["outbounds"] = outbounds
+        let before = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+        let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: before, credentials: Self.credentials,
+            tcpPortAvailable: { _ in true }, resolveIPv4: { _ in XCTFail("Numeric sender must not resolve"); return nil }))
+        let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+        let loop = try XCTUnwrap((output["outbounds"] as? [[String: Any]])?.first { ($0["tag"] as? String) == "caller-loop" })
+        let actual = try XCTUnwrap(loop["streamSettings"] as? [String: Any])
+        tls["masterKeyLog"] = ""
+        XCTAssertEqual(actual["tlsSettings"] as? NSDictionary, tls as NSDictionary)
+        XCTAssertEqual(actual["sockopt"] as? NSDictionary, stream["sockopt"] as? NSDictionary)
+        XCTAssertEqual(actual["security"] as? String, "tls")
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), before)
+    }
+
     private func inactiveTLSFixtures() throws -> [[String: Any]] {
         var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         for _ in 0..<10 {

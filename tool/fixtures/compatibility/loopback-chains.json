@@ -1,0 +1,451 @@
+[
+  {
+    "name": "unused_loop_missing",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "127.0.0.1",
+                "port": 19090
+              }
+            ]
+          }
+        },
+        {
+          "tag": "caller-loop",
+          "protocol": "loopback",
+          "settings": {
+            "inboundTag": "caller-loop-input"
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "loopback-unused.invalid",
+              "masterKeyLog": ""
+            },
+            "sockopt": {
+              "dialerProxy": "dormant-missing",
+              "tcpKeepAliveIdle": 7
+            }
+          }
+        },
+        {
+          "tag": "carrier",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "127.0.0.1",
+                "port": 19091
+              }
+            ]
+          }
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-loop-input"
+            ],
+            "outboundTag": "carrier"
+          }
+        ]
+      }
+    },
+    "expectedNativeAccepted": true
+  },
+  {
+    "name": "referenced_loop_missing",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "127.0.0.1",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "sockopt": {
+              "dialerProxy": "caller-loop"
+            }
+          }
+        },
+        {
+          "tag": "caller-loop",
+          "protocol": "loopback",
+          "settings": {
+            "inboundTag": "caller-loop-input"
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "loopback-unused.invalid",
+              "masterKeyLog": ""
+            },
+            "sockopt": {
+              "dialerProxy": "dormant-missing",
+              "tcpKeepAliveIdle": 7
+            }
+          }
+        },
+        {
+          "tag": "carrier",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "127.0.0.1",
+                "port": 19091
+              }
+            ]
+          }
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-loop-input"
+            ],
+            "outboundTag": "carrier"
+          }
+        ]
+      }
+    },
+    "expectedNativeAccepted": true
+  },
+  {
+    "name": "referenced_loop_apparent_cycle",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "127.0.0.1",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "sockopt": {
+              "dialerProxy": "caller-loop"
+            }
+          }
+        },
+        {
+          "tag": "caller-loop",
+          "protocol": "loopback",
+          "settings": {
+            "inboundTag": "caller-loop-input"
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "loopback-unused.invalid",
+              "masterKeyLog": ""
+            },
+            "sockopt": {
+              "dialerProxy": "proxy",
+              "tcpKeepAliveIdle": 7
+            }
+          }
+        },
+        {
+          "tag": "carrier",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "127.0.0.1",
+                "port": 19091
+              }
+            ]
+          }
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-loop-input"
+            ],
+            "outboundTag": "carrier"
+          }
+        ]
+      }
+    },
+    "expectedNativeAccepted": true
+  },
+  {
+    "name": "active_primary_missing",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "127.0.0.1",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "sockopt": {
+              "dialerProxy": "active-missing"
+            }
+          }
+        },
+        {
+          "tag": "caller-loop",
+          "protocol": "loopback",
+          "settings": {
+            "inboundTag": "caller-loop-input"
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "loopback-unused.invalid",
+              "masterKeyLog": ""
+            },
+            "sockopt": {
+              "dialerProxy": "dormant-missing",
+              "tcpKeepAliveIdle": 7
+            }
+          }
+        },
+        {
+          "tag": "carrier",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "127.0.0.1",
+                "port": 19091
+              }
+            ]
+          }
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-loop-input"
+            ],
+            "outboundTag": "carrier"
+          }
+        ]
+      }
+    },
+    "expectedNativeAccepted": false
+  },
+  {
+    "name": "active_socket_cycle",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "127.0.0.1",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "sockopt": {
+              "dialerProxy": "carrier"
+            }
+          }
+        },
+        {
+          "tag": "caller-loop",
+          "protocol": "loopback",
+          "settings": {
+            "inboundTag": "caller-loop-input"
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "security": "tls",
+            "tlsSettings": {
+              "serverName": "loopback-unused.invalid",
+              "masterKeyLog": ""
+            },
+            "sockopt": {
+              "dialerProxy": "dormant-missing",
+              "tcpKeepAliveIdle": 7
+            }
+          }
+        },
+        {
+          "tag": "carrier",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "127.0.0.1",
+                "port": 19091
+              }
+            ]
+          },
+          "streamSettings": {
+            "sockopt": {
+              "dialerProxy": "proxy"
+            }
+          }
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-loop-input"
+            ],
+            "outboundTag": "carrier"
+          }
+        ]
+      }
+    },
+    "expectedNativeAccepted": false
+  },
+  {
+    "name": "missing_referenced_loop",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [],
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "127.0.0.1",
+                "port": 19090
+              }
+            ]
+          },
+          "streamSettings": {
+            "sockopt": {
+              "dialerProxy": "caller-loop"
+            }
+          }
+        },
+        {
+          "tag": "carrier",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "127.0.0.1",
+                "port": 19091
+              }
+            ]
+          }
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-loop-input"
+            ],
+            "outboundTag": "carrier"
+          }
+        ]
+      }
+    },
+    "expectedNativeAccepted": false
+  }
+]

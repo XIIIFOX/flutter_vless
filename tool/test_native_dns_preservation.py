@@ -115,6 +115,7 @@ def source_snapshot():
     paths.extend(sorted(CLASSIC_OVERLAY.glob('native_classic_*.go')))
     paths.append(ROOT / 'tool/fixtures/compatibility/protocols.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/inactive-tls.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/loopback-chains.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/full-config.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/traffic-counters.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/fakedns.json')
@@ -170,6 +171,13 @@ def require_inactive_tls_runtime(output, preparers):
     if preparers not in (1, 2) or len(markers) != 3 * preparers or any(markers.count(mode) != preparers
             for mode in ('direct', 'chained', 'independent')):
         raise RuntimeError('Exact dormant ECH transport runtime markers missing or duplicated')
+
+
+def require_loopback_chain_runtime(output, preparers):
+    markers = re.findall(r'^[ \t]+xhttp_runtime_test\.go:\d+: XHTTP_LOOPBACK_CHAIN_PASS\r?$',
+                         output, re.MULTILINE)
+    if preparers not in (1, 2) or len(markers) != preparers:
+        raise RuntimeError('Exact loopback-chain transport runtime markers missing or duplicated')
 
 
 def require_ipv6_dns_runtime(output, preparers):
@@ -330,6 +338,7 @@ def main():
             preparers = 1 + bool(runtime_environment.get('NATIVE_DNS_PREPARER_APPLE'))
             require_transport_data_runtime(output, preparers)
             require_inactive_tls_runtime(output, preparers)
+            require_loopback_chain_runtime(output, preparers)
             require_ipv6_dns_runtime(output, preparers)
             require_ipv4_dns_runtime(output, preparers)
             results[-1]['selected_test_pass'] = True
@@ -338,6 +347,7 @@ def main():
             results[-1]['transport_data_runtime_preparers'] = preparers
             results[-1]['independent_download_runtime_modes_per_preparer'] = 1
             results[-1]['inactive_tls_runtime_modes_per_preparer'] = 3
+            results[-1]['loopback_chain_runtime_modes_per_preparer'] = 1
             results[-1]['ipv6_dns_runtime_modes_per_preparer'] = 4
             results[-1]['ipv4_dns_lifetime_modes_per_preparer'] = 2
         if source_snapshot() != report['source_sha256']:

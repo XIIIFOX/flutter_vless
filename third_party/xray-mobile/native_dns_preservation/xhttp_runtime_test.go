@@ -317,7 +317,7 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 			}
 			options := map[string]any{"penetrate": !mode.independent, "tcpKeepAliveIdle": 30, "addressPortStrategy": ""}
 			if chained {
-				options["dialerProxy"] = "carrier"
+				options["dialerProxy"] = "caller-loop"
 				options["addressPortStrategy"] = "NoNe"
 			}
 			download := map[string]any{"address": "endpoint.invalid", "port": downloadPort, "network": "xhttp",
@@ -336,11 +336,18 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 				map[string]any{"tag": "direct", "protocol": "freedom"}, map[string]any{"tag": "block", "protocol": "blackhole"}}
 			if chained {
 				outbounds = append(outbounds, map[string]any{"tag": "carrier", "protocol": "socks", "settings": map[string]any{"address": "endpoint.invalid", "port": carrierPort}})
+				outbounds = append(outbounds, map[string]any{"tag": "caller-loop", "protocol": "loopback",
+					"settings":       map[string]any{"inboundTag": "caller-chain-scope"},
+					"streamSettings": map[string]any{"sockopt": map[string]any{"dialerProxy": "dormant-loop-handler"}}})
 			}
 			parentStream := outbounds[0].(map[string]any)["streamSettings"].(map[string]any)
 			parentStream["security"], parentStream["tlsSettings"] = "none", dormantTLS()
 			source := map[string]any{"log": map[string]any{"loglevel": "none"}, "inbounds": []any{}, "outbounds": outbounds,
 				"dns": map[string]any{"hosts": map[string]any{"endpoint.invalid": "127.0.0.2"}, "queryStrategy": "UseIPv4", "servers": []string{"tcp://9.9.9.9"}}}
+			if chained {
+				source["routing"] = map[string]any{"domainStrategy": "AsIs", "rules": []any{map[string]any{
+					"type": "field", "inboundTag": []string{"caller-chain-scope"}, "outboundTag": "carrier"}}}
+			}
 			wantDownload, _ := json.Marshal(download)
 			var prepared []byte
 			var managedPort int
@@ -350,7 +357,7 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 				const variable = "FLUTTER_VLESS_FIXTURE_ENDPOINT"
 				t.Setenv(variable, "endpoint.invalid")
 				control, _ := json.Marshal(source)
-				for _, index := range []int{0, len(outbounds) - 1} {
+				for _, index := range []int{0, len(outbounds) - 2} {
 					outbounds[index].(map[string]any)["settings"].(map[string]any)["address"] = "env:" + variable
 				}
 				download["address"] = "env:" + variable
@@ -406,8 +413,35 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 			} else if !bytes.Equal(wantDownload, got) {
 				t.Fatal("XHTTP preparation rewrote the inherited download stream")
 			}
-			if chained && stream["sockopt"].(map[string]any)["dialerProxy"] != "carrier" {
+			if chained && stream["sockopt"].(map[string]any)["dialerProxy"] != "caller-loop" {
 				t.Fatal("XHTTP parent caller chain changed")
+			}
+			if chained {
+				var loop, carrier map[string]any
+				for _, raw := range effective["outbounds"].([]any) {
+					outbound := raw.(map[string]any)
+					switch outbound["tag"] {
+					case "caller-loop":
+						loop = outbound
+					case "carrier":
+						carrier = outbound
+					}
+				}
+				if loop == nil || carrier == nil || loop["protocol"] != "loopback" ||
+					loop["settings"].(map[string]any)["inboundTag"] != "caller-chain-scope" ||
+					loop["streamSettings"].(map[string]any)["sockopt"].(map[string]any)["dialerProxy"] != "dormant-loop-handler" {
+					t.Fatal("caller loopback or its dormant sender changed")
+				}
+				foundRule := false
+				for _, raw := range effective["routing"].(map[string]any)["rules"].([]any) {
+					rule := raw.(map[string]any)
+					if reflect.DeepEqual(rule["inboundTag"], []any{"caller-chain-scope"}) && rule["outboundTag"] == "carrier" {
+						foundRule = true
+					}
+				}
+				if !foundRule {
+					t.Fatal("caller loopback no longer redispatches to the exact SOCKS carrier")
+				}
 			}
 			// Core's system dialer and XHTTP clients keep process-global state.
 			// The backend and each prepared client need separate processes, so
@@ -463,6 +497,7 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 				t.Logf("XHTTP_TRANSPORT_DATA_MAPS_PASS chained=%t", chained)
 				if chained {
 					t.Log("XHTTP_ENVIRONMENT_FROZEN_PASS")
+					t.Log("XHTTP_LOOPBACK_CHAIN_PASS")
 				}
 			}
 		})

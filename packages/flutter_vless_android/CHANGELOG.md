@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve logical endpoint names behind caller proxy chains in explicit proxy DNS mode, including effective XHTTP download chains. Keep physical endpoint bootstrap and WireGuard peer lookup; add native regressions and an exact-output Core traffic gate.
+
 * Add shared inactive TLS/Reality and XHTTP download regressions through native preparation and runtime normalization, preserving the existing Android admission behavior.
 
 * Include Classic DNS UDP lifecycle cleanup in locally built Core artifacts, retaining caller DNS data and protecting late requests during shutdown.

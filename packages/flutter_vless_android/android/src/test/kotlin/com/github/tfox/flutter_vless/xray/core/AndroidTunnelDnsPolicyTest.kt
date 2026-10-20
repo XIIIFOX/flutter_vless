@@ -451,7 +451,7 @@ class AndroidTunnelDnsPolicyTest {
                         assertEquals(download.get("sockopt").toString(), actualDownload.get("sockopt").toString())
                 } else {
                     val actualChild = actualDownload.getJSONObject("sockopt")
-                    assertEquals("ForceIP", actualChild.getString("domainStrategy"))
+                    assertEquals(if (child === explicit) "AsIs" else "ForceIP", actualChild.getString("domainStrategy"))
                     if (child === explicit) {
                         for (key in listOf("dialerProxy", "interface", "tcpKeepAliveIdle"))
                             assertEquals(explicit.get(key), actualChild.get(key))
@@ -1144,6 +1144,117 @@ class AndroidTunnelDnsPolicyTest {
         }
         // This file-only producer test does not assert that an inactive ECH URL
         // was never fetched by Core; native Build/runtime controls own that proof.
+    }
+
+    private fun logicalChainProfile(stream: JSONObject = JSONObject().put("sockopt",
+        JSONObject().put("dialerProxy", "outer").put("domainStrategy", "AsIs"))): JSONObject = JSONObject("""{
+        "inbounds":[],"api":null,
+        "dns":{"servers":["tcp://192.0.2.53"],"queryStrategy":"UseIPv4","hosts":{"caller.invalid":"192.0.2.9"}},
+        "outbounds":[{"tag":"proxy","protocol":"socks","settings":{"servers":[{"address":"inside-only.invalid","port":1080}]}},
+          {"tag":"outer","protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":19090}]}},
+          {"tag":"direct","protocol":"freedom"}],"routing":{"rules":[]}}
+        """).also { it.getJSONArray("outbounds").getJSONObject(0).put("streamSettings", stream) }
+
+    @Test fun chainedLogicalProxyRemainsUnresolvedThroughRuntimeNormalization() {
+        val source = logicalChainProfile(); val before = source.toString()
+        val prepared = AndroidTunnelDnsPolicy.prepare(before, "proxy", environment = {
+            error("No environment lookup expected")
+        }) { error("A logical chain destination must not reach physical DNS") }
+        val actual = JSONObject(prepared.configJson)
+        assertTrue(prepared.bootstrapHostnames.isEmpty())
+        assertEquals(setOf("127.0.0.1"), prepared.bootstrapAddresses)
+        assertFalse(actual.getJSONObject("dns").getJSONObject("hosts").has("inside-only.invalid"))
+        val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = prepared.configJson, ANDROID_DNS_POLICY = "proxy")
+        val runtime = XrayCoreManager.buildRuntimeConfigJson(profile, File("."),
+            LocalProxyCredentials("chain-user", "synthetic-chain-token"), prepared,
+            tcpAvailable = { true }, environment = { error("No listener environment lookup expected") })
+        for (json in listOf(actual, runtime)) {
+            val proxy = json.getJSONArray("outbounds").getJSONObject(0)
+            assertEquals("inside-only.invalid", proxy.getJSONObject("settings").getJSONArray("servers").getJSONObject(0).getString("address"))
+            assertEquals("outer", proxy.getJSONObject("streamSettings").getJSONObject("sockopt").getString("dialerProxy"))
+            assertEquals("AsIs", proxy.getJSONObject("streamSettings").getJSONObject("sockopt").getString("domainStrategy"))
+            assertEquals("ForceIP", json.getJSONArray("outbounds").getJSONObject(1).getJSONObject("streamSettings")
+                .getJSONObject("sockopt").getString("domainStrategy"))
+        }
+        assertEquals(prepared.configJson, profile.V2RAY_FULL_JSON_CONFIG)
+        assertEquals(before, source.toString())
+    }
+
+    @Test fun xhttpDownloadsUseEffectiveInheritedOrIndependentChainBeforePhysicalBootstrap() {
+        for (parentChain in listOf(false, true)) for (penetrate in listOf(false, true)) for (childChain in listOf(false, true)) {
+            val options = JSONObject().put("penetrate", penetrate).put("tcpKeepAliveIdle", 30)
+            if (parentChain) options.put("dialerProxy", "outer")
+            val childOptions = JSONObject().put("domainStrategy", "UseIPv6").put("tcpKeepAliveIdle", 7)
+            if (childChain) childOptions.put("dialerProxy", if (penetrate) "dormant-missing-child" else "outer")
+            val nested = JSONObject().put("address", "unused-grandchild.invalid").put("port", 9443).put("network", "tcp")
+                .put("sockopt", JSONObject().put("dialerProxy", "missing-grandchild"))
+            val download = JSONObject().put("address", "download-only.invalid").put("port", 8443).put("network", "xhttp")
+                .put("sockopt", childOptions).put("security", "tls")
+                .put("tlsSettings", JSONObject().put("serverName", "download-tls.invalid"))
+                .put("xhttpSettings", JSONObject().put("path", "/download").put("downloadSettings", nested))
+            val transportKey = if (childChain) "splithttpSettings" else "xhttpSettings"
+            val stream = JSONObject().put("network", "xhttp").put("sockopt", options)
+                .put(transportKey, JSONObject().put("extra", JSONObject().put("downloadSettings", download)))
+            val source = logicalChainProfile(stream); val before = source.toString(); val resolved = mutableListOf<String>()
+            val prepared = AndroidTunnelDnsPolicy.prepare(before, "proxy", environment = { error("No env expected") }) { name ->
+                resolved += name
+                listOf(when (name) {
+                    "inside-only.invalid" -> "192.0.2.7"
+                    "download-only.invalid" -> "192.0.2.8"
+                    else -> error("Unused destination reached physical DNS")
+                })
+            }
+            val expectedNames = buildList { if (!parentChain) add("inside-only.invalid"); if (!(if (penetrate) parentChain else childChain)) add("download-only.invalid") }
+            assertEquals("parent=$parentChain/penetrate=$penetrate/child=$childChain", expectedNames, resolved)
+            assertEquals(expectedNames.toSet(), prepared.bootstrapHostnames)
+            val actual = JSONObject(prepared.configJson).getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
+            assertEquals(if (parentChain) "AsIs" else "ForceIP", actual.getJSONObject("sockopt").getString("domainStrategy"))
+            val actualChild = actual.getJSONObject(transportKey).getJSONObject("extra").getJSONObject("downloadSettings")
+            if (penetrate) assertEquals(childOptions.toString(), actualChild.getJSONObject("sockopt").toString())
+            else assertEquals(if (childChain) "AsIs" else "ForceIP", actualChild.getJSONObject("sockopt").getString("domainStrategy"))
+            assertEquals(nested.toString(), actualChild.getJSONObject("xhttpSettings").getJSONObject("downloadSettings").toString())
+            assertEquals(download.getJSONObject("tlsSettings").toString(), actualChild.getJSONObject("tlsSettings").toString())
+            assertEquals(before, source.toString())
+        }
+    }
+
+    @Test fun unchainedAndWireguardEndpointsRetainPhysicalBootstrapAndRefusal() {
+        for (wireguard in listOf(false, true)) {
+            val source = logicalChainProfile(if (wireguard) JSONObject().put("sockopt", JSONObject().put("dialerProxy", "outer")) else JSONObject())
+            if (wireguard) source.getJSONArray("outbounds").getJSONObject(0).put("protocol", "wireguard")
+                .put("settings", JSONObject().put("secretKey", "synthetic").put("peers", JSONArray().put(JSONObject()
+                    .put("endpoint", "inside-only.invalid:51820").put("publicKey", "synthetic"))))
+            val resolved = mutableListOf<String>(); val before = source.toString()
+            val prepared = AndroidTunnelDnsPolicy.prepare(before, "proxy") { resolved += it; listOf("192.0.2.7") }
+            assertEquals(listOf("inside-only.invalid"), resolved)
+            assertEquals(setOf("192.0.2.7", "127.0.0.1"), prepared.bootstrapAddresses)
+            assertEquals("ForceIP", JSONObject(prepared.configJson).getJSONArray("outbounds").getJSONObject(0)
+                .getJSONObject("streamSettings").getJSONObject("sockopt").getString("domainStrategy"))
+            assertThrows(IllegalArgumentException::class.java) { AndroidTunnelDnsPolicy.prepare(before, "proxy") { emptyList() } }
+            assertEquals(before, source.toString())
+        }
+    }
+
+    @Test fun logicalChainFixLeavesConfigPolicyAndInactiveDownloadsToCallerCore() {
+        val dormant = JSONObject().put("address", "unused-download.invalid").put("network", "tcp")
+            .put("sockopt", JSONObject().put("dialerProxy", "missing-dormant"))
+        for (active in listOf(false, true)) for (chain in listOf("missing-active", "proxy")) {
+            val stream = JSONObject().put("network", if (active) "xhttp" else "tcp")
+                .put("sockopt", JSONObject().put("dialerProxy", chain))
+                .put("xhttpSettings", JSONObject().put("extra", JSONObject.NULL).put("downloadSettings", dormant))
+                .put("splithttpSettings", JSONObject().put("downloadSettings", dormant))
+            val source = logicalChainProfile(stream); val before = source.toString()
+            val caller = AndroidTunnelDnsPolicy.prepare(before, "config") { error("Config mode must not bootstrap") }
+            assertEquals(source.getJSONObject("dns").toString(), JSONObject(caller.configJson).getJSONObject("dns").toString())
+            assertEquals(source.getJSONArray("outbounds").toString(), JSONObject(caller.configJson).getJSONArray("outbounds").let {
+                JSONArray((0 until source.getJSONArray("outbounds").length()).map(it::getJSONObject)).toString() })
+            val prepared = AndroidTunnelDnsPolicy.prepare(before, "proxy") { error("Logical or inactive address must not resolve") }
+            val actual = JSONObject(prepared.configJson).getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
+            assertEquals(chain, actual.getJSONObject("sockopt").getString("dialerProxy"))
+            assertEquals(stream.getJSONObject("xhttpSettings").toString(), actual.getJSONObject("xhttpSettings").toString())
+            assertEquals(stream.getJSONObject("splithttpSettings").toString(), actual.getJSONObject("splithttpSettings").toString())
+            assertEquals(before, source.toString())
+        }
     }
 
     @Test fun conflictingNativeCaseAliasesAreRejected() {

@@ -172,6 +172,21 @@ class PreservationRunnerGuards(unittest.TestCase):
             with self.subTest(output=output, preparers=preparers), self.assertRaises(RuntimeError):
                 runner.require_inactive_tls_runtime(output, preparers)
 
+    def test_loopback_chain_snapshot_and_exact_runtime_count(self):
+        with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
+                mock.patch.object(runner.platform, 'system', return_value='Linux'):
+            snapshot = runner.source_snapshot()
+        for path in ['tool/fixtures/compatibility/loopback-chains.json',
+                     'third_party/xray-mobile/native_dns_preservation/loopback_chains_test.go']:
+            self.assertEqual(snapshot.get(path), 'synthetic-digest', path)
+        marker = '    xhttp_runtime_test.go:400: XHTTP_LOOPBACK_CHAIN_PASS\n'
+        runner.require_loopback_chain_runtime(marker, 1)
+        runner.require_loopback_chain_runtime(marker * 2, 2)
+        for output, preparers in [('', 1), (marker * 2, 1), (marker, 2), (marker, 0), (marker, 3),
+                                 ('noise ' + marker.lstrip(), 1), (marker.replace('PASS', 'PASS_EXTRA'), 1)]:
+            with self.subTest(output=output, preparers=preparers), self.assertRaises(RuntimeError):
+                runner.require_loopback_chain_runtime(output, preparers)
+
     def test_ipv6_dns_snapshot_and_exact_runtime_modes(self):
         with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
                 mock.patch.object(runner.platform, 'system', return_value='Linux'):
@@ -311,6 +326,7 @@ class PreservationRunnerGuards(unittest.TestCase):
                         '    xhttp_runtime_test.go:10: XHTTP_INDEPENDENT_DOWNLOAD_PASS\n' +
                         ''.join(f'    xhttp_runtime_test.go:10: XHTTP_DORMANT_ECH_PASS mode={mode}\n'
                                 for mode in ('direct', 'chained', 'independent')) +
+                        '    xhttp_runtime_test.go:10: XHTTP_LOOPBACK_CHAIN_PASS\n' +
                         ''.join(f'    dns_ipv6_servers_test.go:10: DNS_IPV6_UPSTREAM_RUNTIME_PASS transport={transport} strategy={strategy}\n'
                                 for transport in ('udp', 'tcp') for strategy in ('UseIP', 'UseIPv4')) +
                         ''.join(f'    dns_ipv6_servers_test.go:10: DNS_IPV4_UPSTREAM_RUNTIME_PASS transport=udp strategy={strategy}\n'

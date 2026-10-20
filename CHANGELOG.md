@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Ignore loopback-owned dormant socket chains during Apple graph admission, retaining active missing-target and cycle checks. Keep Android chained destinations logical instead of resolving them through physical bootstrap; add shared native and controlled traffic regressions.
+
 * Preserve dormant TLS ECH settings when TLS is disabled or Reality is selected. Apply Apple and inherited XHTTP download ECH admission only to active TLS; retain active-fetch restrictions and add shared native/Core regressions.
 
 * Close Classic DNS UDP channels and request-cleanup timers with Core, for both address families. Fence late requests and EDNS retries after shutdown; keep caller DNS selection and query policy unchanged.

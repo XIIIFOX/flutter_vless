@@ -73,7 +73,7 @@ public enum TunnelDNSPolicy {
         var chains: [String: [String]] = [:]
         for outbound in outbounds {
             if let name = outbound["tag"] as? String {
-                chains[name] = streamChains(outbound["streamSettings"] as? [String: Any] ?? [:])
+                chains[name] = outboundChains(outbound)
             }
         }
         let available = Set(outbounds.compactMap { $0["tag"] as? String })
@@ -83,7 +83,7 @@ public enum TunnelDNSPolicy {
         }
         for outbound in outbounds {
             let name = outbound["tag"] as? String ?? ""
-            for next in streamChains(outbound["streamSettings"] as? [String: Any] ?? [:]) {
+            for next in outboundChains(outbound) {
                 guard validChain(next, visited: name.isEmpty ? [] : [name]) else { return nil }
             }
         }
@@ -339,6 +339,13 @@ public enum TunnelDNSPolicy {
             stream[key] = settings
         }
         return true
+    }
+
+    private static func outboundChains(_ outbound: [String: Any]) -> [String] {
+        // Loopback.Process redispatches the link and never calls its dialer.
+        // Its sender still builds normally; only these socket edges are unused.
+        guard protocolRole(outbound["protocol"]) != "loopback" else { return [] }
+        return streamChains(outbound["streamSettings"] as? [String: Any] ?? [:])
     }
 
     private static func streamChains(_ stream: [String: Any], followDownload: Bool = true) -> [String] {

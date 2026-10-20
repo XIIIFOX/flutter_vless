@@ -16,6 +16,46 @@ spec.loader.exec_module(runner)
 
 
 class PreservationRunnerGuards(unittest.TestCase):
+    def h3_log(self, preparers=1):
+        modes = ['raw_numeric', 'native_cnc_windows'] + (['native_cnc_apple'] if preparers == 2 else [])
+        lines = ''.join(f'    xhttp_h3_lifetime_test.go:400: H3_LIFETIME_PASS mode={mode}\n'
+                        f'    --- PASS: TestNativeXHTTPH3Lifetime/{mode} (0.01s)\n' for mode in modes)
+        return lines + '--- PASS: TestNativeXHTTPH3Lifetime (0.03s)\nPASS\n'
+
+    def complete_phase(self):
+        return {'exit_code': 0, 'process_exit_code': 0, 'timed_out': False,
+                'output_closed': True, 'output_eof': True, 'output_errors': []}
+
+    def test_h3_lifetime_requires_all_exact_source_modes_and_selected_passes(self):
+        for preparers in (1, 2):
+            good = self.h3_log(preparers)
+            expected = ['raw_numeric', 'native_cnc_windows'] + (['native_cnc_apple'] if preparers == 2 else [])
+            self.assertEqual(runner.require_xhttp_h3_lifetime_runtime(good, preparers, self.complete_phase()), expected)
+            runner.require_xhttp_h3_lifetime_runtime(good.replace('\n', '\r\n'), preparers, self.complete_phase())
+            for body in ('', good.replace('mode=raw_numeric', 'mode=unknown'),
+                         good.replace('xhttp_h3_lifetime_test.go:', 'unrelated.go:'),
+                         good.replace('H3_LIFETIME_PASS mode=raw_numeric', 'prefix H3_LIFETIME_PASS mode=raw_numeric'),
+                         good.replace('    xhttp_h3_lifetime_test.go:400: H3_LIFETIME_PASS mode=raw_numeric\n', ''),
+                         good + '    xhttp_h3_lifetime_test.go:400: H3_LIFETIME_PASS mode=raw_numeric\n',
+                         good.replace('--- PASS: TestNativeXHTTPH3Lifetime/raw_numeric', '--- SKIP: TestNativeXHTTPH3Lifetime/raw_numeric'),
+                         good.replace('--- PASS: TestNativeXHTTPH3Lifetime/raw_numeric', '--- PASS: AnotherTest/raw_numeric'),
+                         good + '--- FAIL: owned_drain (0.01s)\n', good.removesuffix('PASS\n')):
+                with self.subTest(preparers=preparers, body=body), self.assertRaises(RuntimeError):
+                    runner.require_xhttp_h3_lifetime_runtime(body, preparers, self.complete_phase())
+        for body, preparers in [(self.h3_log(), 2), (self.h3_log(2), 1), (self.h3_log(), 0), (self.h3_log(), 3)]:
+            with self.subTest(preparers=preparers), self.assertRaises(RuntimeError):
+                runner.require_xhttp_h3_lifetime_runtime(body, preparers, self.complete_phase())
+
+    def test_h3_lifetime_rejects_truncated_failed_or_unreaped_phase(self):
+        for key, value in [('exit_code', 1), ('process_exit_code', 1), ('timed_out', True),
+                           ('output_closed', False), ('output_eof', False), ('output_errors', ['capture failed'])]:
+            phase = self.complete_phase(); phase[key] = value
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                runner.require_xhttp_h3_lifetime_runtime(self.h3_log(), 1, phase)
+        phase = self.complete_phase(); del phase['output_eof']
+        with self.assertRaises(RuntimeError):
+            runner.require_xhttp_h3_lifetime_runtime(self.h3_log(), 1, phase)
+
     def test_snapshot_binds_transitive_preparation_report_header(self):
         with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
                 mock.patch.object(runner.platform, 'system', return_value='Linux'):
@@ -317,6 +357,13 @@ class PreservationRunnerGuards(unittest.TestCase):
             self.assertFalse((source / 'go.mod').exists())
 
     def test_runtime_uses_lifetime_copy_and_alternate_modfile(self):
+        self.exercise_runtime_main()
+
+    def test_runtime_main_refuses_invalid_h3_after_old_phases_pass(self):
+        self.exercise_runtime_main(self.h3_log().replace('mode=raw_numeric', 'mode=unknown'), expected_exit=1)
+
+    def exercise_runtime_main(self, h3_output=None, expected_exit=0):
+        h3_output = self.h3_log() if h3_output is None else h3_output
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             evidence, source = base / 'evidence', base / 'original-core'
@@ -326,9 +373,12 @@ class PreservationRunnerGuards(unittest.TestCase):
                         'module_sum': 'synthetic',
                         'upstream_sha256': {'guarded.go': runner.digest(source / 'guarded.go')}}
             commands = []
+            budgets = {}
             def checked(name, command, **kwargs):
                 commands.append((name, command))
-                kwargs['results'].append({'name': name, 'exit_code': 0})
+                budgets[name] = kwargs['seconds']
+                kwargs['results'].append({'name': name, 'exit_code': 0, 'process_exit_code': 0,
+                    'timed_out': False, 'output_closed': True, 'output_eof': True, 'output_errors': []})
                 if '-o' in command:
                     Path(command[command.index('-o') + 1]).write_text('compiled')
                 if name == 'core-pin':
@@ -356,16 +406,24 @@ class PreservationRunnerGuards(unittest.TestCase):
                         '--- PASS: TestNativeXHTTPTLS (0.01s)\n' + ''.join(
                             f'    xhttp_tls_runtime_test.go:10: XHTTP_TLS_H2_PASS mode={mode}\n'
                             for mode in ('independent', 'wrong_ca', 'wrong_sni')))
+                if name == 'actual-xhttp-h3-lifetime':
+                    (evidence / 'actual-xhttp-h3-lifetime.log').write_text(h3_output)
             with mock.patch.object(runner, 'EVIDENCE', evidence), \
                     mock.patch.object(runner.sys, 'argv', ['runner', '--run-runtime']), \
+                    mock.patch.object(runner.sys, 'stderr', io.StringIO()), \
                     mock.patch.object(runner.platform, 'system', return_value='Linux'), \
                     mock.patch.object(runner, 'os', SimpleNamespace(name='posix', environ=os.environ, sep=os.sep)), \
                     mock.patch.object(runner.common, 'runtime_authorized', return_value=True), \
                     mock.patch.object(runner.common, 'MANIFEST', manifest), \
                     mock.patch.object(runner, 'source_snapshot', return_value={'synthetic': 'hash'}), \
+                    mock.patch.object(runner, 'require_xhttp_h3_lifetime_runtime',
+                                      wraps=runner.require_xhttp_h3_lifetime_runtime) as h3_verify, \
                     mock.patch.object(runner.common, 'checked', side_effect=checked), \
                     mock.patch.object(runner, 'prepare_classic_core', return_value={'kind': 'classic-udp-lifetime-only'}) as prepare:
-                self.assertEqual(runner.main(), 0)
+                self.assertEqual(runner.main(), expected_exit)
+            h3_verify.assert_called_once()
+            self.assertEqual(h3_verify.call_args.args[0], h3_output)
+            self.assertEqual(h3_verify.call_args.args[1], 1)
             prepare.assert_called_once_with(source.resolve(), evidence / 'ClassicCore', manifest)
             compile_command = next(command for name, command in commands if name == 'acceptance-compile')
             self.assertIn('-modfile=' + str(evidence / 'classic-lifetime.mod'), compile_command)
@@ -377,11 +435,25 @@ class PreservationRunnerGuards(unittest.TestCase):
             tls_runtime = next(command for name, command in commands if name == 'actual-xhttp-tls')
             self.assertIn('^TestNativeXHTTPTLS$', tls_runtime)
             self.assertIn('-test.timeout=90s', tls_runtime)
+            self.assertIn('actual-xhttp-h3-lifetime', dict(commands))
+            h3_runtime = dict(commands)['actual-xhttp-h3-lifetime']
+            self.assertIn('^TestNativeXHTTPH3Lifetime$', h3_runtime)
+            self.assertIn('-test.timeout=150s', h3_runtime)
+            self.assertEqual(budgets['actual-core-dns'], 140)
+            self.assertEqual(budgets['actual-xhttp-tls'], 110)
+            self.assertEqual(budgets['actual-xhttp-h3-lifetime'], 170)
+            self.assertEqual([name for name, _ in commands].count('acceptance-compile'), 1)
             report = json.loads((evidence / 'result.json').read_text())
             self.assertTrue(report['core_overlay_applied'])
             self.assertFalse(report['native_dns_context_overlay_applied'])
             self.assertEqual(report['classic_lifetime_patch']['kind'], 'classic-udp-lifetime-only')
-            self.assertTrue(report['success'])
+            self.assertIs(report['success'], expected_exit == 0)
+            if expected_exit == 0:
+                self.assertEqual(report['results'][-1]['selected_tests'], ['TestNativeXHTTPH3Lifetime'])
+                self.assertEqual(report['results'][-1]['h3_lifetime_modes'], ['raw_numeric', 'native_cnc_windows'])
+            else:
+                self.assertEqual(report['error'], 'Exact H3 lifetime modes missing or duplicated')
+                self.assertNotIn('selected_test_pass', report['results'][-1])
 
     def test_default_selects_pure_preparation_without_core_runtime(self):
         with tempfile.TemporaryDirectory() as directory:

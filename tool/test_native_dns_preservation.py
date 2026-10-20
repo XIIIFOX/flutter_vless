@@ -27,6 +27,7 @@ SELECTED_TEST = 'TestNativeDNSPreservation'
 PROTOCOL_TEST = 'TestNativeProtocolPreparation'
 MATERIAL_TEST = 'TestNativeDoHMaterialOnly'
 XHTTP_TLS_TEST = 'TestNativeXHTTPTLS'
+XHTTP_H3_LIFETIME_TEST = 'TestNativeXHTTPH3Lifetime'
 
 spec = importlib.util.spec_from_file_location('dns_preservation_checked', ROOT / 'tool/test_native_dns_context_runtime.py')
 common = importlib.util.module_from_spec(spec)
@@ -188,6 +189,35 @@ def require_xhttp_tls_runtime(output, preparers):
     if preparers not in (1, 2) or len(markers) != 3 * preparers or any(
             markers.count(mode) != preparers for mode in modes):
         raise RuntimeError('Exact XHTTP TLS/H2 runtime markers missing or duplicated')
+
+
+def require_xhttp_h3_lifetime_runtime(output, preparers, phase):
+    if (phase.get('exit_code') != 0 or phase.get('process_exit_code') != 0 or
+            phase.get('timed_out') is not False or phase.get('output_closed') is not True or
+            phase.get('output_eof') is not True or phase.get('output_errors') != []):
+        raise RuntimeError('H3 lifetime phase did not complete with full output')
+    if preparers not in (1, 2):
+        raise RuntimeError('H3 lifetime preparer count is invalid')
+    modes = ['raw_numeric', 'native_cnc_windows']
+    if preparers == 2:
+        modes.append('native_cnc_apple')
+    marker = re.compile(r'^[ \t]+xhttp_h3_lifetime_test\.go:\d+: H3_LIFETIME_PASS mode=([^\r\n]+)\r?$')
+    seen = []
+    for line in output.splitlines():
+        if 'H3_LIFETIME_PASS' not in line:
+            continue
+        match = marker.fullmatch(line)
+        if not match:
+            raise RuntimeError('H3 lifetime marker source or format changed')
+        seen.append(match.group(1))
+    if len(seen) != len(modes) or sorted(seen) != sorted(modes):
+        raise RuntimeError('Exact H3 lifetime modes missing or duplicated')
+    for name in [XHTTP_H3_LIFETIME_TEST, *(XHTTP_H3_LIFETIME_TEST + '/' + mode for mode in modes)]:
+        if len(re.findall(r'^[ \t]*--- PASS: ' + re.escape(name) + r' \(', output, re.MULTILINE)) != 1:
+            raise RuntimeError('Every selected H3 lifetime case must pass exactly once')
+    if re.search(r'^[ \t]*--- (?:FAIL|SKIP):', output, re.MULTILINE) or not re.search(r'\nPASS\r?\n?\Z', output):
+        raise RuntimeError('H3 lifetime cases or drain failed, skipped or did not finish')
+    return modes
 
 
 def require_ipv6_dns_runtime(output, preparers):
@@ -371,6 +401,15 @@ def main():
             results[-1]['selected_tests'] = [XHTTP_TLS_TEST]
             results[-1]['xhttp_tls_runtime_modes_per_preparer'] = 3
             results[-1]['xhttp_tls_runtime_preparers'] = preparers
+            # H3 close/drain has its own budget; old DNS/HTTP1 and H2 phases
+            # retain their original deadlines and strict assertions.
+            checked('actual-xhttp-h3-lifetime', [str(binary), '-test.run', '^' + XHTTP_H3_LIFETIME_TEST + '$',
+                    '-test.v', '-test.timeout=150s'], 170, MOBILE, runtime_environment)
+            output = (EVIDENCE / 'actual-xhttp-h3-lifetime.log').read_text(encoding='utf-8')
+            modes = require_xhttp_h3_lifetime_runtime(output, preparers, results[-1])
+            results[-1]['selected_test_pass'] = True
+            results[-1]['selected_tests'] = [XHTTP_H3_LIFETIME_TEST]
+            results[-1]['h3_lifetime_modes'] = modes
         if source_snapshot() != report['source_sha256']:
             raise RuntimeError('Production preparer/acceptance source changed during verification')
         report['source_snapshot_unchanged'] = True

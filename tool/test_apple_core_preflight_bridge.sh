@@ -189,7 +189,7 @@ sources = [root/'ios/flutter_vless/Sources/flutter_vless/FlutterVlessPlugin.swif
 bodies=[]
 for path in sources:
  s=path.read_text()
- a=s.index('        let operation = commands.submit {\n            // Do not replace the app-process singleton')
+ a=s.index('        let preparationChanges = Array(changes)') + len('        let preparationChanges = Array(changes)\n')
  b=s.index('\n        Task {',a)
  bodies.append(s[a:b])
 assert bodies[0] == bodies[1], 'Both Apple start paths must use the checked transaction'
@@ -213,7 +213,7 @@ probe='''private final class StartProbe {
 }
 '''
 success_start=sources[0].read_text().index('\n            do {', sources[0].read_text().index('\n        Task {', sources[0].read_text().index('        let operation = commands.submit {\n            // Do not replace the app-process singleton')))+len('\n            do {')
-success_end=sources[0].read_text().index('\n            } catch let error as CorePreflightError', success_start)
+success_end=sources[0].read_text().index('\n            } catch', success_start)
 success=sources[0].read_text()[success_start:success_end]
 probe=probe.replace('\n}\n', '''
  func refreshRuntimePolling(reason: String) {}
@@ -282,3 +282,6 @@ python3 "$ROOT/tool/test_apple_native_routing_admission.py"
 
 # Actual host admission must use the injected, bounded TCP chooser.
 python3 "$ROOT/tool/test_apple_private_port_availability.py"
+
+# Reinitialization cannot redirect a queued start into another options/profile owner.
+python3 "$ROOT/tool/test_apple_start_owner.py"

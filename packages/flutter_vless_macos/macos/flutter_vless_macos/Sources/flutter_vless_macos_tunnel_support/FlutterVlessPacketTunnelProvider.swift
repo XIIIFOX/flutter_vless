@@ -196,10 +196,10 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         let preparation = Task {
             try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: config, credentials: credentials, routingIntent: routingIntent,
                 tcpPortAvailable: LocalProxyAccessPolicy.isTCPPortAvailable,
-                resolveIPv4: {
+                resolveEndpoint: {
                     rememberTunnelLog("Resolving VPN transport endpoint")
-                    return try await TunnelEndpointResolver.resolveIPv4($0, event: rememberTunnelLog)
-                })
+                    return try await TunnelEndpointResolver.resolveEndpoint($0, event: rememberTunnelLog)
+                }, isCurrent: { self.sessionAdmission.isCurrent(epoch) })
         }
         setStartupPreparation(preparation, epoch: epoch)
         defer { setStartupPreparation(nil, epoch: epoch) }
@@ -221,7 +221,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         }
         guard sessionAdmission.isCurrent(epoch), !preparation.isCancelled,
               let parsed = parseConfig(jsonData: prepared.data),
-              TunnelDNSPolicy.allowsRouteExclusions(prepared.bootstrapAddresses.map { "\($0)/32" }) else {
+              TunnelDNSPolicy.allowsRouteExclusions(prepared.bootstrapAddresses.filter { isIPv4Literal($0) }.map { "\($0)/32" }) else {
             throw tunnelError("Tunnel preparation cancelled or incompatible")
         }
         let addresses = prepared.bootstrapAddresses

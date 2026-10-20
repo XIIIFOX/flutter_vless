@@ -1,5 +1,9 @@
 ## 1.1.7
 
+* Accept system-resolved IPv6 transport endpoints on iOS/macOS while preserving caller DNS, endpoint names and TLS identity. Discard endpoint results and failures after session cancellation; retain the IPv4-only resolver API.
+
+* Freeze the Apple options/profile owner for each queued Start. Cancel a start superseded by successful reinitialization before touching the replacement profile; preserve the active owner after invalid options.
+
 * Cancel pending capability-gated starts after Stop or a newer Start on every platform. Return the fixed `VPN_START_CANCELLED` code without private configuration or native error details.
 
 * Follow bounded static DNS hosts aliases when admitting named remote resolvers on Apple and Windows. Preserve the complete caller DNS document, resolver URL and TLS identity.

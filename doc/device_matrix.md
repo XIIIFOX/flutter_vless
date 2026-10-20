@@ -427,3 +427,35 @@ Final native Stop is acknowledged, both ordinary-network pages load again,
 and task-owned emulator, driver clients and VM forwarding are stopped. Temporary
 private input copies are removed; shared ADB and unrelated processes are preserved.
 Host DNS, proxy, route and VPN snapshots remain byte-identical.
+
+## iPhone openApp controls, 2026-10-20
+
+A separate OFF-only case used the already open signed example 1.1.7/build117
+on the physical iPhone 13 Pro Max. Its five options/control source files are
+byte-identical to the current source; the installed application itself remains
+the earlier `ce65b6a` build. This qualifies these unchanged control branches,
+not the newer provider/startup code.
+
+The actual shield in Control Center opened Example with `action=openApp`.
+With `requireUnlock=true`, iOS presented Face ID; explicit Cancel left the VPN
+OFF. A second authentication outcome has no owner confirmation and is not
+counted as an accepted-authentication pass. With `requireUnlock=false`, tapping
+the same system control opened Example without an authentication prompt.
+Neither branch had a saved quick-start authorization or invoked Start.
+The configured shield SF Symbol rendered; compact control label/custom-symbol
+variants remain outside this case.
+
+Read-back checks confirmed no tunnel provider, no saved reference, reconnect and
+On Demand OFF. The complete original native options/provider metadata was
+restored, including disabled quick access, `toggle` and required unlock. An
+immediate file copy briefly read the prior preferences image; a separate fresh
+copy matched the full baseline exactly. Example's original empty editor and
+routing OFF remained intact. Existing Example/Runner processes were preserved.
+Safari was restored and the site's Check again action completed with the
+ordinary underlay IP/country. No Mac network settings, Core, emulator, USB
+forwarder or new application process was started for this case.
+
+Private evidence: `build/ios-live-2026-10-20/iphone-openapp-controls-01/`.
+Remaining device options include current retry plateau/unlimited/sleep-wake,
+On Demand transitions, broader protection and diagnostics saturation. All eight
+full compatibility requirements remain Partial.

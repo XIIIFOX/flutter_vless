@@ -85,7 +85,7 @@ for platform,path in paths.items():
  inputs=[privacy/p for p in ['VlessNativeOptions.swift','NativeRoutingSpec.swift','LocalProxyAccessPolicy.swift','XrayAddressEnvironment.swift','XrayCertificatePaths.swift','XrayConfigKeys.swift','XrayServiceTags.swift','XrayPrivacyConfig.swift','CorePreflightPolicy.swift']]
  if platform=='macos':inputs.append(privacy/'DesktopBypassPolicy.swift')
  s=path.read_text();assert 'manager.xrayConfig = effectiveConfigData' in s
- a=s.index('        let proxyOnly = arguments["proxy_only"]');b=s.index('        let operation = commands.submit',a)
+ a=s.index('        let proxyOnly = arguments["proxy_only"]');b=s.index('        // Initialization may replace the manager',a)
  runner=s.index('private final class ProxyOnlyRunner {')
  helper_start=s.index('    fileprivate static func buildProxyOnlyConfigData',runner);helper_end=s.index('\n    }\n',helper_start)+6
  delay_start=s.index('    private static func findDelayEndpoint',runner);delay_end=s.index('\n    }\n',delay_start)+6

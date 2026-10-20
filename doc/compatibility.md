@@ -1962,6 +1962,34 @@ earlier runtime cases and both example builds at `961cbe3`; the focused gate
 does not repeat those legacy cases or example builds. Public IPv6 bootstrap,
 NAT64, handover and additional physical-device checks remain open.
 
+### Named Apple IPv6 endpoints and native options ownership
+
+Both Apple providers now use a typed physical endpoint resolver. It preserves
+IPv4-first selection, then tries the system AAAA result before the existing
+encrypted IPv4 fallback. Numeric family validation rejects malformed strings,
+embedded NUL and scope text; system AAAA provenance does not prove DNS64.
+The private bootstrap branch accepts the selected IPv6 address with bracketed
+redirect syntax and an exact /128 route exclusion. Caller DNS, logical endpoint,
+routing rules and TLS identity remain intact. Session revocation is checked
+before preparation, after each asynchronous lookup/retry and before returning
+prepared data, including obsolete lookup failures. The legacy IPv4 resolver
+API remains IPv4-only.
+
+Apple native Start also captures the manager/group owning its options at call
+admission. A successful reinitialization supersedes the queued request; it
+cannot start or clear the replacement profile. Obsolete preflight errors use
+`VPN_START_CANCELLED`; invalid options preserve the existing owner. This covers
+queued preparation and the checked proxy-mode stop boundary, without claiming
+interruption or rollback of an already admitted OS preference save.
+
+The named-IPv6 rejection and stale-error branches were reproduced before their
+fixes. Pure, injected-I/O suites pass 90 cases for each Apple source module;
+8 extracted Start ownership cases pass per platform. These local checks execute
+no Core, SDK, resolver, socket or VPN. Android and Windows retain their existing
+implementation and qualified gates for this Apple-specific increment.
+IPv6-only/NAT64 networks, address-candidate failover, active path re-preparation
+and new physical-device acceptance of these provider changes remain open.
+
 Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |

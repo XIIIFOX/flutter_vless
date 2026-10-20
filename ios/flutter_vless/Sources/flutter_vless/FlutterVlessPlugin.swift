@@ -766,9 +766,18 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return
         }
         let preparationChanges = Array(changes)
+        // Initialization may replace the manager while this request waits for
+        // preferences. Never apply an older config to that replacement owner.
+        let startManager = packetTunnelManager
+        let startGroup = controlGroup
+        let ownerIsCurrent = { [weak self] in
+            guard let self else { return false }
+            return self.packetTunnelManager === startManager && self.controlGroup == startGroup
+        }
         let operation = commands.submit {
             // Do not replace the app-process singleton or change its asset
             // environment while a proxy-only session is still serving traffic.
+            guard ownerIsCurrent() else { throw CancellationError() }
             guard !self.proxyOnlyRunner.isRunning else {
                 throw CorePreflightError.activeProxySession
             }
@@ -780,13 +789,15 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             } else {
                 pluginLog.warning("Core preflight unavailable in legacy runtime")
             }
+            guard ownerIsCurrent() else { throw CancellationError() }
             if let preparedProxyConfig {
                 // Switching modes is an explicit request to release the system VPN.
-                try await self.packetTunnelManager?.stop(waitForDisconnect: true)
-                if let group = self.controlGroup { VlessSystemControl.clear(group: group) }
+                try await startManager?.stop(waitForDisconnect: true)
+                guard ownerIsCurrent() else { throw CancellationError() }
+                if let group = startGroup { VlessSystemControl.clear(group: group) }
                 try self.proxyOnlyRunner.start(prepared: preparedProxyConfig, geoAssetsDirectory: geoAssetsDirectory)
             } else {
-                guard let manager = self.packetTunnelManager else {
+                guard let manager = startManager else {
                     throw NSError(domain: "VPN", code: 1, userInfo: nil)
                 }
                 self.proxyOnlyRunner.stop()
@@ -808,6 +819,9 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 let report = try await operation.value
                 self.refreshRuntimePolling(reason: "startVless-success")
                 result(report.flutterResult)
+            } catch let error where error is CancellationError || !ownerIsCurrent() {
+                result(FlutterError(code: "VPN_START_CANCELLED", message: "VPN start was superseded.", details: ["stage": "prepare"]))
+                self.refreshRuntimePolling(reason: "startVless-cancelled")
             } catch let error as CorePreflightError {
                 result(FlutterError(code: "CORE_CONFIG_ERROR", message: error.localizedDescription, details: error.details))
                 self.refreshRuntimePolling(reason: "startVless-preflight-error")

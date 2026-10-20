@@ -4,6 +4,128 @@ import XCTest
 final class TunnelEndpointResolverTests: XCTestCase {
     private let host = "vpn.example.com"
 
+    func testTypedNumericAddressDerivesFamilyAndKeepsHonestSource() throws {
+        let v4 = try XCTUnwrap(TunnelEndpointAddress(text: "192.0.2.7", source: .systemNameAnswer))
+        XCTAssertEqual(v4.text, "192.0.2.7")
+        XCTAssertEqual(v4.family, .ipv4)
+        XCTAssertEqual(v4.source, .systemNameAnswer)
+        let v6 = try XCTUnwrap(TunnelEndpointAddress(text: "2001:DB8::7", source: .systemNameAnswer))
+        XCTAssertEqual(v6.text, "2001:db8::7")
+        XCTAssertEqual(v6.family, .ipv6)
+        // A system AAAA result does not identify whether DNS64 synthesized it.
+        XCTAssertEqual(v6.source, .systemNameAnswer)
+        let mapped = try XCTUnwrap(TunnelEndpointAddress(text: "::ffff:192.0.2.7", source: .systemNameAnswer))
+        XCTAssertEqual(mapped.family, .ipv4)
+        XCTAssertEqual(mapped.text, "192.0.2.7")
+    }
+
+    func testTypedNumericAddressRejectsTruncationJunkAndEncryptedIPv6() {
+        for text in ["", "endpoint.example.com", "192.0.2.7\u{0}junk", "2001:db8::7\u{0}junk",
+                     "192.0.2.7 trailing", " 192.0.2.7", "[2001:db8::7]", "fe80::7%en0", "2001:db8:::7"] {
+            XCTAssertNil(TunnelEndpointAddress(text: text, source: .systemNameAnswer), text)
+        }
+        XCTAssertNil(TunnelEndpointAddress(text: "2001:db8::7", source: .encryptedIPv4Answer))
+    }
+
+    func testNamedEndpointKeepsIPv4FirstAndDoesNotQueryIPv6OrFallback() async throws {
+        var calls: [TunnelEndpointAddress.Family] = []
+        let result = try await TunnelEndpointResolver.resolveEndpoint(host, system: { _, family in
+            calls.append(family)
+            return "192.0.2.7"
+        }, fallback: { _ in XCTFail("System IPv4 result must remain authoritative"); return nil })
+        XCTAssertEqual(calls, [.ipv4])
+        XCTAssertEqual(result?.text, "192.0.2.7")
+        XCTAssertEqual(result?.source, .systemNameAnswer)
+    }
+
+    func testNamedEndpointUsesSystemIPv6BeforePublicIPv4Fallback() async throws {
+        var calls: [TunnelEndpointAddress.Family] = []
+        let result = try await TunnelEndpointResolver.resolveEndpoint(host, system: { name, family in
+            XCTAssertEqual(name, self.host)
+            calls.append(family)
+            return family == .ipv4 ? nil : "2001:db8::7"
+        }, fallback: { _ in XCTFail("Successful system AAAA must not reach public fallback"); return nil })
+        XCTAssertEqual(calls, [.ipv4, .ipv6])
+        XCTAssertEqual(result?.text, "2001:db8::7")
+        XCTAssertEqual(result?.family, .ipv6)
+        XCTAssertEqual(result?.source, .systemNameAnswer)
+    }
+
+    func testNamedEndpointFallbackRunsOnlyAfterBothSystemFamilies() async throws {
+        var calls: [String] = []
+        var messages: [String] = []
+        let result = try await TunnelEndpointResolver.resolveEndpoint(host, system: { _, family in
+            calls.append(family == .ipv4 ? "ipv4" : "ipv6")
+            return nil
+        }, fallback: { _ in calls.append("fallback"); return "192.0.2.8" },
+            event: { messages.append($0.text) })
+        XCTAssertEqual(calls, ["ipv4", "ipv6", "fallback"])
+        XCTAssertEqual(result?.family, .ipv4)
+        XCTAssertEqual(result?.source, .encryptedIPv4Answer)
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertFalse(messages.joined().contains(host))
+        XCTAssertFalse(messages.joined().contains("192.0.2.8"))
+    }
+
+    func testNamedEndpointRejectsWrongFamilyAndInvalidBoundaryValues() async throws {
+        var calls: [TunnelEndpointAddress.Family] = []
+        let result = try await TunnelEndpointResolver.resolveEndpoint(host, system: { _, family in
+            calls.append(family)
+            return family == .ipv4 ? "2001:db8::7" : "192.0.2.7"
+        }, fallback: { _ in "192.0.2.8\u{0}junk" })
+        XCTAssertEqual(calls, [.ipv4, .ipv6])
+        XCTAssertNil(result)
+    }
+
+    func testNamedEndpointPrivateNamesNeverReachPublicFallback() async throws {
+        let result = try await TunnelEndpointResolver.resolveEndpoint("router.local", system: { _, _ in nil },
+            fallback: { _ in XCTFail("Private name leaked to public resolver"); return nil })
+        XCTAssertNil(result)
+    }
+
+    func testNamedEndpointChecksCancellationAfterEveryAwait() async throws {
+        for cancelledBoundary in 0...2 {
+            var calls: [Int] = []
+            let task = Task {
+                try await TunnelEndpointResolver.resolveEndpoint(self.host, system: { _, family in
+                    let boundary = family == .ipv4 ? 0 : 1
+                    calls.append(boundary)
+                    if boundary == cancelledBoundary {
+                        withUnsafeCurrentTask { $0?.cancel() }
+                        return family == .ipv4 ? "192.0.2.7" : "2001:db8::7"
+                    }
+                    return nil
+                }, fallback: { _ in
+                    calls.append(2)
+                    withUnsafeCurrentTask { $0?.cancel() }
+                    return "192.0.2.8"
+                })
+            }
+            do { _ = try await task.value; XCTFail("Cancelled boundary published an address") }
+            catch { XCTAssertTrue(error is CancellationError) }
+            XCTAssertEqual(calls, Array(0...cancelledBoundary))
+        }
+    }
+
+    func testLegacyIPv4ResolverRejectsIPv6SystemAndFallbackAnswers() async throws {
+        let result = try await TunnelEndpointResolver.resolveIPv4(host,
+            system: { _ in "2001:db8::7" }, fallback: { _ in "2001:db8::8" })
+        XCTAssertNil(result)
+    }
+
+    func testNamedEndpointPropagatesSystemErrorWithoutChangingLegacyRetryPolicy() async throws {
+        var calls = 0
+        do {
+            _ = try await TunnelEndpointResolver.resolveEndpoint(host, system: { _, _ in
+                calls += 1
+                throw URLError(.networkConnectionLost)
+            }, fallback: { _ in XCTFail("Thrown system errors must propagate"); return nil })
+            XCTFail("System error was hidden")
+        } catch { XCTAssertEqual((error as? URLError)?.code, .networkConnectionLost) }
+        XCTAssertEqual(calls, 1)
+    }
+
+
     func testEncryptedBootstrapSmokeWhenRequested() async throws {
         guard ProcessInfo.processInfo.environment["FLUTTER_VLESS_TEST_BOOTSTRAP_NETWORK"] == "1" else {
             throw XCTSkip("Opt-in public endpoint check; no VPN or route changes")

@@ -384,7 +384,7 @@ public enum TunnelDNSPolicy {
     private static func pin(_ host: String, resolved: inout [String: String], addresses: inout Set<String>,
                             resolver: (String) -> String?) -> String? {
         if isLiteral(host) { addresses.insert(host); return host }
-        guard let ip = resolved[hostKey(host)] ?? resolver(host), isIPv4(ip) else { return nil }
+        guard let ip = resolved[hostKey(host)] ?? resolver(host), isLiteral(ip) else { return nil }
         resolved[hostKey(host)] = ip
         addresses.insert(ip)
         return ip
@@ -404,10 +404,14 @@ public enum TunnelDNSPolicy {
         return n.intValue
     }
     private static func isIPv4(_ value: String) -> Bool {
+        guard !value.utf8.contains(0) else { return false }
         var address = in_addr()
         return value.withCString { inet_pton(AF_INET, $0, &address) } == 1
     }
     private static func isLiteral(_ value: String) -> Bool {
+        guard !value.isEmpty, value.utf8.allSatisfy({
+            (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) || $0 == 46 || $0 == 58
+        }) else { return false }
         var address = in6_addr()
         return isIPv4(value) || value.withCString { inet_pton(AF_INET6, $0, &address) } == 1
     }

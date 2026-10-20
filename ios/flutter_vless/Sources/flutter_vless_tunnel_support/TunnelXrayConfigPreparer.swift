@@ -39,6 +39,27 @@ public struct TunnelPreparedConfig {
 public enum TunnelXrayConfigPreparer {
     public enum StartupError: Error { case invalidConfiguration, endpointUnavailable }
 
+    /// Resolve only physical endpoints. The typed answer retains its actual
+    /// numeric family; a system AAAA answer does not imply proven DNS64.
+    /// Session ownership is rechecked around every asynchronous boundary.
+    public static func prepareForStartup(
+        jsonData: Data,
+        credentials: LocalProxyCredentials,
+        routingIntent: NativeRoutingIntent? = nil,
+        tcpPortAvailable: ((Int) -> Bool)? = nil,
+        environmentSnapshot: XrayEnvironmentSnapshot = .capture(),
+        resolveEndpoint: (String) async throws -> TunnelEndpointAddress?,
+        isCurrent: () -> Bool = { true },
+        attempts: Int = 5,
+        retryDelay: () async throws -> Void = { try await Task.sleep(nanoseconds: 3_000_000_000) }
+    ) async throws -> TunnelPreparedConfig {
+        try await prepareForStartup(jsonData: jsonData, credentials: credentials,
+            routingIntent: routingIntent, tcpPortAvailable: tcpPortAvailable,
+            environmentSnapshot: environmentSnapshot,
+            resolveIPv4: { try await resolveEndpoint($0)?.text }, isCurrent: isCurrent,
+            attempts: attempts, retryDelay: retryDelay)
+    }
+
     /// Retry transient endpoint resolution only before virtual DNS/routes exist.
     /// A failed preparation must never create a connected tunnel with no runtime
     /// to recover. Exhaustion is a startup error handled by NetworkExtension.
@@ -49,14 +70,20 @@ public enum TunnelXrayConfigPreparer {
         tcpPortAvailable: ((Int) -> Bool)? = nil,
         environmentSnapshot: XrayEnvironmentSnapshot = .capture(),
         resolveIPv4: (String) async throws -> String?,
+        isCurrent: () -> Bool = { true },
         attempts: Int = 5,
         retryDelay: () async throws -> Void = { try await Task.sleep(nanoseconds: 3_000_000_000) }
     ) async throws -> TunnelPreparedConfig {
+        func checkOwnership() throws {
+            try Task.checkCancellation()
+            guard isCurrent() else { throw CancellationError() }
+        }
+        try checkOwnership()
         var resolved: [String: String] = [:]
         // A monotonic deadline compatible with the iOS 15 deployment target.
         let deadline = ProcessInfo.processInfo.systemUptime + 25
         for attempt in 0..<max(1, attempts) {
-            try Task.checkCancellation()
+            try checkOwnership()
             // Discover only transport endpoints requested by the existing
             // normalizer. Never resolve routing/sniffing domains or TLS SNI.
             while true {
@@ -67,16 +94,23 @@ public enum TunnelXrayConfigPreparer {
                     missingHost = host
                     return nil
                 }
-                try Task.checkCancellation()
+                try checkOwnership()
                 if let prepared { return prepared }
                 guard let host = missingHost else { throw StartupError.invalidConfiguration }
                 guard resolved.count < 64 else { throw StartupError.invalidConfiguration }
-                guard let address = try await resolveIPv4(host) else { break }
-                try Task.checkCancellation()
+                let address: String?
+                do { address = try await resolveIPv4(host) }
+                catch { try checkOwnership(); throw error }
+                try checkOwnership()
+                guard let address else { break }
                 guard ProcessInfo.processInfo.systemUptime < deadline else { throw StartupError.endpointUnavailable }
                 resolved[host] = address
             }
-            if attempt + 1 < attempts { try await retryDelay() }
+            if attempt + 1 < attempts {
+                do { try await retryDelay() }
+                catch { try checkOwnership(); throw error }
+                try checkOwnership()
+            }
         }
         throw StartupError.endpointUnavailable
     }

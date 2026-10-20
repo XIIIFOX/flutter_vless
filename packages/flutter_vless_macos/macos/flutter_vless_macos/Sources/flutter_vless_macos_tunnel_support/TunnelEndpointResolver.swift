@@ -3,11 +3,77 @@ import Darwin
 import dnssd
 import flutter_vless_macos_privacy
 
+/// One verified numeric endpoint answer. A system AAAA answer does not expose
+/// whether it was synthesized by DNS64; no NAT64 prefix or reachability is inferred.
+public struct TunnelEndpointAddress: Equatable, Sendable {
+    public enum Family: Equatable, Sendable { case ipv4, ipv6 }
+    public enum Source: Equatable, Sendable { case systemNameAnswer, encryptedIPv4Answer }
+
+    public let text: String
+    public let family: Family
+    public let source: Source
+
+    public init?(text: String, source: Source) {
+        // Reject embedded NUL before handing the text to a C-string parser.
+        guard !text.isEmpty, !text.utf8.contains(0), text.utf8.allSatisfy({
+            (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) || $0 == 46 || $0 == 58
+        }),
+              let parsed = Self.numeric(text), source != .encryptedIPv4Answer || parsed.1 == .ipv4 else { return nil }
+        self.text = parsed.0
+        self.family = parsed.1
+        self.source = source
+    }
+
+    private static func numeric(_ text: String) -> (String, Family)? {
+        var v4 = in_addr()
+        var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+        if text.withCString({ inet_pton(AF_INET, $0, &v4) }) == 1 {
+            guard inet_ntop(AF_INET, &v4, &buffer, socklen_t(buffer.count)) != nil else { return nil }
+            return (String(cString: buffer), .ipv4)
+        }
+        var v6 = in6_addr()
+        guard text.withCString({ inet_pton(AF_INET6, $0, &v6) }) == 1 else { return nil }
+        let bytes = withUnsafeBytes(of: v6) { Array($0) }
+        // Core treats IPv4-mapped IPv6 as IPv4. Keep the verified family aligned.
+        if bytes.prefix(10).allSatisfy({ $0 == 0 }), bytes[10] == 0xff, bytes[11] == 0xff {
+            withUnsafeMutableBytes(of: &v4) { $0.copyBytes(from: bytes[12..<16]) }
+            guard inet_ntop(AF_INET, &v4, &buffer, socklen_t(buffer.count)) != nil else { return nil }
+            return (String(cString: buffer), .ipv4)
+        }
+        guard inet_ntop(AF_INET6, &v6, &buffer, socklen_t(buffer.count)) != nil else { return nil }
+        return (String(cString: buffer), .ipv6)
+    }
+}
+
 /// Used only for VPN transport endpoints, before virtual DNS is installed.
 /// mDNSResponder can be blocked while includeAllNetworks is starting on macOS.
 /// Bound and cancel that lookup, then use the tunnel's DNS upstream over HTTPS
 /// from the provider process. Never turn off protection to bootstrap a tunnel.
 enum TunnelEndpointResolver {
+    /// Preserve IPv4-first selection, then try a system AAAA answer before the
+    /// existing encrypted IPv4 fallback. This does not synthesize IPv4 literals.
+    static func resolveEndpoint(_ host: String,
+                            event: (NativeDiagnosticMessage) -> Void = { _ in }) async throws -> TunnelEndpointAddress? {
+        try await resolveEndpoint(host, system: { host, family in
+            try await SystemEndpointLookup.resolve(host, timeout: 2, family: family)
+        }, fallback: { try await encryptedLookup($0) }, event: event)
+    }
+
+    static func resolveEndpoint(_ host: String,
+                            system: (String, TunnelEndpointAddress.Family) async throws -> String?,
+                            fallback: (String) async throws -> String?,
+                            event: (NativeDiagnosticMessage) -> Void = { _ in }) async throws -> TunnelEndpointAddress? {
+        for family in [TunnelEndpointAddress.Family.ipv4, .ipv6] {
+            try Task.checkCancellation()
+            let raw = try await system(host, family)
+            try Task.checkCancellation()
+            if let raw, let address = TunnelEndpointAddress(text: raw, source: .systemNameAnswer), address.family == family {
+                return address
+            }
+        }
+        return try await encryptedAddress(host, fallback: fallback, event: event)
+    }
+
     static func resolveIPv4(_ host: String,
                             event: (NativeDiagnosticMessage) -> Void = { _ in }) async throws -> String? {
         try await resolveIPv4(host, system: {
@@ -20,14 +86,25 @@ enum TunnelEndpointResolver {
                             fallback: (String) async throws -> String?,
                             event: (NativeDiagnosticMessage) -> Void = { _ in }) async throws -> String? {
         try Task.checkCancellation()
-        if let address = try await system(host) { return address }
+        let raw = try await system(host)
+        try Task.checkCancellation()
+        if let raw, let address = TunnelEndpointAddress(text: raw, source: .systemNameAnswer), address.family == .ipv4 {
+            return address.text
+        }
+        return try await encryptedAddress(host, fallback: fallback, event: event)?.text
+    }
+
+    private static func encryptedAddress(_ host: String,
+                            fallback: (String) async throws -> String?,
+                            event: (NativeDiagnosticMessage) -> Void) async throws -> TunnelEndpointAddress? {
         try Task.checkCancellation()
         // Never disclose local/single-label names to a public bootstrap resolver.
         guard isPublicHostname(host) else { return nil }
         event("System endpoint DNS unavailable; trying encrypted endpoint bootstrap")
         do {
-            let address = try await fallback(host)
+            let raw = try await fallback(host)
             try Task.checkCancellation()
+            let address = raw.flatMap { TunnelEndpointAddress(text: $0, source: .encryptedIPv4Answer) }
             if address != nil { event("Encrypted endpoint bootstrap completed") }
             return address
         } catch {
@@ -129,9 +206,13 @@ final class SystemEndpointLookup: @unchecked Sendable {
     private var continuation: CheckedContinuation<String?, Error>?
     private var timer: DispatchWorkItem?
     private var cancelled = false
+    private let family: TunnelEndpointAddress.Family
 
-    static func resolve(_ host: String, timeout: TimeInterval) async throws -> String? {
-        let lookup = SystemEndpointLookup()
+    private init(family: TunnelEndpointAddress.Family) { self.family = family }
+
+    static func resolve(_ host: String, timeout: TimeInterval,
+                        family: TunnelEndpointAddress.Family = .ipv4) async throws -> String? {
+        let lookup = SystemEndpointLookup(family: family)
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
@@ -149,16 +230,23 @@ final class SystemEndpointLookup: @unchecked Sendable {
                        continuation: CheckedContinuation<String?, Error>) {
         self.continuation = continuation
         guard !cancelled else { finish(.failure(CancellationError())); return }
+        let queryProtocol = family == .ipv4 ? kDNSServiceProtocol_IPv4 : kDNSServiceProtocol_IPv6
         let status = DNSServiceGetAddrInfo(&service, DNSServiceFlags(kDNSServiceFlagsTimeout), 0,
-            DNSServiceProtocol(kDNSServiceProtocol_IPv4), host, { _, flags, _, error, _, address, _, context in
+            DNSServiceProtocol(queryProtocol), host, { _, flags, _, error, _, address, _, context in
                 guard let context else { return }
                 let lookup = Unmanaged<SystemEndpointLookup>.fromOpaque(context).takeUnretainedValue()
                 guard error == kDNSServiceErr_NoError else { lookup.finish(.success(nil)); return }
-                guard flags & DNSServiceFlags(kDNSServiceFlagsAdd) != 0,
-                      let address, address.pointee.sa_family == sa_family_t(AF_INET) else { return }
-                var ip = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
-                var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-                guard inet_ntop(AF_INET, &ip, &buffer, socklen_t(buffer.count)) != nil else { return }
+                guard flags & DNSServiceFlags(kDNSServiceFlagsAdd) != 0, let address else { return }
+                var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+                if lookup.family == .ipv4 {
+                    guard address.pointee.sa_family == sa_family_t(AF_INET) else { return }
+                    var ip = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
+                    guard inet_ntop(AF_INET, &ip, &buffer, socklen_t(buffer.count)) != nil else { return }
+                } else {
+                    guard address.pointee.sa_family == sa_family_t(AF_INET6) else { return }
+                    var ip = address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { $0.pointee.sin6_addr }
+                    guard inet_ntop(AF_INET6, &ip, &buffer, socklen_t(buffer.count)) != nil else { return }
+                }
                 lookup.finish(.success(String(cString: buffer)))
             }, Unmanaged.passUnretained(self).toOpaque())
         guard status == kDNSServiceErr_NoError, let service,

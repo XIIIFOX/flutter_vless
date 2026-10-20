@@ -1,0 +1,36 @@
+name: Unpublished iOS SDK preview
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios-sdk:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: third_party/xray-mobile/go.mod
+          cache-dependency-path: third_party/xray-mobile/go.sum
+      - name: Test SDK artifact provenance controls
+        run: python3 tool/test_package_apple_core_preview.py
+      - name: Build one unpublished iOS routing SDK
+        run: tool/build_apple_core_preview.sh ios build/apple-sdk-preview/ios --vpn-routing
+      - name: Verify architectures, source provenance and archive bytes
+        run: python3 tool/package_apple_core_preview.py --preview build/apple-sdk-preview/ios --output build/apple-sdk-artifact --head "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-sdk-preview-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            build/apple-sdk-artifact/ios-sdk-preview.tar.gz
+            build/apple-sdk-artifact/manifest.json
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7

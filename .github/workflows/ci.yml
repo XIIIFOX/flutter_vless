@@ -69,7 +69,7 @@ jobs:
           cache-dependency-path: third_party/xray-mobile/go.sum
       - name: Test unpublished DNS context with actual isolated Core instances
         run: python tool/test_native_dns_context_runtime.py --run-runtime
-      - name: Test production DNS preparation with ordinary pinned Core
+      - name: Test production DNS preparation with Classic lifetime cleanup
         run: python tool/test_native_dns_preservation.py --run-runtime
       - name: Test optional VPN routing seam with isolated pinned Core
         run: python tool/test_native_vpn_routing.py --run-runtime
@@ -450,6 +450,7 @@ jobs:
       - name: Test PacketTunnel Swift helper
         run: |
           python3 tool/test_build_apple_core_preview.py
+          python3 tool/test_apple_classic_core.py
           bash tool/test_apple_address_binding.sh
           bash tool/test_apple_routing_spec.sh
           tool/test_ios_tunnel_support.sh

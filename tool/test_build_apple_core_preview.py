@@ -76,6 +76,12 @@ class ApplePreviewBuilderTest(unittest.TestCase):
         (capability / 'overlay/core/routing.go').write_text('package core\n')
         (capability / 'pin-manifest.json').write_text(json.dumps({'module':MODULE,'module_version':VERSION,'module_sum':CHECKSUM,'core_commit':'92ccc939aaf4','capability':'fixture-routing'}))
         (capability / 'apply.py').write_text('import pathlib,shutil\ndef copy_and_apply(source,destination,**kwargs):\n if pathlib.Path(destination).exists(): raise ValueError("Destination must be new")\n return pathlib.Path(shutil.copytree(source,destination))\n')
+        with (capability / 'apply.py').open('a') as out:
+            out.write('def copy_and_apply_classic(source,destination,**kwargs):\n return copy_and_apply(source,destination,**kwargs)\n')
+        classic = self.root / 'third_party/xray-native-dns'
+        (classic / 'overlay/app/dns').mkdir(parents=True)
+        for name in ('classic_lifetime_patch.py', 'pin-manifest.json', 'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go'):
+            (classic / name).write_text('shared-classic-fixture')
         self.core = self.root / 'module-cache/core'
         self.core.mkdir(parents=True)
         (self.core / 'go.mod').write_text('module '+MODULE+'\n')
@@ -96,14 +102,18 @@ class ApplePreviewBuilderTest(unittest.TestCase):
     def recorded(self):
         return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
 
-    def test_default_commands_and_receipt_stay_legacy(self):
+    def test_default_uses_classic_only_disposable_core_without_routing_tag(self):
         result=self.run_builder('ios',self.output)
         self.assertEqual(result.returncode,0,result.stderr)
         calls=self.recorded(); bind=next(c for c in calls if c['tool']=='gomobile')
-        self.assertEqual(bind['cwd'],str(self.mobile))
+        self.assertEqual(bind['cwd'],str(self.output/'classic/mobile'))
         self.assertFalse(any(a.startswith('-tags=') for a in bind['args']))
         self.assertEqual(json.loads((self.output/'preview.json').read_text()),{'platform':'ios','core':VERSION,'preflightABI':1,'published':False})
         self.assertFalse((self.output/'routing').exists())
+        receipt=json.loads((self.output/'classic-preview.json').read_text())
+        self.assertTrue(receipt['classic_dns_lifetime_applied'])
+        self.assertEqual(receipt['routing_capability_expected'],0)
+        self.assertIn('third_party/xray-native-dns/classic_lifetime_patch.py',receipt['source_sha256'])
 
     def test_optional_build_uses_disposable_module_and_tag(self):
         original={p.name:p.read_bytes() for p in self.mobile.iterdir()}
@@ -118,6 +128,8 @@ class ApplePreviewBuilderTest(unittest.TestCase):
         self.assertFalse(receipt['runtime_executed'])
         self.assertEqual(receipt['core_replacement'],str(self.output/'routing/Core'))
         self.assertTrue(receipt['source_unchanged'] and receipt['module_cache_source_unchanged'] and receipt['copies_unchanged'])
+        self.assertTrue(receipt['classic_dns_lifetime_applied'])
+        self.assertIn('third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime.go',receipt['source_sha256'])
         self.assertEqual(original,{p.name:p.read_bytes() for p in self.mobile.iterdir()})
         self.assertEqual(cached,(self.core/'go.mod').read_bytes())
 
@@ -159,6 +171,12 @@ class ApplePreviewBuilderTest(unittest.TestCase):
         result=self.run_builder('ios',self.output,'--vpn-routing',environment=dict(self.env,MUTATE_INPUT=str(self.core/'go.mod')))
         self.assertNotEqual(result.returncode,0)
         self.assertFalse((self.output/'routing-preview.json').exists())
+
+    def test_shared_classic_helper_mutation_prevents_ordinary_success(self):
+        helper=self.root/'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime.go'
+        result=self.run_builder('ios',self.output,environment=dict(self.env,MUTATE_INPUT=str(helper)))
+        self.assertNotEqual(result.returncode,0)
+        self.assertFalse((self.output/'classic-preview.json').exists())
 
 
 if __name__ == '__main__':

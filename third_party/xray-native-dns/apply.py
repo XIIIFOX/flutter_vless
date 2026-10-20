@@ -272,6 +272,14 @@ func LookupForIP(domain string, strategy DomainStrategy, localAddr net.Address) 
     spec.loader.exec_module(module)
     module.apply(root, replace)
 
+    classic_patch = here / 'classic_lifetime_patch.py'
+    spec = importlib.util.spec_from_file_location('native_dns_classic_lifetime_patch', classic_patch)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    # managed_input_patch already owns the same dispatcher payload-release
+    # correction. Classic accepts only that exact state or ordinary pinned Core.
+    module.apply(root, replace)
+
     for source in sorted((here / 'overlay').rglob('*.go')):
         target = root / source.relative_to(here / 'overlay')
         if target.exists():

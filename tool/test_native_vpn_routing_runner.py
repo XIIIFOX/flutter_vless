@@ -34,6 +34,7 @@ class ApplyGuards(unittest.TestCase):
             with (mock.patch.object(applier, 'HERE', overlay_root),
                   mock.patch.object(applier, 'MANIFEST', manifest),
                   mock.patch.object(applier, 'patches', return_value=[('guarded.go', 'before\n', 'after\n')]),
+                  mock.patch.object(applier, 'apply_classic_lifetime', create=True),
                   mock.patch.object(applier.subprocess, 'run', side_effect=AssertionError('No Go allowed in fake-copy guards'))):
                 yield source, target, root, original
 
@@ -108,6 +109,28 @@ class ApplyGuards(unittest.TestCase):
 
 
 class RunnerGuards(unittest.TestCase):
+    def test_routing_and_classic_only_copies_apply_shared_lifetime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / 'source'; source.mkdir()
+            (source / 'guarded.go').write_text('before\n')
+            here = root / 'routing'; (here / 'overlay').mkdir(parents=True)
+            calls = []
+            def classic(copy):
+                calls.append(copy)
+                (copy / 'classic-proof').write_text('classic only')
+            with mock.patch.object(applier, 'HERE', here), \
+                    mock.patch.object(applier, 'MANIFEST', {'upstream_sha256': {'guarded.go': runner.digest(source / 'guarded.go')}}), \
+                    mock.patch.object(applier, 'patches', return_value=[('guarded.go', 'before\n', 'after\n')]), \
+                    mock.patch.object(applier, 'apply_classic_lifetime', side_effect=classic, create=True):
+                routed = applier.copy_and_apply(source, root / 'routed', caches=[])
+                self.assertEqual(calls, [routed])
+                plain = applier.copy_and_apply_classic(source, root / 'plain', caches=[])
+                self.assertEqual(calls, [routed, plain])
+                self.assertEqual((plain / 'guarded.go').read_text(), 'before\n')
+                self.assertEqual((routed / 'guarded.go').read_text(), 'after\n')
+                self.assertEqual((source / 'guarded.go').read_text(), 'before\n')
+
     def test_child_environment_is_local_and_browser_dialer_cannot_initialize(self):
         parent = {'XRAY_BROWSER_DIALER': '127.0.0.1:1', 'xray.browser.dialer': '127.0.0.1:2',
                   'XrAy_Unknown': 'private', 'GOTOOLCHAIN': 'auto', 'GOWORK': '/foreign', 'KEEP': 'yes'}

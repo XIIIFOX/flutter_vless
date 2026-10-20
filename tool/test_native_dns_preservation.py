@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile production DNS preparers; execute ordinary pinned Core only in CI."""
+"""Test native DNS preparation; run checked, lifetime-patched Core only in CI."""
 from __future__ import annotations
 
 import argparse
@@ -19,6 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / 'build/native_dns_preservation'
 WINDOWS = ROOT / 'packages/flutter_vless_windows/windows'
 MOBILE = ROOT / 'third_party/xray-mobile'
+CAPABILITY = ROOT / 'third_party/xray-native-dns'
+CLASSIC_PATCH = CAPABILITY / 'classic_lifetime_patch.py'
+CLASSIC_OVERLAY = CAPABILITY / 'overlay/app/dns'
 SWIFT = ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos'
 SELECTED_TEST = 'TestNativeDNSPreservation'
 PROTOCOL_TEST = 'TestNativeProtocolPreparation'
@@ -45,12 +48,71 @@ def child_environment(source):
     return result
 
 
+def prepare_classic_core(source, destination, manifest, *, patch_apply=None, overlay=CLASSIC_OVERLAY):
+    """Apply only Classic DNS lifetime edits in a checked, private Core copy."""
+    source, destination = Path(source), Path(destination)
+    resolved, origin = destination.resolve(), source.resolve()
+    if source.is_symlink() or not source.is_dir() or destination.exists() or destination.is_symlink():
+        raise ValueError('Classic DNS patch requires a real source and new destination')
+    if resolved == origin or origin in resolved.parents or any(
+            resolved.parts[index:index + 2] == ('pkg', 'mod') for index in range(len(resolved.parts) - 1)):
+        raise ValueError('Classic DNS patch destination must be outside source and module caches')
+    if any(path.is_symlink() for path in source.rglob('*')):
+        raise ValueError('Core source symlinks are unsupported')
+    allowed = {'app/dns/dns.go', 'app/dns/nameserver_udp.go', 'transport/internet/udp/dispatcher.go'}
+    expected = manifest['upstream_sha256']
+    if not allowed.issubset(expected) or any(
+            Path(name).is_absolute() or '..' in Path(name).parts for name in expected):
+        raise ValueError('Classic DNS upstream guards are incomplete')
+    if any(digest(source / name) != value for name, value in expected.items()):
+        raise ValueError('Pinned Core source mismatch before Classic DNS patch')
+    helpers = sorted(Path(overlay).glob('native_classic_*.go'))
+    if not {'native_classic_lifetime.go', 'native_classic_lifetime_test.go'}.issubset(path.name for path in helpers) \
+            or any(path.is_symlink() for path in helpers):
+        raise ValueError('Classic DNS lifetime helper sources are missing or unsafe')
+    shutil.copytree(source, destination, copy_function=shutil.copy2)
+    destination.chmod(destination.stat().st_mode | 0o700)
+    for path in destination.rglob('*'):
+        path.chmod(path.stat().st_mode | (0o700 if path.is_dir() else 0o200))
+
+    def replace(name, before, after):
+        if name not in allowed:
+            raise ValueError('Classic DNS patch attempted an unrelated Core edit')
+        path = destination / name
+        text = path.read_text()
+        if text.count(before) != 1:
+            raise ValueError('Classic DNS pinned replacement boundary changed: ' + name)
+        path.write_text(text.replace(before, after))
+
+    if patch_apply is None:
+        spec = importlib.util.spec_from_file_location('classic_dns_lifetime_patch', CLASSIC_PATCH)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        patch_apply = module.apply
+    patch_apply(destination, replace)
+    added = {}
+    for helper in helpers:
+        target = destination / 'app/dns' / helper.name
+        if target.exists() or target.is_symlink():
+            raise ValueError('Classic DNS helper would overwrite a Core file')
+        shutil.copyfile(helper, target)
+        added['app/dns/' + helper.name] = digest(target)
+    if any(digest(source / name) != value for name, value in expected.items()):
+        raise ValueError('Original Core source changed during Classic DNS preparation')
+    return {'kind': 'classic-udp-lifetime-only', 'source_unchanged': True,
+            'changed_upstream': {name: digest(destination / name) for name in allowed
+                                 if digest(destination / name) != expected[name]},
+            'added_files': added}
+
+
 def source_snapshot():
     paths = [Path(__file__).resolve(), ROOT / 'tool/test_native_dns_preservation_runner.py', ROOT / 'tool/test_native_dns_context_runtime.py',
              ROOT / 'third_party/xray-native-dns/pin-manifest.json', MOBILE / 'go.mod', MOBILE / 'go.sum',
              WINDOWS / 'xray_config.h', WINDOWS / 'desktop_security_test.cpp',
              WINDOWS / 'xray_config_test.cpp', WINDOWS / 'asset_location.h', WINDOWS / 'preparation_report.h',
              WINDOWS / 'third_party/nlohmann/json.hpp']
+    paths.append(CLASSIC_PATCH)
+    paths.extend(sorted(CLASSIC_OVERLAY.glob('native_classic_*.go')))
     paths.append(ROOT / 'tool/fixtures/compatibility/protocols.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/full-config.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/traffic-counters.json')
@@ -107,6 +169,14 @@ def require_ipv6_dns_runtime(output, preparers):
     if preparers not in (1, 2) or any(markers.count((transport, strategy)) != preparers
             for transport in ('udp', 'tcp') for strategy in ('UseIP', 'UseIPv4')):
         raise RuntimeError('Exact IPv6 DNS carrier runtime markers missing or duplicated')
+
+
+def require_ipv4_dns_runtime(output, preparers):
+    markers = re.findall(r'^\s+dns_ipv6_servers_test\.go:\d+: DNS_IPV4_UPSTREAM_RUNTIME_PASS transport=udp strategy=(UseIP|UseIPv4)\r?$',
+                         output, re.MULTILINE)
+    if preparers not in (1, 2) or any(markers.count(strategy) != preparers
+                                     for strategy in ('UseIP', 'UseIPv4')):
+        raise RuntimeError('Exact IPv4 Classic DNS lifetime control markers missing or duplicated')
 
 
 def cmd_path(path):
@@ -171,6 +241,7 @@ def main():
     common.EVIDENCE = EVIDENCE
     results = []
     report = {'runtime_requested': arguments.run_runtime, 'core_overlay_applied': False,
+              'native_dns_context_overlay_applied': False,
               'go_binary': str(Path(shutil.which(arguments.go) or arguments.go).resolve()), 'results': results}
     environment = child_environment(os.environ)
     core_source = None
@@ -214,8 +285,19 @@ def main():
         report['core_module_sum'] = metadata['Sum']
         if any(digest(core_source / path) != expected for path, expected in manifest['upstream_sha256'].items()):
             raise RuntimeError('Ordinary Core source cache does not match pin')
+        module_flags = []
+        if arguments.run_runtime:
+            classic_core = EVIDENCE / 'ClassicCore'
+            report['classic_lifetime_patch'] = prepare_classic_core(core_source, classic_core, manifest)
+            report['core_overlay_applied'] = True
+            modfile = EVIDENCE / 'classic-lifetime.mod'
+            shutil.copyfile(MOBILE / 'go.mod', modfile)
+            shutil.copyfile(MOBILE / 'go.sum', modfile.with_suffix('.sum'))
+            checked('classic-lifetime-modfile', [arguments.go, 'mod', 'edit', '-modfile=' + str(modfile),
+                    '-replace=' + manifest['module'] + '=' + str(classic_core)], 30, MOBILE)
+            module_flags = ['-modfile=' + str(modfile)]
         binary = EVIDENCE / ('acceptance.test.exe' if os.name == 'nt' else 'acceptance.test')
-        checked('acceptance-compile', [arguments.go, 'test', '-c', '-o', str(binary), './native_dns_preservation'], 300, MOBILE)
+        checked('acceptance-compile', [arguments.go, 'test', *module_flags, '-c', '-o', str(binary), './native_dns_preservation'], 300, MOBILE)
         report['acceptance_sha256'] = digest(binary)
         # Decode/build, file-only preparers, a static-host matcher and an inert
         # selector manager: no Core instance, listener, resolver or engine.
@@ -239,12 +321,14 @@ def main():
             preparers = 1 + bool(runtime_environment.get('NATIVE_DNS_PREPARER_APPLE'))
             require_transport_data_runtime(output, preparers)
             require_ipv6_dns_runtime(output, preparers)
+            require_ipv4_dns_runtime(output, preparers)
             results[-1]['selected_test_pass'] = True
             results[-1]['selected_tests'] = [SELECTED_TEST]
             results[-1]['transport_data_runtime_modes_per_preparer'] = 2
             results[-1]['transport_data_runtime_preparers'] = preparers
             results[-1]['independent_download_runtime_modes_per_preparer'] = 1
             results[-1]['ipv6_dns_runtime_modes_per_preparer'] = 4
+            results[-1]['ipv4_dns_lifetime_modes_per_preparer'] = 2
         if source_snapshot() != report['source_sha256']:
             raise RuntimeError('Production preparer/acceptance source changed during verification')
         report['source_snapshot_unchanged'] = True

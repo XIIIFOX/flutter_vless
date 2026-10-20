@@ -173,6 +173,148 @@ class PreservationRunnerGuards(unittest.TestCase):
             with self.subTest(count=count, output=output), self.assertRaises(RuntimeError):
                 runner.require_ipv6_dns_runtime(output, count)
 
+    def test_ipv4_classic_lifetime_modes_are_both_required(self):
+        lines = [f'    dns_ipv6_servers_test.go:10: DNS_IPV4_UPSTREAM_RUNTIME_PASS transport=udp strategy={strategy}\n'
+                 for strategy in ('UseIP', 'UseIPv4')]
+        valid = ''.join(lines)
+        runner.require_ipv4_dns_runtime(valid, 1)
+        runner.require_ipv4_dns_runtime(valid * 2, 2)
+        for output, count in [('', 1), (lines[0], 1), (valid + lines[0], 1), (valid, 2),
+                              (valid * 2, 1), (valid, 0),
+                              (valid.replace('transport=udp', 'transport=tcp'), 1),
+                              (valid.replace('dns_ipv6_servers_test.go:', 'unrelated.go:'), 1)]:
+            with self.subTest(output=output, count=count), self.assertRaises(RuntimeError):
+                runner.require_ipv4_dns_runtime(output, count)
+
+    def test_classic_lifetime_copy_uses_checked_disposable_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            source, overlay = base / 'upstream', base / 'overlay'
+            overlay.mkdir()
+            required = ('app/dns/dns.go', 'app/dns/nameserver_udp.go',
+                        'transport/internet/udp/dispatcher.go')
+            for name in required:
+                path = source / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('original ' + name)
+                path.chmod(0o444)
+            for name in ('native_classic_lifetime.go', 'native_classic_lifetime_test.go'):
+                (overlay / name).write_text('package dns\n')
+            manifest = {'upstream_sha256': {name: runner.digest(source / name) for name in required}}
+            original = dict(manifest['upstream_sha256'])
+            calls = []
+
+            def patch(root, replace):
+                calls.append(root)
+                replace(required[0], 'original', 'patched')
+
+            destination = base / 'copy'
+            report = runner.prepare_classic_core(source, destination, manifest,
+                                                 patch_apply=patch, overlay=overlay)
+            self.assertEqual(calls, [destination])
+            self.assertEqual((destination / required[0]).read_text(), 'patched ' + required[0])
+            self.assertEqual({name: runner.digest(source / name) for name in required}, original)
+            self.assertEqual(set(report['changed_upstream']), {required[0]})
+            self.assertEqual(len(report['added_files']), 2)
+            self.assertTrue(report['source_unchanged'])
+            with self.assertRaises(ValueError):
+                runner.prepare_classic_core(source, destination, manifest,
+                                            patch_apply=patch, overlay=overlay)
+            with self.assertRaises(ValueError):
+                runner.prepare_classic_core(source, source / 'nested', manifest,
+                                            patch_apply=patch, overlay=overlay)
+            self.assertEqual(calls, [destination])
+            (source / required[0]).chmod(0o644)
+            (source / required[0]).write_text('tampered')
+            with self.assertRaises(ValueError):
+                runner.prepare_classic_core(source, base / 'bad-copy', manifest,
+                                            patch_apply=patch, overlay=overlay)
+            self.assertFalse((base / 'bad-copy').exists())
+
+    def test_classic_lifetime_copy_refuses_symlinks_and_unowned_edits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            source, overlay = base / 'upstream', base / 'overlay'
+            overlay.mkdir()
+            required = ('app/dns/dns.go', 'app/dns/nameserver_udp.go',
+                        'transport/internet/udp/dispatcher.go')
+            for name in required:
+                path = source / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('original')
+            for name in ('native_classic_lifetime.go', 'native_classic_lifetime_test.go'):
+                (overlay / name).write_text('package dns\n')
+            manifest = {'upstream_sha256': {name: runner.digest(source / name) for name in required}}
+            alias = source / 'alias'
+            alias.write_text('filesystem boundary control')
+            actual_is_symlink = Path.is_symlink
+            # Exercise refusal without requiring Windows symlink privileges.
+            with mock.patch.object(Path, 'is_symlink',
+                    lambda path: path == alias or actual_is_symlink(path)), self.assertRaises(ValueError):
+                runner.prepare_classic_core(source, base / 'symlink-copy', manifest,
+                                            patch_apply=lambda *_: None, overlay=overlay)
+            self.assertFalse((base / 'symlink-copy').exists())
+            (source / 'alias').unlink()
+            def unowned(root, replace):
+                replace('go.mod', 'module', 'changed')
+            with self.assertRaises(ValueError):
+                runner.prepare_classic_core(source, base / 'unowned-copy', manifest,
+                                            patch_apply=unowned, overlay=overlay)
+            self.assertFalse((source / 'go.mod').exists())
+
+    def test_runtime_uses_lifetime_copy_and_alternate_modfile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            evidence, source = base / 'evidence', base / 'original-core'
+            source.mkdir()
+            (source / 'guarded.go').write_text('original')
+            manifest = {'module': 'synthetic.invalid/core', 'module_version': 'v1.0.0',
+                        'module_sum': 'synthetic',
+                        'upstream_sha256': {'guarded.go': runner.digest(source / 'guarded.go')}}
+            commands = []
+            def checked(name, command, **kwargs):
+                commands.append((name, command))
+                kwargs['results'].append({'name': name, 'exit_code': 0})
+                if '-o' in command:
+                    Path(command[command.index('-o') + 1]).write_text('compiled')
+                if name == 'core-pin':
+                    (evidence / 'core-pin.log').write_text(json.dumps(
+                        {'Version': 'v1.0.0', 'Sum': 'synthetic', 'Dir': str(source)}))
+                if name == 'protocol-preparation-pure':
+                    selection = command[command.index('-test.run') + 1][2:-2]
+                    (evidence / 'protocol-preparation-pure.log').write_text(''.join(
+                        f'--- PASS: {test} (0.01s)\n' for test in selection.split('|')))
+                if name == 'actual-core-dns':
+                    (evidence / 'actual-core-dns.log').write_text(
+                        '--- PASS: TestNativeDNSPreservation (0.01s)\n' +
+                        ''.join(f'    xhttp_runtime_test.go:10: XHTTP_TRANSPORT_DATA_MAPS_PASS chained={mode}\n'
+                                for mode in ('true', 'false')) +
+                        '    xhttp_runtime_test.go:10: XHTTP_INDEPENDENT_DOWNLOAD_PASS\n' +
+                        ''.join(f'    dns_ipv6_servers_test.go:10: DNS_IPV6_UPSTREAM_RUNTIME_PASS transport={transport} strategy={strategy}\n'
+                                for transport in ('udp', 'tcp') for strategy in ('UseIP', 'UseIPv4')) +
+                        ''.join(f'    dns_ipv6_servers_test.go:10: DNS_IPV4_UPSTREAM_RUNTIME_PASS transport=udp strategy={strategy}\n'
+                                for strategy in ('UseIP', 'UseIPv4')))
+            with mock.patch.object(runner, 'EVIDENCE', evidence), \
+                    mock.patch.object(runner.sys, 'argv', ['runner', '--run-runtime']), \
+                    mock.patch.object(runner.platform, 'system', return_value='Linux'), \
+                    mock.patch.object(runner.common, 'runtime_authorized', return_value=True), \
+                    mock.patch.object(runner.common, 'MANIFEST', manifest), \
+                    mock.patch.object(runner, 'source_snapshot', return_value={'synthetic': 'hash'}), \
+                    mock.patch.object(runner.common, 'checked', side_effect=checked), \
+                    mock.patch.object(runner, 'prepare_classic_core', return_value={'kind': 'classic-udp-lifetime-only'}) as prepare:
+                self.assertEqual(runner.main(), 0)
+            prepare.assert_called_once_with(source.resolve(), evidence / 'ClassicCore', manifest)
+            compile_command = next(command for name, command in commands if name == 'acceptance-compile')
+            self.assertIn('-modfile=' + str(evidence / 'classic-lifetime.mod'), compile_command)
+            edit = next(command for name, command in commands if name == 'classic-lifetime-modfile')
+            self.assertIn('-replace=synthetic.invalid/core=' + str(evidence / 'ClassicCore'), edit)
+            self.assertEqual((source / 'guarded.go').read_text(), 'original')
+            report = json.loads((evidence / 'result.json').read_text())
+            self.assertTrue(report['core_overlay_applied'])
+            self.assertFalse(report['native_dns_context_overlay_applied'])
+            self.assertEqual(report['classic_lifetime_patch']['kind'], 'classic-udp-lifetime-only')
+            self.assertTrue(report['success'])
+
     def test_default_selects_pure_preparation_without_core_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = Path(directory) / 'evidence'

@@ -79,14 +79,17 @@ func testIPv6DNSServers(t *testing.T, native bool) {
 	}
 }
 
-func ipv6DNSHeader() []byte {
-	address := netip.MustParseAddr("2001:db8::53").As16()
-	return binary.BigEndian.AppendUint16(append([]byte{0, 0, 0, 4}, address[:]...), 18053)
+func dnsIPCarrierHeader(address netip.Addr) []byte {
+	kind := byte(4)
+	if address.Is4() {
+		kind = 1
+	}
+	return binary.BigEndian.AppendUint16(append([]byte{0, 0, 0, kind}, address.AsSlice()...), 18053)
 }
 
 // The carrier is IPv4-only. Its SOCKS destination is nevertheless the exact
 // caller IPv6 DNS address. No physical IPv6 listener or resolver is involved.
-func ipv6DNSCarrier(t *testing.T, observed *fixture, associations, callbacks *atomic.Int64, transport, nonce string) int {
+func ipv6DNSCarrier(t *testing.T, observed *fixture, associations, callbacks *atomic.Int64, transport, nonce string, resolver netip.Addr) int {
 	t.Helper()
 	answer := func(packet []byte) ([]byte, error) {
 		var request dns.Msg
@@ -125,9 +128,9 @@ func ipv6DNSCarrier(t *testing.T, observed *fixture, associations, callbacks *at
 				}
 				return
 			}
-			header := ipv6DNSHeader()
+			header := dnsIPCarrierHeader(resolver)
 			if transport != "udp" || associations.Load() == 0 || !peer.Addr().Is4() || n <= len(header) || !bytes.Equal(packet[:len(header)], header) {
-				observed.fail(errors.New("DNS UDP destination was not exact IPv6 ATYP4 through its live IPv4 association"))
+				observed.fail(errors.New("DNS UDP destination lost exact IP family/address/port or live IPv4 association"))
 				continue
 			}
 			response, err := answer(packet[len(header):n])
@@ -184,12 +187,12 @@ func ipv6DNSCarrier(t *testing.T, observed *fixture, associations, callbacks *at
 			}
 			return
 		}
-		if transport != "tcp" || request != [4]byte{5, 1, 0, 4} {
-			observed.fail(errors.New("DNS TCP destination did not use exact IPv6 ATYP4"))
+		if transport != "tcp" || request != [4]byte{5, 1, 0, dnsIPCarrierHeader(resolver)[3]} {
+			observed.fail(errors.New("DNS TCP destination did not use exact address family"))
 			return
 		}
-		var target [18]byte
-		if _, err := io.ReadFull(connection, target[:]); err != nil || !bytes.Equal(target[:], ipv6DNSHeader()[4:]) {
+		target := make([]byte, len(dnsIPCarrierHeader(resolver))-4)
+		if _, err := io.ReadFull(connection, target); err != nil || !bytes.Equal(target, dnsIPCarrierHeader(resolver)[4:]) {
 			observed.fail(errors.New("DNS TCP target address/port changed"))
 			return
 		}
@@ -235,10 +238,22 @@ func ipv6DNSCarrier(t *testing.T, observed *fixture, associations, callbacks *at
 }
 
 func testNativeIPv6DNS(t *testing.T) {
+	testNativeDNSIPLifetime(t, netip.MustParseAddr("2001:db8::53"), []string{"udp", "tcp"})
+}
+
+func testNativeIPv4DNS(t *testing.T) {
+	testNativeDNSIPLifetime(t, netip.MustParseAddr("192.0.2.53"), []string{"udp"})
+}
+
+func testNativeDNSIPLifetime(t *testing.T, resolver netip.Addr, transports []string) {
+	family := 6
+	if resolver.Is4() {
+		family = 4
+	}
 	if !strings.EqualFold(os.Getenv("CI"), "true") || runtime.GOOS == "darwin" && !strings.EqualFold(os.Getenv("GITHUB_ACTIONS"), "true") {
 		t.Fatal("actual IPv6 DNS Core execution is CI-only")
 	}
-	for _, transport := range []string{"udp", "tcp"} {
+	for _, transport := range transports {
 		for _, strategy := range []string{"UseIP", "UseIPv4"} {
 			t.Run(transport+"/"+strategy, func(t *testing.T) {
 				var lookups, associations, callbacks atomic.Int64
@@ -271,7 +286,7 @@ func testNativeIPv6DNS(t *testing.T) {
 						return
 					}
 					if !t.Failed() {
-						t.Logf("DNS_IPV6_UPSTREAM_RUNTIME_PASS transport=%s strategy=%s", transport, strategy)
+						t.Logf("DNS_IPV%d_UPSTREAM_RUNTIME_PASS transport=%s strategy=%s", family, transport, strategy)
 					}
 				})
 				var nonce [16]byte
@@ -279,7 +294,7 @@ func testNativeIPv6DNS(t *testing.T) {
 					t.Fatal(err)
 				}
 				name := "dns-v6-" + hex.EncodeToString(nonce[:]) + ".invalid"
-				carrier := ipv6DNSCarrier(t, observed, &associations, &callbacks, transport, name)
+				carrier := ipv6DNSCarrier(t, observed, &associations, &callbacks, transport, name, resolver)
 				cases := preparationCorpus(t, "dns-ipv6-servers.json", 4)
 				index := 0
 				if transport == "tcp" {
@@ -292,6 +307,10 @@ func testNativeIPv6DNS(t *testing.T) {
 				policy := source["dns"].(map[string]any)
 				policy["queryStrategy"] = strategy
 				server := policy["servers"].([]any)[0].(map[string]any)
+				server["address"] = resolver.String()
+				if transport == "tcp" {
+					server["address"] = "tcp://" + net.JoinHostPort(resolver.String(), "18053")
+				}
 				server["queryStrategy"], server["domains"] = strategy, []string{"full:" + name}
 				prepared, port := prepare(t, source)
 				decoded, err := serial.DecodeJSONConfig(bytes.NewReader(prepared))
@@ -318,7 +337,7 @@ func testNativeIPv6DNS(t *testing.T) {
 						time.Sleep(10 * time.Millisecond)
 					}
 					if associations.Load() != 0 || callbacks.Load() != 0 {
-						t.Error("Core Stop retained its IPv6 DNS carrier association/callback")
+						t.Errorf("Core Stop retained its IPv%d DNS carrier association/callback", family)
 					}
 				})
 				if err := engine.Start(); err != nil {

@@ -188,6 +188,22 @@ def require_selected_test_pass(output, name):
         raise RuntimeError('Selected actual runtime acceptance test did not report PASS')
 
 
+def require_classic_lifetime_pass(output):
+    names = [
+        'TestNativeClassicLifetimeClosesBothFamilies',
+        'TestNativeClassicLifetimeClosesBeforeQueryAndConcurrentClose',
+        'TestNativeClassicLifetimeInterruptsBlockedDispatch',
+        'TestNativeClassicLifetimeRegistrationStartCloseOrder',
+        'TestNativeClassicLifetimeEDNSRetryAndLateAdmission',
+        'TestNativeClassicLifetimeClosedDispatcherReleasesPayload',
+    ]
+    if re.search(r'^\s*--- (SKIP|FAIL): TestNativeClassicLifetime', output, re.MULTILINE) or any(
+            len(re.findall(r'^--- PASS: ' + re.escape(name) + r' \(', output, re.MULTILINE)) != 1
+            for name in names):
+        raise RuntimeError('Classic DNS lifetime controls missing, duplicated, failed or skipped')
+    return names
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-runtime', action='store_true')
@@ -263,6 +279,9 @@ def main():
             selection = '^TestNative'
             checked(name + '-pure-tests', [str(binary), '-test.run', selection, '-test.v', '-test.timeout=20s'],
                     cwd=core, environment=environment, seconds=35, results=results)
+            if name == 'appdns':
+                results[-1]['classic_lifetime_selected_tests'] = require_classic_lifetime_pass(
+                    (EVIDENCE / (name + '-pure-tests.log')).read_text(encoding='utf-8'))
         binary = EVIDENCE / ('acceptance.test.exe' if os.name == 'nt' else 'acceptance.test')
         checked('runtime-compile', [arguments.go, 'test', '-c', '-o', str(binary), './native_dns_context_runtime'],
                 cwd=core, environment=environment, seconds=300, results=results)

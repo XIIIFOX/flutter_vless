@@ -2,6 +2,7 @@
 """Apply the optional routing seam only to a new disposable pinned Core copy."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -10,9 +11,51 @@ import subprocess
 
 HERE = Path(__file__).resolve().parent
 MANIFEST = json.loads((HERE / 'pin-manifest.json').read_text())
+CLASSIC = HERE.parent / 'xray-native-dns'
 
 
-def copy_and_apply(source, destination, *, go='go', caches=None):
+def classic_input_paths():
+    return [CLASSIC / 'classic_lifetime_patch.py', CLASSIC / 'pin-manifest.json',
+            CLASSIC / 'overlay/app/dns/native_classic_lifetime.go',
+            CLASSIC / 'overlay/app/dns/native_classic_lifetime_test.go']
+
+
+def apply_classic_lifetime(root):
+    """Only the family-neutral Classic lifetime patch, never strict DNS policy."""
+    inputs = classic_input_paths()
+    if any(path.is_symlink() or not path.is_file() for path in inputs):
+        raise ValueError('Classic lifetime inputs must be real files')
+    manifest = json.loads((CLASSIC / 'pin-manifest.json').read_text())
+    if any(manifest[key] != MANIFEST[key] for key in ('module', 'module_version', 'module_sum', 'core_commit')):
+        raise ValueError('Classic lifetime and routing Core pins differ')
+    allowed = {'app/dns/dns.go', 'app/dns/nameserver_udp.go', 'transport/internet/udp/dispatcher.go'}
+    for name in allowed:
+        if hashlib.sha256((root / name).read_bytes()).hexdigest() != manifest['upstream_sha256'][name]:
+            raise ValueError('Pinned Classic lifetime source mismatch: ' + name)
+    def replace(name, before, after):
+        if name not in allowed:
+            raise ValueError('Classic lifetime attempted an unrelated edit')
+        path = root / name
+        source = path.read_text()
+        if source.count(before) != 1:
+            raise ValueError('Pinned Classic replacement mismatch: ' + name)
+        path.write_text(source.replace(before, after))
+    spec = importlib.util.spec_from_file_location('routing_classic_lifetime', CLASSIC / 'classic_lifetime_patch.py')
+    patch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(patch)
+    patch.apply(root, replace)
+    for helper in inputs[2:]:
+        target = root / 'app/dns' / helper.name
+        if target.exists() or target.is_symlink():
+            raise ValueError('Classic lifetime helper collision')
+        shutil.copyfile(helper, target)
+
+
+def copy_and_apply_classic(source, destination, *, go='go', caches=None):
+    return copy_and_apply(source, destination, go=go, caches=caches, routing=False)
+
+
+def copy_and_apply(source, destination, *, go='go', caches=None, routing=True):
     source, destination = Path(source).resolve(), Path(destination).absolute()
     if destination.exists() or destination.is_symlink():
         raise ValueError('Destination must be new')
@@ -33,11 +76,11 @@ def copy_and_apply(source, destination, *, go='go', caches=None):
         if hashlib.sha256((source / relative).read_bytes()).hexdigest() != expected:
             raise ValueError('Pinned source mismatch: ' + relative)
     # Validate every replacement before copying; no source or cache mutation.
-    replacements = patches()
+    replacements = patches() if routing else []
     for relative, before, _ in replacements:
         if (source / relative).read_text().count(before) != 1:
             raise ValueError('Pinned replacement mismatch: ' + relative)
-    overlays = sorted((HERE / 'overlay').rglob('*.go'))
+    overlays = sorted((HERE / 'overlay').rglob('*.go')) if routing else []
     for overlay in overlays:
         if (source / overlay.relative_to(HERE / 'overlay')).exists():
             raise ValueError('Overlay path already exists')
@@ -51,6 +94,7 @@ def copy_and_apply(source, destination, *, go='go', caches=None):
         target = destination / overlay.relative_to(HERE / 'overlay')
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(overlay, target)
+    apply_classic_lifetime(destination)
     return destination
 
 

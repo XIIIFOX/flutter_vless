@@ -146,6 +146,7 @@ Track the small delivery gates separately from the eight full requirements:
 | Preserve caller DNS and private A/AAAA path | Qualified controlled baseline on all four native platforms | Caller DNS and controlled FakeDNS Core/Android TUN/Windows TUN/both released Apple SDK gates pass. Combined Apple HEV/FakeDNS, physical devices and wider DNS semantics remain open. |
 | DNS dictionary data, remote URL data and system-hosts flag | Qualified controlled increment | Shared five-profile preparation, all four public message adapters and Android JVM controls pass. Expanded Core traffic passes all three OS jobs at f5e0a88; both released Apple SDKs and Android's augmented CallerRoot DNS tests pass at e2acc10. Physical/system-VPN and wider DNS acceptance remain separate. |
 | IPv6 caller DNS server addresses | Preparation qualified; UDP/TCP runtime pending | Both Apple preparers and Windows preserve numeric IPv6 servers and static resolver mappings, including mixed address families. The 33 inert preparation cases pass; exact IPv6 destinations carried through an IPv4 proxy still require the new remote Core traffic gate. Android already admits these address families. |
+| Classic UDP DNS shutdown | Implementation and remote acceptance in progress | New real-traffic checks receive the expected DNS answers, but unmodified pinned Core retains the detached UDP channel after Close. The shared lifetime patch closes the channel and cleanup timer, fences late normal/EDNS sends and retains caller policy; both address families require the new runtime gate. |
 | Protocol/transport preparation and controlled XHTTP | Qualified | Shared pinned-Core corpus and controlled payloads; the exhaustive external-server matrix is deferred. |
 | Typed transport headers and XHTTP download policy | Qualified controlled increment | The ten-profile transport dictionary corpus checks 18 raw maps and effective pinned-Core headers through both native preparers, public import/start/delay on all four message adapters and Android's actual prepare/build path. This covers data preservation, not a full transport handshake matrix. |
 | Routing attribute dictionary data | Preparation qualified | Shared literal regex corpus, all four public import/start/delay adapters, Android producer and actual pinned-Core attribute matching pass. Both native preparers retain the exact compiled rule; this is separate from system-VPN traffic. |
@@ -184,6 +185,17 @@ physical IPv6 protection or Apple transport endpoint bootstrap. The new runtime
 gate targets UDP and TCP logical IPv6 DNS destinations through an IPv4 SOCKS
 carrier; broader DNS transports, direct IPv6 and IPv6-only VPN endpoints remain
 separate acceptance work.
+
+The first IPv6 DNS wire run at `b4d0277` receives the exact A/AAAA responses and
+retains `UseIPv4` NODATA, with zero OS resolver calls. Its TCP modes pass, but UDP
+channels remain active beyond the three-second post-Close observation on all
+three Core systems. Pinned Core detaches the Classic DNS channel from the query
+context and keeps a one-minute inactivity timer; its DNS feature does not close
+that channel. This is family-independent retention, not proof of a permanent
+leak. The subsequent guarded lifetime patch also covers IPv4 controls. Runtime
+preparation tests that use this patch report a checked disposable Core copy and
+alternate module file explicitly; their pure default baseline remains upstream
+Core. No module-cache source or published runtime pin is changed.
 
 The physical iPhone preview at `ae68d75` also checks A and AAAA requests from
 an actual app UDP socket to this virtual resolver with caller `UseIPv4` and no
@@ -274,8 +286,12 @@ uses nonblocking I/O with one three-second invocation budget, capped by a shared
 six-second VPN or five-second proxy startup budget. Authentication fragments and
 retries keep that deadline; cancellation and expiry are checked after socket
 cleanup and before admitting the listener to the next setup operation. The 52
-inert actual-method controls cover these boundaries; Windows runtime acceptance
-for this follow-up is pending. These budgets do not bound the entire Stop call,
+inert actual-method controls cover these boundaries. The
+[Windows run at `23bb13d`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39365877362)
+passes all six jobs: those 52 controls and the existing 20 packet controls per
+system, both example builds and 460 VPN/proxy/portable traffic rows across Windows
+2022/2025. Its two follow-up test-only repairs address MSVC warnings; production
+runtime code is identical to `b4d0277`. These budgets do not bound the entire Stop call,
 subsequent WinInet operations or OS scheduling latency.
 
 Focused controls exercise actual probe methods with in-memory I/O and clocks.

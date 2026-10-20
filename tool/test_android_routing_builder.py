@@ -71,6 +71,10 @@ def copy_and_apply(source,destination,**kwargs):
  assert 'replace ' not in (source/'go.mod').read_text()
  shutil.copytree(source,destination);(destination/'routing-applied').write_text('routing')
  return destination
+def copy_and_apply_classic(source,destination,**kwargs):
+ destination=copy_and_apply(source,destination,**kwargs)
+ (destination/'classic-applied').write_text('classic')
+ return destination
 '''
 
 
@@ -100,6 +104,9 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
         (capability/'overlay/main/native_routing_cli.go').write_text('package main\n')
         (capability/'pin-manifest.json').write_text(json.dumps({'module':CORE,'module_version':VERSION,'module_sum':SUM,'core_commit':'92ccc939aaf4','capability':'native-vpn-routing-source-preview-v1'}))
         (capability/'apply.py').write_text(ROUTING)
+        classic=self.root/'third_party/xray-native-dns';(classic/'overlay/app/dns').mkdir(parents=True)
+        for name in ('classic_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go'):
+            (classic/name).write_text('shared classic fixture')
         self.cache = self.root/'module-cache/Core';self.cache.mkdir(parents=True)
         (self.cache/'go.mod').write_text('module '+CORE+'\n')
         (self.cache/'go.sum').write_text('fixture sums\n')
@@ -137,8 +144,14 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
             self.assertFalse(any(a.startswith('-tags') for a in c['args']))
             self.assertIn('-buildmode=pie',c['args']);self.assertIn('-Wl,-z,max-page-size=16384',c['ldflags'])
             self.assertEqual(Path(c['args'][c['args'].index('-o')+1]).name,'libxray.so')
-        self.assertFalse(any(c['tool']=='routing' for c in calls))
+        self.assertEqual(len([c for c in calls if c['tool']=='routing']),1)
+        self.assertTrue(all((Path(c['cwd'])/'classic-applied').is_file() for c in builds))
         self.assertFalse(list(self.output.glob('routing-preview-*.json')));self.assertEqual(tree(self.cache),cache)
+        receipts=list(self.output.glob('classic-preview-*.json'));self.assertEqual(len(receipts),1)
+        receipt=json.loads(receipts[0].read_text())
+        self.assertTrue(receipt['classic_dns_lifetime_applied'])
+        self.assertEqual(receipt['routing_capability_expected'],0)
+        self.assertTrue(receipt['module_cache_source_unchanged'] and receipt['copies_unchanged'])
 
     def test_optin_composes_before_edits_and_uses_readonly_local_graph(self):
         original,cache=tree(self.mobile),tree(self.cache)
@@ -159,11 +172,40 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
         self.assertTrue(receipt['source_unchanged'] and receipt['module_cache_source_unchanged'] and receipt['copies_unchanged'])
         self.assertEqual(len(receipt['artifacts_sha256']),4)
         self.assertEqual(tree(self.mobile),original);self.assertEqual(tree(self.cache),cache)
+        self.assertIn('third_party/xray-native-dns/classic_lifetime_patch.py',receipt['source_sha256'])
 
     def test_optin_requires_explicit_target_before_go(self):
         self.environment.pop('TARGET_DIR')
         self.assertNotEqual(self.run_builder(routing=True).returncode,0)
         self.assertEqual(self.recorded(),[])
+
+    def assert_ordinary_output_symlink_refused(self, file_link):
+        self.output.mkdir()
+        abi=self.output/'x86_64'
+        if file_link:
+            abi.mkdir();(abi/'libxray.so').symlink_to(self.cache/'go.mod')
+        else:
+            abi.symlink_to(self.cache,target_is_directory=True)
+        before=tree(self.cache)
+        result=self.run_builder(XRAY_BUILD_ARM64='0',XRAY_BUILD_ARMV7='0',XRAY_BUILD_X86='0',XRAY_BUILD_X86_64='1')
+        self.assertNotEqual(result.returncode,0)
+        self.assertFalse(any(c['tool']=='go' and c['args'][0]=='build' for c in self.recorded()))
+        self.assertEqual(tree(self.cache),before)
+
+    def test_ordinary_abi_symlink_is_refused_before_compiler(self):
+        self.assert_ordinary_output_symlink_refused(False)
+
+    def test_ordinary_output_file_symlink_is_refused_before_compiler(self):
+        self.assert_ordinary_output_symlink_refused(True)
+
+    def test_ordinary_cache_output_refused_before_directory_creation(self):
+        output=self.cache/'uncreated-output'
+        before=tree(self.cache)
+        result=self.run_builder(TARGET_DIR=str(output))
+        self.assertNotEqual(result.returncode,0)
+        self.assertFalse(output.exists())
+        self.assertEqual(tree(self.cache),before)
+        self.assertFalse(any(c['tool']=='go' and c['args'][0]=='build' for c in self.recorded()))
 
     def test_wrong_pin_or_checksum_refused_before_copy_or_build(self):
         for values in [{'PIN_VERSION':'wrong'},{'PIN_SUM':'wrong'}]:

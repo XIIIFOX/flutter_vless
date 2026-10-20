@@ -44,6 +44,8 @@ echo "Using vendored xray-mobile source from $XRAY_MOBILE_DIR"
 
 # Xray-core uses calendar release tags but keeps the original module path.
 go get "github.com/xtls/xray-core@$XRAY_CORE_REF"
+python3 "$REPO_ROOT/tool/prepare_apple_classic_core.py" \
+    --mobile "$PWD" --destination "$PWD/../Core-classic" --go "$(command -v go)"
 MOBILE_VERSION="$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
 go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
 mkdir -p "$BUILD_DIR/tools"

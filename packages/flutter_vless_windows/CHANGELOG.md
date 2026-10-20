@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Include Classic DNS UDP channel/timer cleanup in locally built Core artifacts; retain caller DNS policies and address families.
+
 * Accept numeric IPv6 caller DNS addresses without changing the caller's DNS data or physical endpoint protection. Add paired native preparation regressions.
 
 * Bound SOCKS-listener readiness across startup retries and authentication with one cancellable deadline. Check cancellation and expiry after socket cleanup and before admitting the listener to VPN/proxy setup.

@@ -19,17 +19,18 @@ OUTPUT="$(cd "$OUTPUT" && pwd)"
 test ! -e "$OUTPUT/XRay.xcframework" || { echo 'Output already exists; preserve or remove it explicitly' >&2; exit 2; }
 MOBILE="$ROOT/third_party/xray-mobile"
 BIND_TAG=""
-if [[ "$ROUTING" == 1 ]]; then
+if true; then
     # gomobile creates its own per-architecture modules. Use a disposable
     # mobile module too, so no ambient -modfile propagation is required.
     unset GOFLAGS
     export GOTOOLCHAIN=local GOWORK=off
-    python3 - "$ROOT" "$OUTPUT" <<'PY'
+    python3 - "$ROOT" "$OUTPUT" "$ROUTING" <<'PY'
 from pathlib import Path
 import hashlib, importlib.util, json, re, shutil, subprocess, sys
-root, output = map(Path, sys.argv[1:])
+root, output = map(Path, sys.argv[1:3])
+routing = sys.argv[3] == '1'
 mobile, capability = root/'third_party/xray-mobile', root/'third_party/xray-vpn-routing'
-work = output/'routing'
+work = output/('routing' if routing else 'classic')
 if work.exists() or work.is_symlink():
     raise SystemExit('Routing build directory must be new')
 manifest = json.loads((capability/'pin-manifest.json').read_text())
@@ -50,13 +51,16 @@ def tree(path):
 def inputs():
     paths = [root/'tool/build_apple_core_preview.sh', mobile/'go.mod', mobile/'go.sum', capability/'apply.py', capability/'pin-manifest.json']
     paths += sorted(mobile.glob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
+    classic = root/'third_party/xray-native-dns'
+    paths += [classic/name for name in ('classic_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
     if any(p.is_symlink() for p in paths): raise ValueError('Input symlinks are unsupported')
     return {str(p.relative_to(root)):digest(p) for p in paths}
 before, cache_before = inputs(), tree(source)
 spec = importlib.util.spec_from_file_location('apple_routing_applier', capability/'apply.py')
 applier = importlib.util.module_from_spec(spec); spec.loader.exec_module(applier)
 work.mkdir()
-core = applier.copy_and_apply(source, work/'Core')
+copy = applier.copy_and_apply if routing else applier.copy_and_apply_classic
+core = copy(source, work/'Core')
 copied = work/'mobile'; copied.mkdir()
 for path in [mobile/'go.mod', mobile/'go.sum', *sorted(mobile.glob('*.go'))]:
     shutil.copyfile(path, copied/path.name)
@@ -66,11 +70,15 @@ state = {'success':False, 'core':version, 'core_module':module, 'core_sum':check
          'core_source':str(source), 'core_replacement':str(core), 'source_sha256':before,
          'module_cache_before_sha256':cache_before, 'core_copy_sha256':tree(core),
          'mobile_copy_sha256':tree(copied), 'routing_tag':'flutter_vless_vpn_routing',
-         'routing_capability_expected':1, 'runtime_executed':False, 'published':False}
+         'routing_capability_expected':1 if routing else 0, 'classic_dns_lifetime_applied':True, 'runtime_executed':False, 'published':False}
 (work/'inputs.json').write_text(json.dumps(state,indent=2)+'\n')
 PY
-    MOBILE="$OUTPUT/routing/mobile"
-    BIND_TAG="-tags=flutter_vless_vpn_routing"
+    if [[ "$ROUTING" == 1 ]]; then
+        MOBILE="$OUTPUT/routing/mobile"
+        BIND_TAG="-tags=flutter_vless_vpn_routing"
+    else
+        MOBILE="$OUTPUT/classic/mobile"
+    fi
 fi
 cd "$MOBILE"
 mkdir -p "$OUTPUT/tools"
@@ -99,10 +107,10 @@ pin = subprocess.check_output(['go','list','-m','-f','{{.Version}}','github.com/
 assert pin.endswith('92ccc939aaf4'), 'Unexpected Xray Core pin'
 headers=list((output/'XRay.xcframework').rglob('XRay.objc.h'))
 assert headers and all('XRayCheckPrivate' in p.read_text() for p in headers), 'Missing preflight bridge'
-if routing:
-    work = output/'routing'
+if True:
+    work = output/('routing' if routing else 'classic')
     state = json.loads((work/'inputs.json').read_text())
-    for symbol in ['XRayRoutingCapability','XRayCheckRoutingPrivate','XRayStartRoutingPrivate']:
+    for symbol in (['XRayRoutingCapability','XRayCheckRoutingPrivate','XRayStartRoutingPrivate'] if routing else []):
         assert all(symbol in p.read_text() for p in headers), 'Missing optional routing bridge: '+symbol
     metadata = json.loads(subprocess.check_output(['go','list','-m','-json',state['core_module']],text=True))
     assert Path(metadata.get('Replace',{}).get('Dir','')).resolve() == Path(state['core_replacement']).resolve(), 'Build lost the disposable Core replacement'
@@ -114,12 +122,14 @@ if routing:
     mobile, capability = root/'third_party/xray-mobile', root/'third_party/xray-vpn-routing'
     paths = [root/'tool/build_apple_core_preview.sh', mobile/'go.mod', mobile/'go.sum', capability/'apply.py', capability/'pin-manifest.json']
     paths += sorted(mobile.glob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
+    classic = root/'third_party/xray-native-dns'
+    paths += [classic/name for name in ('classic_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
     assert not any(p.is_symlink() for p in paths), 'Input became a symlink'
     assert state['source_sha256'] == {str(p.relative_to(root)):digest(p) for p in paths}, 'Build input changed'
     assert state['module_cache_before_sha256'] == tree(Path(state['core_source'])), 'Original Core cache changed'
     assert state['core_copy_sha256'] == tree(Path(state['core_replacement'])) and state['mobile_copy_sha256'] == tree(work/'mobile'), 'Copied source changed during build'
     state.update(success=True, source_unchanged=True, module_cache_source_unchanged=True, copies_unchanged=True)
-    (output/'routing-preview.json').write_text(json.dumps(state,indent=2)+'\n')
+    (output/('routing-preview.json' if routing else 'classic-preview.json')).write_text(json.dumps(state,indent=2)+'\n')
 (output/'preview.json').write_text(json.dumps({'platform':platform,'core':pin,'preflightABI':1,'published':False},indent=2)+'\n')
 PY
 echo "Built $PLATFORM preview: $OUTPUT/XRay.xcframework"

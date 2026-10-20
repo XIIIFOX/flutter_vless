@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Close Classic DNS UDP channels and request-cleanup timers with Core, for both address families. Fence late requests and EDNS retries after shutdown; keep caller DNS selection and query policy unchanged.
+
 * Accept numeric IPv6 caller DNS servers on Apple and Windows without rewriting their addresses or query policy. Keep the transport endpoint bootstrap separate; add paired IPv6 and IPv4-mapped DNS regressions.
 
 * Share one cancellable Windows SOCKS-listener readiness deadline across startup retries. Use nonblocking authentication, retain fragmented replies and reject readiness after cancellation or deadline expiry, including socket cleanup.

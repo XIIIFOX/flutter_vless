@@ -29,6 +29,7 @@ class RoutingPreviewTests(unittest.TestCase):
         self.receipt = {'core_module':pin['module'],'core':pin['module_version'],'core_sum':pin['module_sum'],'core_commit':pin['core_commit'],
             'overlay_capability':pin['capability'],'routing_tags':builder.TAGS,'selected_abis':['x86_64'],'protection_overlay':'ordinary H/P/D',
             'routing_capability_expected':1,'runtime_executed':False,'published':False,'success':True,'source_unchanged':True,
+            'classic_dns_lifetime_applied':True,
             'module_cache_source_unchanged':True,'copies_unchanged':True,'source_sha256':{'fixed-input':'snapshot'},
             'output_directory':str(self.output/'raw'),'artifacts_sha256':{'x86_64/libxray.so':hashlib.sha256(self.image).hexdigest()}}
         def owned(command,**options):
@@ -54,6 +55,8 @@ class RoutingPreviewTests(unittest.TestCase):
 
     def test_bad_pin_tags_protection_stale_or_partial_receipt_refused(self):
         for key,value in [('core','foreign'),('routing_tags',['other']),('protection_overlay','none'),('selected_abis',['x86']),
+            ('classic_dns_lifetime_applied',False),
+            ('classic_dns_lifetime_applied',1),
             ('source_sha256',{}),('success',False),('copies_unchanged',False),('runtime_executed',True),('runtime_executed',0)]:
             with self.subTest(key=key,value=value):
                 receipt = copy.deepcopy(self.receipt); receipt[key] = value

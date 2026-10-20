@@ -30,6 +30,8 @@ def source_hashes():
     paths = [BUILD, MOBILE/'go.mod', MOBILE/'go.sum', CAPABILITY/'apply.py', CAPABILITY/'pin-manifest.json']
     paths += sorted(MOBILE.glob('*.go')) + sorted((MOBILE/'nativecli').rglob('*.go')) + sorted((CAPABILITY/'overlay').rglob('*.go'))
     paths += sorted(PROTECT.glob('*.py')) + sorted(PROTECT.glob('*.go'))
+    classic = ROOT/'third_party/xray-native-dns'
+    paths += [classic/name for name in ('classic_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
     if MOBILE.is_symlink() or (MOBILE/'nativecli').is_symlink() or any(path.is_symlink() for path in paths) or any(
             path.is_symlink() for base in (MOBILE/'nativecli', CAPABILITY/'overlay') for path in base.rglob('*')):
         raise ValueError('Routing source symlinks are unsupported')
@@ -41,8 +43,10 @@ def validate_receipt(receipt, arch, raw):
     expected = {'core_module': manifest['module'], 'core': manifest['module_version'], 'core_sum': manifest['module_sum'],
                 'core_commit': manifest['core_commit'], 'overlay_capability': manifest['capability'], 'routing_tags': TAGS,
                 'selected_abis': [arch], 'protection_overlay': 'ordinary H/P/D', 'routing_capability_expected': 1,
+                'classic_dns_lifetime_applied': True,
                 }
-    if any(receipt.get(k) != v for k, v in expected.items()) or receipt.get('routing_capability_expected') is True:
+    if any(receipt.get(k) != v for k, v in expected.items()) or receipt.get('routing_capability_expected') is True \
+            or receipt.get('classic_dns_lifetime_applied') is not True:
         raise ValueError('Routing build pin, protection or fixed tag evidence differs')
     if any(receipt.get(k) is not False for k in ('runtime_executed','published')):
         raise ValueError('Routing build must remain unpublished and unexecuted')

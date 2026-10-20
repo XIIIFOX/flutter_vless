@@ -14,6 +14,9 @@
     "proxy/socks/server.go": "6247a63dc3d4d14f7e0d0cd52582692e9507bb85970ae3bdb67dd89537e1c363",
     "common/mux/client.go": "469e1c4672509901492ccbb0ab161dbd0712d7d9e1c1356be3bf6b662830d054",
     "common/mux/session.go": "e47da02c861acbfb02712177e28e852d682d7d8c157dec94ef38a3dc6c604392",
-    "core/xray.go": "66edf1a9ed6b9683b4f668612e6c6e876830cffb07521517f03a21e630f7ef15"
+    "core/xray.go": "66edf1a9ed6b9683b4f668612e6c6e876830cffb07521517f03a21e630f7ef15",
+    "app/dns/dns.go": "51675585d892f1dceeb0d2520303ac73ef0084e58af4414e52f86bf9b2bd5fef",
+    "app/dns/nameserver_udp.go": "d5f53d45c9170c6b6c6a91af6f078b6c2f453b22a7679df818c643a23cf59a7f",
+    "transport/internet/udp/dispatcher.go": "76bdf02b75c5c71c424bc177c4f6284d15b4b23c271b2b5653de0ced61b86dfe"
   }
 }

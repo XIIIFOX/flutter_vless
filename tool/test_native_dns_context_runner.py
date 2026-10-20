@@ -46,6 +46,24 @@ class ErroringSink:
 
 
 class RunnerGuards(unittest.TestCase):
+    def test_classic_lifetime_requires_every_actual_control_once(self):
+        names = [
+            'TestNativeClassicLifetimeClosesBothFamilies',
+            'TestNativeClassicLifetimeClosesBeforeQueryAndConcurrentClose',
+            'TestNativeClassicLifetimeInterruptsBlockedDispatch',
+            'TestNativeClassicLifetimeRegistrationStartCloseOrder',
+            'TestNativeClassicLifetimeEDNSRetryAndLateAdmission',
+            'TestNativeClassicLifetimeClosedDispatcherReleasesPayload',
+        ]
+        valid = ''.join(f'--- PASS: {name} (0.01s)\n' for name in names)
+        runner.require_classic_lifetime_pass(valid)
+        for output in ['', valid.replace(names[0], 'UnrelatedTest'),
+                       valid + f'--- PASS: {names[0]} (0.01s)\n',
+                       valid + f'    --- SKIP: {names[0]}/IPv6 (0.01s)\n',
+                       valid.replace('--- PASS:', '--- FAIL:', 1)]:
+            with self.subTest(output=output), self.assertRaises(RuntimeError):
+                runner.require_classic_lifetime_pass(output)
+
     def test_runtime_requires_ci(self):
         self.assertFalse(runner.runtime_authorized({}, 'Linux'))
         self.assertTrue(runner.runtime_authorized({'CI': 'true'}, 'Linux'))

@@ -608,6 +608,19 @@ jobs:
           REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 REQUIRE_DARWIN_INTERFACE_BINDING=1 bash tool/test_macos_privacy_runtime.sh
           HEV=ios/flutter_vless/.build/artifacts/tun2sockskit/HevSocks5Tunnel/HevSocks5Tunnel.xcframework
           bash tool/test_macos_packet_bridge.sh "$HEV/macos-arm64_x86_64"
+      - name: Package the checked unpublished iOS SDK
+        run: |
+          python3 tool/test_package_apple_core_preview.py
+          python3 tool/package_apple_core_preview.py --preview build/apple-core-preview/ios --output build/apple-checked-sdk-artifact --head "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-checked-sdk-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            build/apple-checked-sdk-artifact/ios-sdk-preview.tar.gz
+            build/apple-checked-sdk-artifact/manifest.json
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
       - name: Preserve Apple synthetic runtime evidence
         if: always()
         uses: actions/upload-artifact@v4

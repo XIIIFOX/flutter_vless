@@ -13,7 +13,7 @@ import tarfile
 ROOT = Path(__file__).resolve().parents[1]
 EXPORTS = ('XRayStartPrivate', 'XRayCheckPrivate', 'XRayRoutingCapability',
            'XRayCheckRoutingPrivate', 'XRayStartRoutingPrivate', 'XRayDarwinInterfaceBindingCapability')
-PACKAGING_INPUTS = ('.github/workflows/apple-sdk-preview.yml',
+PACKAGING_INPUTS = ('.github/workflows/apple-sdk-preview.yml', '.github/workflows/ci.yml',
                     'tool/package_apple_core_preview.py', 'tool/test_package_apple_core_preview.py')
 H3_PATCH = 'third_party/xray-native-dns/h3_lifetime_patch.py'
 BINDING_PATCH = 'third_party/xray-native-dns/darwin_interface_bind_patch.py'

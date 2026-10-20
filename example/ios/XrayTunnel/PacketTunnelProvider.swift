@@ -154,6 +154,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                profile.providerConfiguration?["xrayConfigReference"] as? Data == reference {
                 rememberTunnelLog("FLVLESS_ACCEPTANCE_SESSION_DEADLINE_110S_V1 stop requested; OFF unverified")
                 manager.connection.stopVPNTunnel()
+                if self.sessionAdmission.isCurrent(epoch),
+                   let active = self.protocolConfiguration as? NETunnelProviderProtocol,
+                   active.providerBundleIdentifier == identifier,
+                   active.providerConfiguration?["xrayConfigReference"] as? Data == reference {
+                    rememberTunnelLog("FLVLESS_ACCEPTANCE_SESSION_DEADLINE_110S_V1 local provider cancellation requested; OFF unverified")
+                    self.cancelTunnelWithError(nil)
+                }
             } else if loadFailed {
                 rememberTunnelLog("FLVLESS_ACCEPTANCE_SESSION_DEADLINE_110S_V1 load uncertain; provider cancellation requested")
                 self.cancelTunnelWithError(nil)

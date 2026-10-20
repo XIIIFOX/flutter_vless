@@ -14,7 +14,8 @@ final class NETunnelProviderProtocol {
 }
 final class FakeConnection {
     var stops = 0
-    func stopVPNTunnel() { stops += 1 }
+    var onStop: (() -> Void)?
+    func stopVPNTunnel() { stops += 1; onStop?() }
 }
 final class NETunnelProviderManager {
     static var load: ((@escaping ([NETunnelProviderManager]?, Error?) -> Void) -> Void)?
@@ -65,7 +66,8 @@ final class PacketTunnelProvider {
             NETunnelProviderManager.load = { callback = $0 }
             DeadlineClock.fire(0); check(DeadlineClock.jobs[1].0 == 5)
             callback?([m], nil); callback?([m], nil); DeadlineClock.fire(1)
-            check(m.connection.stops == 1 && p.cancelled == 0)
+            // This manager never completes provider Stop: local cancellation is independently requested.
+            check(m.connection.stops == 1 && p.cancelled == 1)
         }
         do {
             let (p, m) = fixture()
@@ -90,6 +92,17 @@ final class PacketTunnelProvider {
             _ = try p.beginAcceptanceSessionDeadline(configuration: p.protocolConfiguration as! NETunnelProviderProtocol, options: VlessNativeOptions())
             callback?([m], nil); DeadlineClock.fire(1)
             check(m.connection.stops == 0 && p.cancelled == 0)
+        }
+        do {
+            let (p, m) = fixture()
+            let old = try p.beginAcceptanceSessionDeadline(configuration: p.protocolConfiguration as! NETunnelProviderProtocol, options: VlessNativeOptions())
+            // A synchronous manager callback can revoke and replace the session.
+            m.connection.onStop = {
+                _ = p.revokeAcceptanceSessionDeadline()
+                _ = try! p.beginAcceptanceSessionDeadline(configuration: p.protocolConfiguration as! NETunnelProviderProtocol, options: VlessNativeOptions())
+            }
+            DeadlineClock.fire(0)
+            check(m.connection.stops == 1 && p.cancelled == 0 && p.sessionAdmission.currentEpoch != old)
         }
         for mode in ["wrong-reference", "foreign", "ambiguous"] {
             let (p, m) = fixture()

@@ -10,6 +10,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.mockito.Answers
 import org.mockito.Mockito
+import java.lang.reflect.InvocationTargetException
 
 /** Actual delayed tile callback / permission continuation; Android dispatch is entirely mocked. */
 class QuickAccessUiRaceTest {
@@ -17,6 +18,13 @@ class QuickAccessUiRaceTest {
     private val profile="b".repeat(64)
     private val enabled=NativeVlessOptions(quickAccess=NativeVlessOptions.QuickAccess(enabled=true,requireUnlock=true))
     private fun anyRunnable(): Runnable { Mockito.any(Runnable::class.java); return Runnable {} }
+    private fun permissionResult(activity: VlessTilePermissionActivity, requestCode: Int, resultCode: Int, data: Intent?) {
+        try {
+            VlessTilePermissionActivity::class.java.getDeclaredMethod("onActivityResult",
+                java.lang.Integer.TYPE, java.lang.Integer.TYPE, Intent::class.java)
+                .apply { isAccessible = true }.invoke(activity, requestCode, resultCode, data)
+        } catch (error: InvocationTargetException) { throw error.targetException }
+    }
     private fun intent(ticket: QuickAccessAction): Intent = Mockito.mock(Intent::class.java).also {
         Mockito.`when`(it.getStringExtra("qa_revision")).thenReturn(ticket.revision)
         Mockito.`when`(it.getStringExtra("qa_configured")).thenReturn(ticket.configuredAction)
@@ -108,7 +116,7 @@ class QuickAccessUiRaceTest {
             Mockito.mockConstruction(NativeOptionsStore::class.java) { store,_ ->
                 Mockito.`when`(store.readSnapshot()).thenReturn(QuickAccessSnapshot(changed,"c".repeat(32)))
             }.use {
-                activity.onActivityResult(24,android.app.Activity.RESULT_OK,null)
+                permissionResult(activity,24,android.app.Activity.RESULT_OK,null)
                 Mockito.verify(activity).finish()
                 assertEquals(0,Mockito.mockingDetails(activity).invocations.count { it.method.name in listOf("startService","startForegroundService") })
             }
@@ -134,7 +142,7 @@ class QuickAccessUiRaceTest {
                     Mockito.`when`(out.putExtra(Mockito.anyString(),Mockito.nullable(String::class.java))).thenReturn(out)
                     Mockito.`when`(out.putExtra(Mockito.anyString(),Mockito.anyLong())).thenReturn(out)
                 }.use { intents ->
-                    activity.onActivityResult(24,android.app.Activity.RESULT_OK,null)
+                    permissionResult(activity,24,android.app.Activity.RESULT_OK,null)
                     val sent=intents.constructed().single()
                     Mockito.verify(sent).putExtra("qa_revision",revision)
                     Mockito.verify(sent).putExtra("qa_profile",profile)

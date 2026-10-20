@@ -44,9 +44,24 @@ def classify(xml,returncode):
     if case.get('classname')!=TEST_CLASS or case.get('name')!=TEST_METHOD or len(failures)!=1 or case.find('error') is not None or case.find('skipped') is not None:
         raise ValueError('wrong selected baseline test outcome')
     failure=failures[0]
-    if failure.get('type')!='java.lang.AssertionError' or failure.get('message')!=ASSERTION or TEST_CLASS not in (failure.text or ''):
+    expected_stack_line='java.lang.AssertionError: '+ASSERTION
+    stack=(failure.text or '').strip().splitlines()
+    # Pinned Gradle serializes throwable.toString() as its failure message. Bare form stays exact-compatible.
+    if failure.get('type')!='java.lang.AssertionError' or failure.get('message') not in (ASSERTION,expected_stack_line) \
+            or not stack or stack[0]!=expected_stack_line \
+            or re.search(r'(?m)^[ \t]*at '+re.escape(TEST_CLASS+'.'+TEST_METHOD)+r'\(',failure.text or '') is None:
         raise ValueError('compile/infra/wrong assertion is not semantic RED')
     return {'class':TEST_CLASS,'method':TEST_METHOD,'type':'java.lang.AssertionError','message':ASSERTION,'XML_sha256':sha(xml)}
+
+def capture_junit(xml,destination):
+    """Keep fresh bounded raw proof even when strict classification rejects its contents."""
+    if not xml.is_file() or xml.is_symlink() or xml.stat().st_size>1024*1024:
+        raise ValueError('fresh bounded JUnit proof missing')
+    with xml.open('rb') as source:
+        raw=source.read(1024*1024+1)
+    if len(raw)>1024*1024:raise ValueError('bounded JUnit proof exceeded')
+    with destination.open('xb') as target:target.write(raw)
+    return destination
 
 def regular_map(root):
     if root.is_symlink() or not root.is_dir():raise ValueError('prebuilt Maven directory unavailable')
@@ -153,13 +168,14 @@ def execute(root,out,env,children):
         command=[sys.executable,str(work/'tool/with_android_local_runtime.py'),':flutter_vless_android:testDebugUnitTest','--tests',TEST_CLASS+'.'+TEST_METHOD,'--no-daemon','--max-workers=2','--stacktrace']
         assert all(PRODUCER_FORBIDDEN not in arg for arg in command)
         code=owned(command,work,out/'baseline-gradle.log',300,children,check=False)
-        result['assertion']=classify(xml,code)
+        captured=capture_junit(xml,out/'baseline-assertion.xml')
+        result['raw_JUnit_xml_sha256']=sha(captured)
+        result['fixture_baseline_unchanged']=sha(baseline_fixture)==fixture_hash
+        if not result['fixture_baseline_unchanged']:raise ValueError('baseline fixture mutated')
+        result['assertion']=classify(captured,code)
         log=(out/'baseline-gradle.log').read_text(errors='replace')
         if ':flutter_vless_android:testDebugUnitTest FAILED' not in log or '1 test completed, 1 failed' not in log:
             raise ValueError('selected Gradle test failure markers missing; not semantic RED')
-        result['fixture_baseline_unchanged']=sha(baseline_fixture)==fixture_hash
-        if not result['fixture_baseline_unchanged']:raise ValueError('baseline fixture mutated')
-        (out/'baseline-assertion.xml').write_bytes(xml.read_bytes())
         result['semantic_RED']=True
     except BaseException as error:
         primary=error;result['error_category']=type(error).__name__

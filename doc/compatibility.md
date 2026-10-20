@@ -197,9 +197,13 @@ used as evidence of exit location.
 
 A bounded recovery attempt stops before worker-loss injection because its
 test-harness confirmation deadline expires. Native Stop succeeds and prior
-options are restored. Its cross-process clock readings do not establish elapsed
-time from guard activation. No fault is injected, so this attempt provides no new
-physical-device qualification for recovery, retry limits or kill-switch behavior.
+options are restored. Across these physical sessions, cross-process clock
+readings do not establish elapsed time from guard activation or qualify the
+driver's arm-relative deadlines. The independent guard retains its own local
+clock; page captures, native Stop acknowledgements, provider exit and option
+restoration are separate evidence. No fault is injected in the recovery attempt,
+so it provides no new physical-device qualification for recovery, retry limits
+or kill-switch behavior.
 
 Full JSON import, startup and delay normalization retain explicit `null`, empty
 objects/arrays and null array elements. In particular, an explicit `fakedns: []`

@@ -120,6 +120,7 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 		}
 	})
 	observations := new(fixture)
+	var originConnections, echRequests atomic.Int64
 	var stopping atomic.Bool
 	complete := false
 	// Register this directory before the final observer so the log survives
@@ -135,6 +136,9 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 		if complete && (counts["origin"] != 3 || counts["upload POST"] < 3 || counts["download GET"] < 3 || len(failures) != 0) {
 			t.Error("XHTTP did not carry all three payloads through the controlled fronts", counts, failures)
 		}
+		if complete && (originConnections.Load() != 3 || echRequests.Load() != 0) {
+			t.Error("dormant ECH attempted an extra origin connection/request", originConnections.Load(), echRequests.Load())
+		}
 		if !complete || t.Failed() {
 			t.Logf("XHTTP_FIXTURE_FAILURE events=%d trace=%v failures=%v", len(events), events[:min(len(events), 48)], failures[:min(len(failures), 8)])
 			xhttpLogFailure(t, backendLog)
@@ -142,6 +146,12 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 	})
 	payload := xhttpPayload()
 	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ech-must-not-run" || r.Method == "PRI" {
+			echRequests.Add(1)
+			observations.fail(errors.New("dormant ECH request reached existing origin"))
+			http.Error(w, "dormant ECH", http.StatusBadRequest)
+			return
+		}
 		observations.record(fmt.Sprintf("origin-entry content-length=%d", r.ContentLength))
 		body, err := io.ReadAll(io.LimitReader(r.Body, int64(len(payload)+1)))
 		if err != nil || r.Method != "POST" || r.Host != "payload.invalid" || !bytes.Equal(body, payload) {
@@ -156,6 +166,14 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 		observations.fail(err)
 	}))
 	origin.Config.ReadHeaderTimeout = 5 * time.Second
+	// Each isolated client makes exactly one CONNECT plus its one HTTP POST
+	// to this origin. An ECH h2c dial must create an extra TCP connection even
+	// when net/http rejects its HTTP/2 preface before invoking the handler.
+	origin.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			originConnections.Add(1)
+		}
+	}
 	origin.Start()
 	t.Cleanup(func() { origin.CloseClientConnections(); origin.Close() })
 	originAddress := netip.MustParseAddrPort(strings.TrimPrefix(origin.URL, "http://"))
@@ -285,13 +303,17 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 	}
 	uploadPort, downloadPort := front("upload"), front("download")
 	allPassed := true
-	for _, mode := range []struct{ chained, independent bool }{{}, {chained: true}, {independent: true}} {
+	for modeIndex, mode := range []struct{ chained, independent bool }{{}, {chained: true}, {independent: true}} {
 		chained := mode.chained
 		name := fmt.Sprintf("caller_chain_%t", chained)
 		if mode.independent {
 			name = "independent_download"
 		}
 		passed := t.Run(name, func(t *testing.T) {
+			dormantTLS := func() map[string]any {
+				return map[string]any{"serverName": "dormant.invalid",
+					"echConfigList": fmt.Sprintf("h2c://127.0.0.1:%d/ech-must-not-run", originAddress.Port())}
+			}
 			options := map[string]any{"penetrate": !mode.independent, "tcpKeepAliveIdle": 30, "addressPortStrategy": ""}
 			if chained {
 				options["dialerProxy"] = "carrier"
@@ -305,6 +327,7 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 				download["xhttpSettings"].(map[string]any)["downloadSettings"] = map[string]any{"address": "127.0.0.1", "port": 9, "network": "tcp",
 					"sockopt": map[string]any{"dialerProxy": "missing-grandchild"}}
 			}
+			download["security"], download["tlsSettings"] = "none", dormantTLS()
 			outbounds := []any{map[string]any{"tag": "proxy", "protocol": "vless", "settings": map[string]any{"address": "endpoint.invalid", "port": uploadPort, "id": identity, "encryption": "none"},
 				"streamSettings": map[string]any{"network": "xhttp", "sockopt": options, "xhttpSettings": map[string]any{
 					"path": "/upload", "host": "upload.invalid", "mode": "packet-up", "headers": map[string]string{"network": "dormant-outer-header"},
@@ -313,6 +336,8 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 			if chained {
 				outbounds = append(outbounds, map[string]any{"tag": "carrier", "protocol": "socks", "settings": map[string]any{"address": "endpoint.invalid", "port": carrierPort}})
 			}
+			parentStream := outbounds[0].(map[string]any)["streamSettings"].(map[string]any)
+			parentStream["security"], parentStream["tlsSettings"] = "none", dormantTLS()
 			source := map[string]any{"log": map[string]any{"loglevel": "none"}, "inbounds": []any{}, "outbounds": outbounds,
 				"dns": map[string]any{"hosts": map[string]any{"endpoint.invalid": "127.0.0.2"}, "queryStrategy": "UseIPv4", "servers": []string{"tcp://9.9.9.9"}}}
 			wantDownload, _ := json.Marshal(download)
@@ -348,6 +373,9 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 				t.Fatal(err)
 			}
 			stream := effective["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)
+			if stream["security"] != "none" || !reflect.DeepEqual(stream["tlsSettings"], parentStream["tlsSettings"]) {
+				t.Fatal("XHTTP caller dormant parent TLS subtree changed")
+			}
 			if stream["sockopt"].(map[string]any)["addressPortStrategy"] != options["addressPortStrategy"] {
 				t.Fatal("XHTTP preparation rewrote the caller's None strategy spelling")
 			}
@@ -416,6 +444,16 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 				t.Fatalf("isolated XHTTP client failed: %v; events=%d trace=%v failures=%v; child=%s", err,
 					len(events), events[:min(len(events), 48)], failures[:min(len(failures), 8)], output)
 			}
+			if echRequests.Load() != 0 || originConnections.Load() != int64(modeIndex+1) {
+				t.Fatal("dormant ECH did not stay inactive during exact payload", echRequests.Load(), originConnections.Load())
+			}
+			markerMode := "direct"
+			if mode.independent {
+				markerMode = "independent"
+			} else if chained {
+				markerMode = "chained"
+			}
+			t.Logf("XHTTP_DORMANT_ECH_PASS mode=%s", markerMode)
 			if mode.independent {
 				t.Log("XHTTP_INDEPENDENT_DOWNLOAD_PASS")
 			} else {

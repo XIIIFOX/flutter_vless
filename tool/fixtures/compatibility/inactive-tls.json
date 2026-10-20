@@ -1,0 +1,524 @@
+[
+  {
+    "name": "primary_missing",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "127.0.0.1",
+            "port": 18443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "tlsSettings": {
+              "serverName": "dormant.invalid",
+              "echConfigList": "https://ech-dormant.invalid/dns-query",
+              "masterKeyLog": ""
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "primary_null",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "127.0.0.1",
+            "port": 18443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "tlsSettings": {
+              "serverName": "dormant.invalid",
+              "echConfigList": "https://ech-dormant.invalid/dns-query",
+              "masterKeyLog": ""
+            },
+            "security": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "primary_empty",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "127.0.0.1",
+            "port": 18443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "tlsSettings": {
+              "serverName": "dormant.invalid",
+              "echConfigList": "https://ech-dormant.invalid/dns-query",
+              "masterKeyLog": ""
+            },
+            "security": ""
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "primary_none",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "127.0.0.1",
+            "port": 18443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "tlsSettings": {
+              "serverName": "dormant.invalid",
+              "echConfigList": "https://ech-dormant.invalid/dns-query",
+              "masterKeyLog": ""
+            },
+            "security": "none"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "primary_mixed_none",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "127.0.0.1",
+            "port": 18443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "tlsSettings": {
+              "serverName": "dormant.invalid",
+              "echConfigList": "https://ech-dormant.invalid/dns-query",
+              "masterKeyLog": ""
+            },
+            "security": "NoNe"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "primary_reality",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "127.0.0.1",
+            "port": 18443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "tlsSettings": {
+              "serverName": "dormant.invalid",
+              "echConfigList": "https://ech-dormant.invalid/dns-query",
+              "masterKeyLog": ""
+            },
+            "security": "reality",
+            "realitySettings": {
+              "serverName": "service.invalid",
+              "fingerprint": "chrome",
+              "publicKey": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+              "shortId": "0123456789abcdef",
+              "show": false,
+              "masterKeyLog": ""
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "independent_download_none",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "127.0.0.1",
+            "port": 18443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xhttp",
+            "sockopt": {
+              "penetrate": false
+            },
+            "xhttpSettings": {
+              "path": "/upload",
+              "mode": "packet-up",
+              "downloadSettings": {
+                "address": "127.0.0.1",
+                "port": 18444,
+                "network": "xhttp",
+                "xhttpSettings": {
+                  "path": "/download"
+                },
+                "tlsSettings": {
+                  "serverName": "dormant.invalid",
+                  "echConfigList": "https://ech-dormant.invalid/dns-query",
+                  "masterKeyLog": ""
+                },
+                "security": "none"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "independent_download_null",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "127.0.0.1",
+            "port": 18443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xhttp",
+            "sockopt": {
+              "penetrate": false
+            },
+            "xhttpSettings": {
+              "path": "/upload",
+              "mode": "packet-up",
+              "downloadSettings": {
+                "address": "127.0.0.1",
+                "port": 18444,
+                "network": "xhttp",
+                "xhttpSettings": {
+                  "path": "/download"
+                },
+                "tlsSettings": {
+                  "serverName": "dormant.invalid",
+                  "echConfigList": "https://ech-dormant.invalid/dns-query",
+                  "masterKeyLog": ""
+                },
+                "security": null
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "inherited_download_none",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "127.0.0.1",
+            "port": 18443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xhttp",
+            "sockopt": {
+              "penetrate": true
+            },
+            "xhttpSettings": {
+              "path": "/upload",
+              "mode": "packet-up",
+              "downloadSettings": {
+                "address": "127.0.0.1",
+                "port": 18444,
+                "network": "xhttp",
+                "xhttpSettings": {
+                  "path": "/download"
+                },
+                "tlsSettings": {
+                  "serverName": "dormant.invalid",
+                  "echConfigList": "https://ech-dormant.invalid/dns-query",
+                  "masterKeyLog": ""
+                },
+                "security": "none"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "inherited_download_null",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "127.0.0.1",
+            "port": 18443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xhttp",
+            "sockopt": {
+              "penetrate": true
+            },
+            "xhttpSettings": {
+              "path": "/upload",
+              "mode": "packet-up",
+              "downloadSettings": {
+                "address": "127.0.0.1",
+                "port": 18444,
+                "network": "xhttp",
+                "xhttpSettings": {
+                  "path": "/download"
+                },
+                "tlsSettings": {
+                  "serverName": "dormant.invalid",
+                  "echConfigList": "https://ech-dormant.invalid/dns-query",
+                  "masterKeyLog": ""
+                },
+                "security": null
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "inherited_download_reality",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "127.0.0.1",
+            "port": 18443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xhttp",
+            "sockopt": {
+              "penetrate": true
+            },
+            "xhttpSettings": {
+              "path": "/upload",
+              "mode": "packet-up",
+              "downloadSettings": {
+                "address": "127.0.0.1",
+                "port": 18444,
+                "network": "xhttp",
+                "xhttpSettings": {
+                  "path": "/download"
+                },
+                "tlsSettings": {
+                  "serverName": "dormant.invalid",
+                  "echConfigList": "https://ech-dormant.invalid/dns-query",
+                  "masterKeyLog": ""
+                },
+                "security": "reality",
+                "realitySettings": {
+                  "serverName": "service.invalid",
+                  "fingerprint": "chrome",
+                  "publicKey": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+                  "shortId": "0123456789abcdef",
+                  "show": false,
+                  "masterKeyLog": ""
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "primary_tls_inline",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "dns": {
+        "queryStrategy": "UseIPv4",
+        "servers": [
+          "9.9.9.9"
+        ]
+      },
+      "inbounds": [],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "127.0.0.1",
+            "port": 18443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "tcp",
+            "tlsSettings": {
+              "serverName": "dormant.invalid",
+              "echConfigList": "AEH+DQA9AAAgACBziE85FLxJySxZAPRHs8CDCbuz1h76I9pLhctC/kgScAAEAAEAAQAOcHVibGljLmV4YW1wbGUAAA==",
+              "masterKeyLog": ""
+            },
+            "security": "tls"
+          }
+        }
+      ]
+    }
+  }
+]

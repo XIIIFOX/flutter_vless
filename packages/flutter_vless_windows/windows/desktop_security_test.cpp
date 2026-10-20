@@ -1214,6 +1214,82 @@ void DnsDataMapCases(const std::string& only = "") {
   Require(selected, "unknown DNS data/map case");
 }
 
+void InactiveTLSCases(const std::string& only = "") {
+  std::ifstream input("tool/fixtures/compatibility/inactive-tls.json");
+  Require(input.good(), "shared inactive TLS corpus required");
+  Json corpus; input >> corpus;
+  Require(corpus.is_array() && corpus.size() == 12, "shared inactive TLS corpus changed");
+  auto target = [](Json& config) -> Json& {
+    auto& stream = config["outbounds"][0]["streamSettings"];
+    if (stream.contains("xhttpSettings") && stream["xhttpSettings"].contains("downloadSettings"))
+      return stream["xhttpSettings"]["downloadSettings"];
+    return stream;
+  };
+  auto prepare = [](const Json& profile) {
+    unsigned resolved = 0, allocated = 0;
+    auto result = PrepareProtectedVpn(profile.dump(), "session-user", "session-password", "Ethernet",
+        [&](const std::string&) { ++resolved; return std::string(); }, nullptr,
+        [&](uint16_t) { ++allocated; return true; });
+    Require(resolved == 0 && allocated > 0, "inactive TLS fixture bypassed fake I/O boundaries");
+    return result;
+  };
+  const auto fixture = [&](const std::string& name) {
+    for (const auto& item : corpus) if (item["name"] == name) return item["config"];
+    throw std::runtime_error("missing inactive TLS fixture");
+  };
+  if (only.empty() || only == "shared") for (const auto& item : corpus) {
+    auto source = item["config"], original = source;
+    const auto prepared = prepare(source);
+    Require(prepared.has_value(), "dormant TLS URL was treated as active ECH");
+    auto output = Parse(*prepared);
+    Require(target(output)["tlsSettings"] == target(source)["tlsSettings"]
+        && target(output).value("realitySettings", Json()) == target(source).value("realitySettings", Json())
+        && target(output).value("security", Json()) == target(source).value("security", Json()), "inactive security payload changed");
+    Require(source == original, "inactive TLS preparation mutated source");
+  }
+  if (only.empty() || only == "aliases") {
+    auto reality_source = fixture("primary_reality");
+    const auto reality = target(reality_source)["realitySettings"];
+    for (const auto* name : {"primary_none", "independent_download_none", "inherited_download_none"})
+      for (const auto* security : {"NoNe", "ReAlItY"}) {
+        auto source = fixture(name);
+        auto& selected = target(source);
+        selected.erase("security"); selected["SeCuRiTy"] = security;
+        auto tls = selected["tlsSettings"]; selected.erase("tlsSettings");
+        tls["ECHCONFIGLIST"] = tls["echConfigList"]; tls.erase("echConfigList"); selected["TLSSETTINGS"] = tls;
+        if (std::string(security) == "ReAlItY") selected["realitySettings"] = reality;
+        const auto original = source;
+        const auto prepared = prepare(source);
+        Require(prepared.has_value(), "mixed-case inactive TLS or REALITY was refused");
+        auto output = Parse(*prepared);
+        Require(target(output)["tlsSettings"] == tls && target(output)["SeCuRiTy"] == security
+            && source == original, "inactive mixed-case TLS/security payload changed");
+      }
+  }
+  if (only.empty() || only == "active") {
+    for (const bool aliases : {false, true}) {
+      auto source = fixture("inherited_download_none"); auto& selected = target(source);
+      selected.erase("security"); selected[aliases ? "SeCuRiTy" : "security"] = aliases ? "TlS" : "tls";
+      if (aliases) {
+        auto& tls = selected["tlsSettings"];
+        tls["ECHCONFIGLIST"] = tls["echConfigList"]; tls.erase("echConfigList");
+      }
+      const auto original = source;
+      Require(!prepare(source) && source == original, "active inherited TLS URL escaped protection");
+    }
+    auto inline_source = fixture("primary_tls_inline");
+    for (const auto* name : {"primary_none", "independent_download_none", "inherited_download_none"}) {
+      auto source = fixture(name);
+      target(source)["security"] = "tls"; target(source)["tlsSettings"] = target(inline_source)["tlsSettings"];
+      const auto original = source;
+      const auto prepared = prepare(source); Require(prepared.has_value(), "inline TLS ECH was refused");
+      auto output = Parse(*prepared);
+      Require(target(output)["tlsSettings"] == target(source)["tlsSettings"] && source == original, "inline TLS payload changed");
+    }
+  }
+  Require(only.empty() || only == "shared" || only == "aliases" || only == "active", "unknown inactive TLS case");
+}
+
 void OpaqueFieldCases() {
   std::ifstream input("tool/fixtures/compatibility/opaque-fields.json");
   Require(input.good(), "shared opaque-field corpus required");
@@ -1266,6 +1342,7 @@ void OpaqueFieldCases() {
 }
 
 int main(int argc, char** argv) try {
+  if (argc == 3 && std::string(argv[1]) == "--inactive-tls-case") { InactiveTLSCases(argv[2]); return 0; }
   if (argc == 2 && std::string(argv[1]) == "--opaque-fields") { OpaqueFieldCases(); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--dns-data-maps-case") { DnsDataMapCases(argv[2]); return 0; }
   if (argc == 3 && std::string(argv[1]) == "--fakedns-case") { FakeDnsCases(argv[2]); return 0; }
@@ -1315,6 +1392,7 @@ int main(int argc, char** argv) try {
   IPv6PayloadCases();
   DirectOnlyCases();
   ProtocolCompatibilityCases();
+  InactiveTLSCases();
   EndpointAddressCases();
   DnsAddressCases();
   DnsDataMapCases();

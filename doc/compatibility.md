@@ -1725,6 +1725,25 @@ qualify the new counter increment above.
 Standalone delay allocation, Core handoff races, recovery relocation and broader
 proxy-only allocation remain separate work under item 5.
 
+The inactive-TLS increment preserves `tlsSettings.echConfigList` when the
+stream's effective `security` is missing, null, empty, `none` (case-insensitive),
+or `reality`. Pinned Core builds a TLS security configuration only for `tls`;
+an XHTTP immediate download keeps its own security even when `penetrate`
+replaces its socket policy. Apple had applied its ECH URL refusal to dormant
+settings in all three stream positions; Windows did so for the inherited
+download. The shared twelve-profile corpus reproduced 25 false refusals across
+the three native preparers with every resolver and port callback injected.
+Android already admitted these values and receives preservation regressions.
+This increment retains the existing active TLS URL restrictions on Apple and
+the inherited Windows download; it does not qualify active ECH fetching.
+Core build comparisons and controlled wire acceptance for this increment are
+pending the new source-bound CI run.
+
+Two source-audit candidates remain separate from that change: Apple validates
+a loopback handler's dormant stream chain, and Android's explicit proxy DNS mode
+bootstraps chained logical destinations as physical endpoints. Neither has a
+completed causal runtime regression yet; they remain work under item 3.
+
 Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |

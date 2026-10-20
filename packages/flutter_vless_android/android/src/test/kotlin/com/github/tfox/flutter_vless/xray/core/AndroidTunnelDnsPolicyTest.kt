@@ -1,5 +1,7 @@
 package com.github.tfox.flutter_vless.xray.core
 
+import com.github.tfox.flutter_vless.xray.dto.XrayConfig
+import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -1068,6 +1070,80 @@ class AndroidTunnelDnsPolicyTest {
             }
             assertEquals(label, before, input.toString())
         }
+    }
+
+    @Test fun sharedInactiveTlsSettingsSurvivePreparationAndActualRuntimeNormalization() {
+        val cases = JSONArray(requireNotNull(javaClass.getResource("/inactive-tls.json")).readText())
+        assertEquals("Expected the complete shared inactive TLS corpus", 12, cases.length())
+        fun streams(config: JSONObject): List<JSONObject> {
+            val primary = config.getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
+            return listOfNotNull(primary, primary.optJSONObject("xhttpSettings")?.optJSONObject("downloadSettings"))
+        }
+        fun retainedTls(label: String, source: JSONObject, actual: JSONObject) {
+            val expectedStreams = streams(source); val actualStreams = streams(actual)
+            assertEquals(label, expectedStreams.size, actualStreams.size)
+            assertEquals("$label must exercise a TLS owner", 1, expectedStreams.count { it.has("tlsSettings") })
+            for (index in expectedStreams.indices) {
+                val expected = expectedStreams[index]; val output = actualStreams[index]
+                for (field in listOf("security", "tlsSettings", "realitySettings")) {
+                    assertEquals("$label/$index/$field presence", expected.has(field), output.has(field))
+                    if (expected.has(field))
+                        assertEquals("$label/$index/$field", expected.get(field).toString(), output.get(field).toString())
+                }
+            }
+        }
+        for (index in 0 until cases.length()) {
+            val item = cases.getJSONObject(index); val source = item.getJSONObject("config")
+            val before = source.toString()
+            for (policy in listOf("config", "proxy")) {
+                val label = item.getString("name") + "/" + policy
+                var environmentCalls = 0; var resolverCalls = 0
+                val prepared = AndroidTunnelDnsPolicy.prepare(before, policy, environment = {
+                    environmentCalls++; error("Numeric TLS corpus must not read environment")
+                }) {
+                    resolverCalls++; error("Numeric TLS corpus must not resolve endpoints")
+                }
+                val preparedJson = JSONObject(prepared.configJson)
+                retainedTls(label + "/prepared", source, preparedJson)
+                assertEquals(label, 0, environmentCalls); assertEquals(label, 0, resolverCalls)
+                assertTrue(label, prepared.bootstrapHostnames.isEmpty())
+                assertEquals(label, if (policy == "proxy") setOf("127.0.0.1") else emptySet<String>(), prepared.bootstrapAddresses)
+                if (policy == "config")
+                    assertEquals(label, source.getJSONObject("dns").toString(), preparedJson.getJSONObject("dns").toString())
+                else assertEquals(label, "ForceIP", streams(preparedJson)[0].getJSONObject("sockopt").getString("domainStrategy"))
+
+                val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = prepared.configJson, ANDROID_DNS_POLICY = policy)
+                val credentials = LocalProxyCredentials("inactive-tls-user", "synthetic-tls-token")
+                val ports = mutableListOf<Int>()
+                val runtime = XrayCoreManager.buildRuntimeConfigJson(profile, File("."), credentials, prepared,
+                    tcpAvailable = { ports += it; true },
+                    environment = { error("Numeric TLS corpus must not read listener environment") })
+                retainedTls(label + "/runtime", source, runtime)
+                assertEquals(label, prepared.configJson, profile.V2RAY_FULL_JSON_CONFIG)
+                assertEquals(label, listOf(profile.LOCAL_SOCKS5_PORT, profile.LOCAL_API_PORT), ports)
+                assertNotEquals(label, profile.LOCAL_SOCKS5_PORT, profile.LOCAL_API_PORT)
+                val inputs = runtime.getJSONArray("inbounds")
+                val managed = (0 until inputs.length()).map(inputs::getJSONObject).single {
+                    it.optString("tag") == prepared.managedInboundTag
+                }
+                assertEquals(label, "127.0.0.1", managed.getString("listen"))
+                assertEquals(label, "socks", managed.getString("protocol"))
+                val settings = managed.getJSONObject("settings")
+                assertTrue(label, settings.getBoolean("udp")); assertEquals(label, "password", settings.getString("auth"))
+                assertEquals(label, credentials.username, settings.getJSONArray("accounts").getJSONObject(0).getString("user"))
+                val sourceRules = preparedJson.getJSONObject("routing").getJSONArray("rules")
+                val dnsGuard = (0 until sourceRules.length()).map(sourceRules::getJSONObject).single {
+                    it.optJSONArray("ip")?.toString() == "[\"${AndroidTunnelDnsPolicy.VIRTUAL_SERVER}/32\"]"
+                }
+                val runtimeRules = runtime.getJSONObject("routing").getJSONArray("rules")
+                assertEquals(label, 1, (0 until runtimeRules.length()).count {
+                    runtimeRules.getJSONObject(it).toString() == dnsGuard.toString()
+                })
+                assertEquals(label, before, source.toString())
+            }
+        }
+        // This file-only producer test does not assert that an inactive ECH URL
+        // was never fetched by Core; native Build/runtime controls own that proof.
     }
 
     @Test fun conflictingNativeCaseAliasesAreRejected() {

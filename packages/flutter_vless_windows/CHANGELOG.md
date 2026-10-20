@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve dormant TLS ECH settings in XHTTP downloads that inherit the upload socket policy. Keep the existing active TLS fetch restriction and physical interface binding.
+
 * Include Classic DNS UDP channel/timer cleanup in locally built Core artifacts; retain caller DNS policies and address families.
 
 * Accept numeric IPv6 caller DNS addresses without changing the caller's DNS data or physical endpoint protection. Add paired native preparation regressions.

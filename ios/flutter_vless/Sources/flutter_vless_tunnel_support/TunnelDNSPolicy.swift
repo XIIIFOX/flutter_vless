@@ -252,7 +252,8 @@ public enum TunnelDNSPolicy {
         var sockopt = stream["sockopt"] as? [String: Any] ?? [:]
         guard sockopt["dialerProxy"] == nil || sockopt["dialerProxy"] is NSNull || sockopt["dialerProxy"] is String else { return false }
         guard inactiveAddressPortStrategy(sockopt["addressPortStrategy"]) else { return false }
-        if let tls = stream["tlsSettings"] as? [String: Any],
+        if (stream["security"] as? String)?.lowercased() == "tls",
+           let tls = stream["tlsSettings"] as? [String: Any],
            tls.keys.contains(where: { XrayJSONField.matches($0, "echConfigList") && (tls[$0] as? String ?? "").contains("://") }) { return false }
         let network = effectiveTransport(in: stream)
         // XDRIVE has a separate fronting destination, not the protocol endpoint.
@@ -273,7 +274,8 @@ public enum TunnelDNSPolicy {
                   let p = port(download["port"]) else { return false }
             let host = LocalProxyAccessPolicy.coreAddressText(raw)
             guard !host.isEmpty else { return false }
-            if let tls = download["tlsSettings"] as? [String: Any],
+            if (download["security"] as? String)?.lowercased() == "tls",
+               let tls = download["tlsSettings"] as? [String: Any],
                tls.keys.contains(where: { XrayJSONField.matches($0, "echConfigList") && (tls[$0] as? String ?? "").contains("://") }) { return false }
             if !physicalTargets.contains(where: { $0.host == host && $0.port == p }) {
                 physicalTargets.append(Endpoint(host: host, port: p))

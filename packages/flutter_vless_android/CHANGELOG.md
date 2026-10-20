@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Add shared inactive TLS/Reality and XHTTP download regressions through native preparation and runtime normalization, preserving the existing Android admission behavior.
+
 * Include Classic DNS UDP lifecycle cleanup in locally built Core artifacts, retaining caller DNS data and protecting late requests during shutdown.
 
 * Give periodic watchdog probes one session-owned deadline and cancel their sockets on Stop. Recheck session and Core ownership between probes and before publishing a connected state.

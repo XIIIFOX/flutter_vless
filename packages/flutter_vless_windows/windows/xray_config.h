@@ -1322,11 +1322,12 @@ inline bool BootstrapStream(Json& stream, const std::vector<BootstrapEndpoint>& 
   }
   if (download && penetrate) {
     auto child = *download;
-    if (!Fields(child, {"address", "port", "network", "method", "tlsSettings"})) return false;
+    if (!Fields(child, {"address", "port", "network", "method", "security", "tlsSettings"})) return false;
     const auto port = Port(child);
     if (!child.contains("address")
         || !child["address"].is_string() || child["address"].get<std::string>().empty() || !port) return false;
-    if (child.contains("tlsSettings") && !child["tlsSettings"].is_null()) {
+    if (child.contains("security") && child["security"].is_string() && Fold(child["security"].get<std::string>()) == "tls"
+        && child.contains("tlsSettings") && !child["tlsSettings"].is_null()) {
       auto tls = child["tlsSettings"];
       if (!Fields(tls, {"echConfigList"})) return false;
       const auto ech = tls.value("echConfigList", Json());

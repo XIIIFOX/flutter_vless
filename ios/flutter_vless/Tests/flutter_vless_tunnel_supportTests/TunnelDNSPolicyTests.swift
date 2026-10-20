@@ -4,6 +4,109 @@ import Darwin
 
 final class TunnelDNSPolicyTests: XCTestCase {
     private static let credentials = try! LocalProxyCredentials(username: "test-session", password: "test-session-password")
+
+    private func inactiveTLSFixtures() throws -> [[String: Any]] {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/inactive-tls.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/inactive-tls.json"))) as? [[String: Any]])
+    }
+
+    private func inactiveTLSStream(_ config: [String: Any]) throws -> [String: Any] {
+        let stream = try XCTUnwrap((config["outbounds"] as? [[String: Any]])?.first?["streamSettings"] as? [String: Any])
+        return ((stream["xhttpSettings"] as? [String: Any])?["downloadSettings"] as? [String: Any]) ?? stream
+    }
+
+    private func replacingInactiveTLSStream(_ config: [String: Any], with target: [String: Any]) throws -> [String: Any] {
+        var result = config
+        var outputs = try XCTUnwrap(result["outbounds"] as? [[String: Any]])
+        var stream = try XCTUnwrap(outputs[0]["streamSettings"] as? [String: Any])
+        if var settings = stream["xhttpSettings"] as? [String: Any], settings["downloadSettings"] != nil {
+            settings["downloadSettings"] = target
+            stream["xhttpSettings"] = settings
+        } else { stream = target }
+        outputs[0]["streamSettings"] = stream
+        result["outbounds"] = outputs
+        return result
+    }
+
+    func testInactiveTLSSharedCorpusPreservesSecurityPayloads() throws {
+        let fixtures = try inactiveTLSFixtures()
+        XCTAssertEqual(fixtures.count, 12)
+        for fixture in fixtures {
+            let name = try XCTUnwrap(fixture["name"] as? String)
+            let source = try XCTUnwrap(fixture["config"] as? [String: Any])
+            let before = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            var allocations = 0
+            let prepared = TunnelXrayConfigPreparer.prepare(jsonData: before, credentials: Self.credentials,
+                tcpPortAvailable: { _ in allocations += 1; return true }, resolveIPv4: { _ in XCTFail("Numeric fixture must not resolve"); return nil })
+            XCTAssertNotNil(prepared, name)
+            if let prepared {
+                let output = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any])
+                let original = try inactiveTLSStream(source), actual = try inactiveTLSStream(output)
+                XCTAssertEqual(actual["tlsSettings"] as? NSDictionary, original["tlsSettings"] as? NSDictionary, name)
+                XCTAssertEqual(actual["realitySettings"] as? NSDictionary, original["realitySettings"] as? NSDictionary, name)
+                XCTAssertEqual(actual["security"] as? NSObject, original["security"] as? NSObject, name)
+                XCTAssertGreaterThan(allocations, 0)
+            }
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), before)
+        }
+    }
+
+    func testInactiveTLSCaseAliasesAndIndependentRealityStayDormant() throws {
+        let fixtures = try inactiveTLSFixtures()
+        let reality = try inactiveTLSStream(try XCTUnwrap(fixtures.first { ($0["name"] as? String) == "primary_reality" }?["config"] as? [String: Any]))["realitySettings"]
+        for name in ["primary_none", "independent_download_none", "inherited_download_none"] {
+            for security in ["NoNe", "ReAlItY"] {
+                let source = try XCTUnwrap(fixtures.first { ($0["name"] as? String) == name }?["config"] as? [String: Any])
+                var target = try inactiveTLSStream(source)
+                target.removeValue(forKey: "security")
+                target["SeCuRiTy"] = security
+                var tls = try XCTUnwrap(target.removeValue(forKey: "tlsSettings") as? [String: Any])
+                tls["ECHCONFIGLIST"] = tls.removeValue(forKey: "echConfigList")
+                target["TLSSETTINGS"] = tls
+                if security == "ReAlItY" { target["realitySettings"] = reality }
+                let candidate = try replacingInactiveTLSStream(source, with: target)
+                let before = try JSONSerialization.data(withJSONObject: candidate, options: [.sortedKeys])
+                let prepared = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: before, credentials: Self.credentials,
+                    tcpPortAvailable: { _ in true }, resolveIPv4: { _ in XCTFail("Numeric fixture must not resolve"); return nil }), name + security)
+                let actual = try inactiveTLSStream(try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.data) as? [String: Any]))
+                XCTAssertEqual(actual["security"] as? String, security)
+                XCTAssertEqual(actual["tlsSettings"] as? NSDictionary, tls as NSDictionary)
+                XCTAssertEqual(try JSONSerialization.data(withJSONObject: candidate, options: [.sortedKeys]), before)
+            }
+        }
+    }
+
+    func testActiveTLSURLRefusalAndInlineControls() throws {
+        let fixtures = try inactiveTLSFixtures()
+        let inline = try inactiveTLSStream(try XCTUnwrap(fixtures.first { ($0["name"] as? String) == "primary_tls_inline" }?["config"] as? [String: Any]))["tlsSettings"]
+        for name in ["primary_none", "independent_download_none", "inherited_download_none"] {
+            for aliases in [false, true] {
+                let source = try XCTUnwrap(fixtures.first { ($0["name"] as? String) == name }?["config"] as? [String: Any])
+                var target = try inactiveTLSStream(source)
+                target.removeValue(forKey: "security")
+                target[aliases ? "SeCuRiTy" : "security"] = aliases ? "TlS" : "tls"
+                var tls = try XCTUnwrap(target.removeValue(forKey: "tlsSettings") as? [String: Any])
+                if aliases { tls["ECHCONFIGLIST"] = tls.removeValue(forKey: "echConfigList") }
+                target[aliases ? "TLSSETTINGS" : "tlsSettings"] = tls
+                let candidate = try replacingInactiveTLSStream(source, with: target)
+                let before = try JSONSerialization.data(withJSONObject: candidate, options: [.sortedKeys])
+                XCTAssertNil(TunnelXrayConfigPreparer.prepare(jsonData: before, credentials: Self.credentials,
+                    tcpPortAvailable: { _ in true }, resolveIPv4: { _ in XCTFail("Active remote ECH must not bootstrap"); return nil }), name)
+                XCTAssertEqual(try JSONSerialization.data(withJSONObject: candidate, options: [.sortedKeys]), before)
+            }
+            let source = try XCTUnwrap(fixtures.first { ($0["name"] as? String) == name }?["config"] as? [String: Any])
+            var target = try inactiveTLSStream(source)
+            target["security"] = "tls"; target["tlsSettings"] = inline
+            let candidate = try replacingInactiveTLSStream(source, with: target)
+            XCTAssertNotNil(TunnelXrayConfigPreparer.prepare(jsonData: try JSONSerialization.data(withJSONObject: candidate), credentials: Self.credentials,
+                tcpPortAvailable: { _ in true }, resolveIPv4: { _ in XCTFail("Inline ECH must not resolve"); return nil }), name)
+        }
+    }
+
     func testByteEnvironmentSnapshotIsFrozenBeforeAllocationAndAcrossStartupRetries() async throws {
         let decomposed = "e\u{301}", composed = "\u{e9}"
         var entries = ["\(composed).port=10810", "\(decomposed).port=10808", "\(decomposed).listen=127.0.0.1",
@@ -1099,7 +1202,7 @@ final class TunnelDNSPolicyTests: XCTestCase {
         XCTAssertEqual(Set(names), ["upload.example", "download.example"])
         let output = try XCTUnwrap((config["outbounds"] as? [[String: Any]])?.first)
         XCTAssertEqual((output["streamSettings"] as? [String: Any])?["xhttpSettings"] as? NSDictionary, (parent["streamSettings"] as? [String: Any])?["xhttpSettings"] as? NSDictionary)
-        for childOverride: [String: Any] in [["address": "download.example", "port": 8443, "network": "tcp"], ["address": "download.example", "port": 8443], ["address": "download.example", "port": 8443, "network": "xhttp", "tlsSettings": ["echConfigList": "https://unsafe.example/ech"]]] {
+        for childOverride: [String: Any] in [["address": "download.example", "port": 8443, "network": "tcp"], ["address": "download.example", "port": 8443], ["address": "download.example", "port": 8443, "network": "xhttp", "security": "tls", "tlsSettings": ["echConfigList": "https://unsafe.example/ech"]]] {
             var invalidParent = parent; var invalidStream = parent["streamSettings"] as! [String: Any]
             invalidStream["xhttpSettings"] = ["downloadSettings": childOverride]
             invalidParent["streamSettings"] = invalidStream

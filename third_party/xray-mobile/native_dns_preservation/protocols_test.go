@@ -111,6 +111,7 @@ func TestProtocolCorpusBuilds(t *testing.T) {
 	testDNSDataMaps(t, false)
 	testTransportDataMaps(t, false)
 	testTransportNone(t, false)
+	testInactiveTLS(t, false)
 	testLogicalAddresses(t, false)
 	testLogicalDNSFixtureIO(t)
 	testFakeDNSPreparation(t, false)
@@ -194,6 +195,7 @@ func testNativeProtocolPreparation(t *testing.T) {
 	testDNSDataMaps(t, true)
 	testTransportDataMaps(t, true)
 	testTransportNone(t, true)
+	testInactiveTLS(t, true)
 	testLogicalAddresses(t, true)
 	testFakeDNSPreparation(t, true)
 }

@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve dormant TLS ECH settings when TLS is disabled or Reality is selected. Apply Apple and inherited XHTTP download ECH admission only to active TLS; retain active-fetch restrictions and add shared native/Core regressions.
+
 * Close Classic DNS UDP channels and request-cleanup timers with Core, for both address families. Fence late requests and EDNS retries after shutdown; keep caller DNS selection and query policy unchanged.
 
 * Accept numeric IPv6 caller DNS servers on Apple and Windows without rewriting their addresses or query policy. Keep the transport endpoint bootstrap separate; add paired IPv6 and IPv4-mapped DNS regressions.

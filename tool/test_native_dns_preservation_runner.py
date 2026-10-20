@@ -153,6 +153,25 @@ class PreservationRunnerGuards(unittest.TestCase):
             with self.subTest(output=output, preparers=preparers), self.assertRaises(RuntimeError):
                 runner.require_transport_data_runtime(output, preparers)
 
+    def test_inactive_tls_snapshot_and_exact_runtime_modes(self):
+        with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
+                mock.patch.object(runner.platform, 'system', return_value='Linux'):
+            snapshot = runner.source_snapshot()
+        for path in ['tool/fixtures/compatibility/inactive-tls.json',
+                     'third_party/xray-mobile/native_dns_preservation/inactive_tls_test.go']:
+            self.assertEqual(snapshot.get(path), 'synthetic-digest', path)
+        lines = [f'    xhttp_runtime_test.go:400: XHTTP_DORMANT_ECH_PASS mode={mode}\n'
+                 for mode in ('direct', 'chained', 'independent')]
+        valid = ''.join(lines)
+        runner.require_inactive_tls_runtime(valid, 1)
+        runner.require_inactive_tls_runtime(valid * 2, 2)
+        for output, preparers in [('', 1), (''.join(lines[:2]), 1), (valid * 2, 1),
+                                 (valid, 2), (valid + lines[0], 1), (valid, 0), (valid, 3),
+                                 (valid + lines[0].replace('mode=direct', 'mode=unknown'), 1),
+                                 ('noise ' + lines[0].lstrip() + ''.join(lines[1:]), 1)]:
+            with self.subTest(output=output, preparers=preparers), self.assertRaises(RuntimeError):
+                runner.require_inactive_tls_runtime(output, preparers)
+
     def test_ipv6_dns_snapshot_and_exact_runtime_modes(self):
         with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
                 mock.patch.object(runner.platform, 'system', return_value='Linux'):
@@ -290,6 +309,8 @@ class PreservationRunnerGuards(unittest.TestCase):
                         ''.join(f'    xhttp_runtime_test.go:10: XHTTP_TRANSPORT_DATA_MAPS_PASS chained={mode}\n'
                                 for mode in ('true', 'false')) +
                         '    xhttp_runtime_test.go:10: XHTTP_INDEPENDENT_DOWNLOAD_PASS\n' +
+                        ''.join(f'    xhttp_runtime_test.go:10: XHTTP_DORMANT_ECH_PASS mode={mode}\n'
+                                for mode in ('direct', 'chained', 'independent')) +
                         ''.join(f'    dns_ipv6_servers_test.go:10: DNS_IPV6_UPSTREAM_RUNTIME_PASS transport={transport} strategy={strategy}\n'
                                 for transport in ('udp', 'tcp') for strategy in ('UseIP', 'UseIPv4')) +
                         ''.join(f'    dns_ipv6_servers_test.go:10: DNS_IPV4_UPSTREAM_RUNTIME_PASS transport=udp strategy={strategy}\n'

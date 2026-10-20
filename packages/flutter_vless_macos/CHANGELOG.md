@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Admit inactive TLS ECH settings in ordinary and immediate XHTTP download streams without rewriting them. Retain the active TLS fetch restriction and native bootstrap protection.
+
 * Close Classic DNS UDP channels and cleanup timers during Core shutdown, including concurrent requests and late EDNS retries.
 
 * Accept numeric IPv6 caller DNS addresses while preserving the original DNS configuration. Keep physical transport endpoint bootstrap unchanged and add paired native preparation regressions.

@@ -22,6 +22,8 @@ MOBILE = ROOT / 'third_party/xray-mobile'
 CAPABILITY = ROOT / 'third_party/xray-native-dns'
 CLASSIC_PATCH = CAPABILITY / 'classic_lifetime_patch.py'
 CLASSIC_OVERLAY = CAPABILITY / 'overlay/app/dns'
+H3_PATCH = CAPABILITY / 'h3_lifetime_patch.py'
+H3_DIALER = 'transport/internet/splithttp/dialer.go'
 SWIFT = ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos'
 SELECTED_TEST = 'TestNativeDNSPreservation'
 PROTOCOL_TEST = 'TestNativeProtocolPreparation'
@@ -107,6 +109,59 @@ def prepare_classic_core(source, destination, manifest, *, patch_apply=None, ove
             'added_files': added}
 
 
+def prepare_lifetime_core(source, destination, manifest, *, classic_apply=None, h3_apply=None, overlay=CLASSIC_OVERLAY):
+    """Compose two scoped patches in an owned copy; preserve Classic receipts."""
+    source, destination = Path(source), Path(destination)
+    expected = manifest['upstream_sha256']
+    if source.is_symlink() or not source.is_dir() or any(path.is_symlink() for path in source.rglob('*')):
+        raise ValueError('Lifetime source must be a real tree')
+    if H3_DIALER not in expected or digest(source / H3_DIALER) != expected[H3_DIALER]:
+        raise ValueError('Pinned H3 source mismatch before lifetime preparation')
+    patch_hash = None
+    if h3_apply is None:
+        if H3_PATCH.is_symlink() or not H3_PATCH.is_file():
+            raise ValueError('H3 patch input must be a real file')
+        patch_hash = digest(H3_PATCH)
+        spec = importlib.util.spec_from_file_location('preservation_h3_lifetime', H3_PATCH)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        h3_apply = module.apply
+    classic = prepare_classic_core(source, destination, manifest, patch_apply=classic_apply, overlay=overlay)
+
+    def snapshot():
+        paths = sorted(destination.rglob('*'))
+        if any(path.is_symlink() for path in paths):
+            raise ValueError('H3 patch introduced a source symlink')
+        return {path.relative_to(destination).as_posix(): digest(path) for path in paths if path.is_file()}
+
+    before = snapshot()
+    if before[H3_DIALER] != expected[H3_DIALER]:
+        raise ValueError('Classic preparation changed the H3 input')
+
+    def replace(name, old, new):
+        if name != H3_DIALER:
+            raise ValueError('H3 patch attempted an unrelated copy edit')
+        path = destination / name
+        text = path.read_text()
+        if text.count(old) != 1:
+            raise ValueError('Pinned H3 replacement boundary changed')
+        path.write_text(text.replace(old, new))
+
+    h3_apply(destination, replace)
+    after = snapshot()
+    if set(before) != set(after) or {path for path in before if before[path] != after[path]} != {H3_DIALER}:
+        raise ValueError('H3 patch must change exactly its owned dialer file')
+    if any(digest(source / path) != value for path, value in expected.items()):
+        raise ValueError('Original Core source changed during lifetime preparation')
+    if patch_hash is not None and digest(H3_PATCH) != patch_hash:
+        raise ValueError('H3 patch source changed during lifetime preparation')
+    return {'classic_lifetime_patch': classic,
+            'h3_lifetime_patch': {'kind': 'xhttp-h3-dial-lifetime-only', 'source_unchanged': True,
+                                  'changed_upstream': {H3_DIALER: after[H3_DIALER]},
+                                  'patch_sha256': patch_hash},
+            'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial']}
+
+
 def source_snapshot():
     paths = [Path(__file__).resolve(), ROOT / 'tool/test_native_dns_preservation_runner.py', ROOT / 'tool/test_native_dns_context_runtime.py',
              ROOT / 'third_party/xray-native-dns/pin-manifest.json', MOBILE / 'go.mod', MOBILE / 'go.sum',
@@ -114,6 +169,7 @@ def source_snapshot():
              WINDOWS / 'xray_config_test.cpp', WINDOWS / 'asset_location.h', WINDOWS / 'preparation_report.h',
              WINDOWS / 'third_party/nlohmann/json.hpp']
     paths.append(CLASSIC_PATCH)
+    paths.extend([H3_PATCH, ROOT / 'tool/test_h3_lifetime_patch.py'])
     paths.extend(sorted(CLASSIC_OVERLAY.glob('native_classic_*.go')))
     paths.append(ROOT / 'tool/fixtures/compatibility/protocols.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/inactive-tls.json')
@@ -302,6 +358,7 @@ def main():
               'go_binary': str(Path(shutil.which(arguments.go) or arguments.go).resolve()), 'results': results}
     environment = child_environment(os.environ)
     core_source = None
+    lifetime_core = None
     manifest = common.MANIFEST
     try:
         report['source_sha256'] = source_snapshot()
@@ -344,14 +401,19 @@ def main():
             raise RuntimeError('Ordinary Core source cache does not match pin')
         module_flags = []
         if arguments.run_runtime:
-            classic_core = EVIDENCE / 'ClassicCore'
-            report['classic_lifetime_patch'] = prepare_classic_core(core_source, classic_core, manifest)
+            lifetime_core = EVIDENCE / 'LifetimeCore'
+            report.update(prepare_lifetime_core(core_source, lifetime_core, manifest))
+            report['h3_lifetime_copy_sha256'] = digest(lifetime_core / H3_DIALER)
+            if report['h3_lifetime_copy_sha256'] != report['h3_lifetime_patch']['changed_upstream'][H3_DIALER]:
+                raise RuntimeError('Prepared H3 lifetime copy does not match its preparation receipt')
             report['core_overlay_applied'] = True
-            modfile = EVIDENCE / 'classic-lifetime.mod'
+            modfile = EVIDENCE / 'native-lifetime.mod'
             shutil.copyfile(MOBILE / 'go.mod', modfile)
             shutil.copyfile(MOBILE / 'go.sum', modfile.with_suffix('.sum'))
-            checked('classic-lifetime-modfile', [arguments.go, 'mod', 'edit', '-modfile=' + str(modfile),
-                    '-replace=' + manifest['module'] + '=' + str(classic_core)], 30, MOBILE)
+            checked('lifetime-modfile', [arguments.go, 'mod', 'edit', '-modfile=' + str(modfile),
+                    '-replace=' + manifest['module'] + '=' + str(lifetime_core)], 30, MOBILE)
+            if digest(lifetime_core / H3_DIALER) != report['h3_lifetime_copy_sha256']:
+                raise RuntimeError('H3 lifetime prepared copy changed before compilation')
             module_flags = ['-modfile=' + str(modfile)]
         binary = EVIDENCE / ('acceptance.test.exe' if os.name == 'nt' else 'acceptance.test')
         checked('acceptance-compile', [arguments.go, 'test', *module_flags, '-c', '-o', str(binary), './native_dns_preservation'], 300, MOBILE)
@@ -410,6 +472,10 @@ def main():
             results[-1]['selected_test_pass'] = True
             results[-1]['selected_tests'] = [XHTTP_H3_LIFETIME_TEST]
             results[-1]['h3_lifetime_modes'] = modes
+        if lifetime_core is not None:
+            report['h3_lifetime_copy_unchanged'] = digest(lifetime_core / H3_DIALER) == report['h3_lifetime_copy_sha256']
+            if not report['h3_lifetime_copy_unchanged']:
+                raise RuntimeError('H3 lifetime prepared copy changed during verification')
         if source_snapshot() != report['source_sha256']:
             raise RuntimeError('Production preparer/acceptance source changed during verification')
         report['source_snapshot_unchanged'] = True
@@ -419,6 +485,22 @@ def main():
         report['error'] = str(error)
         print('Native DNS preservation check failed: ' + str(error), file=sys.stderr)
     finally:
+        if lifetime_core is not None and 'h3_lifetime_copy_sha256' in report:
+            try:
+                report['h3_lifetime_copy_unchanged'] = digest(lifetime_core / H3_DIALER) == report['h3_lifetime_copy_sha256']
+            except OSError:
+                report['h3_lifetime_copy_unchanged'] = False
+            if not report['h3_lifetime_copy_unchanged']:
+                report['success'] = False
+                report['error'] = 'H3 lifetime prepared copy changed during verification'
+        if 'source_sha256' in report:
+            try:
+                report['source_snapshot_unchanged'] = source_snapshot() == report['source_sha256']
+            except (OSError, ValueError, RuntimeError):
+                report['source_snapshot_unchanged'] = False
+            if not report['source_snapshot_unchanged']:
+                report['success'] = False
+                report['error'] = 'Production preparer/acceptance source changed during verification'
         if core_source is not None:
             try:
                 report['module_cache_targeted_sources_unchanged'] = all(

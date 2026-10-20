@@ -20,7 +20,9 @@ class RoutingPreviewTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name); self.output = self.root/'output'; self.ndk = self.root/'ndk'; self.ndk.mkdir()
         self.cache = self.root/'cache'; self.cache.mkdir(); self.calls = []
-        patch = mock.patch.object(builder,'source_hashes',return_value={'fixed-input':'snapshot'}); patch.start(); self.addCleanup(patch.stop)
+        self.h3_key = 'third_party/xray-native-dns/h3_lifetime_patch.py'
+        self.inputs = {'fixed-input':'snapshot', self.h3_key:'a'*64}
+        patch = mock.patch.object(builder,'source_hashes',return_value=self.inputs); patch.start(); self.addCleanup(patch.stop)
         image = bytearray(256); image[:6] = b'\x7fELF\x02\x01'
         struct.pack_into('<HH',image,16,3,62); struct.pack_into('<QQ',image,24,0x1000,64)
         struct.pack_into('<HH',image,54,56,1); struct.pack_into('<I',image,64,1); struct.pack_into('<Q',image,112,16384)
@@ -30,7 +32,8 @@ class RoutingPreviewTests(unittest.TestCase):
             'overlay_capability':pin['capability'],'routing_tags':builder.TAGS,'selected_abis':['x86_64'],'protection_overlay':'ordinary H/P/D',
             'routing_capability_expected':1,'runtime_executed':False,'published':False,'success':True,'source_unchanged':True,
             'classic_dns_lifetime_applied':True,
-            'module_cache_source_unchanged':True,'copies_unchanged':True,'source_sha256':{'fixed-input':'snapshot'},
+            'h3_lifetime_applied':True,'lifetime_patch_scope':['classic_dns','xhttp_h3_dial'],'h3_lifetime_patch_sha256':'a'*64,
+            'module_cache_source_unchanged':True,'copies_unchanged':True,'source_sha256':self.inputs,
             'output_directory':str(self.output/'raw'),'artifacts_sha256':{'x86_64/libxray.so':hashlib.sha256(self.image).hexdigest()}}
         def owned(command,**options):
             self.calls.append((command,options))
@@ -57,6 +60,8 @@ class RoutingPreviewTests(unittest.TestCase):
         for key,value in [('core','foreign'),('routing_tags',['other']),('protection_overlay','none'),('selected_abis',['x86']),
             ('classic_dns_lifetime_applied',False),
             ('classic_dns_lifetime_applied',1),
+            ('h3_lifetime_applied',False),('h3_lifetime_applied',1),('h3_lifetime_patch_sha256','b'*64),
+            ('lifetime_patch_scope',['classic_dns']),('lifetime_patch_scope',['classic_dns','xhttp_h3_dial','full_dns']),
             ('source_sha256',{}),('success',False),('copies_unchanged',False),('runtime_executed',True),('runtime_executed',0)]:
             with self.subTest(key=key,value=value):
                 receipt = copy.deepcopy(self.receipt); receipt[key] = value

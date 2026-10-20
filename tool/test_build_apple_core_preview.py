@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """File-only command mocks for the optional Apple routing framework builder."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -78,9 +79,10 @@ class ApplePreviewBuilderTest(unittest.TestCase):
         (capability / 'apply.py').write_text('import pathlib,shutil\ndef copy_and_apply(source,destination,**kwargs):\n if pathlib.Path(destination).exists(): raise ValueError("Destination must be new")\n return pathlib.Path(shutil.copytree(source,destination))\n')
         with (capability / 'apply.py').open('a') as out:
             out.write('def copy_and_apply_classic(source,destination,**kwargs):\n return copy_and_apply(source,destination,**kwargs)\n')
+            out.write('def copy_and_apply_lifetimes(source,destination,**kwargs):\n assert kwargs.get("routing",False) is False\n result=copy_and_apply(source,destination,**kwargs)\n (result/"h3-applied").write_text("h3")\n return result\n')
         classic = self.root / 'third_party/xray-native-dns'
         (classic / 'overlay/app/dns').mkdir(parents=True)
-        for name in ('classic_lifetime_patch.py', 'pin-manifest.json', 'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go'):
+        for name in ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'pin-manifest.json', 'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go'):
             (classic / name).write_text('shared-classic-fixture')
         self.core = self.root / 'module-cache/core'
         self.core.mkdir(parents=True)
@@ -102,7 +104,7 @@ class ApplePreviewBuilderTest(unittest.TestCase):
     def recorded(self):
         return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
 
-    def test_default_uses_classic_only_disposable_core_without_routing_tag(self):
+    def test_default_uses_combined_lifetime_disposable_core_without_routing_tag(self):
         result=self.run_builder('ios',self.output)
         self.assertEqual(result.returncode,0,result.stderr)
         calls=self.recorded(); bind=next(c for c in calls if c['tool']=='gomobile')
@@ -112,6 +114,8 @@ class ApplePreviewBuilderTest(unittest.TestCase):
         self.assertFalse((self.output/'routing').exists())
         receipt=json.loads((self.output/'classic-preview.json').read_text())
         self.assertTrue(receipt['classic_dns_lifetime_applied'])
+        self.assertTrue((self.output/'classic/Core/h3-applied').is_file())
+        self.assert_lifetime_receipt(receipt)
         self.assertEqual(receipt['routing_capability_expected'],0)
         self.assertIn('third_party/xray-native-dns/classic_lifetime_patch.py',receipt['source_sha256'])
 
@@ -129,9 +133,28 @@ class ApplePreviewBuilderTest(unittest.TestCase):
         self.assertEqual(receipt['core_replacement'],str(self.output/'routing/Core'))
         self.assertTrue(receipt['source_unchanged'] and receipt['module_cache_source_unchanged'] and receipt['copies_unchanged'])
         self.assertTrue(receipt['classic_dns_lifetime_applied'])
+        self.assert_lifetime_receipt(receipt)
         self.assertIn('third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime.go',receipt['source_sha256'])
         self.assertEqual(original,{p.name:p.read_bytes() for p in self.mobile.iterdir()})
         self.assertEqual(cached,(self.core/'go.mod').read_bytes())
+
+    def assert_lifetime_receipt(self, receipt):
+        key = 'third_party/xray-native-dns/h3_lifetime_patch.py'
+        self.assertIs(receipt['h3_lifetime_applied'], True)
+        self.assertEqual(receipt['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial'])
+        self.assertEqual(receipt['h3_lifetime_patch_sha256'], hashlib.sha256((self.root/key).read_bytes()).hexdigest())
+        self.assertEqual(receipt['source_sha256'][key], receipt['h3_lifetime_patch_sha256'])
+
+    def test_h3_patch_mutation_prevents_both_build_modes_success(self):
+        helper = self.root/'third_party/xray-native-dns/h3_lifetime_patch.py'
+        for routing in (False, True):
+            with self.subTest(routing=routing):
+                helper.write_text('shared-classic-fixture')
+                output = self.root/('mutated-routing' if routing else 'mutated-ordinary')
+                args = ('ios', output, '--vpn-routing') if routing else ('ios', output)
+                result = self.run_builder(*args, environment=dict(self.env, MUTATE_INPUT=str(helper)))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((output/('routing-preview.json' if routing else 'classic-preview.json')).exists())
 
     def test_optional_macos_preserves_static_xcframework_layout(self):
         result=self.run_builder('macos',self.output,'--vpn-routing')

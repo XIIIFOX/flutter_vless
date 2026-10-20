@@ -93,7 +93,7 @@ paths = [root/'packages/flutter_vless_android/android/build_xray.sh', mobile/'go
 paths += sorted(mobile.glob('*.go')) + sorted((mobile/'nativecli').rglob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
 paths += sorted(protect.glob('*.py')) + sorted(protect.glob('*.go'))
 classic = root/'third_party/xray-native-dns'
-paths += [classic/name for name in ('classic_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
 if mobile.is_symlink() or any(p.is_symlink() for p in paths): raise ValueError('Build input symlinks are unsupported')
 tree(mobile/'nativecli')
 before, cache_before = {str(p.relative_to(root)):digest(p) for p in paths}, tree(source)
@@ -130,7 +130,10 @@ state = {'success':False, 'core_module':module, 'core':version, 'core_sum':check
          'output_directory':str(output), 'core_replacement':str(core), 'mobile_replacement':str(copied),
          'source_sha256':before, 'module_cache_before_sha256':cache_before, 'core_copy_sha256':tree(core), 'mobile_copy_sha256':tree(copied),
          'routing_tags':tags.split(','), 'selected_abis':selected_abis, 'protection_overlay':'ordinary H/P/D',
-         'routing_capability_expected':1, 'classic_dns_lifetime_applied':True, 'runtime_executed':False, 'published':False}
+         'routing_capability_expected':1, 'classic_dns_lifetime_applied':True,
+         'h3_lifetime_applied':True, 'lifetime_patch_scope':['classic_dns','xhttp_h3_dial'],
+         'h3_lifetime_patch_sha256':before['third_party/xray-native-dns/h3_lifetime_patch.py'],
+         'runtime_executed':False, 'published':False}
 (work/'inputs.json').write_text(json.dumps(state,indent=2)+'\n')
 PY
 else
@@ -162,12 +165,12 @@ paths=[root/'packages/flutter_vless_android/android/build_xray.sh',mobile/'go.mo
 paths += sorted(mobile.glob('*.go')) + sorted((mobile/'nativecli').rglob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
 paths += sorted(protect.glob('*.py')) + sorted(protect.glob('*.go'))
 classic=root/'third_party/xray-native-dns'
-paths += [classic/name for name in ('classic_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
 if any(p.is_symlink() for p in paths): raise ValueError('Classic input symlink')
 before,cache_before={str(p.relative_to(root)):digest(p) for p in paths},tree(source)
 spec=importlib.util.spec_from_file_location('ordinary_classic_applier',capability/'apply.py')
 applier=importlib.util.module_from_spec(spec);spec.loader.exec_module(applier)
-core=applier.copy_and_apply_classic(source,work/'Core',caches=[cache])
+core=applier.copy_and_apply_lifetimes(source,work/'Core',caches=[cache],routing=False)
 subprocess.run([sys.executable,str(protect/'apply.py'),str(core)],check=True,timeout=30)
 abis=[arch for arch,key in [('arm64-v8a','XRAY_BUILD_ARM64'),('armeabi-v7a','XRAY_BUILD_ARMV7'),('x86','XRAY_BUILD_X86'),('x86_64','XRAY_BUILD_X86_64')] if os.environ.get(key,'1')=='1']
 if not abis: raise SystemExit('Classic build requires an ABI')
@@ -178,7 +181,10 @@ for arch in abis:
 state={'success':False,'core_module':module,'core':version,'core_sum':checksum,'core_commit':manifest['core_commit'],
        'core_source':str(source),'source_sha256':before,'module_cache_before_sha256':cache_before,
        'core_copy_sha256':tree(core),'mobile_copy_sha256':None,'selected_abis':abis,
-       'classic_dns_lifetime_applied':True,'routing_capability_expected':0,'runtime_executed':False,'published':False}
+       'classic_dns_lifetime_applied':True,'routing_capability_expected':0,
+       'h3_lifetime_applied':True,'lifetime_patch_scope':['classic_dns','xhttp_h3_dial'],
+       'h3_lifetime_patch_sha256':before['third_party/xray-native-dns/h3_lifetime_patch.py'],
+       'runtime_executed':False,'published':False}
 (work/'inputs.json').write_text(json.dumps(state,indent=2)+'\n')
 PYCLASSIC
 fi
@@ -271,7 +277,7 @@ paths = [root/'packages/flutter_vless_android/android/build_xray.sh', mobile/'go
 paths += sorted(mobile.glob('*.go')) + sorted((mobile/'nativecli').rglob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
 paths += sorted(protect.glob('*.py')) + sorted(protect.glob('*.go'))
 classic = root/'third_party/xray-native-dns'
-paths += [classic/name for name in ('classic_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
 if mobile.is_symlink() or any(p.is_symlink() for p in paths) or {str(p.relative_to(root)):digest(p) for p in paths} != state['source_sha256']:
     raise SystemExit('Routing build input changed')
 if tree(Path(state['core_source'])) != state['module_cache_before_sha256']:

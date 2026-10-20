@@ -35,6 +35,8 @@ class ApplyGuards(unittest.TestCase):
                   mock.patch.object(applier, 'MANIFEST', manifest),
                   mock.patch.object(applier, 'patches', return_value=[('guarded.go', 'before\n', 'after\n')]),
                   mock.patch.object(applier, 'apply_classic_lifetime', create=True),
+                  mock.patch.object(applier, 'apply_h3_lifetime', create=True),
+                  mock.patch.object(applier, 'validate_h3_lifetime_source', create=True),
                   mock.patch.object(applier.subprocess, 'run', side_effect=AssertionError('No Go allowed in fake-copy guards'))):
                 yield source, target, root, original
 
@@ -108,6 +110,131 @@ class ApplyGuards(unittest.TestCase):
             self.assertEqual(original.read_text(), 'before\n')
 
 
+class LifetimeApplyGuards(unittest.TestCase):
+    H3 = 'transport/internet/splithttp/dialer.go'
+
+    @contextlib.contextmanager
+    def fixture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, here, native = root / 'source', root / 'routing', root / 'native'
+            original = source / self.H3
+            original.parent.mkdir(parents=True)
+            original.write_text('H3 original block\n')
+            (source / 'guarded.go').write_text('unchanged routing source\n')
+            (here / 'overlay').mkdir(parents=True)
+            native.mkdir()
+            pins = {'module': 'synthetic.invalid/core', 'module_version': 'v1.0.0',
+                    'module_sum': 'h1:synthetic', 'core_commit': 'synthetic-commit'}
+            manifest = {**pins, 'upstream_sha256': {self.H3: runner.digest(original)}}
+            routing_manifest = {**pins, 'upstream_sha256': {'guarded.go': runner.digest(source / 'guarded.go')}}
+            (native / 'pin-manifest.json').write_text(json.dumps(manifest))
+            (native / 'h3_lifetime_patch.py').write_text(
+                'def apply(root, replace):\n'
+                " replace('transport/internet/splithttp/dialer.go', 'H3 original block\\n', 'H3 owned close block\\n')\n")
+            with (mock.patch.object(applier, 'HERE', here),
+                  mock.patch.object(applier, 'CLASSIC', native),
+                  mock.patch.object(applier, 'MANIFEST', routing_manifest),
+                  mock.patch.object(applier, 'patches', return_value=[]),
+                  mock.patch.object(applier, 'apply_classic_lifetime') as classic,
+                  mock.patch.object(applier.subprocess, 'run', side_effect=AssertionError('No Go allowed'))):
+                yield root, source, native, manifest, classic
+
+    def test_classic_inputs_stay_classic_while_combined_inputs_attest_h3(self):
+        classic = applier.classic_input_paths()
+        self.assertEqual(len(classic), 4)
+        self.assertNotIn(applier.CLASSIC / 'h3_lifetime_patch.py', classic)
+        self.assertEqual(applier.lifetime_input_paths(), [*classic, applier.CLASSIC / 'h3_lifetime_patch.py'])
+
+    def test_default_and_plain_lifetime_copies_apply_h3_but_classic_only_does_not(self):
+        with self.fixture() as (root, source, native, manifest, classic):
+            before = runner.tree_snapshot(source)
+            for name, copy in [('routing', applier.copy_and_apply),
+                               ('ordinary', applier.copy_and_apply_lifetimes),
+                               ('classic', applier.copy_and_apply_classic)]:
+                target = copy(source, root / ('copy-' + name), caches=[])
+                expected = 'H3 original block\n' if name == 'classic' else 'H3 owned close block\n'
+                self.assertEqual((target / self.H3).read_text(), expected)
+            self.assertEqual(classic.call_count, 3)
+            self.assertEqual(runner.tree_snapshot(source), before)
+
+    def test_h3_requires_every_shared_module_pin(self):
+        for key in ('module', 'module_version', 'module_sum', 'core_commit'):
+            with self.subTest(key=key), self.fixture() as (root, source, native, manifest, classic):
+                changed = dict(manifest); changed[key] = 'different'
+                (native / 'pin-manifest.json').write_text(json.dumps(changed))
+                before = runner.tree_snapshot(source)
+                with self.assertRaisesRegex(ValueError, 'pins differ'):
+                    applier.apply_h3_lifetime(source)
+                self.assertEqual(runner.tree_snapshot(source), before)
+
+    def test_h3_wrong_upstream_hash_refuses_without_edit(self):
+        with self.fixture() as (root, source, native, manifest, classic):
+            (source / self.H3).write_text('unexpected upstream\n')
+            before = runner.tree_snapshot(source)
+            with self.assertRaisesRegex(ValueError, 'source mismatch'):
+                applier.apply_h3_lifetime(source)
+            self.assertEqual(runner.tree_snapshot(source), before)
+
+    def test_copy_rejects_corrupt_h3_before_creating_any_destination(self):
+        with self.fixture() as (root, source, native, manifest, classic):
+            (source / self.H3).write_text('unexpected upstream\n')
+            before = runner.tree_snapshot(source)
+            target = root / 'rejected-copy'
+            with self.assertRaisesRegex(ValueError, 'H3 lifetime source mismatch'):
+                applier.copy_and_apply_lifetimes(source, target, caches=[])
+            self.assertFalse(target.exists())
+            classic.assert_not_called()
+            self.assertEqual(runner.tree_snapshot(source), before)
+
+    def test_copy_rejects_mismatched_h3_pins_before_creating_any_destination(self):
+        for key in ('module', 'module_version', 'module_sum', 'core_commit'):
+            with self.subTest(key=key), self.fixture() as (root, source, native, manifest, classic):
+                changed = dict(manifest); changed[key] = 'different'
+                (native / 'pin-manifest.json').write_text(json.dumps(changed))
+                before = runner.tree_snapshot(source)
+                target = root / 'rejected-copy'
+                with self.assertRaisesRegex(ValueError, 'pins differ'):
+                    applier.copy_and_apply_lifetimes(source, target, caches=[])
+                self.assertFalse(target.exists())
+                classic.assert_not_called()
+                self.assertEqual(runner.tree_snapshot(source), before)
+
+    def test_h3_patch_symlink_refuses_without_edit(self):
+        with self.fixture() as (root, source, native, manifest, classic):
+            patch = native / 'h3_lifetime_patch.py'
+            before = runner.tree_snapshot(source)
+            original = Path.is_symlink
+            # Exercise the metadata refusal without requiring Windows symlink
+            # privileges in this portable, file-only guard suite.
+            with mock.patch.object(Path, 'is_symlink', lambda path: path == patch or original(path)), \
+                    self.assertRaisesRegex(ValueError, 'real files'):
+                applier.apply_h3_lifetime(source)
+            self.assertEqual(runner.tree_snapshot(source), before)
+
+    def test_h3_patch_cannot_edit_an_unrelated_file(self):
+        with self.fixture() as (root, source, native, manifest, classic):
+            (source / 'unrelated.go').write_text('retain\n')
+            (native / 'h3_lifetime_patch.py').write_text(
+                "def apply(root, replace):\n replace('unrelated.go', 'retain\\n', 'changed\\n')\n")
+            before = runner.tree_snapshot(source)
+            with self.assertRaisesRegex(ValueError, 'unrelated edit'):
+                applier.apply_h3_lifetime(source)
+            self.assertEqual(runner.tree_snapshot(source), before)
+
+    def test_h3_patch_requires_exact_unique_block(self):
+        for block in ('missing\\n', 'H3 original block\\nH3 original block\\n'):
+            with self.subTest(block=block), self.fixture() as (root, source, native, manifest, classic):
+                path = source / self.H3
+                path.write_text(block.replace('\\n', '\n'))
+                manifest['upstream_sha256'][self.H3] = runner.digest(path)
+                (native / 'pin-manifest.json').write_text(json.dumps(manifest))
+                before = runner.tree_snapshot(source)
+                with self.assertRaisesRegex(ValueError, 'replacement mismatch'):
+                    applier.apply_h3_lifetime(source)
+                self.assertEqual(runner.tree_snapshot(source), before)
+
+
 class RunnerGuards(unittest.TestCase):
     def test_routing_and_classic_only_copies_apply_shared_lifetime(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -122,6 +249,8 @@ class RunnerGuards(unittest.TestCase):
             with mock.patch.object(applier, 'HERE', here), \
                     mock.patch.object(applier, 'MANIFEST', {'upstream_sha256': {'guarded.go': runner.digest(source / 'guarded.go')}}), \
                     mock.patch.object(applier, 'patches', return_value=[('guarded.go', 'before\n', 'after\n')]), \
+                    mock.patch.object(applier, 'apply_h3_lifetime', create=True), \
+                    mock.patch.object(applier, 'validate_h3_lifetime_source', create=True), \
                     mock.patch.object(applier, 'apply_classic_lifetime', side_effect=classic, create=True):
                 routed = applier.copy_and_apply(source, root / 'routed', caches=[])
                 self.assertEqual(calls, [routed])
@@ -130,7 +259,6 @@ class RunnerGuards(unittest.TestCase):
                 self.assertEqual((plain / 'guarded.go').read_text(), 'before\n')
                 self.assertEqual((routed / 'guarded.go').read_text(), 'after\n')
                 self.assertEqual((source / 'guarded.go').read_text(), 'before\n')
-
     def test_child_environment_is_local_and_browser_dialer_cannot_initialize(self):
         parent = {'XRAY_BROWSER_DIALER': '127.0.0.1:1', 'xray.browser.dialer': '127.0.0.1:2',
                   'XrAy_Unknown': 'private', 'GOTOOLCHAIN': 'auto', 'GOWORK': '/foreign', 'KEEP': 'yes'}

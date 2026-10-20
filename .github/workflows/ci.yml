@@ -68,9 +68,20 @@ jobs:
         with:
           go-version-file: third_party/xray-mobile/go.mod
           cache-dependency-path: third_party/xray-mobile/go.sum
+      - name: Test guarded Core lifetime source copies
+        run: |
+          python tool/test_h3_lifetime_patch.py
+          python third_party/xray-native-dns/test_apply.py
+          python tool/test_native_dns_preservation_runner.py
+          python tool/test_native_vpn_routing_runner.py
+      - name: Test Apple lifetime preparation and build provenance
+        if: matrix.os == 'macos-latest'
+        run: |
+          python tool/test_apple_classic_core.py
+          python tool/test_build_apple_core_preview.py
       - name: Test unpublished DNS context with actual isolated Core instances
         run: python tool/test_native_dns_context_runtime.py --run-runtime
-      - name: Test production DNS preparation with Classic lifetime cleanup
+      - name: Test production preparation with Classic and H3 lifetime cleanup
         run: python tool/test_native_dns_preservation.py --run-runtime
       - name: Test optional VPN routing seam with isolated pinned Core
         run: python tool/test_native_vpn_routing.py --run-runtime
@@ -258,6 +269,7 @@ jobs:
           python3 tool/test_android_emulator_failure_capture.py
           python3 tool/test_android_routing_builder.py
           python3 tool/test_android_routing_preview.py
+          python3 tool/test_build_android_dns_preview.py
       - name: Verify Maven Central Android runtime resolution
         run: tool/test_android_maven_runtime.sh
       - name: Preserve Android routing metadata checks

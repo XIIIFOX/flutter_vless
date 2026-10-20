@@ -57,7 +57,11 @@ def copy_and_apply(source, destination, *, go='go', caches=None):
     for path in destination.rglob('*'):
         path.chmod(path.stat().st_mode | 0o200)
     apply_overlay(destination)
-    (destination / '.flutter-vless-unpublished-capability.json').write_text(json.dumps({'capability':MANIFEST['capability'], 'core_commit':MANIFEST['core_commit'], 'published':False}, indent=2)+'\n')
+    (destination / '.flutter-vless-unpublished-capability.json').write_text(json.dumps({
+        'capability': MANIFEST['capability'], 'core_commit': MANIFEST['core_commit'],
+        'published': False,
+        'lifetime_patches': ['classic-udp-lifetime', 'xhttp-h3-owned-transport'],
+    }, indent=2)+'\n')
     return destination
 
 
@@ -278,6 +282,12 @@ func LookupForIP(domain string, strategy DomainStrategy, localAddr net.Address) 
     spec.loader.exec_module(module)
     # managed_input_patch already owns the same dispatcher payload-release
     # correction. Classic accepts only that exact state or ordinary pinned Core.
+    module.apply(root, replace)
+
+    h3_patch = here / 'h3_lifetime_patch.py'
+    spec = importlib.util.spec_from_file_location('native_dns_h3_lifetime_patch', h3_patch)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     module.apply(root, replace)
 
     for source in sorted((here / 'overlay').rglob('*.go')):

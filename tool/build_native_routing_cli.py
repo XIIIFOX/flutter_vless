@@ -135,6 +135,9 @@ def main(argv=None):
         applier = core_runner.load_module(CAPABILITY / 'apply.py', 'desktop_routing_applier')
         core = applier.copy_and_apply(source, output / 'Core', go=go, caches=[cache])
         report['classic_dns_lifetime_applied'] = True
+        report['h3_lifetime_applied'] = True
+        report['lifetime_patch_scope'] = ['classic_dns', 'xhttp_h3_dial']
+        report['h3_lifetime_patch_sha256'] = before['third_party/xray-native-dns/h3_lifetime_patch.py']
         mobile = output / 'Mobile'
         copy_mobile(mobile)
         core_initial, mobile_initial = core_runner.tree_snapshot(core), core_runner.tree_snapshot(mobile)

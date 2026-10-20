@@ -129,6 +129,10 @@ class RoutingCLIBuilderTest(unittest.TestCase):
         self.assertEqual((report['goos'], report['goarch']), ('windows', 'amd64'))
         self.assertEqual(Path(report['artifact']).name, 'xray.exe')
         self.assertTrue(report['classic_dns_lifetime_applied'])
+        self.assertIs(report['h3_lifetime_applied'], True)
+        self.assertEqual(report['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial'])
+        key = 'third_party/xray-native-dns/h3_lifetime_patch.py'
+        self.assertEqual(report['h3_lifetime_patch_sha256'], report['input_sha256'][key])
         self.assertIn('third_party/xray-native-dns/classic_lifetime_patch.py', report['input_sha256'])
         self.assertIn('third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime.go', report['input_sha256'])
         compile_call = next(call for call in self.calls if call[1][1] == 'build')

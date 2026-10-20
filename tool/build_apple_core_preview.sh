@@ -52,15 +52,14 @@ def inputs():
     paths = [root/'tool/build_apple_core_preview.sh', mobile/'go.mod', mobile/'go.sum', capability/'apply.py', capability/'pin-manifest.json']
     paths += sorted(mobile.glob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
     classic = root/'third_party/xray-native-dns'
-    paths += [classic/name for name in ('classic_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+    paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
     if any(p.is_symlink() for p in paths): raise ValueError('Input symlinks are unsupported')
     return {str(p.relative_to(root)):digest(p) for p in paths}
 before, cache_before = inputs(), tree(source)
 spec = importlib.util.spec_from_file_location('apple_routing_applier', capability/'apply.py')
 applier = importlib.util.module_from_spec(spec); spec.loader.exec_module(applier)
 work.mkdir()
-copy = applier.copy_and_apply if routing else applier.copy_and_apply_classic
-core = copy(source, work/'Core')
+core = applier.copy_and_apply(source, work/'Core') if routing else applier.copy_and_apply_lifetimes(source, work/'Core', routing=False)
 copied = work/'mobile'; copied.mkdir()
 for path in [mobile/'go.mod', mobile/'go.sum', *sorted(mobile.glob('*.go'))]:
     shutil.copyfile(path, copied/path.name)
@@ -70,7 +69,10 @@ state = {'success':False, 'core':version, 'core_module':module, 'core_sum':check
          'core_source':str(source), 'core_replacement':str(core), 'source_sha256':before,
          'module_cache_before_sha256':cache_before, 'core_copy_sha256':tree(core),
          'mobile_copy_sha256':tree(copied), 'routing_tag':'flutter_vless_vpn_routing',
-         'routing_capability_expected':1 if routing else 0, 'classic_dns_lifetime_applied':True, 'runtime_executed':False, 'published':False}
+         'routing_capability_expected':1 if routing else 0, 'classic_dns_lifetime_applied':True,
+         'h3_lifetime_applied':True, 'lifetime_patch_scope':['classic_dns','xhttp_h3_dial'],
+         'h3_lifetime_patch_sha256':before['third_party/xray-native-dns/h3_lifetime_patch.py'],
+         'runtime_executed':False, 'published':False}
 (work/'inputs.json').write_text(json.dumps(state,indent=2)+'\n')
 PY
     if [[ "$ROUTING" == 1 ]]; then
@@ -123,7 +125,7 @@ if True:
     paths = [root/'tool/build_apple_core_preview.sh', mobile/'go.mod', mobile/'go.sum', capability/'apply.py', capability/'pin-manifest.json']
     paths += sorted(mobile.glob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
     classic = root/'third_party/xray-native-dns'
-    paths += [classic/name for name in ('classic_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+    paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
     assert not any(p.is_symlink() for p in paths), 'Input became a symlink'
     assert state['source_sha256'] == {str(p.relative_to(root)):digest(p) for p in paths}, 'Build input changed'
     assert state['module_cache_before_sha256'] == tree(Path(state['core_source'])), 'Original Core cache changed'

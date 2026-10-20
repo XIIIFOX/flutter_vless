@@ -69,9 +69,15 @@ def copy_and_apply(source,destination,**kwargs):
  with open(os.environ['CALLS'],'a') as f:f.write(json.dumps({'tool':'routing','source':str(source),'root':str(destination)})+'\n')
  assert not destination.exists()
  assert 'replace ' not in (source/'go.mod').read_text()
- shutil.copytree(source,destination);(destination/'routing-applied').write_text('routing')
+ shutil.copytree(source,destination);(destination/'routing-applied').write_text('routing');(destination/'h3-applied').write_text('h3')
  return destination
 def copy_and_apply_classic(source,destination,**kwargs):
+ destination=copy_and_apply(source,destination,**kwargs)
+ (destination/'h3-applied').unlink()
+ (destination/'classic-applied').write_text('classic')
+ return destination
+def copy_and_apply_lifetimes(source,destination,**kwargs):
+ assert kwargs.get('routing',False) is False
  destination=copy_and_apply(source,destination,**kwargs)
  (destination/'classic-applied').write_text('classic')
  return destination
@@ -105,7 +111,7 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
         (capability/'pin-manifest.json').write_text(json.dumps({'module':CORE,'module_version':VERSION,'module_sum':SUM,'core_commit':'92ccc939aaf4','capability':'native-vpn-routing-source-preview-v1'}))
         (capability/'apply.py').write_text(ROUTING)
         classic=self.root/'third_party/xray-native-dns';(classic/'overlay/app/dns').mkdir(parents=True)
-        for name in ('classic_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go'):
+        for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go'):
             (classic/name).write_text('shared classic fixture')
         self.cache = self.root/'module-cache/Core';self.cache.mkdir(parents=True)
         (self.cache/'go.mod').write_text('module '+CORE+'\n')
@@ -146,10 +152,12 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
             self.assertEqual(Path(c['args'][c['args'].index('-o')+1]).name,'libxray.so')
         self.assertEqual(len([c for c in calls if c['tool']=='routing']),1)
         self.assertTrue(all((Path(c['cwd'])/'classic-applied').is_file() for c in builds))
+        self.assertTrue(all((Path(c['cwd'])/'h3-applied').is_file() for c in builds))
         self.assertFalse(list(self.output.glob('routing-preview-*.json')));self.assertEqual(tree(self.cache),cache)
         receipts=list(self.output.glob('classic-preview-*.json'));self.assertEqual(len(receipts),1)
         receipt=json.loads(receipts[0].read_text())
         self.assertTrue(receipt['classic_dns_lifetime_applied'])
+        self.assert_lifetime_receipt(receipt)
         self.assertEqual(receipt['routing_capability_expected'],0)
         self.assertTrue(receipt['module_cache_source_unchanged'] and receipt['copies_unchanged'])
 
@@ -173,6 +181,32 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
         self.assertEqual(len(receipt['artifacts_sha256']),4)
         self.assertEqual(tree(self.mobile),original);self.assertEqual(tree(self.cache),cache)
         self.assertIn('third_party/xray-native-dns/classic_lifetime_patch.py',receipt['source_sha256'])
+        self.assert_lifetime_receipt(receipt)
+        self.assertTrue(all((Path(c['cwd'])/'h3-applied').is_file() for c in builds))
+
+    def assert_lifetime_receipt(self, receipt):
+        key = 'third_party/xray-native-dns/h3_lifetime_patch.py'
+        self.assertIs(receipt['h3_lifetime_applied'], True)
+        self.assertEqual(receipt['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial'])
+        self.assertEqual(receipt['h3_lifetime_patch_sha256'], hashlib.sha256((self.root/key).read_bytes()).hexdigest())
+        self.assertEqual(receipt['source_sha256'][key], receipt['h3_lifetime_patch_sha256'])
+
+    def test_h3_patch_mutation_refuses_both_ordinary_and_routing_receipts(self):
+        patch = self.root/'third_party/xray-native-dns/h3_lifetime_patch.py'
+        for routing in (False, True):
+            with self.subTest(routing=routing):
+                patch.write_text('shared classic fixture')
+                result = self.run_builder(routing=routing, MUTATE_INPUT=str(patch))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(list(self.output.glob('*-preview-*.json')))
+
+    def test_h3_patch_symlink_refused_before_mock_compile(self):
+        patch = self.root/'third_party/xray-native-dns/h3_lifetime_patch.py'
+        patch.unlink(); patch.symlink_to(self.mobile/'mobile.go')
+        for routing in (False, True):
+            with self.subTest(routing=routing):
+                self.assertNotEqual(self.run_builder(routing=routing).returncode, 0)
+        self.assertFalse(any(c['tool']=='go' and c['args'][0]=='build' for c in self.recorded()))
 
     def test_optin_requires_explicit_target_before_go(self):
         self.environment.pop('TARGET_DIR')

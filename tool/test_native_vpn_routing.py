@@ -57,7 +57,7 @@ def source_snapshot():
              ROOT / 'tool/test_native_dns_context_runtime.py', CAPABILITY / 'apply.py',
              CAPABILITY / 'pin-manifest.json', MOBILE / 'go.mod', MOBILE / 'go.sum']
     classic = ROOT / 'third_party/xray-native-dns'
-    paths.extend(classic / name for name in ('classic_lifetime_patch.py', 'pin-manifest.json', 'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go'))
+    paths.extend(classic / name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py', 'pin-manifest.json', 'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go'))
     paths.extend(sorted((CAPABILITY / 'overlay').rglob('*.go')))
     return {str(path.relative_to(ROOT)).replace(os.sep, '/'): digest(path) for path in paths}
 

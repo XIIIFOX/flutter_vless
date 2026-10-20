@@ -52,6 +52,14 @@ def input_hashes():
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 
 
+def copied_h3_hash(core):
+    parts = Path('transport/internet/splithttp/dialer.go').parts
+    paths = [core.joinpath(*parts[:index]) for index in range(len(parts) + 1)]
+    if any(path.is_symlink() for path in paths) or not paths[-1].is_file():
+        raise ValueError('Copied H3 source must remain a real file')
+    return hashlib.sha256(paths[-1].read_bytes()).hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path, help='new disposable directory')
@@ -88,11 +96,25 @@ def main():
     copier.validate_destination(source, output, copier.module_cache_paths(go))
     output.mkdir(parents=True)
     report = {'published': False, 'production_enabled': False, 'host_qualified': False,
+              'runtime_executed': False,
               'capability': 'native-instance-preview-1', 'core_commit': manifest['core_commit'],
               'arch': args.arch, 'module_sum': metadata['Sum'], 'go_binary': go, 'success': False,
               'input_sha256': initial_hashes}
+    copied_h3_before = None
+
+    def copied_h3_unchanged():
+        try:
+            return copied_h3_hash(work) == copied_h3_before
+        except (OSError, ValueError):
+            return False
+
     try:
         copier.copy_and_apply(source, work, go=go)
+        copied_h3_before = copied_h3_hash(work)
+        report['copied_h3_sha256'] = copied_h3_before
+        report.update(classic_dns_lifetime_applied=True, h3_lifetime_applied=True,
+                      lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial'],
+                      h3_lifetime_patch_sha256=initial_hashes['third_party/xray-native-dns/h3_lifetime_patch.py'])
         owned([os.sys.executable, str(PROTECTION / 'apply.py'), str(work)], cwd=ROOT,
               environment=environment, seconds=30)
         artifact = output / 'jniLibs' / args.arch / 'libxray_dns_preview.so'
@@ -102,6 +124,9 @@ def main():
         owned([go, 'build', '-trimpath', '-buildvcs=false', '-buildmode=pie',
                '-ldflags=-s -w -buildid= -checklinkname=0 -linkmode=external -extldflags=-Wl,-z,max-page-size=16384',
                '-o', str(artifact), './main/nativepreview'], cwd=work, environment=build_environment, seconds=600)
+        report['copied_h3_source_unchanged'] = copied_h3_unchanged()
+        if not report['copied_h3_source_unchanged']:
+            raise RuntimeError('Copied H3 source changed during build')
         report['artifact'] = str(artifact)
         report['artifact_sha256'] = hashlib.sha256(artifact.read_bytes()).hexdigest()
         report['source_snapshot_unchanged'] = input_hashes() == report['input_sha256']
@@ -131,6 +156,10 @@ def main():
         report['error_type'] = type(error).__name__
         raise
     finally:
+        if copied_h3_before is not None:
+            report['copied_h3_source_unchanged'] = copied_h3_unchanged()
+            if not report['copied_h3_source_unchanged']:
+                report['success'] = False
         report['module_cache_targeted_sources_unchanged'] = all(
             hashlib.sha256((source / relative).read_bytes()).hexdigest() == digest
             for relative, digest in manifest['upstream_sha256'].items())
@@ -139,6 +168,8 @@ def main():
         (output / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
     if not report['module_cache_targeted_sources_unchanged']:
         raise RuntimeError('Original pinned sources changed')
+    if report.get('copied_h3_source_unchanged') is not True:
+        raise RuntimeError('Copied H3 source changed during build')
     return 0
 
 

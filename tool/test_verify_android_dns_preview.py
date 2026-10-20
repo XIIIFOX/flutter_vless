@@ -28,10 +28,12 @@ class PreviewVerificationTests(unittest.TestCase):
         pin = json.loads((verifier.builder.CAPABILITY / 'pin-manifest.json').read_text())
         self.metadata = {'success': True, 'source_snapshot_unchanged': True, 'module_cache_targeted_sources_unchanged': True,
                          'published': False, 'production_enabled': False, 'host_qualified': False,
+                         'runtime_executed': False, 'classic_dns_lifetime_applied': True, 'h3_lifetime_applied': True,
+                         'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial'], 'h3_lifetime_patch_sha256': 'a'*64,
                          'core_commit': pin['core_commit'], 'capability': 'native-instance-preview-1',
                          'arch': 'x86_64', 'artifact': str(self.binary), 'artifact_sha256': hashlib.sha256(image).hexdigest(),
-                         'input_sha256': {'source': 'verified'}}
-        patch = mock.patch.object(verifier.builder, 'input_hashes', return_value={'source': 'verified'})
+                         'input_sha256': {'source': 'verified', 'third_party/xray-native-dns/h3_lifetime_patch.py': 'a'*64}}
+        patch = mock.patch.object(verifier.builder, 'input_hashes', return_value=self.metadata['input_sha256'])
         patch.start()
         self.addCleanup(patch.stop)
 
@@ -49,11 +51,21 @@ class PreviewVerificationTests(unittest.TestCase):
         changes = [('success', False), ('source_snapshot_unchanged', False), ('module_cache_targeted_sources_unchanged', False),
                    ('published', True), ('production_enabled', True), ('host_qualified', True), ('arch', 'unknown'),
                    ('capability', 'legacy'), ('core_commit', 'wrong'), ('input_sha256', {'old': 'snapshot'}),
+                   ('runtime_executed', True), ('runtime_executed', 0), ('h3_lifetime_applied', False), ('h3_lifetime_applied', 1),
+                   ('classic_dns_lifetime_applied', False), ('lifetime_patch_scope', ['classic_dns']),
+                   ('lifetime_patch_scope', ['classic_dns', 'xhttp_h3_dial', 'full_dns']), ('h3_lifetime_patch_sha256', 'b'*64),
                    ('artifact', str(self.root/'foreign')), ('artifact_sha256', 'bad')]
         for key, value in changes:
             with self.subTest(key=key), self.assertRaises(ValueError):
                 metadata = copy.deepcopy(self.metadata)
                 metadata[key] = value
+                self.check(metadata)
+
+    def test_missing_h3_scope_cannot_qualify_existing_preview(self):
+        for key in ('h3_lifetime_applied', 'lifetime_patch_scope', 'h3_lifetime_patch_sha256'):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                metadata = copy.deepcopy(self.metadata)
+                del metadata[key]
                 self.check(metadata)
 
     def test_mutated_binary_and_bad_elf_alignment_are_refused(self):

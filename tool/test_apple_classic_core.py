@@ -19,7 +19,7 @@ class AppleClassicProducerTests(unittest.TestCase):
     def require_hook(self, relative):
         source = (ROOT / relative).read_text()
         hook = source.index('prepare_apple_classic_core.py') if 'prepare_apple_classic_core.py' in source else -1
-        self.assertGreater(hook, 0, 'ordinary producer must prepare the Classic-only Core')
+        self.assertGreater(hook, 0, 'ordinary producer must prepare the checked lifetime Core')
         self.assertLess(source.index('go get "github.com/xtls/xray-core@$XRAY_CORE_REF"'), hook)
         self.assertLess(hook, source.index('go mod tidy'))
         self.assertIn('--mobile "$PWD"', source)
@@ -33,6 +33,8 @@ class AppleClassicProducerTests(unittest.TestCase):
 
 
 class AppleClassicPreparationTests(unittest.TestCase):
+    H3 = 'transport/internet/splithttp/dialer.go'
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -40,12 +42,13 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.mobile, self.source, self.destination = self.base / 'mobile', self.base / 'cache/Core', self.base / 'Core'
         self.mobile.mkdir()
         (self.mobile / 'go.mod').write_text('synthetic copied module\n')
-        for relative in helper.UPSTREAM:
+        self.upstream = tuple(dict.fromkeys([*helper.UPSTREAM, self.H3]))
+        for relative in self.upstream:
             path = self.source / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('original ' + relative)
         self.pin = {'module': 'synthetic.invalid/core', 'module_version': 'v1.0.0', 'module_sum': 'h1:synthetic',
-                    'upstream_sha256': {name: helper.digest(self.source / name) for name in helper.UPSTREAM}}
+                    'upstream_sha256': {name: helper.digest(self.source / name) for name in self.upstream}}
         self.selected = {'Path': self.pin['module'], 'Version': self.pin['module_version']}
         self.downloaded = {'Path': self.pin['module'], 'Version': self.pin['module_version'],
                            'Sum': self.pin['module_sum'], 'Dir': str(self.source)}
@@ -53,7 +56,10 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.lose_replacement = False
         self.mutate_cache = False
         self.inputs = [ROOT / 'third_party/xray-native-dns/overlay/app/dns' / name for name in helper.HELPERS]
-        copier = SimpleNamespace(copy_and_apply_classic=self.copy, classic_input_paths=lambda: self.inputs)
+        self.inputs.append(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py')
+        copier = SimpleNamespace(copy_and_apply_lifetimes=self.copy, lifetime_input_paths=lambda: self.inputs,
+                                 copy_and_apply_classic=mock.Mock(side_effect=AssertionError('ordinary producer must include H3')),
+                                 classic_input_paths=lambda: self.inputs[:-1])
         patches = mock.patch.multiple(helper, manifest=lambda: self.pin, applier=lambda: copier,
                                       metadata=self.metadata, run=self.run_go, reference_hashes=self.reference)
         patches.start()
@@ -61,11 +67,11 @@ class AppleClassicPreparationTests(unittest.TestCase):
 
     def reference(self, source, parent):
         return {relative: hashlib.sha256(('patched ' + relative).encode()).hexdigest()
-                for relative in helper.UPSTREAM}
+                for relative in self.upstream}
 
     def make_copy(self, destination):
         shutil.copytree(self.source, destination)
-        for relative in helper.UPSTREAM:
+        for relative in self.upstream:
             (destination / relative).write_text('patched ' + relative)
         for name in helper.HELPERS:
             shutil.copyfile(ROOT / 'third_party/xray-native-dns/overlay/app/dns' / name,
@@ -105,18 +111,46 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.make_copy(self.destination)
         self.selected['Replace'] = {'Dir': str(self.destination)}
 
-    def test_new_copy_uses_only_checked_classic_copier(self):
+    def test_new_copy_uses_checked_classic_and_h3_copier(self):
         before = helper.tree(self.source)
         report = self.prepare()
-        self.assertEqual(report['mode'], 'new-classic-copy')
+        self.assertEqual(report['mode'], 'new-lifetime-copy')
         self.assertEqual(len(self.copies), 1)
         self.assertEqual(self.copies[0][2], {'go': 'inert-go'})
         self.assertEqual(len(self.edits), 1)
         self.assertEqual(before, helper.tree(self.source))
         self.assertFalse(report['runtime_executed'])
+        self.assertTrue(report['h3_lifetime_applied'])
+        self.assertEqual(report['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial'])
+        self.assertEqual(report['h3_lifetime_patch_sha256'], helper.digest(self.inputs[-1]))
+        self.assertIn('no full native-DNS context overlay', report['scope'])
+        self.assertEqual(report['stage'], 'pre-build-preparation')
         self.assertEqual(report['source_sha256'].get('third_party/xray-vpn-routing/pin-manifest.json'),
                          helper.digest(ROOT / 'third_party/xray-vpn-routing/pin-manifest.json'))
         self.assertTrue((self.base / 'classic-core-inputs.json').is_file())
+
+    def test_h3_input_is_attested_in_ordinary_receipt(self):
+        report = self.prepare()
+        self.assertEqual(report['source_sha256']['third_party/xray-native-dns/h3_lifetime_patch.py'],
+                         helper.digest(self.inputs[-1]))
+
+    def test_existing_classic_only_replacement_is_refused_before_edit(self):
+        self.existing()
+        (self.destination / self.H3).write_text('original ' + self.H3)
+        before = helper.tree(self.destination)
+        with self.assertRaisesRegex(ValueError, 'lifetime patch'):
+            self.prepare()
+        self.assertEqual(before, helper.tree(self.destination))
+        self.assertEqual(self.edits, [])
+
+    def test_existing_h3_patch_requires_exact_not_close_presence(self):
+        self.existing()
+        (self.destination / self.H3).write_text('different H3 close ordering')
+        before = helper.tree(self.destination)
+        with self.assertRaisesRegex(ValueError, 'lifetime patch'):
+            self.prepare()
+        self.assertEqual(before, helper.tree(self.destination))
+        self.assertEqual(self.edits, [])
 
     def test_existing_routing_replacement_is_validated_and_preserved(self):
         self.existing()

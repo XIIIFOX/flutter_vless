@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare only Classic DNS lifetime support in a copied Apple build module."""
+"""Prepare Classic DNS and XHTTP H3 lifetime fixes in a copied Apple build module."""
 from __future__ import annotations
 
 import argparse
@@ -13,7 +13,8 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-UPSTREAM = ('app/dns/dns.go', 'app/dns/nameserver_udp.go', 'transport/internet/udp/dispatcher.go')
+UPSTREAM = ('app/dns/dns.go', 'app/dns/nameserver_udp.go', 'transport/internet/udp/dispatcher.go',
+            'transport/internet/splithttp/dialer.go')
 HELPERS = ('native_classic_lifetime.go', 'native_classic_lifetime_test.go')
 
 
@@ -59,7 +60,7 @@ def metadata(go, arguments, mobile, timeout=60):
 
 def reference_hashes(source, parent):
     # A routing replacement may contain other intentional overlay files. Only
-    # compare the three exact Classic upstream edits and its two helper files.
+    # compare the three Classic upstream edits, H3 dial edit and two helpers.
     with tempfile.TemporaryDirectory(prefix='classic-reference-', dir=parent) as directory:
         reference = Path(directory)
         for relative in UPSTREAM:
@@ -68,14 +69,18 @@ def reference_hashes(source, parent):
             shutil.copyfile(source / relative, target)
 
         def replace(relative, before, after):
+            if relative not in UPSTREAM:
+                raise ValueError('Lifetime reference attempted an unrelated edit')
             path = reference / relative
             text = path.read_text()
             if text.count(before) != 1:
-                raise ValueError('Pinned Classic reference mismatch')
+                raise ValueError('Pinned lifetime reference mismatch')
             path.write_text(text.replace(before, after))
 
         patch = load(ROOT / 'third_party/xray-native-dns/classic_lifetime_patch.py', 'ordinary_classic_reference')
         patch.apply(reference, replace)
+        h3 = load(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py', 'ordinary_h3_reference')
+        h3.apply(reference, replace)
         return {relative: digest(reference / relative) for relative in UPSTREAM}
 
 
@@ -98,9 +103,9 @@ def prepare(mobile, destination, go):
     before = tree(source)
     for relative in UPSTREAM:
         if before.get(relative) != pin['upstream_sha256'][relative]:
-            raise ValueError('Pinned Classic upstream mismatch')
+            raise ValueError('Pinned lifetime upstream mismatch')
     inputs = [Path(__file__).resolve(), ROOT / 'third_party/xray-vpn-routing/apply.py',
-              ROOT / 'third_party/xray-vpn-routing/pin-manifest.json', *copier.classic_input_paths()]
+              ROOT / 'third_party/xray-vpn-routing/pin-manifest.json', *copier.lifetime_input_paths()]
     input_hashes = {str(path.relative_to(ROOT)): digest(path) for path in inputs}
     replacement = selected.get('Replace')
     if replacement is not None:
@@ -117,17 +122,17 @@ def prepare(mobile, destination, go):
         expected = reference_hashes(source, mobile.parent)
         for relative, value in expected.items():
             if existing.get(relative) != value:
-                raise ValueError('Existing Core lacks exact Classic patch')
+                raise ValueError('Existing Core lacks exact lifetime patch')
         for name in HELPERS:
             helper = ROOT / 'third_party/xray-native-dns/overlay/app/dns' / name
             if existing.get('app/dns/' + name) != digest(helper):
                 raise ValueError('Existing Core lacks exact Classic helper')
         mode = 'validated-existing-replacement'
     else:
-        effective = copier.copy_and_apply_classic(source, destination, go=go)
+        effective = copier.copy_and_apply_lifetimes(source, destination, go=go)
         existing = tree(effective)
         run(go, ['mod', 'edit', '-replace=' + module + '=' + str(effective)], mobile, 30)
-        mode = 'new-classic-copy'
+        mode = 'new-lifetime-copy'
     final = metadata(go, ['list', '-m', '-json', module], mobile)
     final_replacement = final.get('Replace')
     if final.get('Path') != module or final.get('Version') != version or not isinstance(final_replacement, dict) \
@@ -136,7 +141,9 @@ def prepare(mobile, destination, go):
     if tree(source) != before or tree(effective) != existing or any(digest(ROOT / name) != value for name, value in input_hashes.items()):
         raise ValueError('Core source or patch inputs changed')
     report = {'stage': 'pre-build-preparation', 'mode': mode, 'module': module, 'version': version, 'sum': checksum,
-              'scope': 'Classic DNS lifetime only; no full native-DNS context overlay',
+              'scope': 'Classic DNS and XHTTP H3 lifetime only; no full native-DNS context overlay',
+              'h3_lifetime_applied': True, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial'],
+              'h3_lifetime_patch_sha256': digest(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py'),
               'replacement': str(effective), 'source_sha256': input_hashes,
               'upstream_cache_unchanged': True, 'replacement_unchanged_after_prepare': True,
               'core_copy_sha256': existing, 'runtime_executed': False}
@@ -153,8 +160,9 @@ def main():
     try:
         prepare(arguments.mobile, arguments.destination, arguments.go)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
-        raise SystemExit('Classic DNS build preparation failed')
+        raise SystemExit('Classic DNS/XHTTP H3 build preparation failed')
     print('APPLE_CLASSIC_DNS_PREPARED=1')
+    print('APPLE_XHTTP_H3_PREPARED=1')
 
 
 if __name__ == '__main__':

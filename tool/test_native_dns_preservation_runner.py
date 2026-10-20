@@ -4,7 +4,7 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -61,6 +61,14 @@ class PreservationRunnerGuards(unittest.TestCase):
                 mock.patch.object(runner.platform, 'system', return_value='Linux'):
             snapshot = runner.source_snapshot()
         self.assertEqual(snapshot.get('packages/flutter_vless_windows/windows/preparation_report.h'), 'synthetic-digest')
+
+    def test_snapshot_binds_h3_patch_and_its_exact_source_guards(self):
+        with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
+                mock.patch.object(runner.platform, 'system', return_value='Linux'):
+            snapshot = runner.source_snapshot()
+        for path in ['third_party/xray-native-dns/h3_lifetime_patch.py',
+                     'tool/test_h3_lifetime_patch.py']:
+            self.assertEqual(snapshot.get(path), 'synthetic-digest', path)
 
     def test_snapshot_binds_opaque_field_corpus(self):
         with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
@@ -356,13 +364,150 @@ class PreservationRunnerGuards(unittest.TestCase):
                                             patch_apply=unowned, overlay=overlay)
             self.assertFalse((source / 'go.mod').exists())
 
+    def lifetime_fixture(self, base):
+        source, overlay = base / 'upstream', base / 'overlay'
+        overlay.mkdir()
+        spec = importlib.util.spec_from_file_location('fixture_h3_patch', runner.H3_PATCH)
+        patch = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(patch)
+        files = {'app/dns/dns.go': 'original dns',
+                 'app/dns/nameserver_udp.go': 'original nameserver',
+                 'transport/internet/udp/dispatcher.go': 'original dispatcher',
+                 runner.H3_DIALER: 'package splithttp\n' + patch.BEFORE + '\n',
+                 'unrelated.go': 'original unrelated'}
+        for name, text in files.items():
+            path = source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+            path.chmod(0o444)
+        for name in ('native_classic_lifetime.go', 'native_classic_lifetime_test.go'):
+            (overlay / name).write_text('package dns\n')
+        manifest = {'upstream_sha256': {name: runner.digest(source / name) for name in files}}
+
+        def classic(root, replace):
+            replace('app/dns/dns.go', 'original dns', 'patched dns')
+
+        return source, overlay, manifest, classic, patch
+
+    def test_combined_lifetime_copy_retains_separate_scopes_and_original_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            source, overlay, manifest, classic, patch = self.lifetime_fixture(base)
+            original = dict(manifest['upstream_sha256'])
+            classic_copy = base / 'classic-only'
+            classic_report = runner.prepare_classic_core(source, classic_copy, manifest,
+                                                        patch_apply=classic, overlay=overlay)
+            self.assertEqual((classic_copy / runner.H3_DIALER).read_bytes(),
+                             (source / runner.H3_DIALER).read_bytes())
+            destination = base / 'combined'
+            report = runner.prepare_lifetime_core(source, destination, manifest,
+                                                  classic_apply=classic, overlay=overlay)
+            self.assertEqual(report['classic_lifetime_patch'], classic_report)
+            self.assertEqual(set(classic_report['changed_upstream']), {'app/dns/dns.go'})
+            self.assertEqual(len(classic_report['added_files']), 2)
+            self.assertEqual(report['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial'])
+            h3 = report['h3_lifetime_patch']
+            self.assertEqual(h3['kind'], 'xhttp-h3-dial-lifetime-only')
+            self.assertTrue(h3['source_unchanged'])
+            self.assertEqual(h3['patch_sha256'], runner.digest(runner.H3_PATCH))
+            self.assertEqual(h3['changed_upstream'], {runner.H3_DIALER: runner.digest(destination / runner.H3_DIALER)})
+            self.assertEqual((destination / runner.H3_DIALER).read_text(),
+                             'package splithttp\n' + patch.AFTER + '\n')
+            self.assertEqual({name: runner.digest(source / name) for name in original}, original)
+            self.assertEqual((destination / 'unrelated.go').read_text(), 'original unrelated')
+            with self.assertRaises(ValueError):
+                runner.prepare_lifetime_core(source, destination, manifest,
+                                             classic_apply=classic, overlay=overlay)
+            self.assertEqual({name: runner.digest(source / name) for name in original}, original)
+
+    def test_combined_lifetime_copy_refuses_missing_or_stale_h3_pin_before_copy(self):
+        for mode in ('missing-pin', 'stale-source'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory)
+                source, overlay, manifest, classic, _ = self.lifetime_fixture(base)
+                if mode == 'missing-pin':
+                    del manifest['upstream_sha256'][runner.H3_DIALER]
+                else:
+                    (source / runner.H3_DIALER).chmod(0o644)
+                    (source / runner.H3_DIALER).write_text('tampered')
+                with mock.patch.object(runner, 'prepare_classic_core') as prepare, self.assertRaises(ValueError):
+                    runner.prepare_lifetime_core(source, base / 'copy', manifest,
+                                                 classic_apply=classic, overlay=overlay)
+                prepare.assert_not_called()
+                self.assertFalse((base / 'copy').exists())
+
+    def test_combined_lifetime_snapshot_keys_are_portable_windows_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            source, overlay, manifest, classic, _ = self.lifetime_fixture(base)
+            relative_to = Path.relative_to
+            # Keep the real host filesystem; only model Windows relative path
+            # rendering, the boundary used to key the owned-copy snapshot.
+            with mock.patch.object(Path, 'relative_to', lambda path, *parts:
+                                   PureWindowsPath(relative_to(path, *parts))):
+                report = runner.prepare_lifetime_core(source, base / 'copy', manifest,
+                                                      classic_apply=classic, overlay=overlay)
+            self.assertEqual(set(report['h3_lifetime_patch']['changed_upstream']), {runner.H3_DIALER})
+
+    def test_combined_lifetime_copy_refuses_already_patched_boundary_even_with_matching_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            source, overlay, manifest, classic, patch = self.lifetime_fixture(base)
+            path = source / runner.H3_DIALER
+            path.chmod(0o644)
+            path.write_text(path.read_text().replace(patch.BEFORE, patch.AFTER))
+            manifest['upstream_sha256'][runner.H3_DIALER] = runner.digest(path)
+            with self.assertRaisesRegex(ValueError, 'replacement boundary changed'):
+                runner.prepare_lifetime_core(source, base / 'copy', manifest,
+                                             classic_apply=classic, overlay=overlay)
+            self.assertEqual(runner.digest(path), manifest['upstream_sha256'][runner.H3_DIALER])
+
+    def test_combined_lifetime_copy_rejects_unowned_noop_added_or_cache_changes(self):
+        for mode in ('unowned-callback', 'unrelated-file', 'noop', 'added-file', 'source-cache'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory)
+                source, overlay, manifest, classic, patch = self.lifetime_fixture(base)
+
+                def h3(root, replace):
+                    if mode == 'unowned-callback':
+                        replace('unrelated.go', 'original', 'wrong')
+                        return
+                    if mode == 'noop':
+                        return
+                    patch.apply(root, replace)
+                    if mode == 'unrelated-file':
+                        (root / 'unrelated.go').write_text('wrong')
+                    if mode == 'added-file':
+                        (root / 'extra.go').write_text('wrong')
+                    if mode == 'source-cache':
+                        path = source / 'unrelated.go'
+                        path.chmod(0o644)
+                        path.write_text('wrong')
+
+                with self.assertRaises(ValueError):
+                    runner.prepare_lifetime_core(source, base / 'copy', manifest,
+                                                 classic_apply=classic, h3_apply=h3, overlay=overlay)
+                if mode != 'source-cache':
+                    self.assertTrue(all(runner.digest(source / name) == value
+                                        for name, value in manifest['upstream_sha256'].items()))
+
     def test_runtime_uses_lifetime_copy_and_alternate_modfile(self):
         self.exercise_runtime_main()
 
     def test_runtime_main_refuses_invalid_h3_after_old_phases_pass(self):
         self.exercise_runtime_main(self.h3_log().replace('mode=raw_numeric', 'mode=unknown'), expected_exit=1)
 
-    def exercise_runtime_main(self, h3_output=None, expected_exit=0):
+    def test_runtime_main_refuses_changed_owned_h3_on_success_or_failure(self):
+        for invalid_output in (False, True):
+            with self.subTest(invalid_output=invalid_output):
+                output = self.h3_log().replace('mode=raw_numeric', 'mode=unknown') if invalid_output else self.h3_log()
+                self.exercise_runtime_main(output, expected_exit=1, mutate_owned=True)
+
+    def test_runtime_main_checks_inputs_in_finally_after_runtime_failure(self):
+        self.exercise_runtime_main(self.h3_log().replace('mode=raw_numeric', 'mode=unknown'),
+                                   expected_exit=1, mutate_inputs=True)
+
+    def exercise_runtime_main(self, h3_output=None, expected_exit=0, mutate_owned=False, mutate_inputs=False):
         h3_output = self.h3_log() if h3_output is None else h3_output
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
@@ -374,7 +519,19 @@ class PreservationRunnerGuards(unittest.TestCase):
                         'upstream_sha256': {'guarded.go': runner.digest(source / 'guarded.go')}}
             commands = []
             budgets = {}
+            inputs_changed = False
+
+            def prepare_copy(source, destination, manifest):
+                path = destination / runner.H3_DIALER
+                path.parent.mkdir(parents=True)
+                path.write_text('prepared H3 dialer')
+                return {'classic_lifetime_patch': {'kind': 'classic-udp-lifetime-only'},
+                        'h3_lifetime_patch': {'kind': 'xhttp-h3-dial-lifetime-only',
+                                              'changed_upstream': {runner.H3_DIALER: runner.digest(path)}},
+                        'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial']}
+
             def checked(name, command, **kwargs):
+                nonlocal inputs_changed
                 commands.append((name, command))
                 budgets[name] = kwargs['seconds']
                 kwargs['results'].append({'name': name, 'exit_code': 0, 'process_exit_code': 0,
@@ -408,6 +565,9 @@ class PreservationRunnerGuards(unittest.TestCase):
                             for mode in ('independent', 'wrong_ca', 'wrong_sni')))
                 if name == 'actual-xhttp-h3-lifetime':
                     (evidence / 'actual-xhttp-h3-lifetime.log').write_text(h3_output)
+                    if mutate_owned:
+                        (evidence / 'LifetimeCore' / runner.H3_DIALER).write_text('mutated H3 dialer')
+                    inputs_changed = mutate_inputs
             with mock.patch.object(runner, 'EVIDENCE', evidence), \
                     mock.patch.object(runner.sys, 'argv', ['runner', '--run-runtime']), \
                     mock.patch.object(runner.sys, 'stderr', io.StringIO()), \
@@ -415,20 +575,21 @@ class PreservationRunnerGuards(unittest.TestCase):
                     mock.patch.object(runner, 'os', SimpleNamespace(name='posix', environ=os.environ, sep=os.sep)), \
                     mock.patch.object(runner.common, 'runtime_authorized', return_value=True), \
                     mock.patch.object(runner.common, 'MANIFEST', manifest), \
-                    mock.patch.object(runner, 'source_snapshot', return_value={'synthetic': 'hash'}), \
+                    mock.patch.object(runner, 'source_snapshot', side_effect=lambda:
+                                      {'synthetic': 'changed' if inputs_changed else 'hash'}), \
                     mock.patch.object(runner, 'require_xhttp_h3_lifetime_runtime',
                                       wraps=runner.require_xhttp_h3_lifetime_runtime) as h3_verify, \
                     mock.patch.object(runner.common, 'checked', side_effect=checked), \
-                    mock.patch.object(runner, 'prepare_classic_core', return_value={'kind': 'classic-udp-lifetime-only'}) as prepare:
+                    mock.patch.object(runner, 'prepare_lifetime_core', side_effect=prepare_copy) as prepare:
                 self.assertEqual(runner.main(), expected_exit)
             h3_verify.assert_called_once()
             self.assertEqual(h3_verify.call_args.args[0], h3_output)
             self.assertEqual(h3_verify.call_args.args[1], 1)
-            prepare.assert_called_once_with(source.resolve(), evidence / 'ClassicCore', manifest)
+            prepare.assert_called_once_with(source.resolve(), evidence / 'LifetimeCore', manifest)
             compile_command = next(command for name, command in commands if name == 'acceptance-compile')
-            self.assertIn('-modfile=' + str(evidence / 'classic-lifetime.mod'), compile_command)
-            edit = next(command for name, command in commands if name == 'classic-lifetime-modfile')
-            self.assertIn('-replace=synthetic.invalid/core=' + str(evidence / 'ClassicCore'), edit)
+            self.assertIn('-modfile=' + str(evidence / 'native-lifetime.mod'), compile_command)
+            edit = next(command for name, command in commands if name == 'lifetime-modfile')
+            self.assertIn('-replace=synthetic.invalid/core=' + str(evidence / 'LifetimeCore'), edit)
             self.assertEqual((source / 'guarded.go').read_text(), 'original')
             old_runtime = next(command for name, command in commands if name == 'actual-core-dns')
             self.assertIn('-test.timeout=120s', old_runtime)
@@ -447,13 +608,27 @@ class PreservationRunnerGuards(unittest.TestCase):
             self.assertTrue(report['core_overlay_applied'])
             self.assertFalse(report['native_dns_context_overlay_applied'])
             self.assertEqual(report['classic_lifetime_patch']['kind'], 'classic-udp-lifetime-only')
+            self.assertIn('h3_lifetime_patch', report)
+            self.assertEqual(report['h3_lifetime_patch']['kind'], 'xhttp-h3-dial-lifetime-only')
+            self.assertEqual(report['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial'])
             self.assertIs(report['success'], expected_exit == 0)
             if expected_exit == 0:
+                self.assertEqual(report['h3_lifetime_copy_sha256'],
+                                 report['h3_lifetime_patch']['changed_upstream'][runner.H3_DIALER])
+                self.assertTrue(report['h3_lifetime_copy_unchanged'])
                 self.assertEqual(report['results'][-1]['selected_tests'], ['TestNativeXHTTPH3Lifetime'])
                 self.assertEqual(report['results'][-1]['h3_lifetime_modes'], ['raw_numeric', 'native_cnc_windows'])
             else:
-                self.assertEqual(report['error'], 'Exact H3 lifetime modes missing or duplicated')
-                self.assertNotIn('selected_test_pass', report['results'][-1])
+                expected_error = ('H3 lifetime prepared copy changed during verification' if mutate_owned else
+                                  'Production preparer/acceptance source changed during verification' if mutate_inputs else
+                                  'Exact H3 lifetime modes missing or duplicated')
+                self.assertEqual(report['error'], expected_error)
+                if mutate_owned:
+                    self.assertFalse(report['h3_lifetime_copy_unchanged'])
+                if mutate_inputs:
+                    self.assertFalse(report['source_snapshot_unchanged'])
+                if 'mode=unknown' in h3_output:
+                    self.assertNotIn('selected_test_pass', report['results'][-1])
 
     def test_default_selects_pure_preparation_without_core_runtime(self):
         with tempfile.TemporaryDirectory() as directory:

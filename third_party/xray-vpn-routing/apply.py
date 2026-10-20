@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply the optional routing seam only to a new disposable pinned Core copy."""
+"""Apply routing and shared lifetime fixes to a new disposable pinned Core copy."""
 import argparse
 import hashlib
 import importlib.util
@@ -12,12 +12,17 @@ import subprocess
 HERE = Path(__file__).resolve().parent
 MANIFEST = json.loads((HERE / 'pin-manifest.json').read_text())
 CLASSIC = HERE.parent / 'xray-native-dns'
+H3_PATH = 'transport/internet/splithttp/dialer.go'
 
 
 def classic_input_paths():
     return [CLASSIC / 'classic_lifetime_patch.py', CLASSIC / 'pin-manifest.json',
             CLASSIC / 'overlay/app/dns/native_classic_lifetime.go',
             CLASSIC / 'overlay/app/dns/native_classic_lifetime_test.go']
+
+
+def lifetime_input_paths():
+    return [*classic_input_paths(), CLASSIC / 'h3_lifetime_patch.py']
 
 
 def apply_classic_lifetime(root):
@@ -51,11 +56,48 @@ def apply_classic_lifetime(root):
         shutil.copyfile(helper, target)
 
 
+def validate_h3_lifetime_source(root):
+    """Read-only H3 pin preflight, before creating or changing a Core copy."""
+    inputs = [CLASSIC / 'h3_lifetime_patch.py', CLASSIC / 'pin-manifest.json']
+    if any(path.is_symlink() or not path.is_file() for path in inputs):
+        raise ValueError('H3 lifetime inputs must be real files')
+    manifest = json.loads(inputs[1].read_text())
+    if any(manifest[key] != MANIFEST[key] for key in ('module', 'module_version', 'module_sum', 'core_commit')):
+        raise ValueError('H3 lifetime and routing Core pins differ')
+    path = root / H3_PATH
+    if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != manifest['upstream_sha256'][H3_PATH]:
+        raise ValueError('Pinned H3 lifetime source mismatch: ' + H3_PATH)
+    return inputs[0]
+
+
+def apply_h3_lifetime(root):
+    """Only dial-owned H3 cleanup; no strict DNS or routing policy changes."""
+    patch_path = validate_h3_lifetime_source(root)
+    path = root / H3_PATH
+
+    def replace(name, before, after):
+        if name != H3_PATH:
+            raise ValueError('H3 lifetime attempted an unrelated edit')
+        source = path.read_text()
+        if source.count(before) != 1:
+            raise ValueError('Pinned H3 replacement mismatch: ' + name)
+        path.write_text(source.replace(before, after))
+
+    spec = importlib.util.spec_from_file_location('routing_h3_lifetime', patch_path)
+    patch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(patch)
+    patch.apply(root, replace)
+
+
 def copy_and_apply_classic(source, destination, *, go='go', caches=None):
-    return copy_and_apply(source, destination, go=go, caches=caches, routing=False)
+    return copy_and_apply(source, destination, go=go, caches=caches, routing=False, h3=False)
 
 
-def copy_and_apply(source, destination, *, go='go', caches=None, routing=True):
+def copy_and_apply_lifetimes(source, destination, *, go='go', caches=None, routing=False, h3=True):
+    return copy_and_apply(source, destination, go=go, caches=caches, routing=routing, h3=h3)
+
+
+def copy_and_apply(source, destination, *, go='go', caches=None, routing=True, h3=True):
     source, destination = Path(source).resolve(), Path(destination).absolute()
     if destination.exists() or destination.is_symlink():
         raise ValueError('Destination must be new')
@@ -75,6 +117,8 @@ def copy_and_apply(source, destination, *, go='go', caches=None, routing=True):
     for relative, expected in MANIFEST['upstream_sha256'].items():
         if hashlib.sha256((source / relative).read_bytes()).hexdigest() != expected:
             raise ValueError('Pinned source mismatch: ' + relative)
+    if h3:
+        validate_h3_lifetime_source(source)
     # Validate every replacement before copying; no source or cache mutation.
     replacements = patches() if routing else []
     for relative, before, _ in replacements:
@@ -95,6 +139,8 @@ def copy_and_apply(source, destination, *, go='go', caches=None, routing=True):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(overlay, target)
     apply_classic_lifetime(destination)
+    if h3:
+        apply_h3_lifetime(destination)
     return destination
 
 

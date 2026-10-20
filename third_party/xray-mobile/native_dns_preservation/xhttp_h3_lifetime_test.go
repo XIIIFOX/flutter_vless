@@ -38,6 +38,14 @@ import (
 )
 
 const h3LifetimeModeEnv = "FLUTTER_VLESS_H3_LIFETIME_MODE"
+const h3LifetimeCertificateMessage = "tls: failed to verify certificate: x509: certificate signed by unknown authority"
+
+// The pinned default client reports this refusal as INTERNAL_ERROR. Require
+// its exact peer certificate reason; an unrelated internal error is no proof.
+func h3LifetimeCertificateRejection(err error) bool {
+	var peer *quic.TransportError
+	return errors.As(err, &peer) && peer.Remote && peer.ErrorCode == quic.InternalError && peer.ErrorMessage == h3LifetimeCertificateMessage
+}
 
 type h3LifetimeWorkers struct{ Listen, Send int }
 
@@ -197,6 +205,26 @@ func testH3LifetimePredicates(t *testing.T) {
 	if diagnostic := h3LifetimeCauseOf(errors.New(strings.Repeat("x", 512))); len(diagnostic.Text) != 256 || diagnostic.Transport {
 		t.Fatal("generic cause diagnostic is not bounded")
 	}
+	for _, tc := range []struct {
+		name  string
+		cause error
+		want  bool
+	}{
+		{"pinned-peer", &quic.TransportError{Remote: true, ErrorCode: quic.InternalError, ErrorMessage: h3LifetimeCertificateMessage}, true},
+		{"wrapped-peer", fmt.Errorf("owned peer: %w", &quic.TransportError{Remote: true, ErrorCode: quic.InternalError, ErrorMessage: h3LifetimeCertificateMessage}), true},
+		{"generic-internal", &quic.TransportError{Remote: true, ErrorCode: quic.InternalError, ErrorMessage: "unrelated failure"}, false},
+		{"local", &quic.TransportError{ErrorCode: quic.InternalError, ErrorMessage: h3LifetimeCertificateMessage}, false},
+		{"wrong-code", &quic.TransportError{Remote: true, ErrorCode: 298, ErrorMessage: h3LifetimeCertificateMessage}, false},
+		{"wrong-reason", &quic.TransportError{Remote: true, ErrorCode: quic.InternalError, ErrorMessage: h3LifetimeCertificateMessage + " unrelated suffix"}, false},
+		{"application", &quic.ApplicationError{Remote: true, ErrorCode: 1, ErrorMessage: h3LifetimeCertificateMessage}, false},
+		{"absent", nil, false},
+	} {
+		t.Run("certificate-cause-"+tc.name, func(t *testing.T) {
+			if h3LifetimeCertificateRejection(tc.cause) != tc.want {
+				t.Fatal("exact peer certificate cause classification changed")
+			}
+		})
+	}
 }
 
 func h3LifetimeAuthorized(t *testing.T) {
@@ -334,8 +362,7 @@ func TestNativeXHTTPH3LifetimeChild(t *testing.T) {
 		context.AfterFunc(ctx, func() {
 			defer contexts.Add(-1)
 			diagnostic.recordCause(context.Cause(ctx))
-			var transportError *quic.TransportError
-			if errors.As(context.Cause(ctx), &transportError) && transportError.Remote && transportError.ErrorCode == quic.TransportErrorCode(0x100+42) {
+			if h3LifetimeCertificateRejection(context.Cause(ctx)) {
 				rejected.Add(1)
 			} else if negative.Load() {
 				badCause.Add(1)
@@ -428,14 +455,14 @@ func TestNativeXHTTPH3LifetimeChild(t *testing.T) {
 		t.Fatal("H3_SETUP CA file", err)
 	}
 	// Bind the same foreign root to the real server certificate: exact expected
-	// x509 cause complements the actual remote QUIC crypto alert, not EOF.
+	// x509 cause complements the exact remote QUIC certificate reason, not EOF.
 	leaf, err := x509.ParseCertificate(material.download.Certificate[0])
 	if err != nil {
 		t.Fatal("H3_SETUP leaf parse", err)
 	}
 	_, verifyErr := leaf.Verify(x509.VerifyOptions{Roots: xhttpTLSRootPool(t, material.foreign), DNSName: "download-tls.invalid"})
 	var unknownAuthority x509.UnknownAuthorityError
-	if !errors.As(verifyErr, &unknownAuthority) {
+	if !errors.As(verifyErr, &unknownAuthority) || "tls: failed to verify certificate: "+verifyErr.Error() != h3LifetimeCertificateMessage {
 		t.Fatal("H3_SETUP wrong-CA cause unavailable")
 	}
 	host := "127.0.0.1"
@@ -550,13 +577,13 @@ func TestNativeXHTTPH3LifetimeChild(t *testing.T) {
 				CoreMessages []string
 			}{causes, messages})
 			t.Logf("H3_SETUP_DIAGNOSTIC mode=%s attempt=%d before_core_close=true contexts=%d rejected=%d bad_cause=%d setup_http=%d bad_http=%d sockets=%d socket_states=%v tracker_error=%v listen=%d send=%d worker_error=%v evidence=%s", mode, attempt, contexts.Load(), rejected.Load(), badCause.Load(), setupHTTP.Load(), badHTTP.Load(), len(connections), states, trackerError, workers.Listen, workers.Send, workerError, evidence)
-			t.Fatal("H3_SETUP exact remote bad_certificate missing")
+			t.Fatal("H3_SETUP exact remote certificate rejection missing")
 		}
 		connections, err := tracker.snapshot()
 		if err != nil || len(connections) != attempt || badHTTP.Load() != 0 || setupHTTP.Load() != 1 || badCause.Load() != 0 {
 			t.Fatal("H3_SETUP unexpected physical socket/handshake/HTTP count", err)
 		}
-		t.Logf("H3_LIFETIME_REJECTION mode=%s attempt=%d remote_crypto=298 sockets=%d", mode, attempt, len(connections))
+		t.Logf("H3_LIFETIME_REJECTION mode=%s attempt=%d peer_transport_code=1 cause=unknown_authority sockets=%d", mode, attempt, len(connections))
 	}
 	startClose()
 	coreClosed := false

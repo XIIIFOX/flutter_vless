@@ -170,8 +170,11 @@ def package(preview, destination, head, repository=ROOT):
             for name in EXPORTS:
                 matches = [line for line in lines if re.search(r'(?:^|\s)_' + re.escape(name) + r'$', line)]
                 if len(matches) != 1 or not re.search(r'\bexternal\b', matches[0]) \
-                        or '(__TEXT,__text)' not in matches[0] or re.search(r'weak|undefined', matches[0], re.I):
-                    raise ValueError('SDK strong ABI export missing: ' + name)
+                        or not any(kind in matches[0] for kind in ('(__TEXT,__text)', '(LTO,CODE)')) \
+                        or re.search(r'weak|undefined', matches[0], re.I):
+                    evidence = json.dumps([line[-240:] for line in matches[:2]])
+                    raise ValueError(f'SDK strong ABI export missing: {name}; library={identifier} '
+                                     f'arch={architecture} matches={len(matches)} evidence={evidence}')
             symbols[identifier + '/' + architecture] = list(EXPORTS)
     receipt_hashes = {name: digest(preview/name) for name in receipts}
     members = {'XRay.xcframework/' + name: value for name, value in framework_hashes.items()}

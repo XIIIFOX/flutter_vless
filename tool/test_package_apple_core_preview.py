@@ -59,6 +59,7 @@ class AppleSDKPackagingTests(unittest.TestCase):
         self.commands = []
         self.bad_architecture = False
         self.bad_export = None
+        self.lto_code = False
 
     def write_receipts(self):
         (self.preview/'routing-preview.json').write_text(json.dumps(self.producer))
@@ -76,13 +77,16 @@ class AppleSDKPackagingTests(unittest.TestCase):
             if self.bad_architecture: return b'x86_64'
             return b'arm64 x86_64' if 'simulator' in command[-1] else b'arm64'
         if command[:2] == ['xcrun', 'nm']:
-            lines = ['000000 (__TEXT,__text) external _' + name for name in subject.EXPORTS]
+            definition = '---------------- (LTO,CODE)' if self.lto_code else '000000 (__TEXT,__text)'
+            lines = [definition + ' external _' + name for name in subject.EXPORTS]
             if self.bad_export == 'weak': lines[0] = lines[0].replace('external', 'weak external')
             elif self.bad_export == 'missing': lines.pop()
             elif self.bad_export == 'duplicate': lines.append(lines[0])
             elif self.bad_export == 'absolute': lines[0] = lines[0].replace('(__TEXT,__text)', '(absolute)')
             elif self.bad_export == 'data': lines[0] = lines[0].replace('(__TEXT,__text)', '(__DATA,__data)')
             elif self.bad_export == 'prefixed': lines[0] = lines[0].replace('_XRayStartPrivate', '_prefix_XRayStartPrivate')
+            elif self.bad_export == 'lto-data': lines[0] = lines[0].replace('(__TEXT,__text)', '(LTO,DATA)')
+            elif self.bad_export == 'long-data': lines[0] = 'x'*10000 + lines[0].replace('(__TEXT,__text)', '(LTO,DATA)')
             return '\n'.join(lines).encode()
         self.fail('Unexpected actual command: ' + repr(command))
 
@@ -103,6 +107,24 @@ class AppleSDKPackagingTests(unittest.TestCase):
         subject.verify_archive(archive, result['members_sha256'])
         self.assertEqual(set(p.name for p in self.destination.iterdir()), {'manifest.json', 'ios-sdk-preview.tar.gz'})
         self.assertFalse(any('go' == command[0] for command in self.commands))
+
+    def test_real_lto_code_definition_shape_is_accepted(self):
+        # The immutable verified SDK469 nm logs use this exact definition class
+        # for all five function wrappers in each of the three architectures.
+        self.lto_code = True
+        result = self.package()
+        self.assertTrue(result['success'])
+        self.assertEqual(len(result['strong_exports']), 3)
+
+    def test_export_refusal_has_bounded_actual_match_and_architecture(self):
+        self.bad_export = 'long-data'
+        with self.assertRaises(ValueError) as failure:
+            self.package()
+        message = str(failure.exception)
+        self.assertIn('library=ios-arm64 arch=arm64 matches=1', message)
+        self.assertIn('(LTO,DATA) external _XRayStartPrivate', message)
+        self.assertLess(len(message), 1000)
+        self.assertFalse(self.destination.exists())
 
     def test_missing_false_foreign_scope_pin_or_hash_refused(self):
         original = copy.deepcopy(self.producer)
@@ -139,7 +161,7 @@ class AppleSDKPackagingTests(unittest.TestCase):
         self.bad_architecture = True
         with self.assertRaisesRegex(ValueError, 'binary architectures'): self.package()
         self.bad_architecture = False
-        for defect in ('weak', 'missing', 'duplicate', 'absolute', 'data', 'prefixed'):
+        for defect in ('weak', 'missing', 'duplicate', 'absolute', 'data', 'prefixed', 'lto-data'):
             self.bad_export = defect
             with self.subTest(defect=defect), self.assertRaisesRegex(ValueError, 'strong ABI'): self.package()
         self.assertFalse(self.destination.exists())

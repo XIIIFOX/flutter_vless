@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       validation:
-        description: Platforms to validate
+        description: Validation scope
         type: choice
-        options: [all, android]
+        options: [all, android, android-current]
         default: all
 
 permissions:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   apple:
-    if: inputs.validation != 'android'
+    if: inputs.validation == 'all'
     name: Apple intent transactions
     runs-on: macos-15-intel
     timeout-minutes: 8
@@ -81,6 +81,7 @@ jobs:
         working-directory: example
         run: flutter pub get
       - name: Prove stale admission fails on the historical implementation
+        if: inputs.validation != 'android-current'
         run: python3 tool/test_android_quick_access_red.py --run-ci --output build/android-quick-access-red
       - name: Test actual plugin and quick action admission
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' && steps.metadata.outcome == 'success' }}
@@ -99,7 +100,7 @@ jobs:
           retention-days: 7
 
   windows:
-    if: inputs.validation != 'android'
+    if: inputs.validation == 'all'
     name: Windows menu transactions and plugin
     runs-on: windows-latest
     timeout-minutes: 20

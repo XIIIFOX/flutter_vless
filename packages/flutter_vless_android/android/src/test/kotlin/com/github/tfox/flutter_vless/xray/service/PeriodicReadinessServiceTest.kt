@@ -32,7 +32,7 @@ class PeriodicReadinessServiceTest {
         val service: XrayVPNService, val recovery: SessionRecoveryPolicy,
         val probe: SessionReadinessProbe, val child: Process,
         val scheduled: MutableList<() -> Unit>, val cleanup: MutableList<() -> Unit>,
-        val broadcasts: MutableList<Intent>
+        val broadcasts: MutableList<Intent>, val optionsStores: () -> List<NativeOptionsStore>
     ) {
         fun arm() {
             XrayVPNService::class.java.getDeclaredMethod("tick", Long::class.javaPrimitiveType, Int::class.javaPrimitiveType)
@@ -100,8 +100,13 @@ class PeriodicReadinessServiceTest {
         AppConfigs.V2RAY_CONFIG = profile
         AppConfigs.ALWAYS_ON_ENABLED = false; AppConfigs.LOCKDOWN_ENABLED = false
         try {
-            Mockito.mockConstruction(Intent::class.java, Mockito.withSettings().defaultAnswer(Answers.RETURNS_SELF)).use {
-                body(Fixture(service, recovery, probe, child, scheduled, cleanup, broadcasts))
+            Mockito.mockConstruction(NativeOptionsStore::class.java) { store, _ ->
+                Mockito.`when`(store.read()).thenReturn(NativeVlessOptions())
+                Mockito.`when`(store.readSnapshot()).thenReturn(QuickAccessSnapshot(NativeVlessOptions(), ""))
+            }.use { stores ->
+                Mockito.mockConstruction(Intent::class.java, Mockito.withSettings().defaultAnswer(Answers.RETURNS_SELF)).use {
+                    body(Fixture(service, recovery, probe, child, scheduled, cleanup, broadcasts) { stores.constructed() })
+                }
             }
         } finally {
             core.set(XrayCoreManager, priorCore)
@@ -327,6 +332,8 @@ class PeriodicReadinessServiceTest {
         try {
             assertTrue(entered.await(2, TimeUnit.SECONDS))
             f.stop()
+            assertEquals("Actual Stop must reach the inert options invalidation boundary once", 1, f.optionsStores().size)
+            Mockito.verify(f.optionsStores().single()).invalidateActions()
             assertFalse(f.recovery.authorized)
             assertEquals("Stop queues cleanup rather than running it on the caller", 1, f.cleanup.size)
             assertTrue("Stop must cancel the active owned socket, not wait for its I/O timeout", finished.await(700, TimeUnit.MILLISECONDS))

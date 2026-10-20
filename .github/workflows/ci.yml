@@ -13,6 +13,7 @@ on:
           - apple-runtime
           - apple-fakedns
           - core-dns-context
+          - native-config
           - native-listeners
           - preparation-report
           - apple-windows
@@ -50,7 +51,7 @@ jobs:
         run: python tool/test_live_acceptance_clock.py -v
 
   core-dns-context:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'core-dns-context' || inputs.validation == 'native-listeners' || inputs.validation == 'preparation-report'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'core-dns-context' || inputs.validation == 'native-listeners' || inputs.validation == 'preparation-report' || inputs.validation == 'native-config'
     name: Scoped Core DNS runtime (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
@@ -82,10 +83,16 @@ jobs:
       - name: Check final Apple routing metadata with the shared Core validator
         if: matrix.os == 'macos-latest'
         shell: bash
+        env:
+          NATIVE_CONFIG_VALIDATION: ${{ inputs.validation }}
         run: |
+          test_args=(--filter TunnelRoutingMetadataTests)
+          if [[ "$NATIVE_CONFIG_VALIDATION" == 'native-config' ]]; then
+            test_args=()
+          fi
           for platform in ios macos; do
             pair_dir="$RUNNER_TEMP/apple-routing-pair-$platform"
-            FLVLESS_EXPORT_ROUTING_PAIR="$pair_dir" bash "tool/test_${platform}_tunnel_support.sh" --filter TunnelRoutingMetadataTests > "build/native_routing_cli/apple-$platform-preparation.log" 2>&1
+            FLVLESS_EXPORT_ROUTING_PAIR="$pair_dir" bash "tool/test_${platform}_tunnel_support.sh" "${test_args[@]}" > "build/native_routing_cli/apple-$platform-preparation.log" 2>&1
             build/native_routing_cli/optional-xray native-routing check --config "$pair_dir/config.json" --spec "$pair_dir/spec.json" > "build/native_routing_cli/apple-$platform-check.log"
           done
       - name: Check Windows routing metadata with the shared Core validator
@@ -197,7 +204,7 @@ jobs:
           flutter test
 
   android-native:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'native-listeners' || inputs.validation == 'preparation-report' || inputs.validation == 'apple-android'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'native-listeners' || inputs.validation == 'preparation-report' || inputs.validation == 'apple-android' || inputs.validation == 'native-config'
     name: Android native unit tests
     runs-on: ubuntu-latest
     steps:

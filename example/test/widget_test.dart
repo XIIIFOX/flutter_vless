@@ -5,11 +5,181 @@ import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_vless/flutter_vless.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter_vless_example/main.dart';
 import 'package:flutter_vless_example/routing.dart';
 
 void main() {
+  void channels(Future<Object?> Function(MethodCall) handle) {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    const channel = MethodChannel('flutter_vless');
+    const status = MethodChannel('flutter_vless/status');
+    messenger.setMockMethodCallHandler(channel, handle);
+    messenger.setMockMethodCallHandler(status, (_) async => null);
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(channel, null);
+      messenger.setMockMethodCallHandler(status, null);
+    });
+  }
+
+  const profile = '{"outbounds":[{"protocol":"freedom"}]}';
+  const passed = {'preparationReport': {'version': 1, 'scope': 'host',
+    'coreCheck': 'passed', 'changes': <String>[]}};
+
+  for (final phase in ['permission', 'native start']) {
+    testWidgets('pending startup $phase offers Disconnect instead of another Start',
+        (tester) async {
+      final pending = Completer<Object?>();
+      var starts = 0, stops = 0;
+      channels((call) async {
+        if (call.method == 'getCoreVersion') return '26.10.17';
+        if (call.method == 'requestPermission') {
+          return phase == 'permission' ? pending.future : true;
+        }
+        if (call.method == 'startVless') {
+          starts++;
+          return pending.future;
+        }
+        if (call.method == 'stopVless') stops++;
+        return null;
+      });
+      await tester.pumpWidget(const MyApp());
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).first, profile);
+      try {
+        await tester.tap(find.text('Connect'));
+        await tester.pump();
+        expect(find.text('Disconnect'), findsOneWidget);
+        expect(find.text('Connect'), findsNothing);
+        await tester.tap(find.text('Disconnect'));
+        await tester.pumpAndSettle();
+        expect(stops, 1);
+        expect(starts, phase == 'permission' ? 0 : 1);
+        expect(find.text('Connect'), findsOneWidget);
+      } finally {
+        if (!pending.isCompleted) pending.complete(phase == 'permission' ? true : passed);
+        await tester.pumpAndSettle();
+      }
+      expect(starts, phase == 'permission' ? 0 : 1);
+      expect(find.byKey(const Key('preparation-report')), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('pending startup older completion cannot clear a newer attempt',
+      (tester) async {
+    final first = Completer<Object?>(), second = Completer<Object?>();
+    var permissions = 0, starts = 0, stops = 0;
+    channels((call) async {
+      if (call.method == 'getCoreVersion') return '26.10.17';
+      if (call.method == 'requestPermission') {
+        return ++permissions == 1 ? first.future : second.future;
+      }
+      if (call.method == 'startVless') starts++;
+      if (call.method == 'stopVless') stops++;
+      return null;
+    });
+    await tester.pumpWidget(const MyApp());
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, profile);
+    try {
+      await tester.tap(find.text('Connect')); await tester.pump();
+      expect(find.text('Disconnect'), findsOneWidget);
+      await tester.tap(find.text('Disconnect')); await tester.pumpAndSettle();
+      await tester.tap(find.text('Connect')); await tester.pump();
+      first.complete(true); await tester.pumpAndSettle();
+      expect(find.text('Disconnect'), findsOneWidget);
+      expect(starts, 0);
+      await tester.tap(find.text('Disconnect')); await tester.pumpAndSettle();
+      expect(stops, 2);
+      expect(permissions, 2);
+    } finally {
+      if (!first.isCompleted) first.complete(false);
+      if (!second.isCompleted) second.complete(false);
+      await tester.pumpAndSettle();
+    }
+    expect(starts, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('pending startup completion cannot clear an awaiting Stop',
+      (tester) async {
+    final start = Completer<Object?>(), stop = Completer<Object?>();
+    channels((call) async {
+      if (call.method == 'getCoreVersion') return '26.10.17';
+      if (call.method == 'requestPermission') return true;
+      if (call.method == 'startVless') return start.future;
+      if (call.method == 'stopVless') return stop.future;
+      return null;
+    });
+    await tester.pumpWidget(const MyApp());
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, profile);
+    try {
+      await tester.tap(find.text('Connect')); await tester.pump();
+      expect(find.text('Disconnect'), findsOneWidget);
+      await tester.tap(find.text('Disconnect')); await tester.pump();
+      start.complete(passed); await tester.pumpAndSettle();
+      expect(find.text('Disconnect'), findsOneWidget);
+      expect(find.byKey(const Key('preparation-report')), findsNothing);
+    } finally {
+      if (!start.isCompleted) start.complete(passed);
+      if (!stop.isCompleted) stop.complete();
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('Connect'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final edit in ['configuration', 'options']) {
+    testWidgets('pending startup $edit edit cancels held permission',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final permission = Completer<Object?>();
+      var starts = 0, initializations = 0;
+      channels((call) async {
+        if (call.method == 'initializeVless') initializations++;
+        if (call.method == 'getCoreVersion') return '26.10.17';
+        if (call.method == 'getCapabilities') return {'optionsVersion': 1};
+        if (call.method == 'requestPermission') return permission.future;
+        if (call.method == 'startVless') starts++;
+        return null;
+      });
+      await tester.pumpWidget(const MyApp());
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).first, profile);
+      try {
+        await tester.tap(find.text('Connect')); await tester.pump();
+        expect(find.text('Disconnect'), findsOneWidget);
+        if (edit == 'configuration') {
+          await tester.enterText(find.byType(TextField).first,
+              '{"outbounds":[{"protocol":"blackhole"}]}');
+        } else {
+          await tester.tap(find.byTooltip('Plugin options'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Apply options'));
+          await tester.pumpAndSettle();
+          expect(initializations, 2);
+          // Applying invalidates permission before the asynchronous options
+          // transaction finishes. Return to the parent to inspect that intent;
+          // complete options persistence is covered by options_storage_test.
+          if (find.text('Plugin options').evaluate().isNotEmpty) {
+            await tester.pageBack();
+            await tester.pumpAndSettle();
+          }
+        }
+      } finally {
+        if (!permission.isCompleted) permission.complete(true);
+        await tester.pumpAndSettle();
+      }
+      expect(starts, 0);
+      expect(find.text('Connect'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('an obsolete start cannot show an error over a newer report',
       (tester) async {
     final messenger =
@@ -51,6 +221,8 @@ void main() {
     await tester.pump();
     expect(checks, 1);
     expect(starts, 0);
+    await tester.tap(find.text('Disconnect'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
     expect(starts, 1);

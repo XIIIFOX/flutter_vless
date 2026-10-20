@@ -53,6 +53,7 @@ class _HomePageState extends State<HomePage> {
   late VlessOptions pluginOptions = widget.options;
   VlessPreparationReport? preparationReport;
   int preparationRequest = 0;
+  int? pendingConnectionRequest;
   late String reportEditorText;
   late FlutterVless flutterVless = FlutterVless(
     options: pluginOptions,
@@ -159,36 +160,50 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _connect() async {
+    if (pendingConnectionRequest != null) return;
     _invalidatePreparation();
     final request = preparationRequest;
-    if (!proxyOnly && !await flutterVless.requestPermission()) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Permission Denied'),
-      ));
-      return;
-    }
+    setState(() => pendingConnectionRequest = request);
+    try {
+      if (!proxyOnly && !await flutterVless.requestPermission()) {
+        if (!mounted || request != preparationRequest) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Permission Denied'),
+        ));
+        return;
+      }
 
-    if (!mounted || request != preparationRequest) return;
-    final report = await flutterVless.startVlessWithReport(
-      remark: remark,
-      config: config.text,
-      proxyOnly: proxyOnly,
-      vpnRouting: proxyOnly ? null : vpnRouting,
-      bypassSubnets: bypassSubnets,
-      blockedApps: blockedApps,
-      certificateAssetsDirectory: certificateDirectory.text.isEmpty
-          ? null
-          : certificateDirectory.text,
-    );
-    if (mounted && request == preparationRequest) {
-      setState(() => preparationReport = report);
+      if (!mounted || request != preparationRequest) return;
+      final report = await flutterVless.startVlessWithReport(
+        remark: remark,
+        config: config.text,
+        proxyOnly: proxyOnly,
+        vpnRouting: proxyOnly ? null : vpnRouting,
+        bypassSubnets: bypassSubnets,
+        blockedApps: blockedApps,
+        certificateAssetsDirectory: certificateDirectory.text.isEmpty
+            ? null
+            : certificateDirectory.text,
+      );
+      if (mounted && request == preparationRequest) {
+        setState(() => preparationReport = report);
+      }
+    } finally {
+      if (mounted && pendingConnectionRequest == request) {
+        setState(() => pendingConnectionRequest = null);
+      }
     }
   }
 
   Future<void> _disconnect() async {
     _invalidatePreparation();
+    final request = preparationRequest;
+    // An older Start cannot clear this Stop while its native reply is pending.
+    setState(() => pendingConnectionRequest = request);
     await flutterVless.stopVless();
+    if (mounted && pendingConnectionRequest == request) {
+      setState(() => pendingConnectionRequest = null);
+    }
   }
 
   Future<void> _measureDelay({bool isolatedProfile = false}) async {
@@ -298,6 +313,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   bool _canStop(VlessStatus status) {
+    if (pendingConnectionRequest != null) return true;
     return switch (status.connectionState) {
       VlessConnectionState.connected ||
       VlessConnectionState.connecting ||

@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Cancel pending capability-gated starts after successful options/owner reinitialization on all four platforms. Preserve the pending request and status listener if native reinitialization fails. Keep Disconnect available in the example while permission or startup is pending; prevent older completions from clearing newer Start/Stop actions.
+
 * Retain quick-action intent across authentication and queued work on every platform. Reject superseded controls; keep Android tile admission through actual process launch and prevent policy-free retries. Stage Apple control startup with On Demand disabled and report uncertain preference saves without overwriting newer owners. Add focused cross-platform transaction regressions.
 
 * Prepare Apple transport endpoints from bounded IPv4/IPv6 candidate sets, preserving DNS TTLs and using documented OS synthesis for IPv4 literals on IPv6-only paths. Reprepare from the original configuration after path, wake, expiry or transport failures; serialize settings changes and scope native cleanup to the committed plan. Native NAT64/handover acceptance remains pending.

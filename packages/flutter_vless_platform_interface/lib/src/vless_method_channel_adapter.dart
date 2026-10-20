@@ -77,6 +77,10 @@ class VlessMethodChannelAdapter extends VlessPlatform {
       }
       rethrow;
     }
+    // A committed native configuration replaces the owner/options that an
+    // older capability-gated Start expected. Revoke it before listener awaits;
+    // rejected initialization leaves both pending Start and listener intact.
+    ++_startGeneration;
     if (previous != null) {
       await previous.cancel();
       _statusSubscription = _listenToStatus(onStatusChanged);

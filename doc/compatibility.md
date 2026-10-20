@@ -1937,8 +1937,10 @@ aliases to a numeric IPv4/IPv6 leaf. Caller DNS, resolver URL, TLS name and opaq
 full-profile data remain unchanged. Cycles, unresolved aliases, RCODE mappings
 and unproven Unicode aliases are refused during configuration preparation.
 
-All four public adapters cancel an older capability-gated start after Stop or
-a newer Start, returning `VPN_START_CANCELLED` without private error details.
+All four public adapters cancel an older capability-gated start after Stop,
+a newer Start or successful native reinitialization, returning
+`VPN_START_CANCELLED` without private error details. Rejected reinitialization
+preserves the pending request and its existing status listener.
 The example ignores this obsolete completion and retains the newer report.
 This cancellation boundary precedes native dispatch; native worker shutdown
 and physical device acceptance remain separate checks.
@@ -2136,6 +2138,45 @@ quick-action cases, with no failures, errors or skips. The separate
 reproduces the stale-action admission defect on the earlier implementation.
 These are source/JVM checks; live tile, permission and VPN traffic acceptance
 remain separate.
+
+### Latest shared startup and physical iPhone checks (2026-10-21)
+
+At the owner’s request, the eight full compatibility requirements below remain
+a deferred backlog. The current 1.1.7 target is the minimum adaptation, startup
+and options fixes, focused regressions and available device acceptance; this
+does not close the complete protocol, DNS64/NAT64 or handover matrix.
+
+The shared adapter invalidates capability-held Start requests at a successful
+native initialization commit, before asynchronous listener replacement. The
+four-platform regression table first reproduces all twelve accept/refuse/error
+races, then passes the 36 startup cases and nine existing options cases.
+Rejected reinitialization retains the original listener and pending Start;
+a new explicit Start remains available. This is a pre-dispatch Dart boundary,
+separate from native session cancellation and physical device acceptance.
+
+The example exposes Disconnect while its permission or native Start future is
+pending. Cancellation invalidates the earlier preparation before Stop, and an
+older completion cannot clear a newer pending Start or Stop. A failed Stop
+retains Disconnect for an explicit retry. Six new widget regressions reproduce
+the former missing-control behavior; all 24 focused widget/options/storage
+checks pass. These UI changes still require a rebuilt device example.
+
+The newly installed signed iPhone example is 1.1.7 (117), with Core 26.10.17.
+Its initialized full-Stop dry run acknowledges cleanup with the matching
+provider absent, followed by ordinary Safari traffic. The first original
+profile is entered through the actual JSON editor with exact raw and semantic
+readback and VPN routing overrides disabled. Its extension starts, but the
+Device Hub display and VM service become unavailable before browser
+acceptance. Both attempted remote Stop paths lack an acknowledgement. iOS
+restarts the extension after targeted termination of that owned process;
+process termination therefore does not establish VPN or On Demand cleanup.
+The owner then switches the system VPN OFF and confirms Safari works; a fresh
+process observation finds no matching provider, and foreground Example shows
+DISCONNECTED. The VM service remains unavailable, so native cleanup readback
+is not newly qualified. This attempt is inconclusive; profiles two/three, split
+routing and options are not qualified for this new product by earlier results.
+The Mac VPN, DNS, routes and proxy are unchanged. Published artifacts remain
+unchanged, and no release is created.
 
 Current implementation/acceptance status (1.1.7, unreleased):
 

@@ -2159,9 +2159,11 @@ pending. Cancellation invalidates the earlier preparation before Stop, and an
 older completion cannot clear a newer pending Start or Stop. A failed Stop
 retains Disconnect for an explicit retry. Six new widget regressions reproduce
 the former missing-control behavior; all 24 focused widget/options/storage
-checks pass. These UI changes still require a rebuilt device example.
+checks pass. These UI changes are included in the rebuilt Android APK07 and
+signed iPhone app08 acceptance products below; the pure checks alone do not
+qualify their device behavior.
 
-The newly installed signed iPhone example is 1.1.7 (117), with Core 26.10.17.
+The earlier signed iPhone attempt used 1.1.7 (117), with Core 26.10.17.
 Its initialized full-Stop dry run acknowledges cleanup with the matching
 provider absent, followed by ordinary Safari traffic. The first original
 profile is entered through the actual JSON editor with exact raw and semantic
@@ -2177,6 +2179,51 @@ is not newly qualified. This attempt is inconclusive; profiles two/three, split
 routing and options are not qualified for this new product by earlier results.
 The Mac VPN, DNS, routes and proxy are unchanged. Published artifacts remain
 unchanged, and no release is created.
+
+### Minimal 1.1.7 scope: closeout record (2026-10-21)
+
+The owner explicitly deferred the exhaustive eight-requirement plan in favor
+of the agreed minimum 1.1.7 adaptation, current startup/options fixes and
+available verification. The results below close out that limited work record;
+all eight full requirements remain **Partial** and belong to the backlog.
+
+- [CI at `4a88d6b`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39508891925)
+  finishes with 11 successful and two skipped jobs. The repaired Windows
+  preparation consumer passes all 12 cases. This CI source lineage is distinct
+  from app08's later test-only provider-deadline follow-up at `ce415f1`.
+- Current Android APK07 on emulator04 imports original profile one and connects
+  once. Both requested IP sites show `103.75.118.225`; Disconnect and full native
+  Stop ACK are followed by both sites showing the OFF address `82.40.63.24`.
+  Invalid-options and pending-Disconnect follow-ups remain **unqualified**:
+  their helper attempts stop before Connect and establish no product failure.
+  The emulator is stopped. Earlier three-profile and split-routing results
+  retain their original product/source scope.
+- Signed iPhone app08 at `ce415f1` imports exact original profile one through the
+  example UI, with reconnect, quick access and On Demand disabled. Native state
+  reports CONNECTED and Core `26.10.17`; a fresh Safari payload URL on
+  `tfox.dev/ip` shows `103.75.118.225`, Japan. The test-only 110-second timer is
+  followed by provider absence before any explicit Stop, while the 240-second
+  host backup has not fired. The UI-read native diagnostic records both the
+  timer request and local provider cancellation; a subsequent explicit full
+  Stop acknowledges cleanup. This qualifies the observed test session ending,
+  not a general hard-deadline guarantee. Fresh ordinary Safari requests then
+  show `95.139.123.8` on both sites (`2ip.ru` redirects to `2ip.io`), and the
+  provider remains absent. Native and app preference readbacks confirm
+  diagnostics, reconnect and quick access disabled, with On Demand disabled.
+  Owned forwarding/watchdog clients are reaped. The in-session `2ip` page only
+  reached loading and remains **unqualified**; no proxy IP is asserted for it.
+
+The current-device follow-ups still needing qualification are pending-Start
+Disconnect and invalid-options UI acceptance on Android, plus all three
+profiles, both routing directions and the complete options matrix on the
+latest iPhone product. The scoped checks above do not reopen that deferred
+matrix. The latest provider-deadline adapter has 18 pure fake assertions and a
+successful signed app-only build; it is opt-in test code, absent from ordinary
+builds without both acceptance flags.
+
+No release or published SDK/AAR pin update is made. The Mac VPN, DNS, routes
+and proxy remain unchanged. Current acceptance does not inherit historical
+three-profile, routing, options, IPv6 or full-matrix qualification.
 
 Current implementation/acceptance status (1.1.7, unreleased):
 

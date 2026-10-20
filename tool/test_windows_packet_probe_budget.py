@@ -70,7 +70,7 @@ class AdmissionConsumer {
   std::atomic<bool> requested_{true};
   struct Process { bool IsRunning() const { return true; } void* hProcess = nullptr; } process;
   Process* xray_process_ = &process;
-  unsigned socks_port_ = 10808; std::string username_, password_;
+  uint16_t socks_port_ = 10808; std::string username_, password_;
   bool ContinueAfterListener() {
     auto fail = [](const char*) { return false; }; (void)fail;
 ADMISSION

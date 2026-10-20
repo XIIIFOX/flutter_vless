@@ -382,7 +382,9 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     private func makePhysicalPathObserver() -> TunnelPhysicalPathObserver {
         TunnelPhysicalPathObserver(excludedInterfaceIndex: { [weak self] in
             if #available(macOS 15.0, *) {
-                return self?.virtualInterface.map { nw_interface_get_index($0) }
+                return self?.virtualInterface.flatMap {
+                    UInt32(exactly: $0.index).flatMap { $0 == 0 ? nil : $0 }
+                }
             }
             return nil
         })

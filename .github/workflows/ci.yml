@@ -508,6 +508,7 @@ jobs:
         run: flutter pub get
       - name: Test PacketTunnel Swift helper
         run: |
+          python3 tool/test_apple_virtual_interface_api.py
           python3 tool/test_apple_cold_start_policy.py --receipts
           python3 tool/test_build_apple_core_preview.py
           python3 tool/test_apple_classic_core.py
@@ -629,6 +630,9 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           path: |
+            build/apple-virtual-interface-api/result.json
+            build/apple-virtual-interface-api/*.swift
+            build/apple-virtual-interface-api/*.log
             build/darwin-interface-binding/semantic/source.json
             build/darwin-interface-binding/semantic/semantic-go.log
             build/darwin-interface-binding/semantic/execution.json

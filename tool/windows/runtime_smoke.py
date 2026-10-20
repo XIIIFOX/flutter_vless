@@ -1473,12 +1473,17 @@ foreach ($event in $events) {{
         with arm.open("x") as marker: marker.write(nonce)
         profile = dict(inbounds=[], outbounds=[
             dict(tag="proxy", protocol="socks", settings=dict(servers=[dict(address="fd00:85:2::2", port=18443,
-                 users=[dict(user="scope-user", **{"pass": "scope-password"})])]), streamSettings=dict(network="tcp"))],
-            routing=dict(rules=[]), dns=dict(servers=["1.1.1.1"], queryStrategy="UseIPv4"))
+                 users=[dict(user="scope-user", **{"pass": "scope-password"})])]), streamSettings=dict(network="tcp")),
+            dict(tag="fixture-block", protocol="blackhole")],
+            routing=dict(rules=[dict(type="field", ip=["198.18.0.77/32"], port="18080", network="tcp", outboundTag="proxy")]),
+            dns=dict(servers=["1.1.1.1"], queryStrategy="UseIPv4"))
         for spec, logical in zip(specs[:3], (78, 79, 80)):
             label, remote, port, protocol = spec
             profile["outbounds"].append(dict(tag=label, protocol="freedom", settings=dict(redirect=f"[{remote}]:{port}")))
             profile["routing"]["rules"].append(dict(type="field", ip=[f"198.18.0.{logical}/32"], network="udp" if protocol == 17 else "tcp", outboundTag=label))
+        # Only the designated application may consume the one-stream peer.
+        # Keep captured guest background/DNS traffic out of this synthetic peer.
+        profile["routing"]["rules"].append(dict(type="field", network="tcp,udp", outboundTag="fixture-block"))
         path = case / "source.json"; path.write_text(json.dumps(profile))
         deadline = time.monotonic() + 80  # manual Stop wrapper target, not OFF guarantee
         with service_log.open("x") as log:

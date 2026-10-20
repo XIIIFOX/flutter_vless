@@ -205,6 +205,20 @@ restoration are separate evidence. No fault is injected in the recovery attempt,
 so it provides no new physical-device qualification for recovery, retry limits
 or kill-switch behavior.
 
+The [parent-local acceptance clock](../tool/live_acceptance_clock.py) now models
+guard activation as an interval between launch and acknowledgement in one
+process. Delayed acknowledgements do not extend launch-relative cutoffs, and
+reported durations remain bounds. Pure controls cover different process origins,
+late/stale/repeated acknowledgements and invalid clock observations. This host
+tool does not retroactively qualify earlier timings or prove native Stop.
+
+Apple recovery now counts an attempt at the final admitted Core call, after old
+workers drain. Cancelled queued work retains its initial or finite retry budget;
+an actual failed call still consumes it. Both providers' extracted methods pass
+the same sleep, drain, admission-boundary and exhaustion controls against inert
+workers. The explicit recovery pause is retained when drain cannot finish.
+Physical sleep/wake and retry-exhaustion acceptance remain separate.
+
 Full JSON import, startup and delay normalization retain explicit `null`, empty
 objects/arrays and null array elements. In particular, an explicit `fakedns: []`
 must reach Core as an empty engine rather than becoming an absent engine with

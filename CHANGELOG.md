@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Count Apple native reconnect attempts at the admitted Core call, after the previous workers drain. Preserve initial and finite retry budgets when sleep cancels queued work, and honor the explicit recovery pause while shutdown is pending.
+
 * Add optional per-start preparation reports with closed operation codes and safe failure stages, preserving the existing start API. Keep host checks separate from final-runtime checks, legacy unavailability and actual network readiness; show the report in example.
 
 * Follow Core's immediate XHTTP download socket dependencies on Apple and Windows. Preserve unused nested download chains without treating them as bootstrap requirements; retain active-chain validation and add controlled preparation/traffic regressions.

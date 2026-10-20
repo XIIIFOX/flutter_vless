@@ -7,7 +7,8 @@ struct LocalProxyCredentials {}
 struct TunnelPreparedConfig {}
 struct FixtureOptions {
     var retries = 0
-    func mayRetry(failures: Int) -> Bool { failures < retries }
+    var reconnectEnabled = true
+    func mayRetry(failures: Int) -> Bool { reconnectEnabled && failures < retries }
     func retryDelay(failures: Int) -> TimeInterval { 0 }
 }
 typealias VlessNativeOptions = FixtureOptions
@@ -69,9 +70,36 @@ final class TunnelPacketBridge {
 }
 enum SyntheticFailure: Error { case core }
 
+// Records production scheduling without sleeping or invoking native work.
+// One control holds delayed callbacks to prove drain refusal cannot hot-loop.
+final class FixtureRuntimeQueue: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "fixture.runtime")
+    private let lock = NSLock()
+    var holdDelayed = false
+    private var delays: [TimeInterval] = []
+    private var held: [@Sendable () -> Void] = []
+    func async(execute work: @escaping @Sendable () -> Void) { queue.async(execute: work) }
+    func sync<T>(execute work: () throws -> T) rethrows -> T { try queue.sync(execute: work) }
+    func asyncAfter(deadline: DispatchTime, execute work: @escaping @Sendable () -> Void) {
+        let now = DispatchTime.now().uptimeNanoseconds
+        let delay = deadline.uptimeNanoseconds > now ? Double(deadline.uptimeNanoseconds - now) / 1e9 : 0
+        lock.lock()
+        delays.append(delay)
+        let hold = holdDelayed && delay > 0.5
+        if hold { held.append(work) }
+        lock.unlock()
+        if !hold { queue.async(execute: work) }
+    }
+    func scheduledDelays() -> [TimeInterval] { lock.lock(); defer { lock.unlock() }; return delays }
+    func releaseHeld() {
+        lock.lock(); let work = held; held.removeAll(); lock.unlock()
+        for callback in work { queue.async(execute: callback) }
+    }
+}
+
 final class FixtureProvider: @unchecked Sendable {
     let watchdogQueue = DispatchQueue(label: "fixture.watchdog")
-    let runtimeQueue = DispatchQueue(label: "fixture.runtime")
+    let runtimeQueue = FixtureRuntimeQueue()
     let sessionAdmission = TunnelSessionAdmission()
     let forwardingLock = NSLock()
     var forwardingReady = false, reasserting = false
@@ -83,7 +111,15 @@ final class FixtureProvider: @unchecked Sendable {
     var watchdogSuspended = false, watchdogInboundHealthy = false
     var watchdogInboundPort: Int?, recoveryCheck: DispatchWorkItem?
     var runtimeSpec: RuntimeSpec?
-    var runtimeRecoveryInFlight = false, initialRuntimeAttempted = false, recoveryExhausted = false
+    var runtimeRecoveryInFlight = false, recoveryExhausted = false
+    var initialRuntimeAttempted = false {
+        didSet {
+            if initialRuntimeAttempted && !oldValue {
+                let hook = attemptAdmissionHook; attemptAdmissionHook = nil
+                hook?()
+            }
+        }
+    }
     var recoveryFailures = 0, nativeOptions = FixtureOptions()
     var hasStartedHEV = false, hevStopSignal: DispatchGroup?
     let hevLifecycle = TunnelProcessLifecycle()
@@ -94,7 +130,8 @@ final class FixtureProvider: @unchecked Sendable {
     var coreStarts = 0, workerStarts = 0, coreStops = 0, healthChecks = 0
     var startedPairs: [(Data, Data?)] = []
     var drainHook: (() -> Void)?, coreHook: (() -> Void)?, workerHook: (() -> Void)?
-    var rejectCore = false, rejectHealth = false
+    var attemptAdmissionHook: (() -> Void)?
+    var rejectCore = false, rejectHealth = false, rejectWorkerStop = false
     func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data? = nil) throws {
         coreStarts += 1
         startedPairs.append((xrayConfig, routingMetadata))
@@ -112,7 +149,10 @@ final class FixtureProvider: @unchecked Sendable {
         let hook = drainHook; drainHook = nil
         hook?()
     }
-    func requestHEVStop() { _ = hevLifecycle.requestStop(); hevLifecycle.markExited(code: 0) }
+    func requestHEVStop() {
+        _ = hevLifecycle.requestStop()
+        if !rejectWorkerStop { hevLifecycle.markExited(code: 0) }
+    }
     func socksInboundHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String { healthChecks += 1; return rejectHealth ? "fixture unavailable" : "ok" }
     func socksConnectHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String { "ok" }
     func socksHTTPHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String { "ok" }
@@ -343,5 +383,124 @@ final class FixtureProvider: @unchecked Sendable {
         precondition(failed.coreStarts == 1 && failed.workerStarts == 0 && failed.recoveryExhausted)
         await failed.stop()
         print("PASS unexpected native errors retain failure diagnostics")
+
+        // Sleep before the first actual native call must not turn that initial
+        // launch into a forbidden retry when automatic reconnect is disabled.
+        var budgetFailures = 0
+        let disabled = FixtureProvider()
+        let disabledSpec = disabled.begin(options: FixtureOptions(retries: 1000, reconnectEnabled: false))
+        let disabledEntered = DispatchSemaphore(value: 0), disabledRelease = DispatchSemaphore(value: 0)
+        disabled.drainHook = {
+            disabledEntered.signal()
+            precondition(disabledRelease.wait(timeout: .now() + 3) == .success)
+        }
+        disabled.recover(disabledSpec.epoch)
+        precondition(disabledEntered.wait(timeout: .now() + 3) == .success)
+        disabled.sleep {}
+        disabledRelease.signal(); disabled.flush()
+        let noInitialAttempt = disabled.coreStarts == 0 && disabled.workerStarts == 0
+            && disabled.recoveryFailures == 0 && !disabled.runtimeRecoveryInFlight
+        disabled.wake()
+        disabled.watchdogQueue.sync {
+            _ = disabled.performTunnelHealthCheck(trigger: "disabled-wake", epoch: disabledSpec.epoch)
+        }
+        disabled.flush()
+        let initialStartedAfterWake = disabled.coreStarts == 1 && disabled.workerStarts == 1
+            && disabled.isForwardingReady() && disabled.recoveryFailures == 0
+        _ = disabled.hevLifecycle.markExited(code: 1)
+        disabled.recover(disabledSpec.epoch); disabled.flush()
+        let disabledStillPreventsRealRetry = disabled.coreStarts == 1 && disabled.recoveryExhausted
+        await disabled.stop()
+        if noInitialAttempt && initialStartedAfterWake && disabledStillPreventsRealRetry {
+            print("PASS sleep-cancelled initial launch survives disabled reconnect without allowing a real retry")
+        } else {
+            print("FAIL disabled reconnect stranded a sleep-cancelled initial launch or admitted a real retry")
+            budgetFailures += 1
+        }
+
+        // A cancelled retry consumes no attempt. Once a real retry is admitted
+        // and fails, the one-attempt limit must still stop further native starts.
+        let limited = FixtureProvider(), limitedSpec = limited.begin(options: FixtureOptions(retries: 1))
+        limited.recover(limitedSpec.epoch); limited.flush()
+        precondition(limited.coreStarts == 1 && limited.workerStarts == 1 && limited.isForwardingReady())
+        _ = limited.hevLifecycle.markExited(code: 1)
+        let limitedEntered = DispatchSemaphore(value: 0), limitedRelease = DispatchSemaphore(value: 0)
+        limited.drainHook = {
+            limitedEntered.signal()
+            precondition(limitedRelease.wait(timeout: .now() + 3) == .success)
+        }
+        limited.recover(limitedSpec.epoch)
+        precondition(limitedEntered.wait(timeout: .now() + 3) == .success)
+        limited.sleep {}
+        limitedRelease.signal(); limited.flush()
+        let cancelledRetryUncounted = limited.coreStarts == 1 && limited.recoveryFailures == 0
+            && !limited.runtimeRecoveryInFlight
+        var realRetryEnteredWithBudget = false
+        limited.coreHook = { realRetryEnteredWithBudget = limited.recoveryFailures == 1 }
+        limited.rejectCore = true
+        limited.wake()
+        limited.watchdogQueue.sync {
+            _ = limited.performTunnelHealthCheck(trigger: "limited-wake", epoch: limitedSpec.epoch)
+        }
+        limited.flush()
+        let actualFailureCountedOnce = limited.coreStarts == 2 && limited.workerStarts == 1
+            && limited.recoveryFailures == 1 && limited.recoveryExhausted && !limited.isForwardingReady()
+            && realRetryEnteredWithBudget
+        limited.recover(limitedSpec.epoch); limited.flush()
+        let furtherStartsRefused = limited.coreStarts == 2
+        await limited.stop()
+        if cancelledRetryUncounted && actualFailureCountedOnce && furtherStartsRefused {
+            print("PASS sleep-cancelled retry preserves finite budget and one actual failed retry exhausts it")
+        } else {
+            print("FAIL sleep consumed the finite retry budget or real failed starts escaped its limit")
+            budgetFailures += 1
+        }
+        // A failed drain performs no attempt, but its explicit retry pause must
+        // still be honored rather than repeatedly scheduling immediate work.
+        let undrained = FixtureProvider(), undrainedSpec = undrained.begin()
+        undrained.runtimeQueue.holdDelayed = true
+        undrained.rejectWorkerStop = true
+        undrained.hasStartedHEV = true
+        undrained.hevLifecycle.beginStart(); undrained.hevLifecycle.markThreadEntered()
+        undrained.recover(undrainedSpec.epoch); undrained.flush()
+        let drainPauses = undrained.runtimeQueue.scheduledDelays()
+        let noAttemptAndBoundedPause = undrained.coreStarts == 0 && undrained.workerStarts == 0
+            && undrained.recoveryFailures == 0 && !undrained.initialRuntimeAttempted
+            && drainPauses.count == 2 && drainPauses[1] >= 2.5
+        await undrained.stop()
+        undrained.runtimeQueue.releaseHeld(); undrained.flush()
+        if noAttemptAndBoundedPause && undrained.coreStarts == 0 {
+            print("PASS failed native drain retains attempt budget and honors the explicit bounded recovery pause")
+        } else {
+            print("FAIL failed drain consumed an attempt or ignored its explicit recovery pause")
+            budgetFailures += 1
+        }
+
+        // Enter sleep immediately when the attempt commits. A consumption
+        // placed before startNativeRuntime's last guard would count no Core
+        // call here. After the final guard, it is a real admitted call and must
+        // count even though its completion is then cancelled and cleaned up.
+        let boundary = FixtureProvider()
+        let boundarySpec = boundary.begin(options: FixtureOptions(retries: 1000, reconnectEnabled: false))
+        boundary.attemptAdmissionHook = { boundary.sleep {} }
+        var coreSawCommittedAttempt = false
+        boundary.coreHook = { coreSawCommittedAttempt = boundary.initialRuntimeAttempted }
+        boundary.recover(boundarySpec.epoch); boundary.flush()
+        let committedAttemptActuallyEnteredCore = boundary.coreStarts == 1 && boundary.workerStarts == 0
+            && coreSawCommittedAttempt && !boundary.isForwardingReady()
+        boundary.wake()
+        boundary.watchdogQueue.sync {
+            _ = boundary.performTunnelHealthCheck(trigger: "commit-boundary-wake", epoch: boundarySpec.epoch)
+        }
+        boundary.flush()
+        let admittedAttemptNotRefunded = boundary.coreStarts == 1 && boundary.recoveryExhausted
+        await boundary.stop()
+        if committedAttemptActuallyEnteredCore && admittedAttemptNotRefunded {
+            print("PASS last pre-Core admission counts only a call actually entered and cancellation does not refund it")
+        } else {
+            print("FAIL attempt consumption preceded the last native guard or refunded a real admitted call")
+            budgetFailures += 1
+        }
+        if budgetFailures != 0 { exit(1) }
     }
 }

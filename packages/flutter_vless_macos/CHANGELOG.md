@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Preserve native reconnect budgets when sleep cancels work before Core admission. Count actual admitted calls, retain finite retry limits and honor the recovery pause while previous workers drain.
+
 * Return per-start host/proxy preparation reports with actual typed edit codes, exact Core-check availability and safe preparation stages. Keep VPN provider preparation outside the host report.
 
 * Restrict XHTTP bootstrap chain admission to the upload and its active immediate download. Preserve unused grandchild socket settings while retaining missing-chain and cycle checks.

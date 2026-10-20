@@ -16,6 +16,7 @@ on:
           - native-listeners
           - preparation-report
           - apple-windows
+          - acceptance-tools
       apple_runner:
         description: Apple runner for manual validation
         type: choice
@@ -30,6 +31,23 @@ on:
       - master
 
 jobs:
+  acceptance-tools:
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'acceptance-tools' || inputs.validation == 'apple-runtime' || inputs.validation == 'apple-windows'
+    name: Acceptance timing controls (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test parent-local deadlines and different clock origins
+        run: python tool/test_live_acceptance_clock.py -v
+
   core-dns-context:
     if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'core-dns-context' || inputs.validation == 'native-listeners' || inputs.validation == 'preparation-report'
     name: Scoped Core DNS runtime (${{ matrix.os }})

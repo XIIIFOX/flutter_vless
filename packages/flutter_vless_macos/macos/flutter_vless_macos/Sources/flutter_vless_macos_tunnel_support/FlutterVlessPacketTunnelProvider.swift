@@ -333,7 +333,18 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     private func isStartupStopped() -> Bool { sessionAdmission.currentEpoch == nil }
 
     private func startNativeRuntime(_ spec: RuntimeSpec) throws {
-        guard sessionAdmission.permitsRuntime(spec.epoch) else { throw CancellationError() }
+        // Commit the attempt at the last pre-Core admission boundary, after
+        // the old runtime drained. Sleep-cancelled work consumes no budget.
+        let admitted = watchdogQueue.sync {
+            guard sessionAdmission.permitsRuntime(spec.epoch), runtimeSpec?.epoch == spec.epoch,
+                  !watchdogSuspended else { return false }
+            let initial = !initialRuntimeAttempted
+            guard initial || (!recoveryExhausted && nativeOptions.mayRetry(failures: recoveryFailures)) else { return false }
+            if initial { initialRuntimeAttempted = true }
+            else { recoveryFailures += 1 }
+            return true
+        }
+        guard admitted else { throw CancellationError() }
         nativeRuntimeEpoch = spec.epoch
         try startXRay(xrayConfig: spec.config, geoAssetsDirectory: spec.geoAssetsDirectory, routingMetadata: spec.routingMetadata)
         guard sessionAdmission.permitsRuntime(spec.epoch) else { throw CancellationError() }
@@ -367,7 +378,6 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         guard sessionAdmission.permitsRuntime(epoch), !watchdogSuspended, !runtimeRecoveryInFlight,
               let spec = runtimeSpec, spec.epoch == epoch else { return }
         let isInitialLaunch = !initialRuntimeAttempted
-        initialRuntimeAttempted = true
         guard isInitialLaunch || (!recoveryExhausted && nativeOptions.mayRetry(failures: recoveryFailures)) else {
             recoveryExhausted = true
             setForwardingReady(false, epoch: epoch)
@@ -375,10 +385,9 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
         let retryDelay = isInitialLaunch ? 0 : nativeOptions.retryDelay(failures: recoveryFailures)
-        if !isInitialLaunch { recoveryFailures += 1 }
         runtimeRecoveryInFlight = true
         setForwardingReady(false, epoch: epoch)
-        runtimeQueue.asyncAfter(deadline: .now() + retryDelay) {
+        runtimeQueue.asyncAfter(deadline: .now() + max(delay, retryDelay)) {
             var started = false
             defer {
                 let runtimeStarted = started

@@ -1403,7 +1403,7 @@ def numeric_ipv6_gate(probe, directory, results, variant="routing"):
 
     def ps(script):
         return subprocess.check_output(["powershell", "-NoProfile", "-Command", "$ErrorActionPreference='Stop'; " + script],
-                                       text=True, timeout=limit(3))
+                                       text=True, timeout=limit(10))
 
     def packets():
         return numeric_ipv6_packets(peer_log.read_text(errors="replace"))

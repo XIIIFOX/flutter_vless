@@ -1952,6 +1952,16 @@ suites pass 60 cases each; the public Dart suite passes 309 tests and example
 passes 12 widget tests, including obsolete-start cancellation. These checks do
 not add new physical-device acceptance for this increment.
 
+The [focused Windows gate at `84ae8c0`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39444948009)
+passes on Windows 2022 and 2025 with both the verified official Core and the
+unpublished routing Core. Each exchange checks the owned non-loopback IPv6 TCP
+tuple, exact nonce/FIN, four forbidden connection controls and complete cleanup.
+Windows 2025 passes on a same-source job rerun after an initial process-query
+timeout before traffic. The unchanged native implementation also passes all 188
+earlier runtime cases and both example builds at `961cbe3`; the focused gate
+does not repeat those legacy cases or example builds. Public IPv6 bootstrap,
+NAT64, handover and additional physical-device checks remain open.
+
 Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |

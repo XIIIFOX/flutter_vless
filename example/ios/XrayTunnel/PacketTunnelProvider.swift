@@ -127,6 +127,69 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     #if FLUTTER_VLESS_ACCEPTANCE_TESTING
     // Watchdog-queue owned; deliberately never reset during this provider's life.
     private var acceptanceCoreLossUsed = false
+    #if FLUTTER_VLESS_ACCEPTANCE_SESSION_DEADLINE
+    private let acceptanceDeadlineLock = NSRecursiveLock()
+    private var acceptanceDeadline: (epoch: TunnelSessionAdmission.Epoch, id: UUID, work: DispatchWorkItem)?
+
+    private func beginAcceptanceSessionDeadline(configuration: NETunnelProviderProtocol, options: VlessNativeOptions) throws -> TunnelSessionAdmission.Epoch {
+        guard !options.reconnectEnabled, options.onDemand == "disabled", !options.enableOnDemand, !options.quickAccessEnabled,
+              let identifier = configuration.providerBundleIdentifier, !identifier.isEmpty,
+              let rawReference = configuration.providerConfiguration?["xrayConfigReference"] as? Data, !rawReference.isEmpty else {
+            throw tunnelError("Acceptance deadline requires an immutable profile and automatic controls disabled")
+        }
+        let reference = Data(rawReference), id = UUID()
+        acceptanceDeadlineLock.lock(); defer { acceptanceDeadlineLock.unlock() }
+        acceptanceDeadline?.work.cancel()
+        let epoch = sessionAdmission.begin()
+        let finish: (NETunnelProviderManager?, Bool) -> Void = { [weak self] manager, loadFailed in
+            guard let self else { return }
+            self.acceptanceDeadlineLock.lock(); defer { self.acceptanceDeadlineLock.unlock() }
+            guard self.acceptanceDeadline?.id == id, self.sessionAdmission.isCurrent(epoch),
+                  let current = self.protocolConfiguration as? NETunnelProviderProtocol,
+                  current.providerBundleIdentifier == identifier,
+                  current.providerConfiguration?["xrayConfigReference"] as? Data == reference else { return }
+            self.acceptanceDeadline = nil
+            if let manager, let profile = manager.protocolConfiguration as? NETunnelProviderProtocol,
+               profile.providerBundleIdentifier == identifier,
+               profile.providerConfiguration?["xrayConfigReference"] as? Data == reference {
+                rememberTunnelLog("FLVLESS_ACCEPTANCE_SESSION_DEADLINE_110S_V1 stop requested; OFF unverified")
+                manager.connection.stopVPNTunnel()
+            } else if loadFailed {
+                rememberTunnelLog("FLVLESS_ACCEPTANCE_SESSION_DEADLINE_110S_V1 load uncertain; provider cancellation requested")
+                self.cancelTunnelWithError(nil)
+            } else {
+                rememberTunnelLog("FLVLESS_ACCEPTANCE_SESSION_DEADLINE_110S_V1 profile uncertain; no stop issued")
+            }
+        }
+        let work = DispatchWorkItem { [weak self] in
+            guard self?.sessionAdmission.isCurrent(epoch) == true else { return }
+            let fallback = DispatchWorkItem { finish(nil, true) }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5, execute: fallback)
+            NETunnelProviderManager.loadAllFromPreferences { managers, error in
+                fallback.cancel()
+                guard error == nil else { finish(nil, true); return }
+                let owned = (managers ?? []).filter {
+                    ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == identifier
+                }
+                guard owned.count == 1,
+                      (owned[0].protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["xrayConfigReference"] as? Data == reference else {
+                    finish(nil, false); return
+                }
+                finish(owned[0], false)
+            }
+        }
+        acceptanceDeadline = (epoch, id, work)
+        rememberTunnelLog("FLVLESS_ACCEPTANCE_SESSION_DEADLINE_110S_V1 armed")
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 110, execute: work)
+        return epoch
+    }
+
+    private func revokeAcceptanceSessionDeadline() -> TunnelSessionAdmission.Epoch? {
+        acceptanceDeadlineLock.lock(); defer { acceptanceDeadlineLock.unlock() }
+        acceptanceDeadline?.work.cancel(); acceptanceDeadline = nil
+        return sessionAdmission.revoke()
+    }
+    #endif
     #endif
 
     private enum EndpointTransitionFailure: Error { case drainPending }
@@ -230,7 +293,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         try NativeRoutingSpec.validateSource(config, intent: routingIntent)
         let options = try VlessNativeOptions(providerConfiguration["options"] as? [String: Any])
         TunnelDebugStore.shared.configure(groupIdentifier: providerConfiguration["groupIdentifier"] as? String, options: options)
+        #if FLUTTER_VLESS_ACCEPTANCE_TESTING && FLUTTER_VLESS_ACCEPTANCE_SESSION_DEADLINE
+        let epoch = try beginAcceptanceSessionDeadline(configuration: configuration, options: options)
+        #else
         let epoch = sessionAdmission.begin()
+        #endif
         setForwardingReady(false, epoch: epoch)
         rememberTunnelLog("Starting Xray packet tunnel")
         let armingReceipt = try TunnelOnDemandPolicy.StartArmingReceipt(configuration: configuration)
@@ -325,7 +392,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        #if FLUTTER_VLESS_ACCEPTANCE_TESTING && FLUTTER_VLESS_ACCEPTANCE_SESSION_DEADLINE
+        let stoppedEpoch = revokeAcceptanceSessionDeadline()
+        #else
         let stoppedEpoch = sessionAdmission.revoke()
+        #endif
         endpointAdmission.revoke(stoppedEpoch)
         forwardingLock.lock()
         let preparation = startupPreparation?.epoch == stoppedEpoch ? startupPreparation?.task : nil

@@ -43,6 +43,7 @@ HEADER = r'''
 #include "native_routing_spec.h"
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -146,6 +147,7 @@ class FlutterVlessPlugin { public:
   struct Queue { void Submit(const std::function<void()>& action) { action(); } } operations_;
   struct QuickProfile { std::string config; Root assets; std::optional<Intent> routing; };
   std::optional<QuickProfile> quick_profile_;
+  std::atomic<std::uint64_t> quick_profile_generation_{0};
   std::atomic<unsigned> options_generation_{0}; std::mutex lifecycle_mutex_; bool is_running_ = false;
   std::chrono::steady_clock::time_point start_time_;
   std::vector<std::function<void()>> callbacks;

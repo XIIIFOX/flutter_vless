@@ -312,6 +312,7 @@ func testNativeXHTTPPenetrate(t *testing.T) {
 		passed := t.Run(name, func(t *testing.T) {
 			dormantTLS := func() map[string]any {
 				return map[string]any{"serverName": "dormant.invalid",
+					"masterKeyLog":  "",
 					"echConfigList": fmt.Sprintf("h2c://127.0.0.1:%d/ech-must-not-run", originAddress.Port())}
 			}
 			options := map[string]any{"penetrate": !mode.independent, "tcpKeepAliveIdle": 30, "addressPortStrategy": ""}

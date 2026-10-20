@@ -1503,6 +1503,11 @@ foreach ($event in $events) {{
         response = b"accepted-" + request
         with socket.create_connection(("198.18.0.77", 18080), timeout=limit(4)) as application:
             assert application.getsockname()[0] == "10.0.85.2", "Challenge bypassed VPN capture"
+            # Start the real stream before observing its downstream connection.
+            # Withhold the nonce until the owned TCP tuple has been sampled.
+            prefix_bytes = len(b"numeric-ipv6-")
+            application.settimeout(limit(3))
+            application.sendall(request[:prefix_bytes])
             established_until = time.monotonic() + limit(3)
             while "IPV6_TCP_PEER_READY=" not in peer_log.read_text():
                 assert peer.poll() is None and time.monotonic() < established_until, "Owned SOCKS handshake did not complete"
@@ -1510,7 +1515,7 @@ foreach ($event in $events) {{
             owner = json.loads(ps(f"$c=@(Get-NetTCPConnection -OwningProcess {core_pid} -RemoteAddress 'fd00:85:2::2' -RemotePort 18443 -State Established); if($c.Count -ne 1){{throw 'Core TCP tuple ambiguous'}}; $c | Select-Object OwningProcess,LocalAddress,LocalPort,RemoteAddress,RemotePort | ConvertTo-Json -Compress"))
             proof["positive"]["tcp_owner"] = dict(PID=int(owner["OwningProcess"]), local_address=owner["LocalAddress"],
                 local_port=int(owner["LocalPort"]), remote_address=owner["RemoteAddress"], remote_port=int(owner["RemotePort"]))
-            application.settimeout(limit(3)); application.sendall(request)
+            application.settimeout(limit(3)); application.sendall(request[prefix_bytes:])
             assert exact(application, len(response)) == response and application.recv(1) == b"", "Owned nonce response/FIN failed"
             proof["positive"]["source"] = application.getsockname()[0]
             proof["positive"]["response_exact"] = True

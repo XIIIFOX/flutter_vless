@@ -358,3 +358,29 @@ internet afterward. Automatic controls remain off, required protection is
 preserved and task-owned app/USB helpers are reaped. Mac VPN settings are
 unchanged. This check does not install or qualify the later H3 source patch.
 The private evidence is under ignored `iphone-off-diagnostics-02` artifacts.
+
+## Unpublished iOS SDK regression, 2026-10-20
+
+The signed example `1.1.7+117` and its Core SDK were rebuilt from `ce65b6a`.
+The SDK came from the successful, build-only
+[iOS preview run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39401007662).
+The app and tunnel extension linked the checked device SDK; stock repository
+SDK and generated build files were restored before installation.
+
+All three supplied original JSON documents were imported byte for byte and
+connected separately on the physical iPhone 13 Pro Max. For each profile,
+Safari loaded tfox.dev/ip and 2ip.ru (redirected to 2ip.io), and both pages
+showed the same proxy exit. Tfox displayed Japan, Poland and
+United States; the third profile's Sweden remark does not establish its exit
+location. Each single connection stopped with native completion and provider
+absence, restored each case's captured prior UI/profile/routing/options, and returned to the
+ordinary internet afterward. Task-owned app, USB and guardian processes were
+stopped and temporary VM inputs removed. Safari and unrelated apps were
+preserved; the Mac VPN remained enabled.
+
+These cases keep the routing panel and automatic options off, with required
+protection unchanged. They qualify the new SDK's ordinary VLESS/Reality
+regression and Stop recovery. They do not establish fresh TCP connections,
+new split-routing/options coverage, physical HTTP/3 negotiation or its
+same-process resource lifetime. Private evidence remains in ignored
+`h3-lifetime/iphone-original-new-sdk-01`, `-02` and `-03` artifacts.

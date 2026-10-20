@@ -1860,6 +1860,18 @@ phone SDK and ordinary supplied Windows `xray.exe` are unchanged. Positive Core
 H3 payloads, general active-transport ownership and rebuilt artifact/device
 acceptance remain open.
 
+The later unpublished iOS preview at `ce65b6a` builds a fresh SDK in
+[a separate build-only CI run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39401007662).
+Its architecture, function definitions, source and archive hashes are checked
+before linking a signed example `1.1.7+117`. Both app and tunnel extension
+select that exact device SDK. All three supplied original VLESS/Reality JSON
+profiles then pass physical iPhone UI import, matching proxy exits on both IP
+websites, native Stop, prior settings restoration and ordinary internet
+recovery. Automatic options and the routing panel stay off. This adds a
+rebuilt iOS artifact and ordinary VPN regression; positive HTTP/3 traffic,
+physical H3 lifetime, new routing/options coverage and updated Android/Windows
+artifact acceptance remain separate. Published binary pins are unchanged.
+
 For configuration-only increments, the manual `ci.yml` scope `native-config`
 selects four jobs: the existing complete Core pipeline on Linux/macOS/Windows
 and the Android native tests. Its macOS Core job additionally runs both complete

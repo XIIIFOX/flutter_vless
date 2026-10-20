@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Add an unpublished CI-only iOS SDK preview with source, archive and ABI checks. Verify its signed example on the physical iPhone with all three original full JSON profiles, matching browser proxy exits, Stop and ordinary internet recovery.
+
 * Close dial-owned XHTTP HTTP/3 UDP sockets before joining their QUIC transport, including immediate dial failures and later connection termination. Include the guarded fix in source builds; published binary pins remain unchanged.
 
 * Ignore loopback-owned dormant socket chains during Apple graph admission, retaining active missing-target and cycle checks. Keep Android chained destinations logical instead of resolving them through physical bootstrap; add shared native and controlled traffic regressions.

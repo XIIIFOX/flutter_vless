@@ -1,0 +1,45 @@
+name: Unpublished Android runtime preview
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: third_party/xray-mobile/go.mod
+          cache-dependency-path: third_party/xray-mobile/go.sum
+      - uses: android-actions/setup-android@v3
+      - name: Install pinned build-only Android toolchain
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+      - name: Test unpublished runtime provenance controls
+        run: python3 tool/test_android_runtime_preview.py
+      - name: Compile four ordinary Classic and H3 runtime ABIs and isolated AAR
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/28.2.13676358"
+          python3 tool/build_android_runtime_preview.py --output build/android-runtime-preview --head "$GITHUB_SHA"
+      - name: Verify exact candidate AAR and create private artifact
+        run: python3 tool/package_android_runtime_preview.py --preview build/android-runtime-preview --output build/android-runtime-artifact --head "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-runtime-preview-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            build/android-runtime-artifact/android-runtime-preview.tar.gz
+            build/android-runtime-artifact/manifest.json
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7

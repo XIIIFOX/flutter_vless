@@ -3,7 +3,9 @@
 #include "proxy_service.h"
 #include "asset_location.h"
 #include "preparation_report.h"
+#include <chrono>
 #include <functional>
+#include <utility>
 
 namespace flutter_vless::native {
 std::optional<fs::path> FindBundledFile(const wchar_t* name);
@@ -39,7 +41,30 @@ bool RoutingCapability(const ProtectedRuntime& runtime, const asset_location::Ro
 bool CheckRoutingPreparedConfig(const std::string& config, const std::string& metadata,
     ProtectedRuntime& runtime, fs::path& config_path, fs::path& metadata_path,
     const asset_location::Root& assets = std::nullopt, preparation::Stage* failure = nullptr);
-bool SocksReady(uint16_t port, const std::string& user = {}, const std::string& password = {});
+// One caller-owned startup deadline across listener retries. The callback is
+// synchronous and is never retained beyond SocksReady's invocation.
+class SocksReadinessBudget {
+ public:
+  using Clock = std::chrono::steady_clock;
+  explicit SocksReadinessBudget(std::chrono::milliseconds timeout, std::function<bool()> cancelled = {})
+      : SocksReadinessBudget(Clock::now() + timeout, std::move(cancelled)) {}
+  SocksReadinessBudget(Clock::time_point deadline, std::function<bool()> cancelled = {})
+      : deadline_(deadline), cancelled_(std::move(cancelled)) {}
+  bool CanContinue() const noexcept {
+    try { return Clock::now() < deadline_ && (!cancelled_ || !cancelled_()); }
+    catch (...) { return false; }
+  }
+  Clock::time_point Deadline() const { return deadline_; }
+  long PollMilliseconds() const {
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline_ - Clock::now()).count();
+    return left >= 50 ? 50 : static_cast<long>(left > 0 ? left : 1);
+  }
+ private:
+  const Clock::time_point deadline_;
+  const std::function<bool()> cancelled_;
+};
+bool SocksReady(uint16_t port, const std::string& user = {}, const std::string& password = {},
+    const SocksReadinessBudget* parent = nullptr);
 // A point-in-time TCP loopback bind check; closes its socket before returning.
 // It neither reserves the port for Core nor changes caller-owned listeners.
 bool TcpPortAvailable(uint16_t port);

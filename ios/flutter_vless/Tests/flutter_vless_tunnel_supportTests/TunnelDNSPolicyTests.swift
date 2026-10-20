@@ -359,7 +359,7 @@ final class TunnelDNSPolicyTests: XCTestCase {
         let unsafe: [[String: Any]] = [
             ["servers": ["https+local://1.1.1.1/dns-query"]], ["servers": ["h2c+local://1.1.1.1/dns-query"]],
             ["servers": ["tcp+local://1.1.1.1"]],
-            ["servers": ["quic+local://1.1.1.1"]], ["servers": ["tls://1.1.1.1"]], ["servers": ["2001:db8::1"]], ["servers": ["https://[2001:db8::1]/dns-query"]],
+            ["servers": ["quic+local://1.1.1.1"]], ["servers": ["tls://1.1.1.1"]],
             ["servers": ["https://unmapped.example/dns-query"]],
             ["servers": ["https://unmapped.example/dns-query"], "useSystemHosts": true],
             ["servers": ["1.1.1.1"], "useSystemHosts": true, "USESystemHOSTS": false],
@@ -391,12 +391,35 @@ final class TunnelDNSPolicyTests: XCTestCase {
         }
     }
 
+    func testIPv6DNSRemoteModesAndCallerStaticBootstrapPreservePolicy() throws {
+        for (server, hosts) in [
+            ("2001:db8::53", [String: Any]()),
+            ("tcp://[2001:db8::53]:5353", [String: Any]()),
+            ("https://[2001:db8::53]/dns-query", [String: Any]()),
+            ("h2c://[2001:db8::53]:8053/dns-query", [String: Any]()),
+            ("tcp://resolver.invalid:5353", ["full:resolver.invalid": "2001:db8::53"] as [String: Any]),
+            ("https://resolver.invalid/dns-query", ["full:resolver.invalid": ["192.0.2.53", "2001:db8::53"]] as [String: Any]),
+            ("h2c://resolver.invalid:8053/dns-query", ["full:resolver.invalid": ["2001:db8::53"]] as [String: Any])
+        ] {
+            let dns: [String: Any] = ["servers": [["address": server, "tag": "caller-dns", "skipFallback": true]],
+                "hosts": hosts, "queryStrategy": "UseIPv4"]
+            let source: [String: Any] = ["dns": dns, "outbounds": [["tag": "direct", "protocol": "freedom"]]]
+            let input = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            var transaction = source
+            let bootstrap = try XCTUnwrap(TunnelDNSPolicy.apply(to: &transaction, managedInboundTag: "ipv6-test", resolveIPv4: { _ in
+                XCTFail("Caller numeric/static DNS must not use endpoint bootstrap"); return nil
+            }))
+            XCTAssertTrue(bootstrap.isEmpty)
+            XCTAssertEqual(transaction["dns"] as? NSDictionary, dns as NSDictionary)
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), input)
+        }
+    }
+
     func testMappedDoHRejectsNonliteralFullPrefixBeforeBootstrap() throws {
         let badHosts: [[String: Any]] = [
             ["FULL:doh.example": "192.0.2.53"], ["Full:doh.example": "192.0.2.53"],
             ["full:doh.example.": "192.0.2.53"], ["doh.example.": "192.0.2.53"],
-            ["domain:doh.example": "192.0.2.53"], ["full:doh.example": "alias.example"],
-            ["full:doh.example": "2001:db8::53"], ["full:doh.example": ["192.0.2.53", "2001:db8::53"]]
+            ["domain:doh.example": "192.0.2.53"], ["full:doh.example": "alias.example"]
         ]
         for hosts in badHosts {
             var source: [String: Any] = ["dns": ["hosts": hosts, "servers": ["https://doh.example/dns-query"]],
@@ -820,14 +843,16 @@ final class TunnelDNSPolicyTests: XCTestCase {
             }
             XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), input)
         }
-        let refused = try XCTUnwrap(fixture["nativeRefusalControls"] as? [[String: Any]])
-        XCTAssertEqual(refused.count, 2)
-        for item in refused {
+        // Historical corpus key retained for Android consumers; these are now
+        // positive logical IPv6 DNS preservation controls.
+        let ipv6 = try XCTUnwrap(fixture["nativeRefusalControls"] as? [[String: Any]])
+        XCTAssertEqual(ipv6.count, 2)
+        for item in ipv6 {
             let source = try XCTUnwrap(item["config"] as? [String: Any])
             var transaction = source
-            XCTAssertNil(TunnelDNSPolicy.apply(to: &transaction, managedInboundTag: "mapped-test",
-                resolveIPv4: { _ in XCTFail("Nonmapped IPv6 DNS must be refused before native lookup"); return nil }))
-            XCTAssertEqual(transaction as NSDictionary, source as NSDictionary)
+            XCTAssertNotNil(TunnelDNSPolicy.apply(to: &transaction, managedInboundTag: "mapped-test",
+                resolveIPv4: { _ in XCTFail("Logical IPv6 DNS must not use native endpoint lookup"); return nil }))
+            XCTAssertEqual(transaction["dns"] as? NSDictionary, source["dns"] as? NSDictionary)
         }
         for server in ["tcp://[::ffff:127.0.0.1]:5353", "https://[::ffff:7f00:1]/dns-query"] {
             let dns: [String: Any] = ["servers": [server], "queryStrategy": "UseIPv4", "tag": "caller-root"]
@@ -843,15 +868,16 @@ final class TunnelDNSPolicyTests: XCTestCase {
         for server in ["tcp://[2001:db8::53]:5353", "https://[::192.0.2.53]/dns-query"] {
             let source: [String: Any] = ["dns": ["servers": [server]], "outbounds": [["tag": "direct", "protocol": "freedom"]]]
             var transaction = source
-            XCTAssertNil(TunnelDNSPolicy.apply(to: &transaction, managedInboundTag: "mapped-test",
-                resolveIPv4: { _ in XCTFail("Nonmapped DNS URL must not bootstrap endpoints"); return nil }))
-            XCTAssertEqual(transaction as NSDictionary, source as NSDictionary)
+            XCTAssertNotNil(TunnelDNSPolicy.apply(to: &transaction, managedInboundTag: "mapped-test",
+                resolveIPv4: { _ in XCTFail("Numeric IPv6 DNS URL must not bootstrap endpoints"); return nil }))
+            XCTAssertEqual(transaction["dns"] as? NSDictionary, source["dns"] as? NSDictionary)
         }
     }
 
     func testRootDNSAdmissionUsesCoreParsedAddressWithoutLosingRawExpandedValue() throws {
         for (server, hosts) in [
             ("[ 127.0.0.1 ]", [String: Any]()),
+            ("[ ::1 ]", [String: Any]()),
             ("https://resolver.invalid/dns-query?opaque=env:UNCHANGED", ["full:resolver.invalid": ["[ 127.0.0.1 ]", "127.0.0.9"]] as [String: Any])
         ] {
             let source: [String: Any] = ["dns": ["servers": ["env:SERVER"], "hosts": hosts], "outbounds": [["tag": "direct", "protocol": "freedom"]]]
@@ -862,10 +888,10 @@ final class TunnelDNSPolicyTests: XCTestCase {
             XCTAssertEqual((output["dns"] as? [String: Any])?["servers"] as? [String], [server])
             XCTAssertEqual((output["dns"] as? [String: Any])?["hosts"] as? NSDictionary, hosts as NSDictionary)
         }
-        for server in ["tcp+local://1.1.1.1", "https+local://1.1.1.1/dns-query", "[ ::1 ]"] {
+        for server in ["tcp+local://1.1.1.1", "https+local://1.1.1.1/dns-query"] {
             let parsed = LocalProxyAccessPolicy.coreAddressText(server)
             let source: [String: Any] = ["dns": ["servers": [server], "hosts": [parsed: "127.0.0.1"]], "outbounds": [["tag": "direct", "protocol": "freedom"]]]
-            XCTAssertNil(TunnelXrayConfigPreparer.prepare(jsonData: try JSONSerialization.data(withJSONObject: source), credentials: Self.credentials), "Static hosts cannot qualify a special mode or IPv6 DNS underlay")
+            XCTAssertNil(TunnelXrayConfigPreparer.prepare(jsonData: try JSONSerialization.data(withJSONObject: source), credentials: Self.credentials), "Static hosts cannot qualify a special local mode")
         }
     }
 

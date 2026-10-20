@@ -510,6 +510,7 @@ func TestNativeDNSPreservation(t *testing.T) {
 	}
 	t.Run("WindowsPreparer", testNativeDNSPreservation)
 	t.Run("WindowsFakeDNS", testNativeFakeDNS)
+	t.Run("WindowsIPv6DNS", testNativeIPv6DNS)
 	t.Run("WindowsIPv6Payload", testNativeIPv6Payload)
 	t.Run("WindowsHTTPSDoH", testNativeHTTPSDoH)
 	t.Run("WindowsLogicalAddresses", testNativeLogicalAddresses)
@@ -520,6 +521,7 @@ func TestNativeDNSPreservation(t *testing.T) {
 	if apple := os.Getenv("NATIVE_DNS_PREPARER_APPLE"); apple != "" {
 		t.Run("ApplePreparer", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeDNSPreservation(t) })
 		t.Run("AppleFakeDNS", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeFakeDNS(t) })
+		t.Run("AppleIPv6DNS", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeIPv6DNS(t) })
 		t.Run("AppleIPv6Payload", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeIPv6Payload(t) })
 		t.Run("AppleHTTPSDoH", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeHTTPSDoH(t) })
 		t.Run("AppleLogicalAddresses", func(t *testing.T) { t.Setenv("NATIVE_DNS_PREPARER", apple); testNativeLogicalAddresses(t) })

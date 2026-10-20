@@ -1,0 +1,324 @@
+[
+  {
+    "name": "ipv6_scalar_udp",
+    "family": 6,
+    "transport": "udp",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [
+        {
+          "tag": "caller-http",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "protocol": "http",
+          "settings": {}
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "192.0.2.7",
+                "port": 19090
+              }
+            ]
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-ipv6-dns"
+            ],
+            "network": "tcp,udp",
+            "outboundTag": "proxy"
+          }
+        ]
+      },
+      "remarks": "synthetic IPv6 DNS transport family",
+      "custom": {
+        "address": "keep-opaque.invalid",
+        "queryStrategy": "UseIPv4"
+      },
+      "dns": {
+        "queryStrategy": "UseIP",
+        "tag": "caller-root-dns",
+        "disableCache": true,
+        "disableFallbackIfMatch": true,
+        "hosts": {
+          "full:static.invalid": "192.0.2.14"
+        },
+        "servers": [
+          {
+            "address": "2001:db8::53",
+            "tag": "caller-ipv6-dns",
+            "domains": [
+              "full:chosen.invalid"
+            ],
+            "skipFallback": true,
+            "queryStrategy": "UseIP",
+            "timeoutMs": 900,
+            "port": 18053
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "ipv6_tcp_url",
+    "family": 6,
+    "transport": "tcp",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [
+        {
+          "tag": "caller-http",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "protocol": "http",
+          "settings": {}
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "192.0.2.7",
+                "port": 19090
+              }
+            ]
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-ipv6-dns"
+            ],
+            "network": "tcp,udp",
+            "outboundTag": "proxy"
+          }
+        ]
+      },
+      "remarks": "synthetic IPv6 DNS transport family",
+      "custom": {
+        "address": "keep-opaque.invalid",
+        "queryStrategy": "UseIPv4"
+      },
+      "dns": {
+        "queryStrategy": "UseIP",
+        "tag": "caller-root-dns",
+        "disableCache": true,
+        "disableFallbackIfMatch": true,
+        "hosts": {
+          "full:static.invalid": "192.0.2.14"
+        },
+        "servers": [
+          {
+            "address": "tcp://[2001:db8::53]:18053",
+            "tag": "caller-ipv6-dns",
+            "domains": [
+              "full:chosen.invalid"
+            ],
+            "skipFallback": true,
+            "queryStrategy": "UseIP",
+            "timeoutMs": 900
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "mapped_scalar_udp_control",
+    "family": 4,
+    "transport": "udp",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [
+        {
+          "tag": "caller-http",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "protocol": "http",
+          "settings": {}
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "192.0.2.7",
+                "port": 19090
+              }
+            ]
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-ipv6-dns"
+            ],
+            "network": "tcp,udp",
+            "outboundTag": "proxy"
+          }
+        ]
+      },
+      "remarks": "synthetic IPv6 DNS transport family",
+      "custom": {
+        "address": "keep-opaque.invalid",
+        "queryStrategy": "UseIPv4"
+      },
+      "dns": {
+        "queryStrategy": "UseIP",
+        "tag": "caller-root-dns",
+        "disableCache": true,
+        "disableFallbackIfMatch": true,
+        "hosts": {
+          "full:static.invalid": "192.0.2.14"
+        },
+        "servers": [
+          {
+            "address": "::ffff:192.0.2.53",
+            "tag": "caller-ipv6-dns",
+            "domains": [
+              "full:chosen.invalid"
+            ],
+            "skipFallback": true,
+            "queryStrategy": "UseIP",
+            "timeoutMs": 900,
+            "port": 18053
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "mapped_tcp_url_control",
+    "family": 4,
+    "transport": "tcp",
+    "config": {
+      "log": {
+        "loglevel": "none"
+      },
+      "inbounds": [
+        {
+          "tag": "caller-http",
+          "listen": "127.0.0.1",
+          "port": 10807,
+          "protocol": "http",
+          "settings": {}
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "192.0.2.7",
+                "port": 19090
+              }
+            ]
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        },
+        {
+          "tag": "block",
+          "protocol": "blackhole"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "inboundTag": [
+              "caller-ipv6-dns"
+            ],
+            "network": "tcp,udp",
+            "outboundTag": "proxy"
+          }
+        ]
+      },
+      "remarks": "synthetic IPv6 DNS transport family",
+      "custom": {
+        "address": "keep-opaque.invalid",
+        "queryStrategy": "UseIPv4"
+      },
+      "dns": {
+        "queryStrategy": "UseIP",
+        "tag": "caller-root-dns",
+        "disableCache": true,
+        "disableFallbackIfMatch": true,
+        "hosts": {
+          "full:static.invalid": "192.0.2.14"
+        },
+        "servers": [
+          {
+            "address": "tcp://[::ffff:192.0.2.53]:18053",
+            "tag": "caller-ipv6-dns",
+            "domains": [
+              "full:chosen.invalid"
+            ],
+            "skipFallback": true,
+            "queryStrategy": "UseIP",
+            "timeoutMs": 900
+          }
+        ]
+      }
+    }
+  }
+]

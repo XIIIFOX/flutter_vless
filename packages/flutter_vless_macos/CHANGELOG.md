@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Accept numeric IPv6 caller DNS addresses while preserving the original DNS configuration. Keep physical transport endpoint bootstrap unchanged and add paired native preparation regressions.
+
 * Share a cancellable deadline across authenticated watchdog probes and HTTP reads. Stop later probe phases and state publication after session cancellation, retaining the existing delay-client socket and TLS behavior.
 
 * Preserve native reconnect budgets when sleep cancels work before Core admission. Count actual admitted calls, retain finite retry limits and honor the recovery pause while previous workers drain.

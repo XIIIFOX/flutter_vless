@@ -1,17 +1,12 @@
 package native_dns_preservation_test
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
-	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"testing"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -33,35 +28,9 @@ func mappedDNSCorpus(t *testing.T) mappedDNSCases {
 	}
 	var cases mappedDNSCases
 	if err := json.Unmarshal(data, &cases); err != nil || len(cases.PositiveCases) != 3 || len(cases.NativeRefusalControls) != 2 {
-		t.Fatal("three mapped IPv4 and two actual IPv6 DNS controls required", err)
+		t.Fatal("three mapped IPv4 and two preserved IPv6 DNS controls required", err)
 	}
 	return cases
-}
-
-// A rejected native candidate must be a real, completed refusal, rather than
-// a timeout, failed executable lookup or missing native preparer.
-func rejectMappedDNSCandidate(t *testing.T, source []byte) {
-	t.Helper()
-	directory := t.TempDir()
-	input, output := filepath.Join(directory, "source.json"), filepath.Join(directory, "effective.json")
-	if err := os.WriteFile(input, source, 0600); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, os.Getenv("NATIVE_DNS_PREPARER"), "--prepare-dns-fixture",
-		input, output, loopbackInterface(t), "endpoint.invalid", "127.0.0.1")
-	_, err := command.CombinedOutput()
-	var exitError *exec.ExitError
-	if ctx.Err() != nil || !errors.As(err, &exitError) || exitError.ExitCode() != 3 {
-		t.Fatal("actual IPv6 DNS did not complete a native family-boundary refusal", err)
-	}
-	if retained, err := os.ReadFile(input); err != nil || !bytes.Equal(retained, source) {
-		t.Fatal("native refusal changed the source file", err)
-	}
-	if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("rejected DNS candidate emitted an effective profile", err)
-	}
 }
 
 // Decode/Build and file-only exporters only. This never starts a Core instance
@@ -133,7 +102,19 @@ func testMappedDNSAddresses(t *testing.T, native bool) {
 				t.Fatal("actual IPv6 control unexpectedly became IPv4")
 			}
 			if native {
-				rejectMappedDNSCandidate(t, source)
+				effective := prepareEndpointAddress(t, source)
+				for _, field := range []string{"dns", "remarks", "custom"} {
+					if !reflect.DeepEqual(effective[field], tc.Config[field]) {
+						t.Fatal("IPv6 DNS control changed raw caller policy", field)
+					}
+				}
+				prepared, err := json.Marshal(effective)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !proto.Equal(compiled, buildRootDNSAddresses(t, prepared)) {
+					t.Fatal("IPv6 DNS control changed compiled DNS")
+				}
 			}
 		})
 	}

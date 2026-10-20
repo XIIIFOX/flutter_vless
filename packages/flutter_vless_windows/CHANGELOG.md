@@ -1,5 +1,9 @@
 ## 1.1.7
 
+* Accept numeric IPv6 caller DNS addresses without changing the caller's DNS data or physical endpoint protection. Add paired native preparation regressions.
+
+* Bound SOCKS-listener readiness across startup retries and authentication with one cancellable deadline. Check cancellation and expiry after socket cleanup and before admitting the listener to VPN/proxy setup.
+
 * Bound packet-path checks and challenge exchanges across fragmented socket I/O. Observe cancellation while waiting and retain owned socket cleanup when the worker stops.
 
 * Return per-start preparation reports from the checked candidate and worker, with closed typed edit codes and failure stages. Preserve manager state on an ordinary VPN preflight refusal as well as explicit routing starts.

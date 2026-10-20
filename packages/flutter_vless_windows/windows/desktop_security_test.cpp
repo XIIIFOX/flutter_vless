@@ -149,7 +149,11 @@ void MappedDnsCases(const std::string& only = "") {
     selected = true;
     const auto source = fixture["config"]; const auto original = source.dump(); unsigned calls = 0;
     const auto result = prepare(source, calls);
-    if (std::string(group) == "nativeRefusalControls") Require(!result, "true/nonmapped IPv6 DNS was admitted");
+    if (std::string(group) == "nativeRefusalControls") {
+      Require(result.has_value() && Parse(*result)["dns"] == source["dns"]
+          && Parse(*result)["remarks"] == source["remarks"] && Parse(*result)["custom"] == source["custom"],
+          "logical IPv6 DNS control was refused or rewritten");
+    }
     else {
       auto literal = source;
       for (const auto& binding : fixture["bindings"]) DnsAddressPath(literal, binding["path"]) = binding["value"];
@@ -170,24 +174,29 @@ void MappedDnsCases(const std::string& only = "") {
       source["dns"]["servers"][0] = address; unsigned calls = 0;
       Require(prepare(source, calls).has_value() && calls == 0, "valid mapped IPv4 syntax did not canonicalize for DNS policy");
     }
-    for (const auto* address : {"::ffff:192.000.2.1", "::ffff:192.0.2.1:1", "::ffff::192.0.2.1", "0:0:0:0:0:ffff:0:0:1", "::1", "64:ff9b::192.0.2.1", "::192.0.2.1"}) {
+    for (const auto* address : {"::ffff:192.000.2.1", "::ffff:192.0.2.1:1", "::ffff::192.0.2.1", "0:0:0:0:0:ffff:0:0:1"}) {
       source["dns"]["servers"][0] = address; unsigned calls = 0;
-      Require(!prepare(source, calls) && calls == 0, "invalid/nonmapped IPv6 DNS crossed the IPv4 policy boundary");
+      Require(!prepare(source, calls) && calls == 0, "malformed numeric DNS was admitted");
+    }
+    for (const auto* address : {"::1", "64:ff9b::192.0.2.1", "::192.0.2.1", "2001:db8::53"}) {
+      source["dns"]["servers"][0] = address; unsigned calls = 0; const auto result = prepare(source, calls);
+      Require(result && calls == 0 && Parse(*result)["dns"] == source["dns"], "valid IPv6 DNS literal was refused or rewritten");
     }
     source = corpus["positiveCases"][2]["config"];
     source["dns"]["hosts"]["full:resolver.invalid"] = Json::array({"[::ffff:127.0.0.1]", "2001:db8::53"}); unsigned calls = 0;
-    Require(!prepare(source, calls) && calls == 0, "mixed actual-IPv6 caller DNS hosts were admitted");
+    const auto result = prepare(source, calls);
+    Require(result && calls == 0 && Parse(*result)["dns"] == source["dns"], "mixed IPv4/IPv6 caller DNS hosts changed");
   }
   if (only.empty() || only == "url-authority") {
     selected = true;
     auto source = corpus["positiveCases"][0]["config"];
-    for (const auto* address : {"tcp://[::ffff:127.0.0.1]:5353", "https://[::ffff:0101:0101]/dns-query", "h2c://[0:0:0:0:0:FFFF:7f00:1]:8053/dns-query", "tcp://127.0.0.1:5353"}) {
+    for (const auto* address : {"tcp://[::ffff:127.0.0.1]:5353", "https://[::ffff:0101:0101]/dns-query", "h2c://[0:0:0:0:0:FFFF:7f00:1]:8053/dns-query", "tcp://127.0.0.1:5353", "tcp://[2001:db8::53]:5353", "tcp://[::192.0.2.53]:5353", "https://[2001:db8::53]/dns-query", "h2c://[2001:db8::53]:8053/dns-query"}) {
       source["dns"]["servers"][0] = address; unsigned calls = 0; const auto result = prepare(source, calls);
       Require(result && calls == 0 && Parse(*result)["dns"] == source["dns"], "mapped IPv4 DNS URL authority was rejected or rewritten");
     }
-    for (const auto* address : {"tcp://[2001:db8::53]:5353", "tcp://[::192.0.2.53]:5353", "tcp://[::ffff:127.0.0.1:5353", "tcp://[::ffff:127.0.0.1]]:53", "tcp://[::ffff:127.0.0.1]:", "tcp://[::ffff:127.0.0.1]:bad", "tcp://[::ffff:127.0.0.1]:0", "tcp://[::ffff:127.0.0.1]:65536", "tcp://[::ffff:127.0.0.1]:-1", "tcp://127.0.0.1:65536"}) {
+    for (const auto* address : {"tcp://[::ffff:127.0.0.1:5353", "tcp://[::ffff:127.0.0.1]]:53", "tcp://[::ffff:127.0.0.1]:", "tcp://[::ffff:127.0.0.1]:bad", "tcp://[::ffff:127.0.0.1]:0", "tcp://[::ffff:127.0.0.1]:65536", "tcp://[::ffff:127.0.0.1]:-1", "tcp://127.0.0.1:65536"}) {
       source["dns"]["servers"][0] = address; unsigned calls = 0;
-      Require(!prepare(source, calls) && calls == 0, "invalid port/authority or actual IPv6 DNS URL admitted");
+      Require(!prepare(source, calls) && calls == 0, "invalid port/authority DNS URL admitted");
     }
   }
   Require(selected, "unknown mapped DNS case");
@@ -385,7 +394,8 @@ void DnsAddressCases(const std::string& only = "") {
     profile["dns"]["servers"] = Json::array({"https://dns.example/dns-query"});
     profile["dns"]["hosts"] = {{"full:dns.example", Json::array({"127.0.0.1", "[ ::1 ]"})}};
     std::vector<std::string> calls;
-    Require(!prepare(profile, calls), "parsed mixed IPv6 static DNS mapping was admitted");
+    const auto mixed = prepare(profile, calls);
+    Require(mixed && calls.empty() && Parse(*mixed)["dns"] == profile["dns"], "parsed mixed IPv6 static DNS mapping changed");
   }
   if (only.empty() || only == "localhost-and-refusal") {
     selected = true;
@@ -950,7 +960,7 @@ void ProtocolCompatibilityCases(const std::string& only = "") {
       profile["dns"]["servers"] = Json::array({"https://dns.example/dns-query"});
       Require(!prepare(profile), "unrecognized full: prefix or nonmatching trailing-dot key admitted");
     }
-    for (const auto& mapping : {Json("alias.invalid"), Json::array(), Json::array({"203.0.113.53", "2001:db8::53"})}) {
+    for (const auto& mapping : {Json("alias.invalid"), Json::array()}) {
       auto profile = source;
       profile["dns"]["hosts"] = {{"full:dns.example", mapping}};
       profile["dns"]["servers"] = Json::array({"https://dns.example/dns-query"});
@@ -1401,9 +1411,9 @@ int main(int argc, char** argv) try {
   Require(Parse(*local_prepared)["routing"]["rules"][1]["inboundTag"] == Json::array({"caller-local"}), "localhost native policy lost its effective client tag");
   local["dns"]["servers"][0]["Tag"] = "";
   auto empty_tag = prepare(local); Require(empty_tag.has_value() && !Parse(*empty_tag)["dns"]["servers"][0].contains("tag"), "native DNS added a duplicate folded tag alias");
-  for (const auto& address : {"tcp+local://1.1.1.1", "https+local://dns.example/dns-query", "quic+local://1.1.1.1", "tls://1.1.1.1", "tcp://[2001:db8::1]", "unknown://1.1.1.1"}) {
+  for (const auto& address : {"tcp+local://1.1.1.1", "https+local://dns.example/dns-query", "quic+local://1.1.1.1", "tls://1.1.1.1", "unknown://1.1.1.1"}) {
     auto unsupported = source; unsupported["dns"]["servers"] = Json::array({address});
-    Require(!prepare(unsupported), "unsupported local/DoT/QUIC/IPv6 path silently admitted");
+    Require(!prepare(unsupported), "unsupported local/DoT/QUIC path silently admitted");
   }
   for (const auto& strategy : {"UseSystem", "use_sys", "use-system"}) {
     auto unsupported = source; unsupported["dns"]["queryStrategy"] = strategy;
@@ -1415,9 +1425,21 @@ int main(int argc, char** argv) try {
   Require(!prepare(dns_script), "unqualified DNS script admitted");
   auto no_resolver_pin = source; no_resolver_pin["dns"]["hosts"].erase("dns.example");
   Require(!prepare(no_resolver_pin), "named remote DNS can enter a root resolver cycle");
-  for (const auto& mapping : {Json("alias.invalid"), Json::array(), Json::array({"203.0.113.53", "2001:db8::53"}), Json{{"address", "203.0.113.53"}}}) {
+  for (const auto& mapping : {Json("alias.invalid"), Json::array(), Json{{"address", "203.0.113.53"}}}) {
     auto unsafe = source; unsafe["dns"]["hosts"]["dns.example"] = mapping;
     Require(!prepare(unsafe), "unqualified resolver static host mapping admitted");
+  }
+  // Family admission preserves the caller's route, including an explicit
+  // direct policy. This is preparation proof, not physical IPv6 qualification.
+  for (const auto* address : {"2001:db8::53", "tcp://[2001:db8::53]:5353", "https://[2001:db8::53]/dns-query", "h2c://[2001:db8::53]:8053/dns-query"}) {
+    auto numeric = source; numeric["dns"]["servers"] = Json::array({address});
+    const auto output = prepare(numeric);
+    Require(output && Parse(*output)["dns"] == numeric["dns"], "IPv6 remote DNS mode changed caller policy");
+  }
+  for (const auto& mapping : {Json("2001:db8::53"), Json::array({"203.0.113.53", "2001:db8::53"})}) {
+    auto named = source; named["dns"]["hosts"]["dns.example"] = mapping;
+    const auto output = prepare(named);
+    Require(output && Parse(*output)["dns"] == named["dns"], "IPv6/mixed static resolver bootstrap changed");
   }
   auto single_resolver_pin = source; single_resolver_pin["dns"]["hosts"]["dns.example"] = "203.0.113.53";
   auto single_prepared = prepare(single_resolver_pin); Require(single_prepared.has_value() && Parse(*single_prepared)["dns"] == single_resolver_pin["dns"], "exact IPv4 resolver host mapping was changed");

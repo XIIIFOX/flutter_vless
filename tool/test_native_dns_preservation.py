@@ -71,6 +71,9 @@ def source_snapshot():
     paths.append(ROOT / 'tool/fixtures/compatibility/endpoint-addresses.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/dns-addresses.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/dns-mapped-addresses.json')
+    paths.append(ROOT / 'tool/fixtures/compatibility/dns-ipv6-servers.json')
+    paths.extend(ROOT / path for path in ['tool/test_native_dns_ipv6_preparation.py',
+        'tool/fixtures/dns_ipv6_preparer.cpp', 'tool/fixtures/dns_ipv6_preparer.swift'])
     paths.append(ROOT / 'tool/fixtures/compatibility/transport-none.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/logical-addresses.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/asset-files.json')
@@ -96,6 +99,14 @@ def require_transport_data_runtime(output, preparers):
     independent = re.findall(r'^\s+xhttp_runtime_test\.go:\d+: XHTTP_INDEPENDENT_DOWNLOAD_PASS\r?$', output, re.MULTILINE)
     if preparers not in (1, 2) or any(markers.count(mode) != preparers for mode in ('true', 'false')) or len(independent) != preparers:
         raise RuntimeError('Exact XHTTP transport dictionary runtime markers missing or duplicated')
+
+
+def require_ipv6_dns_runtime(output, preparers):
+    markers = re.findall(r'^\s+dns_ipv6_servers_test\.go:\d+: DNS_IPV6_UPSTREAM_RUNTIME_PASS transport=(udp|tcp) strategy=(UseIP|UseIPv4)\r?$',
+                         output, re.MULTILINE)
+    if preparers not in (1, 2) or any(markers.count((transport, strategy)) != preparers
+            for transport in ('udp', 'tcp') for strategy in ('UseIP', 'UseIPv4')):
+        raise RuntimeError('Exact IPv6 DNS carrier runtime markers missing or duplicated')
 
 
 def cmd_path(path):
@@ -227,11 +238,13 @@ def main():
             common.require_selected_test_pass(output, SELECTED_TEST)
             preparers = 1 + bool(runtime_environment.get('NATIVE_DNS_PREPARER_APPLE'))
             require_transport_data_runtime(output, preparers)
+            require_ipv6_dns_runtime(output, preparers)
             results[-1]['selected_test_pass'] = True
             results[-1]['selected_tests'] = [SELECTED_TEST]
             results[-1]['transport_data_runtime_modes_per_preparer'] = 2
             results[-1]['transport_data_runtime_preparers'] = preparers
             results[-1]['independent_download_runtime_modes_per_preparer'] = 1
+            results[-1]['ipv6_dns_runtime_modes_per_preparer'] = 4
         if source_snapshot() != report['source_sha256']:
             raise RuntimeError('Production preparer/acceptance source changed during verification')
         report['source_snapshot_unchanged'] = True

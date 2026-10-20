@@ -208,15 +208,18 @@ void ProxyService::RunV2ray(std::shared_ptr<flutter_vless::preparation::StartupC
       }
     }
   }
+  const flutter_vless::native::SocksReadinessBudget readiness_budget(std::chrono::milliseconds(5000), [this] { return !is_running_.load(); });
   bool listening = false;
-  for (int i = 0; i < 50 && is_running_.load() && xray_process_->IsRunning(); ++i) {
-    if (port && flutter_vless::native::SocksReady(*port, user, password)) { listening = true; break; }
+  for (int i = 0; i < 50 && readiness_budget.CanContinue() && is_running_.load() && xray_process_->IsRunning(); ++i) {
+    if (port && flutter_vless::native::SocksReady(*port, user, password, &readiness_budget)) { listening = true; break; }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
-  if (!listening || !SetSystemProxy("localhost", *port)) {
+  if (!listening || !readiness_budget.CanContinue() || !is_running_.load() || !SetSystemProxy("localhost", *port)) {
     is_running_.store(false); finish(false); StopXrayProcess(); CleanupTempFiles(); return;
   }
+  if (!is_running_.load()) { finish(false); StopXrayProcess(); CleanupTempFiles(); return; }
   InitializeApiClient();
+  if (!is_running_.load()) { finish(false); StopXrayProcess(); CleanupTempFiles(); return; }
   start_time_ = std::chrono::steady_clock::now();
   finish(true);
   CleanupTempFiles();

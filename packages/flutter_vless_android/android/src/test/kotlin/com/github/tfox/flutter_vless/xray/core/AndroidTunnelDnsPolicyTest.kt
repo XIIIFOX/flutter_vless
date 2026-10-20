@@ -605,8 +605,60 @@ class AndroidTunnelDnsPolicyTest {
                 assertTrue(label, prepared.bootstrapHostnames.isEmpty())
                 assertTrue(label, prepared.bootstrapAddresses.isEmpty())
                 assertEquals(label, before, input.toString())
-                // The two refusal controls apply only to the current desktop
-                // family boundary. Android retains its existing Core policy.
+                // These controls record the historical desktop family refusal.
+                // Android retains the caller's existing Core policy for both families.
+            }
+        }
+    }
+
+    @Test fun sharedIpv6DnsServersPreserveConfigAndRetainExplicitProxyOverride() {
+        val cases = JSONArray(requireNotNull(javaClass.getResource("/dns-ipv6-servers.json")).readText())
+        assertEquals(4, cases.length())
+        for (index in 0 until cases.length()) {
+            val item = cases.getJSONObject(index); val source = item.getJSONObject("config")
+            val before = source.toString()
+            for (policy in listOf("config", "proxy")) {
+                val label = item.getString("name") + "/" + policy
+                var environmentCalls = 0; var resolverCalls = 0
+                val prepared = AndroidTunnelDnsPolicy.prepare(before, policy, environment = {
+                    environmentCalls++; error("Numeric transport must not read environment")
+                }) {
+                    resolverCalls++; error("Numeric transport must not resolve endpoints")
+                }
+                val actual = JSONObject(prepared.configJson)
+                assertEquals(label, 0, environmentCalls); assertEquals(label, 0, resolverCalls)
+                assertEquals(label, before, source.toString())
+                for (field in listOf("inbounds", "log", "remarks", "custom"))
+                    assertEquals(label, source.get(field).toString(), actual.get(field).toString())
+                val originals = source.getJSONArray("outbounds")
+                val outbounds = actual.getJSONArray("outbounds")
+                assertEquals(label, originals.length() + 1, outbounds.length())
+                for (outbound in 0 until originals.length()) {
+                    val original = originals.getJSONObject(outbound); val output = outbounds.getJSONObject(outbound)
+                    for (field in original.keys())
+                        assertEquals(label, original.get(field).toString(), output.get(field).toString())
+                }
+                val sourceRouting = source.getJSONObject("routing"); val routing = actual.getJSONObject("routing")
+                assertEquals(label, sourceRouting.get("domainStrategy"), routing.get("domainStrategy"))
+                val sourceRules = sourceRouting.getJSONArray("rules"); val rules = routing.getJSONArray("rules")
+                val prefix = if (policy == "config") 1 else 2
+                assertEquals(label, sourceRules.length() + prefix, rules.length())
+                for (rule in 0 until sourceRules.length())
+                    assertEquals(label, sourceRules.getJSONObject(rule).toString(), rules.getJSONObject(rule + prefix).toString())
+                assertTrue(label, prepared.bootstrapHostnames.isEmpty())
+                if (policy == "config") {
+                    assertEquals(label, source.getJSONObject("dns").toString(), actual.getJSONObject("dns").toString())
+                    assertTrue(label, prepared.bootstrapAddresses.isEmpty())
+                } else {
+                    // An explicit proxy policy deliberately replaces caller DNS, for either address family.
+                    val dns = actual.getJSONObject("dns")
+                    assertEquals(label, "UseIP", dns.getString("queryStrategy"))
+                    assertEquals(label, "[\"tcp://1.1.1.1\"]", dns.getJSONArray("servers").toString())
+                    assertTrue(label, dns.getBoolean("disableFallback"))
+                    assertEquals(label, setOf("192.0.2.7"), prepared.bootstrapAddresses)
+                    assertEquals(label, "proxy", outbounds.getJSONObject(originals.length())
+                        .getJSONObject("streamSettings").getJSONObject("sockopt").getString("dialerProxy"))
+                }
             }
         }
     }

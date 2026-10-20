@@ -48,7 +48,7 @@ def actual(data):
     # The Windows fd types/macros are fakes, not Darwin's similarly named APIs.
     probe = probe.replace("fd_set", "InertFdSet").replace("timeval", "InertTimeval")
     # Preserve the actual post-listener admission block before tun config work.
-    admission = section(service, "  bool listening = false;", "  // Credentials live only in a private file")
+    admission = section(service, "  const native::SocksReadinessBudget readiness_budget(", "  // Credentials live only in a private file")
     if admission.count("native::SocksReady(") != 1:
         raise ValueError("listener admission boundary changed")
     admission = admission.replace("std::this_thread::sleep_for", "InertSleep")
@@ -62,7 +62,15 @@ def actual(data):
     return probe + r'''
 namespace flutter_vless {
 bool CheckWithCancel(PacketPathProbe& probe) { ADAPTER }
-namespace native { bool SocksReady(uint16_t, const std::string&, const std::string&) {
+namespace native {
+class SocksReadinessBudget {
+ public:
+  SocksReadinessBudget(std::chrono::milliseconds, std::function<bool()> cancelled) : cancelled_(std::move(cancelled)) {}
+  bool CanContinue() const { return !cancelled_(); }
+ private:
+  std::function<bool()> cancelled_;
+};
+bool SocksReady(uint16_t, const std::string&, const std::string&, const SocksReadinessBudget*) {
   ++kernel.socks_ready; kernel.cancel = true; if (kernel.join) kernel.join(); return true;
 } }
 class AdmissionConsumer {

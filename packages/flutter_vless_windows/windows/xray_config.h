@@ -1449,16 +1449,10 @@ inline std::optional<std::vector<unsigned>> IPv6Words(const std::string& value) 
   left.resize(8 - right.size(), 0); left.insert(left.end(), right.begin(), right.end());
   return left;
 }
-// The caller supplies Core's parsed Address view. Only IPv4 and its exact
-// mapped form belong to the protected IPv4 resolver policy.
-inline std::optional<std::string> DnsIPv4(const std::string& value) {
-  if (Literal4(value)) return value;
-  const auto words = IPv6Words(value);
-  if (!words) return std::nullopt;
-  for (size_t i = 0; i < 5; ++i) if ((*words)[i] != 0) return std::nullopt;
-  if ((*words)[5] != 0xffff) return std::nullopt;
-  return std::to_string((*words)[6] >> 8) + "." + std::to_string((*words)[6] & 255) + "." +
-      std::to_string((*words)[7] >> 8) + "." + std::to_string((*words)[7] & 255);
+// A caller DNS destination is a logical Core address. Preserve its family
+// and source text; this does not grant a physical IPv6 firewall exception.
+inline bool DnsIPLiteral(const std::string& value) {
+  return Literal4(value) || IPv6Words(value).has_value();
 }
 
 // A native namespace reservation, not a rewrite of caller FakeDNS pools.
@@ -1578,8 +1572,8 @@ inline bool ProtectedDnsAddress(const std::string& address, const Json& hosts) {
       }
       host = host.substr(1, close - 1);
       // URL authority brackets belong to the URL parser, not a second pass
-      // over the root Address. Only numeric IPv4/mapped hosts are qualified.
-      if (!DnsIPv4(host)) return false;
+      // over the root Address. Only numeric IP hosts are qualified.
+      if (!DnsIPLiteral(host)) return false;
     } else if (const auto colon = host.find(':'); colon != std::string::npos) {
       port = host.substr(colon + 1);
       host = host.substr(0, colon);
@@ -1587,7 +1581,7 @@ inline bool ProtectedDnsAddress(const std::string& address, const Json& hosts) {
     if (port && (port->empty() || port->size() > 5 || port->find_first_not_of("0123456789") != std::string::npos
         || std::stoul(*port) == 0 || std::stoul(*port) > 65535)) return false;
   }
-  if (DnsIPv4(host)) return true;
+  if (DnsIPLiteral(host)) return true;
   if (host.empty() || host.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.") != std::string::npos) return false;
   // Named remote resolvers need a caller-owned static bootstrap. No native
   // endpoint mapping is added to this map; URLs/TLS names remain unchanged.
@@ -1602,10 +1596,10 @@ inline bool ProtectedDnsAddress(const std::string& address, const Json& hosts) {
     if (domain.rfind("full:", 0) == 0) domain.erase(0, 5);
     if (DnsDomainLower(domain) != host) continue;
     found = true;
-    if (it->is_string()) { if (!DnsIPv4(ParsedAddressText(it->get<std::string>()))) return false; }
+    if (it->is_string()) { if (!DnsIPLiteral(ParsedAddressText(it->get<std::string>()))) return false; }
     else {
       if (!it->is_array() || it->empty()) return false;
-      for (const auto& entry : *it) if (!entry.is_string() || !DnsIPv4(ParsedAddressText(entry.get<std::string>()))) return false;
+      for (const auto& entry : *it) if (!entry.is_string() || !DnsIPLiteral(ParsedAddressText(entry.get<std::string>()))) return false;
     }
   }
   return found;

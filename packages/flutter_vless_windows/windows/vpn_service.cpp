@@ -285,12 +285,13 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   if (!requested_.load()) return fail("VPN startup cancelled");
   xray_process_ = native::Launch(xray_executable_path_, command, false, asset_directory_, worker_candidate_->Routing());
   if (!xray_process_) return fail("Cannot launch the protected Xray process");
+  const native::SocksReadinessBudget readiness_budget(std::chrono::milliseconds(6000), [this] { return !requested_.load(); });
   bool listening = false;
-  for (int i = 0; i < 60 && requested_.load() && xray_process_->IsRunning(); ++i) {
-    if (native::SocksReady(socks_port_, username_, password_)) { listening = true; break; }
+  for (int i = 0; i < 60 && readiness_budget.CanContinue() && requested_.load() && xray_process_->IsRunning(); ++i) {
+    if (native::SocksReady(socks_port_, username_, password_, &readiness_budget)) { listening = true; break; }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
-  if (!requested_.load()) return fail("VPN startup cancelled");
+  if (!requested_.load() || !readiness_budget.CanContinue()) return fail("VPN startup cancelled");
   if (!listening) {
     DWORD code = 0; GetExitCodeProcess(reinterpret_cast<HANDLE>(xray_process_->hProcess), &code);
     Event(("Authenticated Xray listener unavailable, process code=" + std::to_string(code)).c_str());

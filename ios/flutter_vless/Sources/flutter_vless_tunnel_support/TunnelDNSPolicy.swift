@@ -167,7 +167,7 @@ public enum TunnelDNSPolicy {
               (field(dns, "script") as? String ?? "").isEmpty,
               !systemStrategy(field(dns, "queryStrategy")) else { return false }
         let hosts = field(dns, "hosts") as? [String: Any] ?? [:]
-        func staticIPv4(_ host: String) -> Bool {
+        func staticIP(_ host: String) -> Bool {
             let keys = hosts.keys.filter { key in
                 // Core recognizes the literal lowercase rule prefix before
                 // folding only the domain body; FULL: is not a full rule.
@@ -178,9 +178,9 @@ public enum TunnelDNSPolicy {
                 return folded == hostKey(host)
             }
             guard keys.count == 1, let value = hosts[keys[0]] else { return false }
-            if let ip = value as? String { return isDNSIPv4(LocalProxyAccessPolicy.coreAddressText(ip)) }
+            if let ip = value as? String { return isLiteral(LocalProxyAccessPolicy.coreAddressText(ip)) }
             if let ips = value as? [String] {
-                return !ips.isEmpty && ips.allSatisfy { isDNSIPv4(LocalProxyAccessPolicy.coreAddressText($0)) }
+                return !ips.isEmpty && ips.allSatisfy { isLiteral(LocalProxyAccessPolicy.coreAddressText($0)) }
             }
             return false
         }
@@ -226,16 +226,17 @@ public enum TunnelDNSPolicy {
                 servers[index] = entry
                 changed = true
             } else if isLiteral(address) {
-                guard isDNSIPv4(address) else { return false }
+                // Caller DNS destinations are logical Core addresses; their
+                // routing remains caller-owned for both IP families.
                 continue
             } else if let url = URLComponents(string: address), let scheme = url.scheme {
                 // A special/unsupported DNS URL cannot become a bare-host
                 // admission merely because a hosts key happens to match it.
                 guard ["tcp", "https", "h2c"].contains(scheme.lowercased()), let rawHost = url.host else { return false }
                 let host = LocalProxyAccessPolicy.coreAddressText(rawHost)
-                guard isDNSIPv4(host) || (!isLiteral(host) && staticIPv4(host)) else { return false }
+                guard isLiteral(host) || (!isLiteral(host) && staticIP(host)) else { return false }
                 continue
-            } else if staticIPv4(address) {
+            } else if staticIP(address) {
                 continue
             } else { return false }
         }
@@ -380,16 +381,6 @@ public enum TunnelDNSPolicy {
     private static func isIPv4(_ value: String) -> Bool {
         var address = in_addr()
         return value.withCString { inet_pton(AF_INET, $0, &address) } == 1
-    }
-    private static func isDNSIPv4(_ value: String) -> Bool {
-        if isIPv4(value) { return true }
-        var address = in6_addr()
-        guard value.withCString({ inet_pton(AF_INET6, $0, &address) }) == 1 else { return false }
-        // Core folds only the exact 80 zero bits + ffff mapped prefix to IPv4.
-        // This is an admission view; keep the caller's raw DNS JSON unchanged.
-        return withUnsafeBytes(of: address) { bytes in
-            bytes.prefix(10).allSatisfy { $0 == 0 } && bytes[10] == 0xff && bytes[11] == 0xff
-        }
     }
     private static func isLiteral(_ value: String) -> Bool {
         var address = in6_addr()

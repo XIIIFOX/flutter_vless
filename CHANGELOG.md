@@ -1,5 +1,9 @@
 ## 1.1.7
 
+* Accept numeric IPv6 caller DNS servers on Apple and Windows without rewriting their addresses or query policy. Keep the transport endpoint bootstrap separate; add paired IPv6 and IPv4-mapped DNS regressions.
+
+* Share one cancellable Windows SOCKS-listener readiness deadline across startup retries. Use nonblocking authentication, retain fragmented replies and reject readiness after cancellation or deadline expiry, including socket cleanup.
+
 * Share one monotonic deadline across Apple and Android watchdog probes and across Windows packet-path exchanges. Observe session cancellation during probe I/O, and reject later probes or connected-state publication from a cancelled session.
 
 * Count Apple native reconnect attempts at the admitted Core call, after the previous workers drain. Preserve initial and finite retry budgets when sleep cancels queued work, and honor the explicit recovery pause while shutdown is pending.

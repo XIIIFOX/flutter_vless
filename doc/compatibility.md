@@ -145,6 +145,7 @@ Track the small delivery gates separately from the eight full requirements:
 | --- | --- | --- |
 | Preserve caller DNS and private A/AAAA path | Qualified controlled baseline on all four native platforms | Caller DNS and controlled FakeDNS Core/Android TUN/Windows TUN/both released Apple SDK gates pass. Combined Apple HEV/FakeDNS, physical devices and wider DNS semantics remain open. |
 | DNS dictionary data, remote URL data and system-hosts flag | Qualified controlled increment | Shared five-profile preparation, all four public message adapters and Android JVM controls pass. Expanded Core traffic passes all three OS jobs at f5e0a88; both released Apple SDKs and Android's augmented CallerRoot DNS tests pass at e2acc10. Physical/system-VPN and wider DNS acceptance remain separate. |
+| IPv6 caller DNS server addresses | Preparation qualified; UDP/TCP runtime pending | Both Apple preparers and Windows preserve numeric IPv6 servers and static resolver mappings, including mixed address families. The 33 inert preparation cases pass; exact IPv6 destinations carried through an IPv4 proxy still require the new remote Core traffic gate. Android already admits these address families. |
 | Protocol/transport preparation and controlled XHTTP | Qualified | Shared pinned-Core corpus and controlled payloads; the exhaustive external-server matrix is deferred. |
 | Typed transport headers and XHTTP download policy | Qualified controlled increment | The ten-profile transport dictionary corpus checks 18 raw maps and effective pinned-Core headers through both native preparers, public import/start/delay on all four message adapters and Android's actual prepare/build path. This covers data preservation, not a full transport handshake matrix. |
 | Routing attribute dictionary data | Preparation qualified | Shared literal regex corpus, all four public import/start/delay adapters, Android producer and actual pinned-Core attribute matching pass. Both native preparers retain the exact compiled rule; this is separate from system-VPN traffic. |
@@ -173,6 +174,16 @@ IPv4 lookup, then HTTPS bootstrap to `1.1.1.1` for public hostnames
 only. The fallback retains normal TLS validation and refuses redirects. The
 physical iPhone check at `78a68c7` used system lookup successfully; it does not
 qualify the encrypted fallback branch or IPv6-only endpoint bootstrap.
+
+Caller DNS admission now accepts numeric IPv6 addresses as well as IPv4 and
+mapped addresses. It preserves the DNS object, query strategy and caller route;
+allowed TCP/HTTPS/h2c URLs and named resolvers with static IP mappings use the
+same address-family check. Preparation acceptance also includes explicit direct
+DNS. This does not establish physical IPv6 reachability or change Windows
+physical IPv6 protection or Apple transport endpoint bootstrap. The new runtime
+gate targets UDP and TCP logical IPv6 DNS destinations through an IPv4 SOCKS
+carrier; broader DNS transports, direct IPv6 and IPv6-only VPN endpoints remain
+separate acceptance work.
 
 The physical iPhone preview at `ae68d75` also checks A and AAAA requests from
 an actual app UDP socket to this virtual resolver with caller `UseIPv4` and no
@@ -258,10 +269,14 @@ Windows packet checks use one 2,250-millisecond exchange budget, and accepted
 challenge exchanges use 1,500 milliseconds, with cancellation checks and waits
 of at most 50 milliseconds. The idle listener retains its 100-millisecond poll.
 The worker passes its stop request into startup and periodic packet checks;
-socket cleanup retains join-before-close ownership. Windows `SocksReady` still
-uses its existing blocking connect and per-call authentication timeouts, so an
-overall Stop deadline remains unqualified. These operation budgets also do not
-bound OS scheduling latency.
+socket cleanup retains join-before-close ownership. SOCKS-listener readiness now
+uses nonblocking I/O with one three-second invocation budget, capped by a shared
+six-second VPN or five-second proxy startup budget. Authentication fragments and
+retries keep that deadline; cancellation and expiry are checked after socket
+cleanup and before admitting the listener to the next setup operation. The 52
+inert actual-method controls cover these boundaries; Windows runtime acceptance
+for this follow-up is pending. These budgets do not bound the entire Stop call,
+subsequent WinInet operations or OS scheduling latency.
 
 Focused controls exercise actual probe methods with in-memory I/O and clocks.
 Four additional real Apple loopback cases are wired into CI for authenticated
@@ -294,8 +309,9 @@ The [Windows run at `b2f93e3`](https://github.com/XIIIFOX/flutter_vless/actions/
 passes all six jobs, including 20 inert packet-budget controls per system, both example
 builds and 460 proxy, portable and VPN rows across Windows 2022/2025. Its only
 change from `7dedb8f` corrects the generated test's port type to match production;
-the native runtime sources are identical. These results do not close the
-remaining `SocksReady` or overall Stop-deadline gap.
+the native runtime sources are identical. Those results precede the separate
+SOCKS-listener readiness follow-up above and do not qualify an overall Stop
+deadline.
 
 Full JSON import, startup and delay normalization retain explicit `null`, empty
 objects/arrays and null array elements. In particular, an explicit `fakedns: []`

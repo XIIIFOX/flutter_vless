@@ -309,29 +309,75 @@ bool TcpPortAvailable(uint16_t port) {
   WSACleanup();
   return available;
 }
-bool SocksReady(uint16_t port, const std::string& user, const std::string& password) {
+bool SocksReady(uint16_t port, const std::string& user, const std::string& password,
+    const SocksReadinessBudget* parent) {
+  const auto deadline = SocksReadinessBudget::Clock::now() + std::chrono::milliseconds(3000);
+  const SocksReadinessBudget budget(parent ? std::min(deadline, parent->Deadline()) : deadline,
+      [parent] { return parent && !parent->CanContinue(); });
+  if (!port || (!user.empty() && (user.size() > 255 || password.size() > 255)) || !budget.CanContinue()) return false;
   WSADATA data{};
   if (WSAStartup(MAKEWORD(2,2), &data)) return false;
-  SOCKET socket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (socket_ == INVALID_SOCKET) { WSACleanup(); return false; }
-  DWORD timeout = 500;
-  setsockopt(socket_, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char*>(&timeout), sizeof(timeout));
-  setsockopt(socket_, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<char*>(&timeout), sizeof(timeout));
+  struct OwnedSocket {
+    SOCKET value = INVALID_SOCKET;
+    bool winsock = true;
+    void Close() {
+      if (value != INVALID_SOCKET) { closesocket(value); value = INVALID_SOCKET; }
+      if (winsock) { WSACleanup(); winsock = false; }
+    }
+    ~OwnedSocket() { Close(); }
+  } owned;
+  if (!budget.CanContinue()) return false;
+  const SOCKET socket_ = owned.value = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (socket_ == INVALID_SOCKET) return false;
+  u_long nonblocking = 1;
+  if (ioctlsocket(socket_, FIONBIO, &nonblocking)) return false;
+  auto wait_ready = [&](bool writing, bool connecting = false) {
+    while (budget.CanContinue()) {
+      fd_set ready, errors; FD_ZERO(&ready); FD_SET(socket_, &ready);
+      FD_ZERO(&errors); FD_SET(socket_, &errors);
+      timeval wait{0, budget.PollMilliseconds() * 1000};
+      const int count = select(0, writing ? nullptr : &ready, writing ? &ready : nullptr,
+          connecting ? &errors : nullptr, &wait);
+      if (count > 0) return budget.CanContinue();
+      if (count < 0 && WSAGetLastError() != WSAEINTR) return false;
+    }
+    return false;
+  };
   sockaddr_in address{}; address.sin_family = AF_INET; address.sin_port = htons(port);
-  InetPtonA(AF_INET, "127.0.0.1", &address.sin_addr);
-  bool ok = connect(socket_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0;
+  if (InetPtonA(AF_INET, "127.0.0.1", &address.sin_addr) != 1 || !budget.CanContinue()) return false;
+  if (connect(socket_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+    const int error = WSAGetLastError();
+    if ((error != WSAEWOULDBLOCK && error != WSAEINPROGRESS) || !wait_ready(true, true)) return false;
+    int result = 0, size = sizeof(result);
+    if (getsockopt(socket_, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&result), &size) || result) return false;
+  }
+  if (!budget.CanContinue()) return false;
   auto exchange = [&](const std::string& request, unsigned char expected0, unsigned char expected1) {
-    if (!ok || send(socket_, request.data(), static_cast<int>(request.size()), 0) != static_cast<int>(request.size())) return false;
+    size_t sent = 0;
+    while (sent < request.size() && budget.CanContinue()) {
+      if (!wait_ready(true)) return false;
+      const int count = send(socket_, request.data() + sent, static_cast<int>(request.size() - sent), 0);
+      if (count == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK) continue;
+      if (count <= 0) return false;
+      sent += count;
+    }
+    if (sent != request.size() || !budget.CanContinue()) return false;
     unsigned char reply[2]{}; size_t got = 0;
-    while (got < 2) { int n = recv(socket_, reinterpret_cast<char*>(reply) + got, static_cast<int>(2-got), 0); if (n <= 0) return false; got += n; }
-    return reply[0] == expected0 && reply[1] == expected1;
+    while (got < 2 && budget.CanContinue()) {
+      if (!wait_ready(false)) return false;
+      const int count = recv(socket_, reinterpret_cast<char*>(reply) + got, static_cast<int>(2-got), 0);
+      if (count == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK) continue;
+      if (count <= 0) return false;
+      got += count;
+    }
+    return got == 2 && budget.CanContinue() && reply[0] == expected0 && reply[1] == expected1;
   };
   const unsigned char method = user.empty() ? 0 : 2;
-  ok = exchange(std::string({5, 1, static_cast<char>(method)}), 5, method);
+  bool ok = exchange(std::string({5, 1, static_cast<char>(method)}), 5, method);
   if (ok && method == 2) {
-    if (user.size() > 255 || password.size() > 255) ok = false;
-    else ok = exchange(std::string({1, static_cast<char>(user.size())}) + user + static_cast<char>(password.size()) + password, 1, 0);
+    ok = exchange(std::string({1, static_cast<char>(user.size())}) + user + static_cast<char>(password.size()) + password, 1, 0);
   }
-  closesocket(socket_); WSACleanup(); return ok;
+  owned.Close();
+  return ok && budget.CanContinue();
 }
 }  // namespace flutter_vless::native

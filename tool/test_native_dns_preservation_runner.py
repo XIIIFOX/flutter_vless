@@ -153,6 +153,26 @@ class PreservationRunnerGuards(unittest.TestCase):
             with self.subTest(output=output, preparers=preparers), self.assertRaises(RuntimeError):
                 runner.require_transport_data_runtime(output, preparers)
 
+    def test_ipv6_dns_snapshot_and_exact_runtime_modes(self):
+        with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
+                mock.patch.object(runner.platform, 'system', return_value='Linux'):
+            snapshot = runner.source_snapshot()
+        for path in ['tool/fixtures/compatibility/dns-ipv6-servers.json',
+                     'tool/test_native_dns_ipv6_preparation.py',
+                     'tool/fixtures/dns_ipv6_preparer.cpp', 'tool/fixtures/dns_ipv6_preparer.swift',
+                     'third_party/xray-mobile/native_dns_preservation/dns_ipv6_servers_test.go']:
+            self.assertEqual(snapshot.get(path), 'synthetic-digest', path)
+        lines = [f'    dns_ipv6_servers_test.go:300: DNS_IPV6_UPSTREAM_RUNTIME_PASS transport={transport} strategy={strategy}\n'
+                 for transport in ('udp', 'tcp') for strategy in ('UseIP', 'UseIPv4')]
+        valid = ''.join(lines)
+        runner.require_ipv6_dns_runtime(valid, 1)
+        runner.require_ipv6_dns_runtime(valid * 2, 2)
+        for output, count in [('', 1), (''.join(lines[:-1]), 1), (valid + lines[0], 1),
+                              (valid, 2), (valid * 2, 1), (valid, 0),
+                              (valid.replace('dns_ipv6_servers_test.go:', 'unrelated.go:'), 1)]:
+            with self.subTest(count=count, output=output), self.assertRaises(RuntimeError):
+                runner.require_ipv6_dns_runtime(output, count)
+
     def test_default_selects_pure_preparation_without_core_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = Path(directory) / 'evidence'

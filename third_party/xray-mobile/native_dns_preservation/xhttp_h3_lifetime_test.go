@@ -30,6 +30,7 @@ import (
 
 	"github.com/apernet/quic-go"
 	"github.com/apernet/quic-go/http3"
+	xlog "github.com/xtls/xray-core/common/log"
 	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
@@ -39,6 +40,71 @@ import (
 const h3LifetimeModeEnv = "FLUTTER_VLESS_H3_LIFETIME_MODE"
 
 type h3LifetimeWorkers struct{ Listen, Send int }
+
+type h3LifetimeCause struct {
+	Type, Text                     string
+	Transport, Application, Remote bool
+	Code                           uint64
+	Cancelled, Deadline            bool
+}
+
+func h3LifetimeCauseOf(err error) h3LifetimeCause {
+	text := fmt.Sprint(err)
+	if len(text) > 256 {
+		text = text[:256]
+	}
+	result := h3LifetimeCause{Type: fmt.Sprintf("%T", err), Text: text,
+		Cancelled: errors.Is(err, context.Canceled), Deadline: errors.Is(err, context.DeadlineExceeded)}
+	var transportError *quic.TransportError
+	var applicationError *quic.ApplicationError
+	if errors.As(err, &transportError) {
+		result.Transport, result.Remote, result.Code = true, transportError.Remote, uint64(transportError.ErrorCode)
+	} else if errors.As(err, &applicationError) {
+		result.Application, result.Remote, result.Code = true, applicationError.Remote, uint64(applicationError.ErrorCode)
+	}
+	return result
+}
+
+// Only this isolated synthetic fixture installs the bounded observer. Config
+// bytes, default QUIC policy and the accepted certificate predicate are unchanged.
+type h3LifetimeDiagnostic struct {
+	mu           sync.Mutex
+	causes       []h3LifetimeCause
+	coreMessages []string
+}
+
+func (*h3LifetimeDiagnostic) Severity() xlog.Severity { return xlog.Severity_Info }
+func (d *h3LifetimeDiagnostic) Handle(message xlog.Message) {
+	general, ok := message.(*xlog.GeneralMessage)
+	if !ok || general.Severity > xlog.Severity_Info {
+		return
+	}
+	text := message.String()
+	if len(text) > 256 {
+		text = text[:256]
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.coreMessages) < 16 {
+		d.coreMessages = append(d.coreMessages, text)
+	} else {
+		// Keep the final transport error if routine setup messages fill the cap.
+		copy(d.coreMessages, d.coreMessages[1:])
+		d.coreMessages[len(d.coreMessages)-1] = text
+	}
+}
+func (d *h3LifetimeDiagnostic) recordCause(err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.causes) < 16 {
+		d.causes = append(d.causes, h3LifetimeCauseOf(err))
+	}
+}
+func (d *h3LifetimeDiagnostic) snapshot() ([]h3LifetimeCause, []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]h3LifetimeCause(nil), d.causes...), append([]string(nil), d.coreMessages...)
+}
 
 func h3LifetimeWorkerText(stacks []byte) h3LifetimeWorkers {
 	var result h3LifetimeWorkers
@@ -121,6 +187,15 @@ func testH3LifetimePredicates(t *testing.T) {
 	stacks := []byte("goroutine 1 [IO wait]:\ngithub.com/apernet/quic-go.(*Transport).listen(0x1)\n\ngoroutine 2:\ngithub.com/apernet/quic-go.(*Transport).runSendQueue(0x1)\n\ngoroutine 3:\nunrelated.listen()\n")
 	if h3LifetimeWorkerText(stacks) != base {
 		t.Fatal("targeted worker parser changed")
+	}
+	for _, code := range []quic.TransportErrorCode{298, 1} {
+		diagnostic := h3LifetimeCauseOf(&quic.TransportError{Remote: true, ErrorCode: code})
+		if !diagnostic.Transport || !diagnostic.Remote || diagnostic.Code != uint64(code) {
+			t.Fatal("typed cause diagnostic lost exact code")
+		}
+	}
+	if diagnostic := h3LifetimeCauseOf(errors.New(strings.Repeat("x", 512))); len(diagnostic.Text) != 256 || diagnostic.Transport {
+		t.Fatal("generic cause diagnostic is not bounded")
 	}
 }
 
@@ -253,10 +328,12 @@ func TestNativeXHTTPH3LifetimeChild(t *testing.T) {
 	port := packet.LocalAddr().(*net.UDPAddr).Port
 	var contexts, rejected, setupHTTP, badHTTP, badCause atomic.Int64
 	var negative atomic.Bool
+	diagnostic := new(h3LifetimeDiagnostic)
 	serverTransport := &quic.Transport{Conn: packet, ConnContext: func(ctx context.Context, _ *quic.ClientInfo) (context.Context, error) {
 		contexts.Add(1)
 		context.AfterFunc(ctx, func() {
 			defer contexts.Add(-1)
+			diagnostic.recordCause(context.Cause(ctx))
 			var transportError *quic.TransportError
 			if errors.As(context.Cause(ctx), &transportError) && transportError.Remote && transportError.ErrorCode == quic.TransportErrorCode(0x100+42) {
 				rejected.Add(1)
@@ -450,6 +527,7 @@ func TestNativeXHTTPH3LifetimeChild(t *testing.T) {
 	if err := clientCore.Start(); err != nil {
 		t.Fatal("H3_SETUP start", err)
 	}
+	xlog.RegisterHandler(diagnostic)
 	t.Logf("H3_LIFETIME_SOURCE mode=%s config_sha256=%x baseline_listen=%d baseline_send=%d", mode, sha256.Sum256(prepared), baseline.Listen, baseline.Send)
 	for attempt := 1; attempt <= 3; attempt++ {
 		connection, _ := connect(t, privatePort, 1, netip.MustParseAddrPort("192.0.2.7:18083"), "")
@@ -460,6 +538,18 @@ func TestNativeXHTTPH3LifetimeChild(t *testing.T) {
 			t.Fatal("H3_SETUP certificate rejection did not close input")
 		}
 		if !h3LifetimeWait(time.Second, func() bool { return rejected.Load() == int64(attempt) && contexts.Load() == 0 }) {
+			connections, trackerError := tracker.snapshot()
+			states := make([]string, 0, len(connections))
+			for _, connection := range connections {
+				states = append(states, h3LifetimeSocketState(connection))
+			}
+			workers, workerError := h3LifetimeWorkersNow()
+			causes, messages := diagnostic.snapshot()
+			evidence, _ := json.Marshal(struct {
+				Causes       []h3LifetimeCause
+				CoreMessages []string
+			}{causes, messages})
+			t.Logf("H3_SETUP_DIAGNOSTIC mode=%s attempt=%d before_core_close=true contexts=%d rejected=%d bad_cause=%d setup_http=%d bad_http=%d sockets=%d socket_states=%v tracker_error=%v listen=%d send=%d worker_error=%v evidence=%s", mode, attempt, contexts.Load(), rejected.Load(), badCause.Load(), setupHTTP.Load(), badHTTP.Load(), len(connections), states, trackerError, workers.Listen, workers.Send, workerError, evidence)
 			t.Fatal("H3_SETUP exact remote bad_certificate missing")
 		}
 		connections, err := tracker.snapshot()

@@ -23,9 +23,12 @@ jobs:
         with:
           go-version-file: third_party/xray-mobile/go.mod
           cache-dependency-path: third_party/xray-mobile/go.sum
-      - uses: android-actions/setup-android@v3
       - name: Install pinned build-only Android toolchain
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+        run: |
+          set -euo pipefail
+          preview_sdk_manager="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)"
+          test -n "$preview_sdk_manager"
+          "$preview_sdk_manager" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
       - name: Test unpublished runtime provenance controls
         run: python3 tool/test_android_runtime_preview.py
       - name: Compile four ordinary Classic and H3 runtime ABIs and isolated AAR

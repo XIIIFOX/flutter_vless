@@ -132,6 +132,8 @@ final class FixtureProvider: @unchecked Sendable {
     var drainHook: (() -> Void)?, coreHook: (() -> Void)?, workerHook: (() -> Void)?
     var attemptAdmissionHook: (() -> Void)?
     var rejectCore = false, rejectHealth = false, rejectWorkerStop = false
+    var inboundHealthHook: (() -> Void)?, connectHealthHook: (() -> Void)?
+    var connectHealthChecks = 0, httpHealthChecks = 0
     func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data? = nil) throws {
         coreStarts += 1
         startedPairs.append((xrayConfig, routingMetadata))
@@ -153,9 +155,16 @@ final class FixtureProvider: @unchecked Sendable {
         _ = hevLifecycle.requestStop()
         if !rejectWorkerStop { hevLifecycle.markExited(code: 0) }
     }
-    func socksInboundHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String { healthChecks += 1; return rejectHealth ? "fixture unavailable" : "ok" }
-    func socksConnectHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String { "ok" }
-    func socksHTTPHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String { "ok" }
+    func socksInboundHealthCheck(port: Int, credentials: LocalProxyCredentials, budget: LocalProxyIOBudget) -> String {
+        healthChecks += 1; inboundHealthHook?()
+        return rejectHealth ? "fixture unavailable" : "ok"
+    }
+    func socksConnectHealthCheck(port: Int, credentials: LocalProxyCredentials, budget: LocalProxyIOBudget) -> String {
+        connectHealthChecks += 1; connectHealthHook?(); return "ok"
+    }
+    func socksHTTPHealthCheck(port: Int, credentials: LocalProxyCredentials, budget: LocalProxyIOBudget) -> String {
+        httpHealthChecks += 1; return "ok"
+    }
     // SOURCE_PROVIDER_METHODS
     func spec(_ epoch: TunnelSessionAdmission.Epoch, options: FixtureOptions = FixtureOptions()) -> RuntimeSpec {
         RuntimeSpec(epoch: epoch, options: options, config: Data(), port: 10808, geoAssetsDirectory: nil, credentials: LocalProxyCredentials())
@@ -499,6 +508,45 @@ final class FixtureProvider: @unchecked Sendable {
             print("PASS last pre-Core admission counts only a call actually entered and cancellation does not refund it")
         } else {
             print("FAIL attempt consumption preceded the last native guard or refunded a real admitted call")
+            budgetFailures += 1
+        }
+        // Revocation while one synchronous probe is returning must stop this
+        // sample. It cannot admit another probe, publish its result or consume
+        // the ordinary watchdog failure/recovery policy.
+        let inboundCancelled = FixtureProvider(), inboundCancelledSpec = inboundCancelled.begin()
+        inboundCancelled.hevLifecycle.beginStart(); inboundCancelled.hevLifecycle.markThreadEntered()
+        inboundCancelled.inboundHealthHook = { _ = inboundCancelled.sessionAdmission.revoke() }
+        let inboundResult = inboundCancelled.watchdogQueue.sync {
+            inboundCancelled.performTunnelHealthCheck(trigger: "cancel-after-inbound", epoch: inboundCancelledSpec.epoch)
+        }
+        let inboundCancellationRespected = !inboundResult && inboundCancelled.healthChecks == 1
+            && inboundCancelled.connectHealthChecks == 0 && inboundCancelled.httpHealthChecks == 0
+            && !inboundCancelled.watchdogInboundHealthy && !inboundCancelled.isForwardingReady()
+            && inboundCancelled.watchdogPolicy.consecutiveFailures == 0
+            && inboundCancelled.recoveryCheck == nil && inboundCancelled.coreStarts == 0
+        await inboundCancelled.stop()
+        if inboundCancellationRespected {
+            print("PASS cancellation after inbound prevents later probes and stale health or failure publication")
+        } else {
+            print("FAIL cancellation after inbound admitted later probes or published cancelled health")
+            budgetFailures += 1
+        }
+
+        let connectCancelled = FixtureProvider(), connectCancelledSpec = connectCancelled.begin()
+        connectCancelled.hevLifecycle.beginStart(); connectCancelled.hevLifecycle.markThreadEntered()
+        connectCancelled.connectHealthHook = { _ = connectCancelled.sessionAdmission.revoke() }
+        let connectResult = connectCancelled.watchdogQueue.sync {
+            connectCancelled.performTunnelHealthCheck(trigger: "cancel-after-connect", epoch: connectCancelledSpec.epoch)
+        }
+        let connectCancellationRespected = !connectResult && connectCancelled.healthChecks == 1
+            && connectCancelled.connectHealthChecks == 1 && connectCancelled.httpHealthChecks == 0
+            && !connectCancelled.isForwardingReady() && connectCancelled.watchdogPolicy.consecutiveFailures == 0
+            && connectCancelled.recoveryCheck == nil && connectCancelled.coreStarts == 0
+        await connectCancelled.stop()
+        if connectCancellationRespected {
+            print("PASS cancellation after CONNECT prevents HTTP and consumes no watchdog failure or retry")
+        } else {
+            print("FAIL cancellation after CONNECT admitted HTTP or consumed a cancelled health sample")
             budgetFailures += 1
         }
         if budgetFailures != 0 { exit(1) }

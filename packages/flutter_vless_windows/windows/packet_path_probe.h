@@ -1,6 +1,7 @@
 #pragma once
 #include <winsock2.h>
 #include <windows.h>
+#include <functional>
 #include "native_runtime.h"
 #include "xray_config.h"
 
@@ -15,7 +16,9 @@ class PacketPathProbe {
   bool Start();
   bool Configure(xray_config::Json& config, uint16_t managed_port,
       std::vector<int64_t>* generated_guards = nullptr) const;
-  bool Check(const char* destination = address) const;
+  // The synchronous callback is not retained after this exchange.
+  bool Check(const char* destination = address,
+      const std::function<bool()>& is_cancelled = {}) const;
  private:
   void Serve();
   SOCKET listener_ = INVALID_SOCKET;

@@ -31,6 +31,12 @@ cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX build\windows-runtime\pack
 if errorlevel 1 exit /b 1
 build\windows-runtime\packet_probe_start_test.exe
 if errorlevel 1 exit /b 1
+python tool\test_windows_packet_probe_budget.py --generate build\windows-runtime\packet_probe_budget_test.cpp
+if errorlevel 1 exit /b 1
+cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX build\windows-runtime\packet_probe_budget_test.cpp /Fe:build\windows-runtime\packet_probe_budget_test.exe /Fo:build\windows-runtime\packet_probe_budget_test.obj
+if errorlevel 1 exit /b 1
+build\windows-runtime\packet_probe_budget_test.exe
+if errorlevel 1 exit /b 1
 python tool\test_windows_traffic.py --generate build\windows-runtime\traffic_consumer_test.cpp
 if errorlevel 1 exit /b 1
 cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX /I%S% build\windows-runtime\traffic_consumer_test.cpp /Fe:build\windows-runtime\traffic_consumer_test.exe /Fo:build\windows-runtime\traffic_consumer_test.obj

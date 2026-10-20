@@ -5,6 +5,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/build/ios_local_proxy_transport"
 mkdir -p "$OUT"
+python3 "$ROOT/tool/test_apple_socks5_budget.py"
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  xcrun swiftc -O -parse-as-library \
+    "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/LocalProxyAccessPolicy.swift" \
+    "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/XrayServiceTags.swift" \
+    "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/LocalProxyIOBudget.swift" \
+    "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/LocalSOCKS5Client.swift" \
+    "$ROOT/tool/fixtures/apple_socks5_budget_loopback.swift" -o "$OUT/budget-loopback"
+  python3 "$ROOT/tool/fixtures/apple_socks5_budget_loopback.py" "$OUT/budget-loopback"
+fi
 cat > "$OUT/main.swift" <<'SWIFT'
 import Foundation
 let credentials = try LocalProxyCredentials(username: "transport-user", password: "transport-password")
@@ -20,6 +30,7 @@ if group.wait(timeout: .now() + 20) != .success { exit(2) }
 SWIFT
 xcrun swiftc -O "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/LocalProxyAccessPolicy.swift" \
   "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/XrayServiceTags.swift" \
+  "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/LocalProxyIOBudget.swift" \
   "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/LocalSOCKS5Client.swift" \
   "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/LocalHTTPProxyClient.swift" \
   "$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/LocalProxyDelayClient.swift" \

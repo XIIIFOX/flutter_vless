@@ -51,6 +51,9 @@ class XrayVPNService : VpnService() {
     private var prepared: JSONObject? = null
     private var routingPreparation: NativeRoutingPreparation? = null
     private var pendingRuntime: Pair<Long, SessionRuntimeCandidate<SessionReadinessProbe>>? = null
+    // Guarded by recovery, so Stop can revoke an in-flight periodic check without
+    // waiting for this service's serial worker. Only the owning phase clears it.
+    private var periodicReadiness: Pair<Long, StartupReadiness>? = null
     private var dnsServers = listOf(AndroidTunnelDnsPolicy.VIRTUAL_SERVER)
     private var credentials: LocalProxyCredentials? = null
     private var tunConfigFile: File? = null
@@ -148,7 +151,7 @@ class XrayVPNService : VpnService() {
                 return START_STICKY
             }
             val request = requests.incrementAndGet()
-            recovery.disarm() // Invalidate queued callbacks immediately, before slow native I/O finishes.
+            disarmRecovery() // Invalidate callbacks and release owned health I/O before queued cleanup.
             NativeQuickAccess.refresh(this)
             profiles.disarm()
             worker.execute {
@@ -478,32 +481,87 @@ class XrayVPNService : VpnService() {
     private fun tick(owner: Long, count: Int) {
         worker.schedule({
             if (!recovery.owns(owner)) return@schedule
+            var checkedChild: Process? = null
             if (count > 0 && count % 30 == 0 && config?.PROXY_ONLY == false) {
-                try { probeAuthenticatedPathOnce() }
-                catch (_: Exception) { recover(Event.AUTH_PROBE_FAILED); return@schedule }
-                if (config?.BLOCKED_APPS?.contains(packageName) == false) {
-                    try { requireNotNull(readinessProbe).verify() }
-                    catch (_: Exception) { recover(Event.PATH_PROBE_FAILED); return@schedule }
+                val expectedChild = XrayCoreManager.currentCoreProcess()
+                try { checkedChild = checkAuthenticatedPath(owner, periodic = true) }
+                catch (error: Exception) {
+                    // Replacement revokes this result, but death of this same
+                    // child must still enter the existing recovery policy.
+                    if (!recovery.owns(owner) || XrayCoreManager.currentCoreProcess() !== expectedChild) return@schedule
+                    recover(if (error is ReadinessFailure && error.stage == ReadinessStage.PACKET_CHALLENGE)
+                        Event.PATH_PROBE_FAILED else Event.AUTH_PROBE_FAILED,
+                        (error as? ReadinessFailure)?.diagnosticValue)
+                    return@schedule
                 }
+                if (checkedChild !== expectedChild) return@schedule
             }
+            fun healthOwnerCurrent(): Boolean {
+                if (!recovery.owns(owner)) return false
+                val child = checkedChild ?: return true
+                if (XrayCoreManager.currentCoreProcess() !== child) return false
+                if (child.isAlive) return true
+                // The checked child may exit after the helper's final check or
+                // during publication. Keep its recovery chain alive at both edges.
+                if (recovery.owns(owner) && XrayCoreManager.currentCoreProcess() === child)
+                    recover(Event.AUTH_PROBE_FAILED, ReadinessFailure(ReadinessStage.OWNER).diagnosticValue)
+                return false
+            }
+            if (!healthOwnerCurrent()) return@schedule
             XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_CONNECTED, (System.nanoTime() - connectedAt) / 1_000_000_000)
-            tick(owner, count + 1)
+            if (healthOwnerCurrent()) tick(owner, count + 1)
         }, 1, TimeUnit.SECONDS)
     }
 
     private fun probeAuthenticatedPath(owner: Long) {
+        checkAuthenticatedPath(owner, periodic = false)
+    }
+
+    private fun checkAuthenticatedPath(owner: Long, periodic: Boolean): Process {
         if (!recovery.owns(owner)) throw ReadinessFailure(ReadinessStage.OWNER)
         val child = XrayCoreManager.currentCoreProcess() ?: throw ReadinessFailure(ReadinessStage.OWNER)
         if (!XrayCoreManager.ownsCoreProcess(child)) throw ReadinessFailure(ReadinessStage.OWNER)
-        StartupReadiness(isCurrent = { recovery.owns(owner) && XrayCoreManager.ownsCoreProcess(child) }).use { readiness ->
-            readiness.authenticated { probeAuthenticatedPathOnce(readiness) }
-            // A real host-UID token also traverses TUN and the forwarder. An
-            // explicit app exclusion cannot qualify that packet path.
-            if (config?.BLOCKED_APPS?.contains(packageName) == false)
-                requireNotNull(readinessProbe).verify(readiness, ReadinessStage.PACKET_CHALLENGE)
-            readiness.check()
+        try {
+            StartupReadiness(isCurrent = { recovery.owns(owner) && XrayCoreManager.ownsCoreProcess(child) }).use { readiness ->
+                val phase = owner to readiness
+                if (periodic) synchronized(recovery) {
+                    if (!recovery.owns(owner)) throw ReadinessFailure(ReadinessStage.OWNER)
+                    periodicReadiness = phase
+                }
+                try {
+                    // Startup alone retries an exact local ECONNREFUSED. An established
+                    // session's health check remains one attempt within the same budget.
+                    if (periodic) probeAuthenticatedPathOnce(readiness)
+                    else readiness.authenticated { probeAuthenticatedPathOnce(readiness) }
+                    readiness.check()
+                    // A real host-UID token also traverses TUN and the forwarder. An
+                    // explicit app exclusion cannot qualify that packet path.
+                    if (config?.BLOCKED_APPS?.contains(packageName) == false)
+                        requireNotNull(readinessProbe).verify(readiness, ReadinessStage.PACKET_CHALLENGE)
+                    readiness.check()
+                } finally {
+                    if (periodic) synchronized(recovery) {
+                        if (periodicReadiness === phase && periodicReadiness?.first == owner) periodicReadiness = null
+                    }
+                }
+            }
+        } catch (error: Exception) {
+            // A stored deadline/cleanup failure must not authorize recovery of a
+            // child that replaced this phase's exact Core identity.
+            if (!recovery.owns(owner) || XrayCoreManager.currentCoreProcess() !== child) throw ReadinessFailure(ReadinessStage.OWNER)
+            throw error
         }
         if (!recovery.owns(owner) || !XrayCoreManager.ownsCoreProcess(child)) throw ReadinessFailure(ReadinessStage.OWNER)
+        return child
+    }
+
+    private fun disarmRecovery() {
+        val phase = synchronized(recovery) {
+            recovery.disarm()
+            periodicReadiness?.second.also { periodicReadiness = null }
+        }
+        // Socket close and timer draining must never hold the ownership monitor.
+        phase?.cancel()
     }
 
     private fun probeAuthenticatedPathOnce(readiness: StartupReadiness? = null) {
@@ -530,7 +588,7 @@ class XrayVPNService : VpnService() {
     }
 
     private fun deactivateSession() {
-        recovery.disarm()
+        disarmRecovery()
         try { closePendingRuntime() }
         finally {
             stopWorkers()
@@ -547,13 +605,13 @@ class XrayVPNService : VpnService() {
         profiles.disarm()
         NativeQuickAccess.profile(this).disarm()
         NativeQuickAccess.refresh(this)
-        recovery.disarm()
+        disarmRecovery()
         worker.execute { deactivateSession(); stopSelf() }
         super.onRevoke()
     }
     override fun onDestroy() {
         requests.incrementAndGet()
-        recovery.disarm()
+        disarmRecovery()
         if (currentRecovery === recovery) currentRecovery = null
         networkCallback?.let { runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) } }
         worker.close { deactivateSession() }

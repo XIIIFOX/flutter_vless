@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Give periodic watchdog probes one session-owned deadline and cancel their sockets on Stop. Recheck session and Core ownership between probes and before publishing a connected state.
+
 * Return a request-owned report after final Core preflight and candidate admission. Collect actual typed preparation edits and closed failure stages without exposing configuration data.
 
 * Add preparation regressions for preserved, unused XHTTP grandchild socket chains.

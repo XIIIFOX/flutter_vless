@@ -157,6 +157,36 @@ class StartupReadinessTest {
         } finally { Thread.interrupted() }
     }
 
+    @Test(timeout = 5000) fun cancellationIsIdempotentAndClosesOnlyItsOwnedSockets() {
+        val owned = Mockito.mock(Socket::class.java); val foreign = Mockito.mock(Socket::class.java)
+        val phase = StartupReadiness(isCurrent = { true })
+        phase.use {
+            it.adopt(owned)
+            it.cancel(); it.cancel()
+            Mockito.verify(owned, Mockito.times(1)).close()
+            Mockito.verify(foreign, Mockito.never()).close()
+            assertEquals(ReadinessStage.OWNER, assertThrows(ReadinessFailure::class.java, it::check).stage)
+            assertFalse("The caller, rather than Stop, drains the timer", it.timerTerminated)
+        }
+        assertTrue(phase.timerTerminated)
+    }
+
+    @Test(timeout = 5000) fun actualConnectorClosesALateSocketWithoutConnectingAfterCancellation() {
+        val phase = StartupReadiness(isCurrent = { true })
+        Mockito.mockConstruction(Socket::class.java) { _, _ -> phase.cancel() }.use { sockets ->
+            phase.use {
+                assertEquals(ReadinessStage.OWNER, assertThrows(ReadinessFailure::class.java) {
+                    AuthenticatedSocksClient.connect(18111, LocalProxyCredentials("owned-user", "owned-password"),
+                        "198.51.100.1", 18112, it)
+                }.stage)
+                val late = sockets.constructed().single()
+                Mockito.verify(late).close()
+                Mockito.verify(late, Mockito.never()).connect(Mockito.any(), Mockito.anyInt())
+            }
+        }
+        assertTrue(phase.timerTerminated)
+    }
+
     @Test(timeout = 5000) fun cleanupFailureDoesNotReplaceThePrimaryStageOrSkipOtherSockets() {
         val first = Mockito.mock(Socket::class.java); val second = Mockito.mock(Socket::class.java)
         Mockito.doThrow(IOException("Synthetic close failure")).`when`(first).close()

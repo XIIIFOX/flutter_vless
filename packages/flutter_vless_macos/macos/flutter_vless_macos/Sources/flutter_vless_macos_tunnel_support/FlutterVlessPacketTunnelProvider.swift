@@ -766,10 +766,22 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             return false
         }
 
-        let inboundResult = socksInboundHealthCheck(port: port, credentials: credentials)
+        // Share one deadline across every handshake, fragment and HTTP read.
+        // Stop/sleep revoke admission directly, without waiting for this queue.
+        let budget = LocalProxyIOBudget(timeout: 15, isCancelled: { [weak self] in
+            self?.sessionAdmission.permitsRuntime(epoch) != true
+        })
+        let inboundResult = socksInboundHealthCheck(port: port, credentials: credentials, budget: budget)
+        guard sessionAdmission.permitsRuntime(epoch) else { return false }
         watchdogInboundHealthy = inboundResult.hasPrefix("ok")
-        let connectResult = socksConnectHealthCheck(port: port, credentials: credentials)
-        let httpResult = socksHTTPHealthCheck(port: port, credentials: credentials)
+        let connectResult = budget.canContinue
+            ? socksConnectHealthCheck(port: port, credentials: credentials, budget: budget)
+            : "health deadline elapsed"
+        guard sessionAdmission.permitsRuntime(epoch) else { return false }
+        let httpResult = budget.canContinue
+            ? socksHTTPHealthCheck(port: port, credentials: credentials, budget: budget)
+            : "health deadline elapsed"
+        guard sessionAdmission.permitsRuntime(epoch) else { return false }
         if let hevLogURL {
             try? TunnelFileLog.trimIfNeeded(hevLogURL)
         }
@@ -820,71 +832,43 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         scheduleNativeRecovery(after: 0, epoch: epoch)
     }
 
-    private func socksInboundHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String {
-        let fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
-        guard fd >= 0 else {
-            return "socket failed errno=\(errno)"
-        }
-        defer { close(fd) }
-
-        var timeout = timeval(tv_sec: 2, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = UInt16(port).bigEndian
-        guard inet_pton(AF_INET, "127.0.0.1", &address.sin_addr) == 1 else {
-            return "inet_pton failed"
-        }
-
-        let connectResult = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard connectResult == 0 else {
-            return "connect 127.0.0.1:\(port) failed errno=\(errno)"
-        }
-
-        return LocalSOCKS5Client.authenticate(fd: fd, credentials: credentials) ? "ok authenticated" : "authentication failed"
+    private func socksInboundHealthCheck(port: Int, credentials: LocalProxyCredentials,
+                                         budget: LocalProxyIOBudget) -> String {
+        do {
+            let fd = try LocalSOCKS5Client.openProxyConnection(proxyPort: port, credentials: credentials,
+                                                              timeout: 2, budget: budget)
+            close(fd)
+            return "ok authenticated"
+        } catch { return "authentication failed" }
     }
 
-    private func socksConnectHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String {
+    private func socksConnectHealthCheck(port: Int, credentials: LocalProxyCredentials,
+                                         budget: LocalProxyIOBudget) -> String {
         do {
             let fd = try LocalSOCKS5Client.openConnection(proxyPort: port, credentials: credentials,
-                                                        host: "1.1.1.1", port: 80, timeout: 5)
+                                                        host: "1.1.1.1", port: 80, timeout: 5, budget: budget)
             close(fd)
             return "ok authenticated connect"
         } catch { return "authenticated connect failed" }
     }
 
     /// Requires authenticated CONNECT and a successful HTTP response from the proxy path.
-    private func socksHTTPHealthCheck(port: Int, credentials: LocalProxyCredentials) -> String {
+    private func socksHTTPHealthCheck(port: Int, credentials: LocalProxyCredentials,
+                                      budget: LocalProxyIOBudget) -> String {
+        let httpBudget = budget.limited(to: 8)
         do {
             let fd = try LocalSOCKS5Client.openConnection(proxyPort: port, credentials: credentials,
-                                                        host: "www.gstatic.com", port: 80)
+                                                        host: "www.gstatic.com", port: 80, budget: httpBudget)
             defer { close(fd) }
             let request = "GET /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\nConnection: close\r\n\r\n"
-            guard LocalSOCKS5Client.sendAll(fd: fd, bytes: Array(request.utf8)),
-                  let response = recvSome(fd: fd, maxCount: 512),
+            guard LocalSOCKS5Client.sendAll(fd: fd, bytes: Array(request.utf8), budget: httpBudget),
+                  let response = LocalSOCKS5Client.receiveSome(fd: fd, maxCount: 512, budget: httpBudget),
                   let status = String(bytes: response, encoding: .utf8)?.split(separator: " ").dropFirst().first,
                   let code = Int(status), (200...399).contains(code) else { return "HTTP response failed" }
             return "ok authenticated HTTP"
         } catch { return "authenticated HTTP connection failed" }
     }
 
-    private func recvSome(fd: Int32, maxCount: Int) -> [UInt8]? {
-        var buffer = [UInt8](repeating: 0, count: maxCount)
-        let received = buffer.withUnsafeMutableBytes {
-            recv(fd, $0.baseAddress, maxCount, 0)
-        }
-        guard received > 0 else {
-            return nil
-        }
-        return Array(buffer.prefix(received))
-    }
 
     private func hex(_ bytes: [UInt8]) -> String {
         bytes.map { String(format: "%02x", $0) }.joined(separator: " ")

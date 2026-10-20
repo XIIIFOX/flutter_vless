@@ -17,7 +17,7 @@ internal class ReadinessFailure(val stage: ReadinessStage, val errno: Int? = nul
     val diagnosticValue: Long get() = (stage.code.toLong() shl 32) or (errno?.takeIf { it in 1..4095 }?.toLong() ?: 0)
 }
 
-/** One startup's absolute budget and socket ownership. This never starts or
+/** One readiness phase's absolute budget and socket ownership. This never starts or
  * restarts a native worker. The expiry task only closes this phase's sockets;
  * the caller always owns timer cancellation and bounded termination. */
 internal class StartupReadiness(
@@ -48,14 +48,19 @@ internal class StartupReadiness(
         catch (error: Throwable) { timer.shutdownNow(); throw error }
     }
 
-    private fun expire() {
+    private fun fail(stage: ReadinessStage) {
         val owned = synchronized(lock) {
-            if (closed) return
-            if (failure == null) failure = ReadinessFailure(ReadinessStage.DEADLINE)
+            if (closed || failure != null) return
+            failure = ReadinessFailure(stage)
             sockets.toList()
         }
         owned.forEach { socket -> runCatching { socket.close() } }
     }
+
+    private fun expire() = fail(ReadinessStage.DEADLINE)
+
+    /** Release blocked owned I/O immediately; the probing caller still drains its timer. */
+    fun cancel() = fail(ReadinessStage.OWNER)
 
     fun check() {
         if (Thread.currentThread().isInterrupted) throw ReadinessFailure(ReadinessStage.INTERRUPTED)

@@ -203,7 +203,8 @@ void VpnService::RunVpn(std::shared_ptr<flutter_vless::preparation::StartupCompl
         break;
       }
       if (!xray_process_->IsRunning() || !tun2socks_process_->IsRunning()
-          || !worker_candidate_ || !worker_candidate_->PacketProbe().Check()) break;
+          || !worker_candidate_ || !worker_candidate_->PacketProbe().Check(
+              flutter_vless::PacketPathProbe::address, [this] { return !requested_.load(); })) break;
       if (++ticks % 2 == 0) UpdateTrafficStats();
       std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -281,6 +282,7 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
       ? std::vector<std::wstring>{L"native-routing", L"run", L"--parent-stdin", L"--config", worker_candidate_->Path().wstring(),
           L"--spec", worker_candidate_->MetadataPath().wstring()}
       : std::vector<std::wstring>{L"run", L"-config", worker_candidate_->Path().wstring()};
+  if (!requested_.load()) return fail("VPN startup cancelled");
   xray_process_ = native::Launch(xray_executable_path_, command, false, asset_directory_, worker_candidate_->Routing());
   if (!xray_process_) return fail("Cannot launch the protected Xray process");
   bool listening = false;
@@ -288,6 +290,7 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
     if (native::SocksReady(socks_port_, username_, password_)) { listening = true; break; }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
+  if (!requested_.load()) return fail("VPN startup cancelled");
   if (!listening) {
     DWORD code = 0; GetExitCodeProcess(reinterpret_cast<HANDLE>(xray_process_->hProcess), &code);
     Event(("Authenticated Xray listener unavailable, process code=" + std::to_string(code)).c_str());
@@ -300,6 +303,7 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   std::string tun = "device: tun://flutter_vless_tun\nproxy: socks5://" + username_ + ":" + password_
       + "@127.0.0.1:" + std::to_string(socks_port_) + "\nloglevel: silent\nmtu: 1500\n";
   if (!private_runtime_->WriteConfig(tun, tun_config_path_)) return fail("Cannot write the private tun2socks configuration");
+  if (!requested_.load()) return fail("VPN startup cancelled");
   tun2socks_process_ = native::Launch(tun2socks_executable_path_, {L"-config", tun_config_path_.wstring()});
   if (!tun2socks_process_) return fail("Cannot launch tun2socks");
   NET_LUID luid{};
@@ -379,7 +383,7 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   worker_candidate_->RemoveFile();
   native::RemovePrivateConfig(tun_config_path_);
   for (int i = 0; i < 10 && requested_.load() && xray_process_->IsRunning() && tun2socks_process_->IsRunning(); ++i) {
-    if (worker_candidate_->PacketProbe().Check()) {
+    if (worker_candidate_->PacketProbe().Check(PacketPathProbe::address, [this] { return !requested_.load(); })) {
       if (report) *report = worker_candidate_->PreparationReport();
       return true;
     }

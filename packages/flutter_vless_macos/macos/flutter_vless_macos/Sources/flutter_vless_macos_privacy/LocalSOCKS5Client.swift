@@ -5,7 +5,8 @@ import Darwin
 public enum LocalSOCKS5Client {
     public enum Failure: Error { case invalidDestination, connect, authentication, request }
 
-    public static func authenticate(fd: Int32, credentials: LocalProxyCredentials?) -> Bool {
+    public static func authenticate(fd: Int32, credentials: LocalProxyCredentials?, budget: LocalProxyIOBudget? = nil) -> Bool {
+        if let budget { return authenticate(fd: fd, credentials: credentials, budget: budget, io: LocalSOCKS5SystemIO()) }
         // A worker can exit while the watchdog writes its greeting. SIGPIPE
         // must report an auth failure instead of terminating NetworkExtension.
         var noSignal: Int32 = 1
@@ -19,7 +20,11 @@ public enum LocalSOCKS5Client {
     }
 
     public static func openConnection(proxyPort: Int, credentials: LocalProxyCredentials?, host: String,
-                                      port: Int, timeout: TimeInterval = 8) throws -> Int32 {
+                                      port: Int, timeout: TimeInterval = 8, budget: LocalProxyIOBudget? = nil) throws -> Int32 {
+        if let budget {
+            return try openConnection(proxyPort: proxyPort, credentials: credentials, host: host, port: port,
+                                      timeout: timeout, budget: budget, io: LocalSOCKS5SystemIO())
+        }
         guard (1...65535).contains(proxyPort), (1...65535).contains(port), !host.isEmpty,
               host.utf8.count <= 255, !host.utf8.contains(0) else { throw Failure.invalidDestination }
         let fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
@@ -74,7 +79,8 @@ public enum LocalSOCKS5Client {
         }
     }
 
-    public static func sendAll(fd: Int32, bytes: [UInt8]) -> Bool {
+    public static func sendAll(fd: Int32, bytes: [UInt8], budget: LocalProxyIOBudget? = nil) -> Bool {
+        if let budget { return sendAll(fd: fd, bytes: bytes, budget: budget, io: LocalSOCKS5SystemIO()) }
         var offset = 0
         while offset < bytes.count {
             let count = bytes.withUnsafeBytes { send(fd, $0.baseAddress!.advanced(by: offset), bytes.count - offset, MSG_NOSIGNAL) }
@@ -85,7 +91,8 @@ public enum LocalSOCKS5Client {
         return true
     }
 
-    public static func receiveExactly(fd: Int32, count: Int) -> [UInt8]? {
+    public static func receiveExactly(fd: Int32, count: Int, budget: LocalProxyIOBudget? = nil) -> [UInt8]? {
+        if let budget { return receiveExactly(fd: fd, count: count, budget: budget, io: LocalSOCKS5SystemIO()) }
         guard count >= 0 else { return nil }
         var bytes = [UInt8](repeating: 0, count: count)
         var offset = 0
@@ -97,4 +104,190 @@ public enum LocalSOCKS5Client {
         }
         return bytes
     }
+
+    public static func openProxyConnection(proxyPort: Int, credentials: LocalProxyCredentials?,
+                                           timeout: TimeInterval = 2, budget: LocalProxyIOBudget? = nil) throws -> Int32 {
+        try openProxyConnection(proxyPort: proxyPort, credentials: credentials, timeout: timeout,
+                                budget: budget ?? LocalProxyIOBudget(timeout: timeout), io: LocalSOCKS5SystemIO())
+    }
+
+    public static func receiveSome(fd: Int32, maxCount: Int, budget: LocalProxyIOBudget? = nil) -> [UInt8]? {
+        if let budget { return receiveSome(fd: fd, maxCount: maxCount, budget: budget, io: LocalSOCKS5SystemIO()) }
+        guard maxCount > 0 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: maxCount)
+        let count = bytes.withUnsafeMutableBytes { Darwin.recv(fd, $0.baseAddress, maxCount, 0) }
+        return count > 0 ? Array(bytes.prefix(count)) : nil
+    }
+
+    static func openProxyConnection(proxyPort: Int, credentials: LocalProxyCredentials?, timeout: TimeInterval,
+                                    budget: LocalProxyIOBudget, io: LocalSOCKS5SocketIO) throws -> Int32 {
+        guard (1...65535).contains(proxyPort) else { throw Failure.invalidDestination }
+        let phase = budget.limited(to: timeout)
+        guard phase.canContinue else { throw Failure.connect }
+        let fd = io.createSocket()
+        guard fd >= 0 else { throw Failure.connect }
+        do {
+            guard io.configure(fd: fd, timeout: timeout), phase.canContinue else { throw Failure.connect }
+            let flags = io.flags(fd: fd)
+            guard flags >= 0, phase.canContinue, io.setFlags(fd: fd, flags: flags | O_NONBLOCK),
+                  phase.canContinue else { throw Failure.connect }
+            let connected = io.connectLoopback(fd: fd, port: proxyPort)
+            if connected != 0 {
+                guard phase.canContinue, [EINPROGRESS, EALREADY, EINTR].contains(io.lastError),
+                      waitReady(fd: fd, write: true, budget: phase, io: io),
+                      io.connectionError(fd: fd) == 0 else { throw Failure.connect }
+            }
+            guard phase.canContinue, io.setFlags(fd: fd, flags: flags), phase.canContinue,
+                  authenticate(fd: fd, credentials: credentials, budget: phase, io: io),
+                  phase.canContinue else { throw Failure.authentication }
+            return fd
+        } catch { io.close(fd: fd); throw error }
+    }
+
+    static func openConnection(proxyPort: Int, credentials: LocalProxyCredentials?, host: String, port: Int,
+                               timeout: TimeInterval, budget: LocalProxyIOBudget, io: LocalSOCKS5SocketIO) throws -> Int32 {
+        guard (1...65535).contains(port), !host.isEmpty, host.utf8.count <= 255,
+              !host.utf8.contains(0) else { throw Failure.invalidDestination }
+        let phase = budget.limited(to: timeout)
+        let fd = try openProxyConnection(proxyPort: proxyPort, credentials: credentials, timeout: timeout, budget: phase, io: io)
+        do {
+            var request: [UInt8] = [5, 1, 0]
+            var ipv4 = in_addr(), ipv6 = in6_addr()
+            if inet_pton(AF_INET, host, &ipv4) == 1 {
+                request.append(1); withUnsafeBytes(of: &ipv4) { request.append(contentsOf: $0) }
+            } else if inet_pton(AF_INET6, host, &ipv6) == 1 {
+                request.append(4); withUnsafeBytes(of: &ipv6) { request.append(contentsOf: $0) }
+            } else { request += [3, UInt8(host.utf8.count)]; request += host.utf8 }
+            request += [UInt8(port >> 8), UInt8(port & 255)]
+            guard sendAll(fd: fd, bytes: request, budget: phase, io: io),
+                  let header = receiveExactly(fd: fd, count: 4, budget: phase, io: io),
+                  header[0] == 5, header[1] == 0, header[2] == 0 else { throw Failure.request }
+            let tail: Int
+            switch header[3] {
+            case 1: tail = 6
+            case 4: tail = 18
+            case 3:
+                guard let length = receiveExactly(fd: fd, count: 1, budget: phase, io: io)?.first else { throw Failure.request }
+                tail = Int(length) + 2
+            default: throw Failure.request
+            }
+            guard receiveExactly(fd: fd, count: tail, budget: phase, io: io) != nil, phase.canContinue else { throw Failure.request }
+            return fd
+        } catch { io.close(fd: fd); throw error }
+    }
+
+    static func authenticate(fd: Int32, credentials: LocalProxyCredentials?, budget: LocalProxyIOBudget,
+                             io: LocalSOCKS5SocketIO) -> Bool {
+        guard budget.canContinue else { return false }
+        let method: UInt8 = credentials == nil ? 0 : 2
+        guard sendAll(fd: fd, bytes: [5, 1, method], budget: budget, io: io),
+              receiveExactly(fd: fd, count: 2, budget: budget, io: io) == [5, method] else { return false }
+        guard let credentials else { return budget.canContinue }
+        return sendAll(fd: fd, bytes: Array(credentials.socksAuthenticationRequest), budget: budget, io: io)
+            && receiveExactly(fd: fd, count: 2, budget: budget, io: io) == [1, 0] && budget.canContinue
+    }
+
+    private static func waitReady(fd: Int32, write: Bool, budget: LocalProxyIOBudget, io: LocalSOCKS5SocketIO) -> Bool {
+        while budget.canContinue {
+            let milliseconds = budget.waitMilliseconds()
+            guard milliseconds > 0 else { return false }
+            let result = io.wait(fd: fd, write: write, milliseconds: milliseconds)
+            guard budget.canContinue else { return false }
+            if result > 0 { return true }
+            if result < 0 && io.lastError != EINTR { return false }
+        }
+        return false
+    }
+
+    static func sendAll(fd: Int32, bytes: [UInt8], budget: LocalProxyIOBudget, io: LocalSOCKS5SocketIO) -> Bool {
+        var offset = 0
+        while offset < bytes.count {
+            guard waitReady(fd: fd, write: true, budget: budget, io: io), budget.canContinue else { return false }
+            let count = bytes.withUnsafeBytes { io.send(fd: fd, pointer: $0.baseAddress!.advanced(by: offset), count: bytes.count - offset) }
+            guard budget.canContinue else { return false }
+            if count < 0 && [EINTR, EAGAIN, EWOULDBLOCK].contains(io.lastError) { continue }
+            guard count > 0 && count <= bytes.count - offset else { return false }
+            offset += count
+        }
+        return budget.canContinue
+    }
+
+    static func receiveExactly(fd: Int32, count: Int, budget: LocalProxyIOBudget, io: LocalSOCKS5SocketIO) -> [UInt8]? {
+        guard count >= 0, budget.canContinue else { return nil }
+        var bytes = [UInt8](repeating: 0, count: count), offset = 0
+        while offset < count {
+            guard waitReady(fd: fd, write: false, budget: budget, io: io), budget.canContinue else { return nil }
+            let read = bytes.withUnsafeMutableBytes { io.receive(fd: fd, pointer: $0.baseAddress!.advanced(by: offset), count: count - offset) }
+            guard budget.canContinue else { return nil }
+            if read < 0 && [EINTR, EAGAIN, EWOULDBLOCK].contains(io.lastError) { continue }
+            guard read > 0 && read <= count - offset else { return nil }
+            offset += read
+        }
+        return budget.canContinue ? bytes : nil
+    }
+
+    static func receiveSome(fd: Int32, maxCount: Int, budget: LocalProxyIOBudget, io: LocalSOCKS5SocketIO) -> [UInt8]? {
+        guard maxCount > 0 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: maxCount)
+        while budget.canContinue {
+            guard waitReady(fd: fd, write: false, budget: budget, io: io), budget.canContinue else { return nil }
+            let count = bytes.withUnsafeMutableBytes { io.receive(fd: fd, pointer: $0.baseAddress!, count: maxCount) }
+            guard budget.canContinue else { return nil }
+            if count < 0 && [EINTR, EAGAIN, EWOULDBLOCK].contains(io.lastError) { continue }
+            return count > 0 && count <= maxCount ? Array(bytes.prefix(count)) : nil
+        }
+        return nil
+    }
+}
+
+// Per-call injection keeps tests on the real implementation without global I/O state.
+protocol LocalSOCKS5SocketIO {
+    var lastError: Int32 { get }
+    func createSocket() -> Int32
+    func configure(fd: Int32, timeout: TimeInterval) -> Bool
+    func flags(fd: Int32) -> Int32
+    func setFlags(fd: Int32, flags: Int32) -> Bool
+    func connectLoopback(fd: Int32, port: Int) -> Int32
+    func connectionError(fd: Int32) -> Int32?
+    func wait(fd: Int32, write: Bool, milliseconds: Int32) -> Int32
+    func send(fd: Int32, pointer: UnsafeRawPointer, count: Int) -> Int
+    func receive(fd: Int32, pointer: UnsafeMutableRawPointer, count: Int) -> Int
+    func close(fd: Int32)
+}
+
+private struct LocalSOCKS5SystemIO: LocalSOCKS5SocketIO {
+    var lastError: Int32 { Darwin.errno }
+    func createSocket() -> Int32 { Darwin.socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) }
+    func configure(fd: Int32, timeout: TimeInterval) -> Bool {
+        var noSignal: Int32 = 1
+        // Returned descriptors retain the legacy blocking timeout for callers
+        // that hand the socket to SecureTransport after CONNECT.
+        let seconds = min(timeout, Double(Int32.max)), whole = Int(seconds)
+        let micros = Int32(max(whole == 0 ? 1 : 0, min(999999, ((seconds - Double(whole)) * 1_000_000).rounded(.up))))
+        var duration = timeval(tv_sec: whole, tv_usec: micros)
+        return setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0
+            && setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &duration, socklen_t(MemoryLayout<timeval>.size)) == 0
+            && setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &duration, socklen_t(MemoryLayout<timeval>.size)) == 0
+    }
+    func flags(fd: Int32) -> Int32 { fcntl(fd, F_GETFL) }
+    func setFlags(fd: Int32, flags: Int32) -> Bool { fcntl(fd, F_SETFL, flags) == 0 }
+    func connectLoopback(fd: Int32, port: Int) -> Int32 {
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size); address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(port).bigEndian; inet_pton(AF_INET, "127.0.0.1", &address.sin_addr)
+        return withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+    }
+    func connectionError(fd: Int32) -> Int32? {
+        var value: Int32 = 0, size = socklen_t(MemoryLayout<Int32>.size)
+        return getsockopt(fd, SOL_SOCKET, SO_ERROR, &value, &size) == 0 ? value : nil
+    }
+    func wait(fd: Int32, write: Bool, milliseconds: Int32) -> Int32 {
+        var descriptor = pollfd(fd: fd, events: write ? Int16(POLLOUT) : Int16(POLLIN), revents: 0)
+        let result = Darwin.poll(&descriptor, 1, milliseconds)
+        if result > 0 && descriptor.revents & Int16(POLLNVAL) != 0 { Darwin.errno = EBADF; return -1 }
+        return result
+    }
+    func send(fd: Int32, pointer: UnsafeRawPointer, count: Int) -> Int { Darwin.send(fd, pointer, count, MSG_DONTWAIT | MSG_NOSIGNAL) }
+    func receive(fd: Int32, pointer: UnsafeMutableRawPointer, count: Int) -> Int { Darwin.recv(fd, pointer, count, MSG_DONTWAIT) }
+    func close(fd: Int32) { Darwin.close(fd) }
 }

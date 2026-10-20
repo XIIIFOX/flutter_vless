@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Share one monotonic deadline across Apple and Android watchdog probes and across Windows packet-path exchanges. Observe session cancellation during probe I/O, and reject later probes or connected-state publication from a cancelled session.
+
 * Count Apple native reconnect attempts at the admitted Core call, after the previous workers drain. Preserve initial and finite retry budgets when sleep cancels queued work, and honor the explicit recovery pause while shutdown is pending.
 
 * Add optional per-start preparation reports with closed operation codes and safe failure stages, preserving the existing start API. Keep host checks separate from final-runtime checks, legacy unavailability and actual network readiness; show the report in example.

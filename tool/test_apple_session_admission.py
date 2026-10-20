@@ -56,14 +56,28 @@ def check_wiring(source):
     recovery = block(source, '    private func scheduleRecoveryCheck')
     assert recovery.index('self.sessionAdmission.isCurrent(epoch)') < recovery.index('self.recoveryCheck = nil')
     assert recovery.index('self.recoveryCheck = nil') < recovery.index('guard self.sessionAdmission.permitsRuntime(epoch)')
+    health = block(source, '    private func performTunnelHealthCheck')
+    assert 'LocalProxyIOBudget(timeout: 15, isCancelled:' in health
+    assert 'self?.sessionAdmission.permitsRuntime(epoch) != true' in health
+    inbound = health.index('let inboundResult = socksInboundHealthCheck')
+    assert inbound < health.index('guard sessionAdmission.permitsRuntime(epoch)', inbound) < health.index('watchdogInboundHealthy =')
+    assert health.count('budget: budget') == 3 and health.count('budget.canContinue') == 2
+    local = block(source, '    private func socksInboundHealthCheck')
+    assert 'openProxyConnection' in local and 'timeout: 2, budget: budget' in local
+    connect = block(source, '    private func socksConnectHealthCheck')
+    assert 'timeout: 5, budget: budget' in connect
+    http = block(source, '    private func socksHTTPHealthCheck')
+    assert 'let httpBudget = budget.limited(to: 8)' in http and http.count('budget: httpBudget') == 3
+    assert 'func recvSome(' not in source
     assert 'watchdogGeneration' not in source and 'startupStopped' not in source
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--platform', choices=tuple(PROVIDERS), required=True)
+    parser.add_argument('--output-dir', type=Path)
     args = parser.parse_args()
-    output = ROOT / 'build/apple_session_admission' / args.platform
+    output = args.output_dir or ROOT / 'build/apple_session_admission' / args.platform
     output.mkdir(parents=True, exist_ok=True)
     (output / 'result.json').unlink(missing_ok=True)
     assert GATES['ios'].read_bytes() == GATES['macos'].read_bytes(), 'Apple admission gates diverged'
@@ -87,19 +101,25 @@ def main():
     generated = output / 'Probe.swift'
     generated.write_text(fixture)
     support = ROOT / 'ios/flutter_vless/Sources/flutter_vless_tunnel_support/TunnelRuntimeSupport.swift'
-    command = ['xcrun', 'swiftc', '-O', '-parse-as-library', str(GATES[args.platform]), str(support), str(generated), '-o', str(output / 'probe')]
+    privacy = (ROOT / 'ios/flutter_vless/Sources/flutter_vless_privacy' if args.platform == 'ios' else
+               ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_privacy')
+    budget = privacy / 'LocalProxyIOBudget.swift'
+    budget_source = budget.read_bytes()
+    command = ['xcrun', 'swiftc', '-O', '-parse-as-library', str(GATES[args.platform]), str(support), str(budget), str(generated), '-o', str(output / 'probe')]
     subprocess.run(command, check=True, timeout=120)
     result = subprocess.run([str(output / 'probe')], capture_output=True, text=True, timeout=20)
     (output / 'probe.log').write_text(result.stdout + result.stderr)
     print(result.stdout, end='')
     assert result.returncode == 0, (result.returncode, result.stderr)
-    assert len([line for line in result.stdout.splitlines() if line.startswith('PASS ')]) == 13
+    assert len([line for line in result.stdout.splitlines() if line.startswith('PASS ')]) == 15
     assert PROVIDERS[args.platform].read_text() == source and GATES[args.platform].read_bytes() == gate
     assert fixture_path.read_text() == fixture_source, 'Source changed during verification'
+    assert budget.read_bytes() == budget_source, 'Budget source changed during verification'
     (output / 'result.json').write_text(json.dumps({
         'platform': args.platform, 'provider_sha256': hashlib.sha256(source.encode()).hexdigest(),
         'gate_sha256': hashlib.sha256(gate).hexdigest(),
         'fixture_sha256': hashlib.sha256(fixture_source.encode()).hexdigest(),
+        'budget_sha256': hashlib.sha256(budget_source).hexdigest(),
         'native_boundaries': 'in-memory-only', 'passed': True}, indent=2) + '\n')
     print(f'PASS {args.platform} provider source wiring and controlled callback admission')
 

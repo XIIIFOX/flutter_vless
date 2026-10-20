@@ -239,6 +239,36 @@ SDK runtime gates and the shipped macOS HEV packet gate pass remotely, alongside
 the example and standalone plugin builds. iOS HEV simulator coverage remains
 compile/link only; these remote fixtures do not qualify the local Mac system VPN.
 
+Apple watchdog probes share a 15-second monotonic budget. Local authentication,
+CONNECT and HTTP phases may shorten it to 2, 5 and 8 seconds respectively;
+partial reads and interrupted calls retain the same deadline. Budgeted I/O uses
+nonblocking operations with waits of at most 100 milliseconds. Stop and sleep
+revoke probe admission, and cancelled samples cannot start later phases or
+publish health/failure state. Existing HTTP/TLS delay callers retain their
+previous socket behavior.
+
+Android periodic health checks share the existing five-second readiness budget
+across private authentication and the packet challenge, with captured session
+and Core ownership. Stop cancels the phase's adopted sockets before queued
+worker cleanup; the old phase cannot clear a replacement phase or publish its
+connected state. Death of the same checked Core retains ordinary recovery.
+Startup's existing refusal retry policy remains separate.
+
+Windows packet checks use one 2,250-millisecond exchange budget, and accepted
+challenge exchanges use 1,500 milliseconds, with cancellation checks and waits
+of at most 50 milliseconds. The idle listener retains its 100-millisecond poll.
+The worker passes its stop request into startup and periodic packet checks;
+socket cleanup retains join-before-close ownership. Windows `SocksReady` still
+uses its existing blocking connect and per-call authentication timeouts, so an
+overall Stop deadline remains unqualified. These operation budgets also do not
+bound OS scheduling latency.
+
+Focused controls exercise actual probe methods with in-memory I/O and clocks.
+Four additional real Apple loopback cases are wired into CI for authenticated
+payloads, fractional socket timeouts, fragmented replies, cancellation and
+refused authentication downgrade. New remote and physical runtime results must
+be qualified separately from the `28b8412` results above.
+
 Full JSON import, startup and delay normalization retain explicit `null`, empty
 objects/arrays and null array elements. In particular, an explicit `fakedns: []`
 must reach Core as an empty engine rather than becoming an absent engine with

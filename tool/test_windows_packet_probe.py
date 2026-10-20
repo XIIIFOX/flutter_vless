@@ -54,6 +54,7 @@ FAKES = r'''
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <set>
 #include <stdexcept>
@@ -62,13 +63,14 @@ FAKES = r'''
 #include <vector>
 using SOCKET = int;
 using BOOL = int;
+using u_long = unsigned long;
 constexpr int INVALID_SOCKET = -1, TRUE = 1, AF_INET = 2, SOCK_STREAM = 1,
-    IPPROTO_TCP = 6, SOL_SOCKET = 1, SO_EXCLUSIVEADDRUSE = 2;
+    IPPROTO_TCP = 6, SOL_SOCKET = 1, SO_EXCLUSIVEADDRUSE = 2, FIONBIO = 3;
 struct WSADATA {};
 struct in_addr { unsigned value = 0; };
 struct sockaddr {};
 struct sockaddr_in { int sin_family = 0; uint16_t sin_port = 0; in_addr sin_addr; };
-enum class Fail { none, startup, challenge, socket_, options, address, bind_, bind_after_collision, name, zero, listen_, worker };
+enum class Fail { none, startup, challenge, socket_, options, address, bind_, bind_after_collision, name, zero, listen_, nonblocking, worker };
 struct Kernel {
   std::vector<uint16_t> ports;
   std::set<SOCKET> handles;
@@ -120,6 +122,10 @@ int getsockname(SOCKET fd, sockaddr* value, int*) {
 int listen(SOCKET fd, int backlog) {
   Require(kernel.handles.count(fd) && backlog == 4, "listen on unowned socket"); ++kernel.listens;
   return kernel.fail == Fail::listen_ ? -1 : 0;
+}
+int ioctlsocket(SOCKET fd, long command, u_long* mode) {
+  Require(kernel.handles.count(fd) && command == FIONBIO && *mode == 1, "listener must be nonblocking before worker");
+  return kernel.fail == Fail::nonblocking ? -1 : 0;
 }
 #undef ntohs
 uint16_t ntohs(uint16_t value) { return value; }
@@ -188,7 +194,7 @@ int main() try {
   Drained(); ++passed;
 
   for (const auto failure : {Fail::startup, Fail::challenge, Fail::socket_, Fail::options,
-      Fail::address, Fail::bind_, Fail::name, Fail::zero, Fail::listen_}) {
+      Fail::address, Fail::bind_, Fail::name, Fail::zero, Fail::listen_, Fail::nonblocking}) {
     Reset({50001}, failure);
     {
       PacketPathProbe probe({10807});

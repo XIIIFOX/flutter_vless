@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Share a cancellable deadline across authenticated watchdog probes and HTTP reads. Stop later probe phases and state publication after session cancellation, retaining the existing delay-client socket and TLS behavior.
+
 * Preserve native reconnect budgets when sleep cancels work before Core admission. Count actual admitted calls, retain finite retry limits and honor the recovery pause while previous workers drain.
 
 * Return per-start host/proxy preparation reports with actual typed edit codes, exact Core-check availability and safe preparation stages. Keep VPN provider preparation outside the host report.

@@ -154,7 +154,7 @@ class ProxyConsumer {
   bool SetSystemProxy(const char*,uint16_t) { ++kernel.proxy_effects;if(kernel.during_proxy)kernel.during_proxy();return true; }
   void InitializeApiClient() {++kernel.api_effects;if(kernel.during_api)kernel.during_api();}
   void StopXrayProcess() {} void CleanupTempFiles() {} void finish(bool ready) { if(ready)++kernel.ready_effects; }
-  void Run() { auto port=std::optional<uint16_t>(10808);std::string user="u",password="p";
+  void Run() { auto port=std::optional<uint16_t>(uint16_t{10808});std::string user="u",password="p";
 PROXY
     finish(true);
   }

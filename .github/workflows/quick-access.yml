@@ -2,12 +2,19 @@ name: Quick access transactions
 
 on:
   workflow_dispatch:
+    inputs:
+      validation:
+        description: Platforms to validate
+        type: choice
+        options: [all, android]
+        default: all
 
 permissions:
   contents: read
 
 jobs:
   apple:
+    if: inputs.validation != 'android'
     name: Apple intent transactions
     runs-on: macos-15-intel
     timeout-minutes: 8
@@ -67,13 +74,16 @@ jobs:
           test -n "$sdk_manager_path"
           "$sdk_manager_path" "platforms;android-36"
       - name: Prepare unchanged pinned runtime for JVM tests
+        id: runtime
         run: tool/build_android_runtime_maven.sh
       - name: Generate Flutter project metadata
+        id: metadata
         working-directory: example
         run: flutter pub get
       - name: Prove stale admission fails on the historical implementation
         run: python3 tool/test_android_quick_access_red.py --run-ci --output build/android-quick-access-red
       - name: Test actual plugin and quick action admission
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' && steps.metadata.outcome == 'success' }}
         run: python3 tool/with_android_local_runtime.py :flutter_vless_android:testDebugUnitTest --stacktrace
       - uses: actions/upload-artifact@v4
         if: always()
@@ -89,6 +99,7 @@ jobs:
           retention-days: 7
 
   windows:
+    if: inputs.validation != 'android'
     name: Windows menu transactions and plugin
     runs-on: windows-latest
     timeout-minutes: 20

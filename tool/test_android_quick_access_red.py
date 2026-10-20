@@ -17,7 +17,7 @@ import zipfile
 
 BASELINE='a137971a04aeb37f81178a89af03b175867fc42c'
 VERSION='26.10.17-protect1'
-EXPECTED_FIXTURE_SHA256='3eca885e94128dfd08b5c7a692b3a9fcf72cc0fe440f2a304aa77ebf806c33fc'
+EXPECTED_FIXTURE_SHA256='cffd512d4ccb74695cb4d451e7b2a21493576c5290c5b8b6ac79393bd77b2ffd'
 TEST_CLASS='com.github.tfox.flutter_vless.xray.service.QuickAccessPreflightRaceTest'
 TEST_METHOD='disabledTileDuringActualFinalPreflightCannotSaveOrReplaceSession'
 ASSERTION='Historical implementation admits stale tile after disable'

@@ -38,12 +38,18 @@ class QuickAccessPreflightRaceTest {
 
     private fun fixture(changeDuringCheck:Boolean, pendingTile:Boolean) {
         // Android jar defaults SDK_INT to zero in plain JVM tests. This only changes the fake SDK constant.
-        val unsafeField=sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe").apply {isAccessible=true}
-        val unsafe=unsafeField.get(null) as sun.misc.Unsafe
+        // Reflection keeps the JDK-only fixture implementation off the Android compiler's type path.
+        // Availability/access are runtime prerequisites on the CI JDK17; this is not a prior qualified seam.
+        val unsafeClass=Class.forName("sun.misc.Unsafe")
+        val unsafe=unsafeClass.getDeclaredField("theUnsafe").apply {isAccessible=true}.get(null)
         val sdk=android.os.Build.VERSION::class.java.getDeclaredField("SDK_INT")
         Class.forName(sdk.declaringClass.name,true,sdk.declaringClass.classLoader)
-        val sdkBase=unsafe.staticFieldBase(sdk);val sdkOffset=unsafe.staticFieldOffset(sdk)
-        val previousSdk=unsafe.getInt(sdkBase,sdkOffset);unsafe.putInt(sdkBase,sdkOffset,34)
+        val sdkBase=unsafeClass.getMethod("staticFieldBase",java.lang.reflect.Field::class.java).invoke(unsafe,sdk)
+        val sdkOffset=(unsafeClass.getMethod("staticFieldOffset",java.lang.reflect.Field::class.java).invoke(unsafe,sdk) as Number).toLong()
+        val getInt=unsafeClass.getMethod("getInt",Any::class.java,java.lang.Long.TYPE)
+        val putInt=unsafeClass.getMethod("putInt",Any::class.java,java.lang.Long.TYPE,java.lang.Integer.TYPE)
+        val previousSdk=(getInt.invoke(unsafe,sdkBase,sdkOffset) as Number).toInt()
+        putInt.invoke(unsafe,sdkBase,sdkOffset,34)
         var currentOptions=NativeVlessOptions(quickAccess=NativeVlessOptions.QuickAccess(enabled=true))
         var revision="a".repeat(32)
         val directory = Files.createTempDirectory("native-service-admission").toFile()
@@ -124,7 +130,7 @@ class QuickAccessPreflightRaceTest {
                     }
                     else -> Answers.RETURNS_DEFAULTS.answer(call)
                 }
-            })).use { stores ->
+            }).use { stores ->
             Mockito.mockConstruction(ServerSocket::class.java) { listener, _ ->
                 if (allTcpOccupied) {
                     Mockito.doThrow(BindException("Synthetic occupied TCP listener")).`when`(listener)
@@ -190,7 +196,7 @@ class QuickAccessPreflightRaceTest {
             managerMembers.forEach {(name,member)->member.set(XrayCoreManager,previous[name])}
             diagnosticsGeneration.set(diagnostics,previousGeneration)
             com.github.tfox.flutter_vless.xray.utils.AppConfigs.V2RAY_CONFIG=previousConfig
-            unsafe.putInt(sdkBase,sdkOffset,previousSdk)
+            putInt.invoke(unsafe,sdkBase,sdkOffset,previousSdk)
             directory.deleteRecursively()
         }
     }

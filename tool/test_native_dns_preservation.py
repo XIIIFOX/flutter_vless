@@ -26,6 +26,7 @@ SWIFT = ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos'
 SELECTED_TEST = 'TestNativeDNSPreservation'
 PROTOCOL_TEST = 'TestNativeProtocolPreparation'
 MATERIAL_TEST = 'TestNativeDoHMaterialOnly'
+XHTTP_TLS_TEST = 'TestNativeXHTTPTLS'
 
 spec = importlib.util.spec_from_file_location('dns_preservation_checked', ROOT / 'tool/test_native_dns_context_runtime.py')
 common = importlib.util.module_from_spec(spec)
@@ -178,6 +179,15 @@ def require_loopback_chain_runtime(output, preparers):
                          output, re.MULTILINE)
     if preparers not in (1, 2) or len(markers) != preparers:
         raise RuntimeError('Exact loopback-chain transport runtime markers missing or duplicated')
+
+
+def require_xhttp_tls_runtime(output, preparers):
+    markers = re.findall(r'^[ \t]+xhttp_tls_runtime_test\.go:\d+: XHTTP_TLS_H2_PASS mode=([^\r\n]+)\r?$',
+                         output, re.MULTILINE)
+    modes = ('independent', 'wrong_ca', 'wrong_sni')
+    if preparers not in (1, 2) or len(markers) != 3 * preparers or any(
+            markers.count(mode) != preparers for mode in modes):
+        raise RuntimeError('Exact XHTTP TLS/H2 runtime markers missing or duplicated')
 
 
 def require_ipv6_dns_runtime(output, preparers):
@@ -350,6 +360,17 @@ def main():
             results[-1]['loopback_chain_runtime_modes_per_preparer'] = 1
             results[-1]['ipv6_dns_runtime_modes_per_preparer'] = 4
             results[-1]['ipv4_dns_lifetime_modes_per_preparer'] = 2
+            # A separate handshake phase retains the existing DNS/HTTP1 suite's
+            # 120-second test deadline and all of its mandatory predicates.
+            checked('actual-xhttp-tls', [str(binary), '-test.run', '^' + XHTTP_TLS_TEST + '$',
+                    '-test.v', '-test.timeout=90s'], 110, MOBILE, runtime_environment)
+            output = (EVIDENCE / 'actual-xhttp-tls.log').read_text(encoding='utf-8')
+            common.require_selected_test_pass(output, XHTTP_TLS_TEST)
+            require_xhttp_tls_runtime(output, preparers)
+            results[-1]['selected_test_pass'] = True
+            results[-1]['selected_tests'] = [XHTTP_TLS_TEST]
+            results[-1]['xhttp_tls_runtime_modes_per_preparer'] = 3
+            results[-1]['xhttp_tls_runtime_preparers'] = preparers
         if source_snapshot() != report['source_sha256']:
             raise RuntimeError('Production preparer/acceptance source changed during verification')
         report['source_snapshot_unchanged'] = True

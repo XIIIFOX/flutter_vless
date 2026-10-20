@@ -187,6 +187,26 @@ class PreservationRunnerGuards(unittest.TestCase):
             with self.subTest(output=output, preparers=preparers), self.assertRaises(RuntimeError):
                 runner.require_loopback_chain_runtime(output, preparers)
 
+    def test_xhttp_tls_runtime_requires_all_three_exact_modes(self):
+        with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
+                mock.patch.object(runner.platform, 'system', return_value='Linux'):
+            snapshot = runner.source_snapshot()
+        self.assertEqual(snapshot.get('third_party/xray-mobile/native_dns_preservation/xhttp_tls_runtime_test.go'),
+                         'synthetic-digest')
+        modes = ('independent', 'wrong_ca', 'wrong_sni')
+        lines = [f'    xhttp_tls_runtime_test.go:400: XHTTP_TLS_H2_PASS mode={mode}\n'
+                 for mode in modes]
+        valid = ''.join(lines)
+        runner.require_xhttp_tls_runtime(valid, 1)
+        runner.require_xhttp_tls_runtime(valid * 2, 2)
+        for output, preparers in [('', 1), (''.join(lines[:2]), 1), (valid * 2, 1),
+                                 (valid, 2), (valid + lines[0], 1), (valid, 0), (valid, 3),
+                                 (valid.replace('mode=wrong_ca', 'mode=unknown'), 1),
+                                 (valid.replace('xhttp_tls_runtime_test.go:', 'unrelated.go:'), 1),
+                                 ('noise ' + lines[0].lstrip() + ''.join(lines[1:]), 1)]:
+            with self.subTest(output=output, preparers=preparers), self.assertRaises(RuntimeError):
+                runner.require_xhttp_tls_runtime(output, preparers)
+
     def test_ipv6_dns_snapshot_and_exact_runtime_modes(self):
         with mock.patch.object(runner, 'digest', return_value='synthetic-digest'), \
                 mock.patch.object(runner.platform, 'system', return_value='Linux'):
@@ -331,6 +351,11 @@ class PreservationRunnerGuards(unittest.TestCase):
                                 for transport in ('udp', 'tcp') for strategy in ('UseIP', 'UseIPv4')) +
                         ''.join(f'    dns_ipv6_servers_test.go:10: DNS_IPV4_UPSTREAM_RUNTIME_PASS transport=udp strategy={strategy}\n'
                                 for strategy in ('UseIP', 'UseIPv4')))
+                if name == 'actual-xhttp-tls':
+                    (evidence / 'actual-xhttp-tls.log').write_text(
+                        '--- PASS: TestNativeXHTTPTLS (0.01s)\n' + ''.join(
+                            f'    xhttp_tls_runtime_test.go:10: XHTTP_TLS_H2_PASS mode={mode}\n'
+                            for mode in ('independent', 'wrong_ca', 'wrong_sni')))
             with mock.patch.object(runner, 'EVIDENCE', evidence), \
                     mock.patch.object(runner.sys, 'argv', ['runner', '--run-runtime']), \
                     mock.patch.object(runner.platform, 'system', return_value='Linux'), \
@@ -347,6 +372,11 @@ class PreservationRunnerGuards(unittest.TestCase):
             edit = next(command for name, command in commands if name == 'classic-lifetime-modfile')
             self.assertIn('-replace=synthetic.invalid/core=' + str(evidence / 'ClassicCore'), edit)
             self.assertEqual((source / 'guarded.go').read_text(), 'original')
+            old_runtime = next(command for name, command in commands if name == 'actual-core-dns')
+            self.assertIn('-test.timeout=120s', old_runtime)
+            tls_runtime = next(command for name, command in commands if name == 'actual-xhttp-tls')
+            self.assertIn('^TestNativeXHTTPTLS$', tls_runtime)
+            self.assertIn('-test.timeout=90s', tls_runtime)
             report = json.loads((evidence / 'result.json').read_text())
             self.assertTrue(report['core_overlay_applied'])
             self.assertFalse(report['native_dns_context_overlay_applied'])

@@ -1776,6 +1776,23 @@ macOS tests, each with one unchanged optional bootstrap skip), and both exported
 final routing pairs pass the shared Core check. These are controlled chain checks;
 broader protocol, TUN and physical-device qualification remain open.
 
+A fresh signed `1fbece9` example also carries Safari traffic on the physical
+iPhone through a private derivative of the first supplied Reality profile.
+The derivative retains the original endpoints/security and adds a caller
+loopback with a dormant missing socket edge. With a direct native default,
+`tfox.dev` reaches the proxy; a separate counterfactual changes only the domain
+rule to `2ip.ru`/its observed `2ip.io` redirect, and Safari then shows distinct
+direct and proxy addresses on the two sites. The first case's 2ip screenshot
+was still loading at eight seconds, so that observation remains unqualified;
+the separate case does not establish its cause. Both cases stop with a native
+ACK and an independently absent provider, restore prior UI/global options and
+show ordinary internet afterward. On Demand/reconnect/quick controls remain
+off; required Kill Switch protection stays unchanged. This is observed IPv4
+browser routing with source-backed UI intent, without a final provider digest,
+per-route counters or independent TCP freshness proof. The remaining supplied
+profiles, enabled options and wider physical protocol/IPv6 matrix are separate
+acceptance cases.
+
 For configuration-only increments, the manual `ci.yml` scope `native-config`
 selects four jobs: the existing complete Core pipeline on Linux/macOS/Windows
 and the Android native tests. Its macOS Core job additionally runs both complete

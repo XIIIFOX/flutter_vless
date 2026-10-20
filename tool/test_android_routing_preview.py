@@ -21,7 +21,8 @@ class RoutingPreviewTests(unittest.TestCase):
         self.root = Path(self.temp.name); self.output = self.root/'output'; self.ndk = self.root/'ndk'; self.ndk.mkdir()
         self.cache = self.root/'cache'; self.cache.mkdir(); self.calls = []
         self.h3_key = 'third_party/xray-native-dns/h3_lifetime_patch.py'
-        self.inputs = {'fixed-input':'snapshot', self.h3_key:'a'*64}
+        self.binding_key = 'third_party/xray-native-dns/darwin_interface_bind_patch.py'
+        self.inputs = {'fixed-input':'snapshot', self.h3_key:'a'*64, self.binding_key:'c'*64}
         patch = mock.patch.object(builder,'source_hashes',return_value=self.inputs); patch.start(); self.addCleanup(patch.stop)
         image = bytearray(256); image[:6] = b'\x7fELF\x02\x01'
         struct.pack_into('<HH',image,16,3,62); struct.pack_into('<QQ',image,24,0x1000,64)
@@ -33,6 +34,7 @@ class RoutingPreviewTests(unittest.TestCase):
             'routing_capability_expected':1,'runtime_executed':False,'published':False,'success':True,'source_unchanged':True,
             'classic_dns_lifetime_applied':True,
             'h3_lifetime_applied':True,'lifetime_patch_scope':['classic_dns','xhttp_h3_dial'],'h3_lifetime_patch_sha256':'a'*64,
+            'darwin_interface_binding_source_applied':True,'darwin_interface_binding_patch_sha256':self.inputs[self.binding_key],
             'module_cache_source_unchanged':True,'copies_unchanged':True,'source_sha256':self.inputs,
             'output_directory':str(self.output/'raw'),'artifacts_sha256':{'x86_64/libxray.so':hashlib.sha256(self.image).hexdigest()}}
         def owned(command,**options):
@@ -61,11 +63,22 @@ class RoutingPreviewTests(unittest.TestCase):
             ('classic_dns_lifetime_applied',False),
             ('classic_dns_lifetime_applied',1),
             ('h3_lifetime_applied',False),('h3_lifetime_applied',1),('h3_lifetime_patch_sha256','b'*64),
+            ('darwin_interface_binding_source_applied',False),('darwin_interface_binding_source_applied',1),
+            ('darwin_interface_binding_patch_sha256','d'*64),
             ('lifetime_patch_scope',['classic_dns']),('lifetime_patch_scope',['classic_dns','xhttp_h3_dial','full_dns']),
             ('source_sha256',{}),('success',False),('copies_unchanged',False),('runtime_executed',True),('runtime_executed',0)]:
             with self.subTest(key=key,value=value):
                 receipt = copy.deepcopy(self.receipt); receipt[key] = value
                 with self.assertRaises(ValueError): builder.validate_receipt(receipt,'x86_64',self.output/'raw')
+
+    def test_missing_binding_source_or_receipt_proof_refused(self):
+        for field in ('darwin_interface_binding_source_applied','darwin_interface_binding_patch_sha256'):
+            with self.subTest(missing=field):
+                receipt=copy.deepcopy(self.receipt);del receipt[field]
+                with self.assertRaises(ValueError):builder.validate_receipt(receipt,'x86_64',self.output/'raw')
+        receipt=copy.deepcopy(self.receipt);del receipt['source_sha256'][self.binding_key]
+        with self.assertRaisesRegex(ValueError,'source snapshot'):builder.validate_receipt(receipt,'x86_64',self.output/'raw')
+        self.assertEqual(self.calls,[]);self.assertFalse(self.output.exists())
 
     def test_source_and_cache_destination_refused_before_writes(self):
         for target in [builder.MOBILE/'uncreated-routing-test',self.cache/'new']:

@@ -114,6 +114,7 @@ final class FixtureAsyncGate: @unchecked Sendable {
         }
     }
     func release() { lock.lock(); let value = continuation; continuation = nil; lock.unlock(); value?.resume() }
+    func waitUntilEntered(timeout: TimeInterval) -> Bool { entered.wait(timeout: .now() + timeout) == .success }
 }
 enum SyntheticFailure: Error { case core }
 enum TunnelXrayConfigPreparer { enum StartupError: Error { case invalidConfiguration } }
@@ -840,11 +841,50 @@ final class FixtureProvider: @unchecked Sendable {
         print("PASS successful stale settings callback is retained only for exact same-epoch installed key")
 
         let failedSettings = FixtureProvider(), failedSettingsSpec = failedSettings.begin(options: FixtureOptions(retries: 2))
-        failedSettings.recover(failedSettingsSpec.epoch); failedSettings.flush()
-        failedSettings.settingsHook = { throw SyntheticFailure.core }
+        failedSettings.recover(failedSettingsSpec.epoch)
+        // Await the actual initial native block and its queued completion, rather
+        // than assuming a bounded number of scheduling yields drained the work.
+        let failedInitialCoreStarts = try! await failedSettings.onRuntimeQueue { failedSettings.coreStarts }
+        let failedInitialReady = failedSettings.watchdogQueue.sync {
+            !failedSettings.runtimeRecoveryInFlight && failedSettings.isForwardingReady()
+        }
+        guard failedInitialCoreStarts == 1 && failedInitialReady else {
+            print("FAIL failed-settings/initial-runtime-not-complete coreStarts=\(failedInitialCoreStarts) ready=\(failedInitialReady)")
+            await failedSettings.stop(); exit(1)
+        }
+        let failedSettingsCallback = FixtureAsyncGate()
+        failedSettings.settingsHook = { await failedSettingsCallback.wait(); throw SyntheticFailure.core }
         failedSettings.watchdogQueue.sync { failedSettings.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: failedSettingsSpec.epoch) }
-        await failedSettings.flushAsync()
-        precondition(failedSettings.installedSettingsKey == nil && failedSettings.coreStarts == 1 && failedSettings.settingGenerations.count >= 1)
+        guard failedSettingsCallback.waitUntilEntered(timeout: 3) else {
+            print("FAIL failed-settings/callback-not-entered")
+            await failedSettings.stop(); exit(1)
+        }
+        // The first callback is explicitly held. A retry uses a new callback;
+        // neither the gate's entry nor a queue yield proves its catch completed.
+        failedSettings.settingsHook = { throw SyntheticFailure.core }
+        failedSettingsCallback.release()
+        // There are exactly two permitted failed preparation attempts. Await
+        // their actual Tasks and watchdog completions; the runner's process
+        // deadline remains the hard bound if a callback/task never completes.
+        for _ in 0..<2 {
+            let pending = failedSettings.watchdogQueue.sync { failedSettings.endpointPreparation?.task }
+            if let pending { await pending.value }
+            failedSettings.watchdogQueue.sync {}
+        }
+        // Each observed value comes from its actual owner after completion.
+        let failedSettingsCache = try! await failedSettings.endpointCommitQueue.submit {
+            (keyNil: failedSettings.installedSettingsKey == nil, callbacks: failedSettings.settingGenerations.count)
+        }.value
+        let failedSettingsCoreStarts = try! await failedSettings.onRuntimeQueue { failedSettings.coreStarts }
+        let failedSettingsState = failedSettings.watchdogQueue.sync {
+            (inFlight: failedSettings.runtimeRecoveryInFlight, exhausted: failedSettings.recoveryExhausted,
+             failures: failedSettings.recoveryFailures)
+        }
+        guard failedSettingsCache.keyNil && failedSettingsCoreStarts == 1 && failedSettingsCache.callbacks >= 1 &&
+            !failedSettingsState.inFlight && failedSettingsState.exhausted else {
+            print("FAIL failed-settings/outcome keyNil=\(failedSettingsCache.keyNil) coreStarts=\(failedSettingsCoreStarts) callbacks=\(failedSettingsCache.callbacks) inFlight=\(failedSettingsState.inFlight) exhausted=\(failedSettingsState.exhausted) failures=\(failedSettingsState.failures)")
+            await failedSettings.stop(); exit(1)
+        }
         await failedSettings.stop()
         print("PASS failed settings callback invalidates installed-key knowledge and never admits Core")
 

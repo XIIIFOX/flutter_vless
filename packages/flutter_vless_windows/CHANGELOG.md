@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Bind tray commands to their displayed action and queued session owner. Reject stale menus after options, profile or connect/disconnect changes; add 31 portable actual-source cases and native tray regressions.
+
 * Admit finite numeric IPv6 TCP proxy endpoints using the selected IPv6 interface and exact owned Core/address/port firewall rules. Preserve prior sessions on rejected preparation and retain the checked interface during recovery.
 
 * Admit bounded static DNS hosts aliases without rewriting caller DNS. Cancel obsolete Dart startup capability checks after Stop or a newer Start.

@@ -14,6 +14,7 @@
 #include <thread>
 #include <chrono>
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <functional>
 #include <vector>
@@ -166,18 +167,24 @@ class FlutterVlessPlugin : public flutter::Plugin {
   };
   std::optional<QuickProfile> quick_profile_; // Access only on operations_. Never persisted in plaintext.
   std::atomic<unsigned> options_generation_{0};
+  std::atomic<std::uint64_t> quick_profile_generation_{0};
   std::atomic<int> last_tray_state_{-1};
   bool tray_pending_ = false;
   void OpenApp() { if (main_window_handle_) { ShowWindow(main_window_handle_, SW_RESTORE); SetForegroundWindow(main_window_handle_); } }
   void RefreshTray() { const auto& manager = V2rayManager::GetInstance(); if (tray_) tray_->Refresh((manager.IsRunning() && !manager.IsProxyOnly()) || manager.IsProtecting(), tray_pending_); }
-  void ToggleFromTray() {
+  void ToggleFromTray(bool expected_active) {
     if (tray_pending_ || !native_options_.quick_enabled) return;
     if (V2rayManager::GetInstance().IsProxyOnly() && V2rayManager::GetInstance().IsRunning()) { OpenApp(); return; }
     tray_pending_ = true; RefreshTray();
     const auto options = native_options_; const auto generation = options_generation_.load();
-    operations_.Submit([this, options, generation] {
+    const auto profile_generation = ++quick_profile_generation_;
+    operations_.Submit([this, options, generation, profile_generation, expected_active] {
       std::lock_guard<std::mutex> lock(lifecycle_mutex_);
-      bool available = generation == options_generation_.load() && !(V2rayManager::GetInstance().IsProxyOnly() && V2rayManager::GetInstance().IsRunning());
+      const auto& manager = V2rayManager::GetInstance();
+      const bool active = (manager.IsRunning() && !manager.IsProxyOnly()) || manager.IsProtecting();
+      bool available = generation == options_generation_.load() &&
+          profile_generation == quick_profile_generation_.load() && active == expected_active &&
+          !(manager.IsProxyOnly() && manager.IsRunning());
       if (available && (V2rayManager::GetInstance().IsRunning() || V2rayManager::GetInstance().IsProtecting())) {
         StopStatusTimer(); V2rayManager::GetInstance().Stop(); is_running_ = false;
         SendStatusToUI(flutter::EncodableList{flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("0"), flutter::EncodableValue("DISCONNECTED")});
@@ -187,6 +194,12 @@ class FlutterVlessPlugin : public flutter::Plugin {
         if (is_running_) { start_time_ = std::chrono::steady_clock::now(); StartStatusTimer(); }
         available = is_running_.load();
       } else { available = false; }
+      const bool published_active = (manager.IsRunning() && !manager.IsProxyOnly()) || manager.IsProtecting();
+      if (available && published_active != expected_active) {
+        auto owned_generation = profile_generation;
+        // Only this action may publish its transition; never revoke a newer owner.
+        quick_profile_generation_.compare_exchange_strong(owned_generation, profile_generation + 1);
+      }
       RunOnUIThread([this, available] { tray_pending_ = false; RefreshTray(); UpdateStatus(); if (!available) OpenApp(); });
     });
   }
@@ -400,7 +413,8 @@ void FlutterVlessPlugin::HandleMethodCall(
     result->Success(flutter::EncodableValue("unsupported"));
   } else if (method_call.method_name() == "clearQuickAccessProfile") {
     std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> reply = std::move(result);
-    operations_.Submit([this, reply] { quick_profile_.reset(); RunOnUIThread([reply] { reply->Success(); }); });
+    ++quick_profile_generation_;
+    operations_.Submit([this, reply] { ++quick_profile_generation_; quick_profile_.reset(); RunOnUIThread([reply] { reply->Success(); }); });
   } else if (method_call.method_name().compare("requestPermission") == 0) {
     // VPN requires elevation for Wintun and mandatory WFP containment.
     result->Success(flutter::EncodableValue(flutter_vless::native::IsAdministrator()));
@@ -412,7 +426,9 @@ void FlutterVlessPlugin::HandleMethodCall(
         const auto found = arguments->find(flutter::EncodableValue("options"));
         auto parsed = flutter_vless::NativeOptions::Parse(found == arguments->end() ? flutter_vless::NativeOptions::Json::object() : OptionJson(found->second));
         parsed.ValidateWindows();
-        if (!tray_) tray_ = std::make_unique<flutter_vless::SystemTray>(main_window_handle_, [this] { ToggleFromTray(); }, [this] { OpenApp(); });
+        if (!tray_) tray_ = std::make_unique<flutter_vless::SystemTray>(main_window_handle_,
+            [this](bool expected_active) { ToggleFromTray(expected_active); }, [this] { OpenApp(); },
+            [this] { return quick_profile_generation_.load(); });
         if (!tray_->Configure(parsed)) { result->Error("QUICK_ACCESS_UNAVAILABLE", "Cannot create the system tray icon; check the .ico path and desktop session"); return; }
         native_options_ = parsed; ++options_generation_;
         flutter_vless::DiagnosticsLog::Instance().Configure(parsed.diagnostics_enabled, parsed.diagnostics_bytes, parsed.diagnostics_lines);
@@ -503,6 +519,7 @@ void FlutterVlessPlugin::HandleMethodCall(
         
         const auto options = native_options_;
         const auto generation = options_generation_.load();
+        ++quick_profile_generation_; // Revoke a menu/queued action before admitting a new manual session.
         operations_.Submit([this, config, proxy_only, assets, routing, shared_result, options, generation, preparation_changes]() {
           std::lock_guard<std::mutex> lock(lifecycle_mutex_);
           LogMessage("Starting Xray...");
@@ -510,6 +527,7 @@ void FlutterVlessPlugin::HandleMethodCall(
           const bool ready = V2rayManager::GetInstance().Start(config, proxy_only, options, assets, routing, &outcome, preparation_changes);
           const bool protecting = V2rayManager::GetInstance().IsProtecting();
           is_running_ = V2rayManager::GetInstance().IsRunning() || protecting;
+          if (ready) ++quick_profile_generation_; // Invalidate menus opened while this Start was queued.
           if (ready && proxy_only) quick_profile_.reset();
           if (ready && !proxy_only && options.quick_enabled && generation == options_generation_.load()) quick_profile_ = QuickProfile{config, assets, routing};
           if (ready) {
@@ -535,8 +553,10 @@ void FlutterVlessPlugin::HandleMethodCall(
     // Convert unique_ptr to shared_ptr to allow capturing in std::function
     std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> shared_result = std::move(result);
 
+    ++quick_profile_generation_;
     operations_.Submit([this, shared_result]() {
       std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+      ++quick_profile_generation_;
       
       StopStatusTimer();
       V2rayManager::GetInstance().Stop();

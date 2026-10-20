@@ -13,6 +13,8 @@ import Foundation
         VlessSystemControl.configure(group:group,provider:provider,options:options)
         VlessSystemControl.authorizeProfile(group:group,provider:provider,reference:Data([1,2,3]))
         try await VlessSystemControl.setConnected(true,group:group,provider:provider)
+        // Recovery is armed only by the provider's separate admission phase.
+        try SDK.simulateProviderAdmission()
         precondition(manager.connection.status == .connecting && manager.isOnDemandEnabled)
         let active = await VlessSystemControl.isConnected(group:group,provider:provider)
         precondition(active)

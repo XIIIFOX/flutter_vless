@@ -9,6 +9,7 @@ import com.google.gson.Gson
 import java.io.File
 import java.io.RandomAccessFile
 import java.security.KeyStore
+import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -47,18 +48,31 @@ internal class AuthorizedProfileStore(context: Context, private val kind: Kind =
         try { output.write(data); file.finishWrite(output) }
         catch (error: Exception) { file.failWrite(output); throw error }
     }
-    fun load(): XrayConfig = locked {
+    fun revision(): String? = locked {
+        if (!file.baseFile.isFile) null else digest(readEncrypted())
+    }
+    fun load(): XrayConfig = loadVersioned().first
+    fun loadVersioned(): Pair<XrayConfig, String> = locked {
+        val data = readEncrypted()
+        decode(data) to digest(data)
+    }
+    private fun readEncrypted(): ByteArray {
+
         val data = file.openRead().use { input ->
             require(input.channel.size() in 30..MAX_ENCRYPTED_BYTES.toLong()) { "Authorized profile unavailable" }
             input.readBytes()
         }
+        return data
+    }
+    private fun decode(data: ByteArray): XrayConfig {
         require(data.size in 30..MAX_ENCRYPTED_BYTES && data[0].toInt() == 1 && data[1].toInt() == 12) { "Authorized profile unavailable" }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, data.copyOfRange(2, 14)))
         cipher.updateAAD(kind.alias.toByteArray())
-        Gson().fromJson(cipher.doFinal(data.copyOfRange(14, data.size)).toString(Charsets.UTF_8), XrayConfig::class.java)
+        return Gson().fromJson(cipher.doFinal(data.copyOfRange(14, data.size)).toString(Charsets.UTF_8), XrayConfig::class.java)
             ?: error("Authorized profile unavailable")
     }
+    private fun digest(data: ByteArray) = MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it) }
     fun disarm() = locked { file.delete() }
     fun exists(): Boolean = locked { file.baseFile.isFile }
     private companion object {

@@ -2,6 +2,7 @@
 #define FLUTTER_VLESS_SYSTEM_TRAY_H_
 #include <windows.h>
 #include <shellapi.h>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include "native_options.h"
@@ -11,8 +12,10 @@ namespace flutter_vless {
 /// UI-thread owner of a single notification-area icon. No network work here.
 class SystemTray {
  public:
-  SystemTray(HWND window, std::function<void()> toggle, std::function<void()> open)
-      : window_(window), toggle_(std::move(toggle)), open_(std::move(open)) {
+  SystemTray(HWND window, std::function<void(bool)> toggle, std::function<void()> open,
+      std::function<std::uint64_t()> profile_revision = [] { return std::uint64_t{0}; })
+      : window_(window), toggle_(std::move(toggle)), open_(std::move(open)),
+        profile_revision_(std::move(profile_revision)) {
     callback_ = RegisterWindowMessageW(L"flutter_vless.tray.v1");
     taskbar_created_ = RegisterWindowMessageW(L"TaskbarCreated");
   }
@@ -23,6 +26,8 @@ class SystemTray {
       custom = static_cast<HICON>(LoadImageW(nullptr, native::Wide(options.windows_icon).c_str(), IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE));
       if (!custom) return false;
     }
+    if (options_.quick_enabled != options.quick_enabled || options_.quick_action != options.quick_action ||
+        options_.require_unlock != options.require_unlock || options_.surface != options.surface) ++policy_revision_;
     Remove(); if (owned_icon_) DestroyIcon(owned_icon_);
     owned_icon_ = custom; options_ = options;
     return !options_.quick_enabled || Add();
@@ -38,17 +43,23 @@ class SystemTray {
     if (!options_.quick_enabled) return true;
     const auto event = LOWORD(parameter);
     if (event == NIN_SELECT || event == NIN_KEYSELECT) {
-      if (!pending_) { if (options_.quick_action == "openApp") open_(); else toggle_(); }
+      if (!pending_) { if (options_.quick_action == "openApp") open_(); else toggle_(active_); }
     } else if (event == WM_CONTEXTMENU) {
+      // TrackPopupMenu pumps messages: bind the rendered intent before it can reenter Configure.
+      const auto action = options_.quick_action; const auto policy = policy_revision_;
+      const auto profile = profile_revision_(); const bool active = active_, pending = pending_;
       HMENU menu = CreatePopupMenu(); if (!menu) return true;
-      AppendMenuW(menu, MF_STRING | (pending_ ? MF_GRAYED : 0), 1,
-          options_.quick_action == "openApp" ? L"Open app" : (active_ ? L"Disconnect" : L"Connect"));
+      AppendMenuW(menu, MF_STRING | (pending ? MF_GRAYED : 0), 1,
+          action == "openApp" ? L"Open app" : (active ? L"Disconnect" : L"Connect"));
       AppendMenuW(menu, MF_STRING, 2, L"Open app");
       POINT point{}; GetCursorPos(&point); SetForegroundWindow(window_);
       const auto choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, 0, window_, nullptr);
       DestroyMenu(menu); PostMessageW(window_, WM_NULL, 0, 0);
-      if (choice == 1 && !pending_) { if (options_.quick_action == "openApp") open_(); else toggle_(); }
-      else if (choice == 2) open_();
+      if (!options_.quick_enabled || policy != policy_revision_ || profile != profile_revision_()) return true;
+      if (choice == 1 && !pending && !pending_) {
+        if (action == "openApp") open_();
+        else if (active == active_) toggle_(active);
+      } else if (choice == 2) open_();
     }
     return true;
   }
@@ -71,7 +82,9 @@ class SystemTray {
   void Remove() { if (added_) { auto data = Data(); Shell_NotifyIconW(NIM_DELETE, &data); added_ = false; } }
   HWND window_; UINT callback_ = 0, taskbar_created_ = 0;
   HICON owned_icon_ = nullptr; bool added_ = false, active_ = false, pending_ = false;
-  NativeOptions options_; std::function<void()> toggle_, open_;
+  NativeOptions options_; std::uint64_t policy_revision_ = 0;
+  std::function<void(bool)> toggle_; std::function<void()> open_;
+  std::function<std::uint64_t()> profile_revision_;
 };
 }
 #endif

@@ -2069,8 +2069,58 @@ boundaries: 19 candidate, 14 preparation and 15 path-observer cases per module;
 28 iOS/29 macOS actual-provider recovery controls and 21 cold-start controls per
 platform. The latter controls extract production functions into inert fixtures.
 These source tests do not establish actual DNS64 behavior, native
-notification effects after our settings writes, or physical handover. Runtime
-and device qualification of this increment is pending.
+notification effects after our settings writes, or physical handover.
+
+[Apple validation at `a137971`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39483878385)
+passes the early real-SDK Swift interface-index typecheck, both complete Apple
+source suites, the pinned Core corpus, both unpublished SDK builds, iOS simulator
+and macOS Core traffic, diagnostics/options, both example builds and the standalone
+iOS SwiftPM product. Each controlled SDK runtime completes all 12 modes with
+both routing variants and no drain fallback. The mandatory Darwin binding
+function also passes its actual-function fake-OS controls. This qualifies the
+controlled runtime increment; it does not establish physical DNS64/NAT64, native
+handover or a new device session. The iOS HEV simulator remains a link-only stub.
+The unpublished iOS archive is consumed with exact producer/package source maps
+and checked device/simulator exports; no release or published SDK pin changes.
+
+### Quick actions across options and startup changes
+
+Apple controls retain their initial action, options, protected profile and
+process-local group/provider generation across authentication and preference
+awaits. A newer Start, Stop, configuration, clear or authorized app profile
+invalidates the earlier action, even when the profile reference is unchanged.
+Opening the app never acquires permission to toggle. Control Start stages On
+Demand OFF with no rules; the provider admits recovery separately. Readback
+checks the protected profile and a unique write marker before Start/Stop.
+
+A failed or revoked attempted Start makes no compensating preference write,
+which could otherwise overwrite a newer owner while an OS save is pending.
+It reports a fixed cleanup-uncertain error: an inactive enabled profile may
+remain. There is no claim of cross-process compare-and-save, cancellation of
+pending OS writes or complete cleanup. The 36-case whole-method fixture uses
+independent in-memory preferences and held authentication/save continuations;
+legacy assertions retain an explicit fake provider-admission step. These are
+source regressions, not physical Face ID or NetworkExtension acceptance.
+
+Android captures OPEN/START/STOP with an atomic options revision and the exact
+encrypted profile or accepted session owner. Unlock, VPN permission, final
+preflight/persistence and actual process launch recheck that intent. New app
+commands and option writes revoke pending controls without disabling an
+already-launched session. Before any Process is returned, failures discard the
+unstarted tile candidate instead of retrying after losing its policy ticket.
+The options lock spans tile persistence/commit and process launch, including
+the existing bounded worker drain, but not preflight, permissions or readiness.
+It is not an aggregate Stop deadline. The 18 actual-method JVM cases are
+selected remotely with the verified local Maven inputs; physical tile and
+permission behavior still needs device acceptance.
+
+Windows menus retain the action they displayed and reject changed options,
+profile ownership, pending actions or active state. Queued tray actions share
+the app Start/Stop owner generation, so an older menu cannot become valid again
+after a newer connect/disconnect pair. The portable actual-source fixture has
+31 cases; real Win32 tray tests and plugin compilation run separately in the
+focused `Quick access transactions` workflow. Device/system-VPN acceptance and
+action cancellation after runtime admission remain separate checks.
 
 Current implementation/acceptance status (1.1.7, unreleased):
 

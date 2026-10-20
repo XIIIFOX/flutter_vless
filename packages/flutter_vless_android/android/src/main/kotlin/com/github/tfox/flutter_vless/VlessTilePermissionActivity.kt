@@ -8,11 +8,11 @@ import android.os.Bundle
 import com.github.tfox.flutter_vless.xray.service.NativeOptionsStore
 import com.github.tfox.flutter_vless.xray.service.XrayVPNService
 
-/** Permission UI only. No profile or native action is accepted from intent extras. */
+/** Non-exported permission UI. Extras carry only a stale-rejectable intent, never profile data or authority. */
 class VlessTilePermissionActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (!NativeOptionsStore(this).read().quickAccess.enabled) { finish(); return }
+        if (currentAction() == null) { finish(); return }
         if (savedInstanceState != null) return
         val permission = VpnService.prepare(this)
         if (permission == null) connect() else {
@@ -25,9 +25,16 @@ class VlessTilePermissionActivity : Activity() {
         super.onActivityResult(requestCode,resultCode,data)
         if (requestCode == 24 && resultCode == RESULT_OK) connect() else finish()
     }
-    private fun connect() {
-        if (NativeOptionsStore(this).read().quickAccess.enabled && VpnService.prepare(this) == null) {
-            val service = Intent(this,XrayVPNService::class.java).setAction(XrayVPNService.ACTION_QUICK_ACCESS_TOGGLE)
+    private fun currentAction() = NativeQuickAccess.action(intent)?.takeIf {
+        it.operation == com.github.tfox.flutter_vless.xray.service.QuickAccessAction.Operation.START &&
+            it.permits(NativeOptionsStore(this).readSnapshot(), NativeQuickAccess.locked(this)) &&
+            !XrayVPNService.hasAcceptedSession() && NativeQuickAccess.profile(this).revision() == it.profile
+    }
+    internal fun connect() {
+        val ticket = currentAction()
+        if (ticket != null && VpnService.prepare(this) == null) {
+            val service = NativeQuickAccess.putAction(Intent(this,XrayVPNService::class.java)
+                .setAction(XrayVPNService.ACTION_QUICK_ACCESS_TOGGLE), ticket)
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(service) else startService(service)
         }
         finish()

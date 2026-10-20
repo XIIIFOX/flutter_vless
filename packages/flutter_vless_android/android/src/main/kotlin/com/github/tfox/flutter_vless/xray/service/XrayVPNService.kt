@@ -64,6 +64,55 @@ class XrayVPNService : VpnService() {
     private lateinit var profiles: AuthorizedProfileStore
     private var sessionOptions = NativeVlessOptions()
     @Volatile private var tileStartPending = false
+    @Volatile private var pendingQuickStart: PendingQuickStart? = null
+
+    /** CLEAR revokes only a pending tile request, never a newer explicit Start or an admitted VPN. */
+    internal fun revokePendingQuickStart() {
+        val pending = pendingQuickStart ?: return
+        requests.compareAndSet(pending.request, pending.request + 1)
+        worker.execute { discardPendingQuickStart(pending) }
+    }
+    private fun discardPendingQuickStart(pending: PendingQuickStart) {
+        if (pendingQuickStart !== pending) return
+        pendingQuickStart = null
+        tileStartPending = false
+        val owner = pending.owner
+        if (owner != null && recovery.owns(owner)) {
+            profiles.disarm()
+            deactivateSession()
+        } else if (owner == null && pending.persisted && !recovery.authorized) profiles.disarm()
+    }
+    /** Exact owner check and revocation share the recovery monitor. Socket cancellation stays outside it. */
+    internal fun acceptQuickStop(action: QuickAccessAction): Long? {
+        val stopped = NativeOptionsStore(this).withSnapshot(action, { NativeQuickAccess.locked(this) }) {
+            synchronized(recovery) {
+                if (action.operation != QuickAccessAction.Operation.STOP || !recovery.owns(action.session)) null
+                else {
+                    val request = requests.incrementAndGet()
+                    pendingQuickStart = null; tileStartPending = false
+                    recovery.disarm()
+                    val phase = periodicReadiness?.second; periodicReadiness = null
+                    request to phase
+                }
+            }
+        } ?: return null
+        stopped.second?.cancel()
+        return stopped.first
+    }
+    private fun quickStartCurrent(pending: PendingQuickStart): Boolean =
+        pendingQuickStart === pending && requests.get() == pending.request &&
+            pending.action.permits(NativeOptionsStore(this).readSnapshot(), NativeQuickAccess.locked(this))
+
+    /** The options lock is held only by the captured tile transaction/actual launch, never by normal user Start. */
+    internal fun launchQuickStart(pending: PendingQuickStart, owner: Long, launch: () -> Process): Process =
+        NativeOptionsStore(this).withSnapshot(pending.action, { NativeQuickAccess.locked(this) }) {
+            check(pendingQuickStart === pending && requests.get() == pending.request && recovery.owns(owner))
+            // A thrown launch has no owned Process: retain the ticket for scoped discard, never a policy-free retry.
+            val process = launch()
+            pendingQuickStart = null
+            tileStartPending = false
+            process
+        } ?: error("Quick action was superseded")
 
     override fun onCreate() {
         super.onCreate()
@@ -104,10 +153,13 @@ class XrayVPNService : VpnService() {
         if (intent?.action == ACTION_QUERY_SYSTEM_STATE || intent?.action == ACTION_CLEAR_QUICK_ACCESS) {
             @Suppress("DEPRECATION")
             val receiver = intent.getParcelableExtra<ResultReceiver>("receiver")
-            if (intent.action == ACTION_CLEAR_QUICK_ACCESS) worker.execute {
+            if (intent.action == ACTION_CLEAR_QUICK_ACCESS) {
+                revokePendingQuickStart()
+                worker.execute {
                 NativeQuickAccess.profile(this).disarm()
                 NativeQuickAccess.refresh(this)
                 receiver?.send(0,Bundle())
+                }
             } else receiver?.send(0,Bundle().apply {
                 putBoolean("alwaysOn",AppConfigs.ALWAYS_ON_ENABLED)
                 putBoolean("lockdown",AppConfigs.LOCKDOWN_ENABLED)
@@ -133,16 +185,26 @@ class XrayVPNService : VpnService() {
         @Suppress("DEPRECATION")
         val suppliedCommand = intent?.getSerializableExtra("COMMAND") as? AppConfigs.V2RAY_SERVICE_COMMANDS
         val tileToggle = intent?.action == ACTION_QUICK_ACCESS_TOGGLE
-        if (tileToggle && !QuickTilePolicy.mayToggle(NativeOptionsStore(this).read().quickAccess.enabled,
-                recovery.authorized, tileStartPending,
-                AppConfigs.V2RAY_STATE != AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED,
-                VpnService.prepare(this) == null)) {
+        val quickAction = if (tileToggle) NativeQuickAccess.action(intent) else null
+        if (tileToggle && (quickAction == null ||
+                !quickAction.permits(NativeOptionsStore(this).readSnapshot(), NativeQuickAccess.locked(this)) ||
+                VpnService.prepare(this) != null || when (quickAction.operation) {
+                    QuickAccessAction.Operation.OPEN -> true
+                    QuickAccessAction.Operation.START -> recovery.authorized || tileStartPending ||
+                        AppConfigs.V2RAY_STATE != AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED ||
+                        NativeQuickAccess.profile(this).revision() != quickAction.profile
+                    QuickAccessAction.Operation.STOP -> !recovery.owns(quickAction.session) ||
+                        AppConfigs.ALWAYS_ON_ENABLED || AppConfigs.LOCKDOWN_ENABLED
+                })) {
             if (!recovery.authorized && requests.get() == 0L) stopSelfResult(startId)
             return if (recovery.authorized) START_STICKY else START_NOT_STICKY
         }
         val command = if (tileToggle) {
-            if (recovery.authorized) AppConfigs.V2RAY_SERVICE_COMMANDS.STOP_SERVICE else AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE
+            if (quickAction!!.operation == QuickAccessAction.Operation.STOP) AppConfigs.V2RAY_SERVICE_COMMANDS.STOP_SERVICE
+            else AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE
         } else suppliedCommand
+        if (!tileToggle && suppliedCommand in listOf(AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE, AppConfigs.V2RAY_SERVICE_COMMANDS.STOP_SERVICE))
+            NativeOptionsStore(this).invalidateActions()
         if (command == AppConfigs.V2RAY_SERVICE_COMMANDS.STOP_SERVICE) {
             @Suppress("DEPRECATION")
             val receiver = intent?.getParcelableExtra<ResultReceiver>("stop_receiver")
@@ -150,12 +212,17 @@ class XrayVPNService : VpnService() {
                 receiver?.send(2,Bundle())
                 return START_STICKY
             }
-            val request = requests.incrementAndGet()
-            disarmRecovery() // Invalidate callbacks and release owned health I/O before queued cleanup.
+            val request = if (tileToggle) {
+                acceptQuickStop(requireNotNull(quickAction))
+                    ?: return if (recovery.authorized) START_STICKY else START_NOT_STICKY
+            } else requests.incrementAndGet().also { pendingQuickStart = null; tileStartPending = false; disarmRecovery() }
+            val stoppedGeneration = recovery.generation
             NativeQuickAccess.refresh(this)
             profiles.disarm()
             worker.execute {
-                profiles.disarm(); deactivateSession()
+                if (!tileToggle || (!recovery.authorized && recovery.generation == stoppedGeneration)) {
+                    profiles.disarm(); deactivateSession()
+                }
                 receiver?.send(0,Bundle())
                 // A queued STOP releases its old session, but must not destroy a newer START.
                 if (requests.get() == request) stopSelfResult(startId)
@@ -167,6 +234,8 @@ class XrayVPNService : VpnService() {
         // The service is non-exported and protected by BIND_VPN_SERVICE.
         val systemAlwaysOnStart = intent?.action == SERVICE_INTERFACE && suppliedCommand == null
         val request = requests.incrementAndGet()
+        val pending = if (tileToggle) PendingQuickStart(request, requireNotNull(quickAction)) else null
+        if (pending != null) pendingQuickStart = pending // Keep an old ticket fenced until its queued cleanup drains.
         if (tileToggle) tileStartPending = true
         showForeground("Connecting; traffic protection is being prepared")
         worker.execute {
@@ -175,13 +244,18 @@ class XrayVPNService : VpnService() {
             val receiver = intent?.getParcelableExtra<ResultReceiver>("start_receiver")
             @Suppress("DEPRECATION")
             val incoming = if (tileToggle) runCatching {
-                NativeQuickAccess.profile(this).load().also { saved ->
+                check(pending != null && quickStartCurrent(pending))
+                val (saved, revision) = NativeQuickAccess.profile(this).loadVersioned()
+                require(revision == pending.action.profile)
+                saved.also {
                     require(!saved.PROXY_ONLY)
-                    saved.PLUGIN_OPTIONS_JSON = Gson().toJson(NativeOptionsStore(this).read())
+                    val snapshot = NativeOptionsStore(this).readSnapshot()
+                    check(pending.action.permits(snapshot, NativeQuickAccess.locked(this)))
+                    saved.PLUGIN_OPTIONS_JSON = Gson().toJson(snapshot.options)
                     saved.APPLICATION_ICON = resources.getIdentifier(saved.NOTIFICATION_ICON_RESOURCE_NAME,
                         saved.NOTIFICATION_ICON_RESOURCE_TYPE,packageName)
                 }
-            }.getOrElse { NativeQuickAccess.profile(this).disarm(); null }
+            }.getOrElse { null }
             else if (command == AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE)
                 (intent?.getSerializableExtra("V2RAY_CONFIG") as? XrayConfig)?.apply {
                     PROXY_ONLY = intent.getBooleanExtra("PROXY_ONLY", false)
@@ -193,7 +267,8 @@ class XrayVPNService : VpnService() {
             }.getOrDefault(true)
             if (restoreDisabled) profiles.disarm()
             if (incoming == null || restoreDisabled) {
-                tileStartPending = false
+                pending?.let(::discardPendingQuickStart)
+                if (request == requests.get()) tileStartPending = false
                 NativeQuickAccess.refresh(this)
                 event(Event.PROFILE_UNAVAILABLE)
                 receiver?.send(1, outcome.toBundle(false))
@@ -206,7 +281,8 @@ class XrayVPNService : VpnService() {
             val accepted = runCatching { acceptSession(incoming, command == AppConfigs.V2RAY_SERVICE_COMMANDS.START_SERVICE, request, systemAlwaysOnStart, outcome) }
                 .getOrElse { event(Event.CONFIG_REJECTED); false }
             if (tileToggle && accepted) XrayCoreManager.publishState(this,AppConfigs.V2RAY_STATES.V2RAY_CONNECTING)
-            tileStartPending = false
+            if (!accepted) pending?.let(::discardPendingQuickStart)
+            if (request == requests.get()) tileStartPending = false
             receiver?.send(if (accepted) 0 else 1, outcome.toBundle(accepted))
             if (!accepted && request == requests.get() && tun == null && !recovery.authorized) {
                 stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(startId)
@@ -218,6 +294,8 @@ class XrayVPNService : VpnService() {
     private fun acceptSession(incoming: XrayConfig, explicit: Boolean, request: Long, systemAlwaysOnStart: Boolean,
                               outcome: StartupPreparationOutcome): Boolean {
         if (request != requests.get()) return false
+        val quick = pendingQuickStart?.takeIf { it.request == request }
+        if (quick != null && !quickStartCurrent(quick)) return false
         val options = try {
             val parsed = incoming.PLUGIN_OPTIONS_JSON?.let { Gson().fromJson(it,Map::class.java) }
             (if (parsed == null) NativeOptionsStore(this).read() else NativeVlessOptions.parse(parsed)).also {
@@ -257,16 +335,22 @@ class XrayVPNService : VpnService() {
             event(Event.CONFIG_REJECTED)
             return false
         }
-        val admitted = finalCandidate.admit(isCurrent = { request == requests.get() }, persist = {
+        val admission = {
+        finalCandidate.admit(isCurrent = { request == requests.get() && (quick == null || pendingQuickStart === quick) }, persist = {
             outcome.stage = PreparationStage.PERSIST
             try { if (explicit) { if (candidate.PROXY_ONLY) profiles.disarm() else profiles.save(incoming) } }
             catch (error: Exception) { event(Event.PROFILE_SAVE_FAILED); throw error }
+            if (quick != null && explicit && !candidate.PROXY_ONLY) quick.persisted = true
             outcome.stage = PreparationStage.PREPARE
         }, commit = { accepted ->
             outcome.stage = PreparationStage.START
             // Mode changes intentionally deactivate VPN protection; VPN-to-VPN replacements retain it.
             if (candidate.PROXY_ONLY && tun != null) deactivateSession()
-            val owner = recovery.activate()
+            val owner = synchronized(recovery) {
+                if (request != requests.get()) null else recovery.activate()
+            } ?: return@admit false
+            if (quick == null) { pendingQuickStart = null; tileStartPending = false }
+            if (quick != null) quick.owner = owner
             recovery.options = options.reconnect
             sessionOptions = options
             if (!stopWorkers()) {
@@ -281,8 +365,8 @@ class XrayVPNService : VpnService() {
                 sourceConfig = incoming.copy()
                 config = candidate; credentials = candidateCredentials
                 AppConfigs.V2RAY_CONFIG = candidate
-                XrayDiagnosticsStore.configure(filesDir,NativeOptionsStore(this).read().diagnostics)
-                if (explicit) {
+                XrayDiagnosticsStore.configure(filesDir,if (quick == null) NativeOptionsStore(this).read().diagnostics else options.diagnostics)
+                if (explicit && quick == null) {
                     runCatching {
                         val retained = NativeQuickAccess.profile(this)
                         if (NativeOptionsStore(this).read().quickAccess.enabled && !candidate.PROXY_ONLY) retained.save(incoming)
@@ -299,6 +383,12 @@ class XrayVPNService : VpnService() {
                 true
             }
         })
+        }
+        // A fresh committed revision gates persistence and commit together. No nested option-store reads on this path.
+        val admitted = if (quick == null) admission() else try {
+            NativeOptionsStore(this).withSnapshot(quick.action, { NativeQuickAccess.locked(this) }) { admission() } ?: false
+        } finally { if (pendingRuntime?.second !== finalCandidate) finalCandidate.close() }
+        if (!admitted && quick != null) discardPendingQuickStart(quick)
         if (admitted) outcome.report = finalCandidate.preparationReport
         return admitted
     }
@@ -349,6 +439,8 @@ class XrayVPNService : VpnService() {
 
     private fun restartWorkers(owner: Long) {
         if (!recovery.owns(owner)) return
+        val quick = pendingQuickStart?.takeIf { it.owner == owner }
+        if (quick != null && !quickStartCurrent(quick)) { discardPendingQuickStart(quick); return }
         XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_CONNECTING)
         showForeground(if (tun != null) "Recovering; VPN traffic remains captured" else "Connecting")
         if (!stopWorkers()) { closePendingRuntime(); recover(Event.WORKER_START_FAILED); return }
@@ -376,10 +468,15 @@ class XrayVPNService : VpnService() {
             val runtime = candidate.configuration
             readinessProbe = candidate.takeProbe()
             candidate.close(); candidate = null
-            val started = XrayCoreManager.startCore(this, current, runtime, protector, owner) { generation, code ->
+            val started = XrayCoreManager.startCore(this, current, runtime, protector, owner,
+                admitStart = if (quick == null) null else { launch -> launchQuickStart(quick, owner, launch) }) { generation, code ->
                 worker.execute { if (recovery.owns(generation)) { event(Event.WORKER_EXIT, code.toLong()); recover(Event.WORKER_EXIT) } }
             }
-            if (!started) { recover(Event.PROTECT_FAILED); return }
+            if (!started) {
+                if (quick != null && pendingQuickStart === quick) discardPendingQuickStart(quick)
+                else recover(Event.PROTECT_FAILED)
+                return
+            }
             if (!recovery.owns(owner)) { stopWorkers(); return }
             if (!current.PROXY_ONLY) {
                 // The broker was positively verified before TUN installation, including cold start.
@@ -463,6 +560,13 @@ class XrayVPNService : VpnService() {
 
     private fun recover(reason: Event, detail: Long? = null) {
         if (!recovery.authorized) return
+        val pending = pendingQuickStart
+        if (pending != null && pending.owner == recovery.generation) {
+            // No Process was returned: a retry must not shed the captured tile policy/identity.
+            event(reason, detail)
+            discardPendingQuickStart(pending)
+            return
+        }
         val next = recovery.restart() // Late callbacks from both workers lose ownership together.
         event(reason, detail)
         stopWorkers() // TUN remains installed throughout backoff, including persistent failure.
@@ -656,6 +760,7 @@ class XrayVPNService : VpnService() {
         // as authorization for an automatic restart.
         @Volatile private var currentRecovery: SessionRecoveryPolicy? = null
         internal fun hasAcceptedSession() = currentRecovery?.authorized == true
+        internal fun acceptedSessionGeneration(): Long? = currentRecovery?.let { if (it.authorized) it.generation else null }
         const val ACTION_QUERY_SYSTEM_STATE = "com.github.tfox.flutter_vless.QUERY_SYSTEM_STATE"
         const val ACTION_CLEAR_QUICK_ACCESS = "com.github.tfox.flutter_vless.CLEAR_QUICK_ACCESS"
         const val ACTION_QUICK_ACCESS_TOGGLE = "com.github.tfox.flutter_vless.QUICK_ACCESS_TOGGLE"

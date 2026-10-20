@@ -389,7 +389,8 @@ object XrayCoreManager {
         })
 
     internal fun startCore(context: Service, config: XrayConfig, configuration: NativeRuntimeConfig,
-        protector: XraySocketProtector?, ownerGeneration: Long, onExit: (Long, Int) -> Unit): Boolean {
+        protector: XraySocketProtector?, ownerGeneration: Long,
+        admitStart: ((() -> Process) -> Process)? = null, onExit: (Long, Int) -> Unit): Boolean {
         if (!stopWorkers()) return false
         return try {
             val inputs = configuration.createInputs(context.noBackupFilesDir, "xray")
@@ -399,7 +400,8 @@ object XrayCoreManager {
                 .directory(context.noBackupFilesDir).redirectErrorStream(true)
             Utilities.configureXrayAssets(context, builder.environment(), config.GEO_ASSETS_DIRECTORY)
             if (protector != null) builder.environment()["FLUTTER_VLESS_PROTECT_SOCKET"] = protector.socketName
-            val process = builder.start()
+            // The optional owner gate linearizes only launch admission, never readiness or success.
+            val process = if (admitStart == null) builder.start() else admitStart { builder.start() }
             xrayProcess = process
             Thread({
                 try {

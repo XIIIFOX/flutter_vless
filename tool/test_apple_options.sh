@@ -18,4 +18,5 @@ s=s.replace('import NetworkExtension','').replace('import WidgetKit','').replace
 PY
 xcrun swiftc -O -parse-as-library "$IOS/VlessNativeOptions.swift" "$ROOT/tool/fixtures/ios_manager_policy/SDK.swift" "$OUT/Control.swift" "$ROOT/tool/fixtures/apple_system_control_test.swift" -o "$OUT/control"
 "$OUT/control"
+python3 "$ROOT/tool/test_apple_system_control_transactions.py"
 bash "$ROOT/tool/test_ios_acceptance_provider.sh"

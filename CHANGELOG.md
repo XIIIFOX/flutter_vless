@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Retain quick-action intent across authentication and queued work on every platform. Reject superseded controls; keep Android tile admission through actual process launch and prevent policy-free retries. Stage Apple control startup with On Demand disabled and report uncertain preference saves without overwriting newer owners. Add focused cross-platform transaction regressions.
+
 * Prepare Apple transport endpoints from bounded IPv4/IPv6 candidate sets, preserving DNS TTLs and using documented OS synthesis for IPv4 literals on IPv6-only paths. Reprepare from the original configuration after path, wake, expiry or transport failures; serialize settings changes and scope native cleanup to the committed plan. Native NAT64/handover acceptance remains pending.
 
 * Enforce the selected interface on generated Apple physical sockets after optional/custom socket settings, including error returns. Add a distinct runtime capability and refuse unsupported artifacts before route installation; keep published SDK pins unchanged.

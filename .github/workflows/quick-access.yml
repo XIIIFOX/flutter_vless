@@ -1,0 +1,149 @@
+name: Quick access transactions
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apple:
+    name: Apple intent transactions
+    runs-on: macos-15-intel
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Typecheck both exact Apple mirrors against native APIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_out="$PWD/build/quick-access-api-typecheck"
+          mkdir -p "$api_out"
+          mac_sdk="$(xcrun --sdk macosx --show-sdk-path)"
+          sim_sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          sources=(
+            "ios/flutter_vless/Sources/flutter_vless_privacy"
+            "packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_privacy"
+          )
+          for index in 0 1; do
+            source_dir="${sources[$index]}"
+            shasum -a 256 "$source_dir/VlessNativeOptions.swift" "$source_dir/VlessSystemControl.swift" >> "$api_out/sources-sha256.txt"
+            xcrun --sdk macosx swiftc -swift-version 5 -typecheck -sdk "$mac_sdk" -target x86_64-apple-macos13.0 -module-cache-path "$api_out/module-cache-macos-$index" "$source_dir/VlessNativeOptions.swift" "$source_dir/VlessSystemControl.swift" > "$api_out/macos-$index.log" 2>&1
+            xcrun --sdk iphonesimulator swiftc -swift-version 5 -typecheck -sdk "$sim_sdk" -target x86_64-apple-ios15.0-simulator -module-cache-path "$api_out/module-cache-ios-$index" "$source_dir/VlessNativeOptions.swift" "$source_dir/VlessSystemControl.swift" > "$api_out/ios-$index.log" 2>&1
+          done
+      - name: Test both Apple controls with inert OS boundaries
+        run: bash tool/test_apple_options.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quick-access-apple-${{ github.sha }}
+          path: |
+            build/apple-system-control-transactions-*/result.json
+            build/apple-system-control-transactions-*/*.log
+            build/quick-access-api-typecheck/*.log
+            build/quick-access-api-typecheck/sources-sha256.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  android:
+    name: Android quick action ownership
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Install Android platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_manager_path="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)"
+          test -n "$sdk_manager_path"
+          "$sdk_manager_path" "platforms;android-36"
+      - name: Prepare unchanged pinned runtime for JVM tests
+        run: tool/build_android_runtime_maven.sh
+      - name: Generate Flutter project metadata
+        working-directory: example
+        run: flutter pub get
+      - name: Prove stale admission fails on the historical implementation
+        run: python3 tool/test_android_quick_access_red.py --run-ci --output build/android-quick-access-red
+      - name: Test actual plugin and quick action admission
+        run: python3 tool/with_android_local_runtime.py :flutter_vless_android:testDebugUnitTest --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quick-access-android-${{ github.sha }}
+          path: |
+            build/android-quick-access-red/*.log
+            build/android-quick-access-red/*.json
+            build/android-quick-access-red/*.xml
+            example/build/flutter_vless_android/test-results/testDebugUnitTest/*.xml
+            example/build/flutter_vless_android/reports/tests/testDebugUnitTest/**
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Windows menu transactions and plugin
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Use local federated packages
+        shell: bash
+        run: |
+          cat > pubspec_overrides.yaml <<'YAML'
+          dependency_overrides:
+            flutter_vless_platform_interface:
+              path: packages/flutter_vless_platform_interface
+            flutter_vless_android:
+              path: packages/flutter_vless_android
+            flutter_vless_macos:
+              path: packages/flutter_vless_macos
+            flutter_vless_windows:
+              path: packages/flutter_vless_windows
+          YAML
+      - name: Compile actual Windows plugin
+        working-directory: example
+        run: |
+          flutter pub get
+          flutter build windows --debug
+      - name: Test actual tray and queued action source
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          if not exist build\quick-access mkdir build\quick-access
+          set "S=packages\flutter_vless_windows\windows"
+          cl /nologo /std:c++17 /EHsc /utf-8 /DNOMINMAX /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN %S%\system_tray_test.cpp %S%\native_runtime.cpp %S%\native_routing_spec.cpp %S%\protected_runtime.cpp %S%\proxy_service.cpp %S%\diagnostics_log.cpp /Fe:build\quick-access\system_tray_test.exe /Fo:build\quick-access\ /link user32.lib ws2_32.lib wininet.lib shlwapi.lib version.lib ole32.lib shell32.lib uuid.lib iphlpapi.lib advapi32.lib bcrypt.lib
+          if errorlevel 1 exit /b 1
+          build\quick-access\system_tray_test.exe > build\quick-access\tray.log 2>&1
+          if errorlevel 1 exit /b 1
+          type build\quick-access\tray.log
+          python tool\test_windows_quick_access.py --generate build\quick-access\transactions.cpp
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX build\quick-access\transactions.cpp /Fe:build\quick-access\transactions.exe /Fo:build\quick-access\transactions.obj
+          if errorlevel 1 exit /b 1
+          build\quick-access\transactions.exe > build\quick-access\transactions.log 2>&1
+          if errorlevel 1 exit /b 1
+          type build\quick-access\transactions.log
+          python -c "from pathlib import Path; assert Path('build/quick-access/transactions.log').read_text().splitlines().count('WINDOWS_QUICK_ACCESS_PASS=31 FAIL=0') == 1; assert Path('build/quick-access/tray.log').read_text().splitlines().count('WINDOWS_TRAY_REVISION_PASS=10') == 1"
+          if errorlevel 1 exit /b 1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quick-access-windows-${{ github.sha }}
+          path: |
+            build/quick-access/*.log
+            build/quick-access/transactions.sources.json
+            build/quick-access/transactions.cpp
+          if-no-files-found: error
+          retention-days: 7

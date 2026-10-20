@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Retain immutable Quick Tile actions through unlock, permission, preflight and process launch. Revoke stale requests on options or session changes; disarm failed unstarted tile requests instead of retrying without their policy. Preserve established VPN and explicit app commands. Add actual-method JVM regressions.
+
 * Invalidate pending Dart startup capability checks on Stop or a newer Start, preventing a delayed request from starting a superseded VPN session.
 
 * Add a build-only CI preview that rebuilds all four ordinary Core ABIs and verifies their exact AAR bytes, source provenance, unchanged HEV/geodata and 16 KiB alignment. Qualify the development example APK, its exact three-architecture payloads and all three original full JSON profiles with real Android browser traffic, domain split routing in both directions and Stop recovery. Keep published runtime pins unchanged; physical HTTP/3 acceptance remains separate.

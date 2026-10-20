@@ -1,6 +1,7 @@
 package com.github.tfox.flutter_vless
 
 import android.app.Activity
+import android.app.KeyguardManager
 import android.app.StatusBarManager
 import android.content.ComponentName
 import android.content.Context
@@ -11,11 +12,25 @@ import android.service.quicksettings.TileService
 import com.github.tfox.flutter_vless.xray.service.AuthorizedProfileStore
 import com.github.tfox.flutter_vless.xray.service.NativeOptionsStore
 import com.github.tfox.flutter_vless.xray.service.NativeVlessOptions
+import com.github.tfox.flutter_vless.xray.service.QuickAccessAction
 import com.github.tfox.flutter_vless.xray.service.XrayVPNService
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import io.flutter.plugin.common.MethodChannel
 
 internal object NativeQuickAccess {
+    fun locked(context: Context) = context.getSystemService(KeyguardManager::class.java).isKeyguardLocked
+    fun putAction(intent: Intent, action: QuickAccessAction): Intent = intent
+        .putExtra("qa_revision", action.revision).putExtra("qa_configured", action.configuredAction)
+        .putExtra("qa_operation", action.operation.name).putExtra("qa_session", action.session)
+        .putExtra("qa_profile", action.profile)
+    fun action(intent: Intent?): QuickAccessAction? = runCatching {
+        requireNotNull(intent)
+        QuickAccessAction(requireNotNull(intent.getStringExtra("qa_revision")),
+            requireNotNull(intent.getStringExtra("qa_configured")),
+            QuickAccessAction.Operation.valueOf(requireNotNull(intent.getStringExtra("qa_operation"))),
+            intent.getLongExtra("qa_session", 0), intent.getStringExtra("qa_profile"))
+            .also { require(it.valid()) }
+    }.getOrNull()
     fun capabilities() = mapOf(
         "optionsVersion" to 1,
         "quickAccessSurfaces" to if (Build.VERSION.SDK_INT >= 24) listOf("quickTile") else emptyList<String>(),

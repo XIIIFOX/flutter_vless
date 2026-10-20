@@ -11,6 +11,7 @@ import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import com.github.tfox.flutter_vless.xray.service.NativeOptionsStore
 import com.github.tfox.flutter_vless.xray.service.QuickTilePolicy
+import com.github.tfox.flutter_vless.xray.service.QuickAccessAction
 import com.github.tfox.flutter_vless.xray.service.XrayVPNService
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
 import java.lang.ref.WeakReference
@@ -74,23 +75,46 @@ class VlessTileService : TileService() {
     }
     override fun onClick() {
         super.onClick()
-        val settings = NativeOptionsStore(this).read().quickAccess
+        val snapshot = NativeOptionsStore(this).beginAction()
+        val settings = snapshot.options.quickAccess
         if (!settings.enabled) { refreshTile(); return }
-        val action = Runnable {
-            when(QuickTilePolicy.action(state(),settings.action == "openApp",(AppConfigs.LOCKDOWN_ENABLED || AppConfigs.ALWAYS_ON_ENABLED))) {
-                QuickTilePolicy.Action.NONE -> Unit
-                QuickTilePolicy.Action.OPEN_APP -> packageManager.getLaunchIntentForPackage(packageName)?.let(::collapseTo)
-                QuickTilePolicy.Action.TOGGLE -> {
-                    if (VpnService.prepare(this) != null) {
-                        collapseTo(Intent(this,VlessTilePermissionActivity::class.java))
-                    } else {
-                        val intent = Intent(this,XrayVPNService::class.java).setAction(XrayVPNService.ACTION_QUICK_ACCESS_TOGGLE)
-                        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
-                    }
-                }
+        val desired = QuickTilePolicy.action(state(), settings.action == "openApp",
+            AppConfigs.LOCKDOWN_ENABLED || AppConfigs.ALWAYS_ON_ENABLED)
+        if (desired == QuickTilePolicy.Action.NONE) return
+        val session = XrayVPNService.acceptedSessionGeneration()
+        val operation = if (desired == QuickTilePolicy.Action.OPEN_APP) QuickAccessAction.Operation.OPEN
+            else if (session != null) QuickAccessAction.Operation.STOP else QuickAccessAction.Operation.START
+        val profile = if (operation == QuickAccessAction.Operation.START)
+            runCatching { NativeQuickAccess.profile(this).revision() }.getOrNull() ?: return else null
+        val ticket = QuickAccessAction(snapshot.revision, settings.action, operation, session ?: 0, profile)
+            .let { if (operation == QuickAccessAction.Operation.STOP) it else it.copy(session = 0) }
+        val action = Runnable { performAction(ticket) }
+        if (settings.requireUnlock && isLocked) unlockAndRun(action) else action.run()
+    }
+    /** Rechecked after unlock; never retarget the UI intent to a new policy/session. */
+    internal fun performAction(ticket: QuickAccessAction) {
+        if (!ticket.permits(NativeOptionsStore(this).readSnapshot(), NativeQuickAccess.locked(this))) return
+        when (ticket.operation) {
+            QuickAccessAction.Operation.OPEN -> packageManager.getLaunchIntentForPackage(packageName)?.let(::collapseTo)
+            QuickAccessAction.Operation.START -> {
+                if (XrayVPNService.hasAcceptedSession() ||
+                    AppConfigs.V2RAY_STATE != AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED ||
+                    NativeQuickAccess.profile(this).revision() != ticket.profile) return
+                if (VpnService.prepare(this) != null)
+                    collapseTo(NativeQuickAccess.putAction(Intent(this,VlessTilePermissionActivity::class.java), ticket))
+                else dispatch(ticket)
+            }
+            QuickAccessAction.Operation.STOP -> {
+                if (XrayVPNService.acceptedSessionGeneration() != ticket.session ||
+                    AppConfigs.LOCKDOWN_ENABLED || AppConfigs.ALWAYS_ON_ENABLED) return
+                dispatch(ticket)
             }
         }
-        if (settings.requireUnlock && isLocked) unlockAndRun(action) else action.run()
+    }
+    private fun dispatch(ticket: QuickAccessAction) {
+        val intent = NativeQuickAccess.putAction(Intent(this,XrayVPNService::class.java)
+            .setAction(XrayVPNService.ACTION_QUICK_ACCESS_TOGGLE), ticket)
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
     }
     @Suppress("DEPRECATION")
     private fun collapseTo(intent: Intent) {

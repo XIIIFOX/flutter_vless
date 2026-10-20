@@ -2122,6 +2122,21 @@ after a newer connect/disconnect pair. The portable actual-source fixture has
 focused `Quick access transactions` workflow. Device/system-VPN acceptance and
 action cancellation after runtime admission remain separate checks.
 
+The [focused Apple/Windows run at `aba92b6`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39492423651)
+passes all 36 Apple transaction cases and the retained legacy checks, plus four
+typechecks of the actual iOS/macOS controls against native SDKs. Windows passes
+actual plugin/example compilation, all 31 portable transaction cases and all
+10 real Win32 tray cases. These results do not qualify new physical-device or
+system-VPN sessions.
+
+The [Android run at `b576ff1`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39498800569)
+passes the complete JVM suite: 375 tests across 49 classes, including all 18 new
+quick-action cases, with no failures, errors or skips. The separate
+[historical regression run](https://github.com/XIIIFOX/flutter_vless/actions/runs/39496907496)
+reproduces the stale-action admission defect on the earlier implementation.
+These are source/JVM checks; live tile, permission and VPN traffic acceptance
+remain separate.
+
 Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |

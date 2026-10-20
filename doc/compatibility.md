@@ -266,8 +266,34 @@ bound OS scheduling latency.
 Focused controls exercise actual probe methods with in-memory I/O and clocks.
 Four additional real Apple loopback cases are wired into CI for authenticated
 payloads, fractional socket timeouts, fragmented replies, cancellation and
-refused authentication downgrade. New remote and physical runtime results must
-be qualified separately from the `28b8412` results above.
+refused authentication downgrade. The results below qualify this increment
+separately from the `28b8412` results above.
+
+The signed iPhone preview rebuilt from `7dedb8f` passes a new, single Core-worker
+loss after these health changes. The same NetworkExtension process records
+failure, Core/HEV restart and restored forwarding; separate cold Safari sessions
+before and after show the expected Japanese exit. Native Stop and provider exit
+are confirmed, the whole prior options are restored, and ordinary Safari access
+works with the test VPN off. This is a recovery regression check; it does not
+exercise a stalled socket, physical sleep, retry exhaustion or enabled On Demand.
+
+The [Android/Apple run at `7dedb8f`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39358509456)
+passes both selected jobs. Apple checks 30 extracted provider controls, 52 inert
+client controls and all four real Darwin loopback cases. The iOS/macOS SwiftPM
+suites retain 176/190 passes and one optional public-bootstrap skip each. Both
+unpublished SDK runtime gates retain their twelve modes, DNS, routing, occupied
+ports, FakeDNS and counters; the remote macOS HEV gate retains 8 MiB payloads,
+IPv6 TCP/UDP and cleanup. iOS HEV coverage remains compile/link only. The Android
+job passes all 342 native tests, including the eight real loopback tests.
+The isolated local ARM64 emulator also passes the controlled caller-root DNS and
+domain-routing/recovery tests with the Mac VPN enabled: actual DNS, HTTP, caller
+API, counters and Stop acknowledgements remain checked. The routing preview is
+present only in the instrumentation APK. The [Windows run at `b2f93e3`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39359055408)
+passes all six jobs, including 20 inert packet-budget controls per system, both example
+builds and 460 proxy, portable and VPN rows across Windows 2022/2025. Its only
+change from `7dedb8f` corrects the generated test's port type to match production;
+the native runtime sources are identical. These results do not close the
+remaining `SocksReady` or overall Stop-deadline gap.
 
 Full JSON import, startup and delay normalization retain explicit `null`, empty
 objects/arrays and null array elements. In particular, an explicit `fakedns: []`

@@ -131,13 +131,16 @@ type nativeRuntimeOrigin struct {
 
 func newNativeRuntimeOrigin(t *testing.T, name, nonce string) *nativeRuntimeOrigin {
 	t.Helper()
-	l, err := net.Listen("tcp4", "127.0.0.1:0")
+	l, u, err := nativeRuntimeReserveOriginPair(func() (net.Listener, int, error) {
+		listener, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			return nil, 0, err
+		}
+		return listener, listener.Addr().(*net.TCPAddr).Port, nil
+	}, func(port int) (*net.UDPConn, error) {
+		return net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+	}, runtime.GOOS)
 	if err != nil {
-		t.Fatal(err)
-	}
-	u, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: l.Addr().(*net.TCPAddr).Port})
-	if err != nil {
-		_ = l.Close()
 		t.Fatal(err)
 	}
 	o := &nativeRuntimeOrigin{name: name, tcp: l, udp: u, active: map[net.Conn]bool{}, seen: map[string]int{}}

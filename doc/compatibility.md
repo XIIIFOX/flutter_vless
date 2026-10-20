@@ -1789,9 +1789,19 @@ ACK and an independently absent provider, restore prior UI/global options and
 show ordinary internet afterward. On Demand/reconnect/quick controls remain
 off; required Kill Switch protection stays unchanged. This is observed IPv4
 browser routing with source-backed UI intent, without a final provider digest,
-per-route counters or independent TCP freshness proof. The remaining supplied
-profiles, enabled options and wider physical protocol/IPv6 matrix are separate
-acceptance cases.
+per-route counters or independent TCP freshness proof. Enabled options and the
+wider physical protocol/IPv6 matrix remain separate acceptance cases.
+
+Three subsequent fresh iPhone cases import each original supplied JSON with
+exact UTF-8 bytes and the example's extra routing panel off. Safari loads both
+`tfox.dev/ip` and `2ip.ru` (redirecting to `2ip.io`), with matching proxy addresses
+on the two sites for each profile. Each case uses one Start, ends with a native
+full-Stop ACK and an independently absent provider, restores the prior UI/profile
+and global options, and loads ordinary internet afterward. Temporary app,
+forwarder and guard processes are reaped. Required protection stays enabled;
+On Demand/reconnect/quick controls stay off. These observations qualify the
+three supplied IPv4 browser paths, with the same freshness/counter limitations
+above; site geolocation is an observation rather than proof of server location.
 
 For configuration-only increments, the manual `ci.yml` scope `native-config`
 selects four jobs: the existing complete Core pipeline on Linux/macOS/Windows

@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Include XHTTP HTTP/3 dial cleanup in source-built Android runtimes and previews, with patch-input and copied-source checks. Published runtime artifacts remain unchanged.
+
 * Preserve logical endpoint names behind caller proxy chains in explicit proxy DNS mode, including effective XHTTP download chains. Keep physical endpoint bootstrap and WireGuard peer lookup; add native regressions and an exact-output Core traffic gate.
 
 * Add shared inactive TLS/Reality and XHTTP download regressions through native preparation and runtime normalization, preserving the existing Android admission behavior.

@@ -339,3 +339,22 @@ by the causal pure tests, separately from this device regression. Quick access,
 reconnect and On Demand were left disabled; all task-owned app/control/forwarding
 processes were stopped. A fresh Safari request after cleanup showed the ordinary
 Russian IP, and the Mac's VPN remained connected.
+
+## iPhone diagnostics options, 2026-10-20
+
+The installed signed example `1.1.7+117` (app source `1fbece9`, existing Core
+SDK `4690312`) passed a separate check with VPN disconnected. The actual options
+page rejects `4095` bytes and `0` lines, stays open and leaves the complete
+native options unchanged. Enabling diagnostics with `4096` bytes / `3` lines
+updates only those three diagnostic fields in native preferences. The displayed
+snapshot contains 52 UTF-8 bytes on one nonempty line; it may contain persisted
+metadata and does not establish saturation, truncation or a new provider start.
+
+Restoring the prior options returns the disabled diagnostics placeholder and
+exact prior native settings (`OFF`, `8192` bytes / `32` lines). The fresh case's
+profile bytes and routing state are restored. No VPN Start occurs; native Stop
+acknowledges completion, the provider is absent and Safari loads the ordinary
+internet afterward. Automatic controls remain off, required protection is
+preserved and task-owned app/USB helpers are reaped. Mac VPN settings are
+unchanged. This check does not install or qualify the later H3 source patch.
+The private evidence is under ignored `iphone-off-diagnostics-02` artifacts.

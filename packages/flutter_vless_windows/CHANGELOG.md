@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Include XHTTP HTTP/3 dial cleanup in the optional source-built routing CLI. The ordinary supplied xray.exe requires its own updated artifact and acceptance.
+
 * Add shared loopback chain admission controls and controlled XHTTP redispatch coverage, retaining the existing dormant loopback sender behavior.
 
 * Preserve dormant TLS ECH settings in XHTTP downloads that inherit the upload socket policy. Keep the existing active TLS fetch restriction and physical interface binding.

@@ -1943,6 +1943,15 @@ The example ignores this obsolete completion and retains the newer report.
 This cancellation boundary precedes native dispatch; native worker shutdown
 and physical device acceptance remain separate checks.
 
+The static-alias increment passes the pinned Core gates on Linux, macOS and
+Windows at `176a56f`, with the same configuration inputs retained by later
+Windows test-harness commits. Four shared profiles pass each native preparer
+and Core's actual static-host lookup. Android's actual preparation/manager path
+passes those profiles within its 357-test native suite. The local Apple DNS
+suites pass 60 cases each; the public Dart suite passes 309 tests and example
+passes 12 widget tests, including obsolete-start cancellation. These checks do
+not add new physical-device acceptance for this increment.
+
 Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |

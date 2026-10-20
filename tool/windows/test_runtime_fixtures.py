@@ -22,6 +22,63 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    @staticmethod
+    def security_xml(record="101", fields=None, kind="5157"):
+        values = dict(ProcessID="0x4d", SourcePort="050001", FilterRTID="0x384",
+                      DestAddress="fd00:85:2::3", DestPort="18443", Protocol="6")
+        if fields is not None: values.update(fields)
+        data = "".join(f'<Data Name="{key}">{value}</Data>' for key, value in values.items())
+        return (f'<Events><Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">'
+                f'<System><EventID>{kind}</EventID><EventRecordID>{record}</EventRecordID></System>'
+                f'<EventData>{data}</EventData></Event></Events>')
+
+    def test_numeric_ipv6_security_xml_preserves_exact_kernel_identity(self):
+        xml = self.security_xml()
+        for data in (xml.encode(), xml.encode("utf-16le"), b"\xff\xfe" + xml.encode("utf-16le")):
+            with self.subTest(encoding=data[:2]):
+                self.assertEqual([dict(RecordId=101)], runtime.numeric_ipv6_security_records(data))
+                rows = runtime.numeric_ipv6_security_records(data, True)
+                self.assertTrue(runtime.numeric_ipv6_refusal(rows[0], ("wrong_address", "fd00:85:2::3", 18443, 6), 77, {900}, 100))
+                self.assertFalse(runtime.numeric_ipv6_refusal(rows[0], ("wrong_address", "fd00:85:2::3", 18443, 6), 77, {900}, 101))
+                self.assertEqual(50001, rows[0]["SourcePort"])
+        self.assertEqual([], runtime.numeric_ipv6_security_records(b"<Events/>", True))
+
+    def test_numeric_ipv6_security_xml_rejects_ambiguous_or_invalid_evidence(self):
+        xml = self.security_xml()
+        malformed = [xml.replace("Events", "Other"), xml.replace("<EventRecordID>101</EventRecordID>", ""),
+            xml.replace("</System>", "<EventRecordID>102</EventRecordID></System>"),
+            xml.replace("</EventData>", '<Data Name="ProcessID">77</Data></EventData>'),
+            xml.replace("</Events>", xml[8:]), xml.replace("http://schemas", "https://schemas"),
+            '<!DOCTYPE Events [<!ENTITY value "101">]>' + xml,
+            self.security_xml(kind="5156"), self.security_xml(record="0"), self.security_xml(record=str(2 ** 64)),
+            self.security_xml(fields={"ProcessID": "-77"}), self.security_xml(fields={"SourcePort": "x"}),
+            self.security_xml(fields={"DestAddress": ""})]
+        for value in malformed:
+            for data in (value.encode(), b"\xff\xfe" + value.encode("utf-16le")):
+                with self.subTest(value=value[:60], encoding=data[:2]), self.assertRaises((AssertionError, runtime.ElementTree.ParseError)):
+                    runtime.numeric_ipv6_security_records(data, True)
+        with self.assertRaises(AssertionError): runtime.numeric_ipv6_security_records(b"<Events/>")
+        with self.assertRaises(AssertionError): runtime.numeric_ipv6_security_records(b"x" * (2 * 1024 * 1024 + 1), True)
+
+    def test_numeric_ipv6_native_security_query_keeps_fixed_channel_and_freshness(self):
+        calls = []
+        def native_query(command, **kwargs):
+            calls.append((command, kwargs))
+            kwargs["stdout"].write(self.security_xml().encode())
+        with patch.dict(runtime.os.environ, {"SystemRoot": "C:/Windows"}), patch.object(runtime.subprocess, "run", side_effect=native_query):
+            self.assertEqual(101, runtime.numeric_ipv6_security_events(2)[0]["RecordId"])
+            self.assertEqual(77, runtime.numeric_ipv6_security_events(1, 100)[0]["ProcessID"])
+            with self.assertRaises(AssertionError): runtime.numeric_ipv6_security_events(1, True)
+        self.assertEqual(2, len(calls))
+        self.assertEqual(["qe", "Security", "/rd:true", "/f:xml", "/e:Events", "/uni:true", "/c:1"], calls[0][0][1:])
+        self.assertEqual(["/c:256", "/q:*[System[EventID=5157 and EventRecordID>100]]"], calls[1][0][-2:])
+        self.assertEqual(1, calls[1][1]["timeout"])
+        self.assertTrue(calls[1][1]["check"])
+        self.assertNotIn("shell", calls[1][1])
+        with patch.dict(runtime.os.environ, {"SystemRoot": "C:/Windows"}), patch.object(runtime.subprocess, "run"):
+            self.assertEqual([], runtime.numeric_ipv6_security_events(1, 100))
+            with self.assertRaises(AssertionError): runtime.numeric_ipv6_security_events(1)
+
     def test_numeric_ipv6_raw_observer_distinguishes_tuple_source_port_and_epoch(self):
         # The positive Core connection must never satisfy wrong-image absence,
         # and pre-policy observer controls must not count as protected packets.

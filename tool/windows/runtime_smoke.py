@@ -12,6 +12,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import socketserver
 import ssl
@@ -23,6 +24,7 @@ import threading
 import time
 import tempfile
 import uuid
+from xml.etree import ElementTree
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORTS = {"inbound": 18580, "direct": 18581, "proxy": 18582, "extra": 18583, "routing_proxy": 18584}
@@ -1358,6 +1360,74 @@ def numeric_ipv6_refusal(event, spec, core_pid, owned, after_record):
             and event.get("FilterRTID") in owned)
 
 
+def numeric_ipv6_security_records(data, refusals=False):
+    # wevtutil /uni:true emits XML bytes, without provider message rendering.
+    assert type(data) is bytes and 0 < len(data) <= 2 * 1024 * 1024, "Security XML size invalid"
+    assert b"<!DOCTYPE" not in data.replace(b"\0", b"").upper(), "Security XML DTD refused"
+    root = ElementTree.fromstring(data)
+    namespace = "{http://schemas.microsoft.com/win/2004/08/events/event}"
+    assert root.tag == "Events" and len(root) <= 256, "Security XML envelope invalid"
+    rows, seen = [], set()
+
+    def number(text, hexadecimal=False):
+        pattern = r"(?:[0-9]+|0x[0-9a-fA-F]+)" if hexadecimal else r"[0-9]+"
+        assert type(text) is str and re.fullmatch(pattern, text), "Security XML number invalid"
+        value = int(text, 16 if text.startswith("0x") else 10)
+        assert 0 <= value < 2 ** 64, "Security XML number outside range"
+        return value
+
+    for event in root:
+        assert event.tag == namespace + "Event", "Security XML event invalid"
+        systems = event.findall(namespace + "System")
+        assert len(systems) == 1, "Security XML system invalid"
+        records = systems[0].findall(namespace + "EventRecordID")
+        assert len(records) == 1, "Security XML record missing or duplicated"
+        record = number(records[0].text)
+        assert record > 0 and record not in seen, "Security XML record invalid"
+        seen.add(record)
+        row = dict(RecordId=record)
+        if refusals:
+            kinds = systems[0].findall(namespace + "EventID")
+            assert len(kinds) == 1 and number(kinds[0].text) == 5157, "Security XML kind invalid"
+            containers = event.findall(namespace + "EventData")
+            assert len(containers) == 1, "Security XML data invalid"
+            values = {}
+            for item in containers[0]:
+                name = item.get("Name")
+                assert item.tag == namespace + "Data" and name and name not in values, "Security XML fields invalid"
+                values[name] = item.text
+            required = {"ProcessID", "SourcePort", "FilterRTID", "DestAddress", "DestPort", "Protocol"}
+            assert required <= values.keys(), "Security XML fields missing"
+            assert values["DestAddress"], "Security XML destination missing"
+            row.update(ProcessID=number(values["ProcessID"], True), SourcePort=number(values["SourcePort"]),
+                       FilterRTID=number(values["FilterRTID"], True), remote=values["DestAddress"],
+                       port=number(values["DestPort"]), protocol=number(values["Protocol"]))
+        rows.append(row)
+    if not refusals:
+        assert len(rows) == 1, "Security baseline missing or ambiguous"
+    return rows
+
+
+def numeric_ipv6_security_events(timeout, after_record=None):
+    # Finite reverse XML query; no PowerShell/Get-WinEvent provider startup.
+    command = [str(Path(os.environ["SystemRoot"]) / "System32" / "wevtutil.exe"), "qe", "Security",
+               "/rd:true", "/f:xml", "/e:Events", "/uni:true"]
+    if after_record is None:
+        command.append("/c:1")
+    else:
+        assert type(after_record) is int and 0 < after_record < 2 ** 64
+        command += ["/c:256", f"/q:*[System[EventID=5157 and EventRecordID>{after_record}]]"]
+    # Spill bounded-count native output to an owned temporary file, then cap
+    # the bytes admitted to the XML parser. subprocess.run reaps on timeout.
+    with tempfile.TemporaryFile() as output:
+        subprocess.run(command, stdout=output, stderr=subprocess.DEVNULL, check=True, timeout=timeout)
+        if after_record is not None and output.tell() == 0:
+            return []  # No event is never evidence; the caller keeps waiting.
+        assert 0 < output.tell() <= 2 * 1024 * 1024, "Security XML size invalid"
+        output.seek(0)
+        return numeric_ipv6_security_records(output.read(2 * 1024 * 1024 + 1), after_record is not None)
+
+
 def numeric_ipv6_gate(probe, directory, results, variant="routing"):
     # Existing cases have already closed their adapters in main's finally.
     # This fresh adapter epoch has one codec/nonce, no retry and no public peer.
@@ -1430,25 +1500,15 @@ def numeric_ipv6_gate(probe, directory, results, variant="routing"):
             time.sleep(0.02)
 
     def security_record_id():
-        return int(ps("$e=Get-WinEvent -LogName Security -MaxEvents 1; if($null -eq $e){throw 'Security baseline missing'}; [long]$e.RecordId").strip())
+        return numeric_ipv6_security_events(limit(3))[0]["RecordId"]
 
     def core_block(spec, core_pid, begin, after_record):
         label, remote, port, protocol = spec
         owned = set(proof["scope"]["owned_filter_ids"])
         scan_until = time.monotonic() + limit(5)
-        script = f"""
-$events = Get-WinEvent -FilterHashtable @{{LogName='Security';Id=5157;StartTime=(Get-Date).AddSeconds(-15)}} -MaxEvents 256 -ErrorAction SilentlyContinue
-foreach ($event in $events) {{
-  $v=@{{}}; ([xml]$event.ToXml()).Event.EventData.Data | ForEach-Object {{ $v[$_.Name]=$_.'#text' }}
-  if ($event.RecordId -gt {after_record} -and [long]$v.ProcessID -eq {core_pid} -and $v.DestAddress -eq '{remote}' -and [int]$v.DestPort -eq {port} -and [int]$v.Protocol -eq {protocol}) {{
-    [pscustomobject]@{{ProcessID=[long]$v.ProcessID;SourcePort=[int]$v.SourcePort;FilterRTID=[long]$v.FilterRTID;RecordId=[long]$event.RecordId;remote=$v.DestAddress;port=[int]$v.DestPort;protocol=[int]$v.Protocol}} | ConvertTo-Json -Compress
-  }}
-}}
-"""
         while True:
             assert peer.poll() is None and service.poll() is None, "Owned sender/observer exited before deny proof"
-            for line in ps(script).splitlines():
-                event = json.loads(line)
+            for event in numeric_ipv6_security_events(limit(3), after_record):
                 if numeric_ipv6_refusal(event, spec, core_pid, owned, after_record):
                     row = observation(spec, event["SourcePort"], core_pid, begin)
                     assert row["syn_packets"] + row["udp_packets"] == 0, "Denied tuple reached the raw observer"

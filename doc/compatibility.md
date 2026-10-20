@@ -2018,15 +2018,24 @@ The actual provider entry and recovery helper pass 17 inert cases per Apple
 platform, including an independently stored late-commit snapshot. The existing
 injected preference suite passes 11 cases per module. Actual host-manager
 fixtures add 16 controls per platform for staging, failed OS Start, storage
-rollback, policy readback, active identity, migration and explicit Stop. These checks use fake
-Core, preferences and network settings and do not qualify physical VPN recovery.
+rollback, policy readback, active identity, migration and explicit Stop. These
+checks use fake Core, preferences and network settings and do not qualify
+physical VPN recovery.
 
-The preceding Apple/Android CI run at `55f1a11` passed Android native/runtime
-checks and Apple helper, shared Core corpus and unpublished SDK construction.
-Its Apple manager fixture failed to extract the newly captured Start owner;
-later Apple runtime/example steps were skipped. The fixture boundary is repaired
-alongside the fresh-start changes; this failed run does not qualify those later
-gates.
+[Apple validation at `5c7abc1`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39457963218)
+passes both unpublished SDK builds, real Core in the iOS simulator, macOS Core
+and HEV packet checks, diagnostics/options, both example builds and the standalone
+iOS SwiftPM product. The iOS HEV simulator slice remains link-only. These are
+controlled regression checks, not new named-IPv6 network or physical-device
+acceptance.
+
+[Focused startup validation at `1ebb618`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39461269764)
+passes 16 host-manager controls, 8 Start-owner cases and 17 provider/policy cases
+per platform, including the later staged-policy readback guard. That later guard
+has source/fixture acceptance; the full application/runtime evidence above
+remains bound to `5c7abc1`. New physical application/failure-recovery acceptance
+is still open. Android's unchanged native/runtime paths also pass the
+[corresponding native job at `55f1a11`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39452930916/job/118732236267).
 
 Current implementation/acceptance status (1.1.7, unreleased):
 

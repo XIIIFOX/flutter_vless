@@ -72,6 +72,13 @@ func networkListener(t *testing.T, network, address string, serve func(net.Conn)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return networkListenerFrom(t, l, serve)
+}
+
+// Activate an already reserved owned listener; acceptance and cleanup semantics
+// are identical to networkListener. Planning alone never starts serve workers.
+func networkListenerFrom(t *testing.T, l net.Listener, serve func(net.Conn)) net.Listener {
+	t.Helper()
 	var mu sync.Mutex
 	active := map[net.Conn]bool{}
 	closed := false

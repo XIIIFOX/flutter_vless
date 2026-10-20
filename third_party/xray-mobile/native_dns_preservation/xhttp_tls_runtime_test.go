@@ -10,6 +10,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -147,13 +148,139 @@ func testNativeXHTTPTLS(t *testing.T) {
 	}
 }
 
-func runNativeXHTTPTLS(t *testing.T, mode string) {
-	material := makeXHTTPTLSMaterial(t)
-	var nonceBytes [16]byte
-	if _, err := rand.Read(nonceBytes[:]); err != nil {
+type xhttpTLSCAFile struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+// Planning owns listeners and certificate files only: no Core, HTTP Serve or
+// Accept worker runs until this exact case is activated after native export.
+type xhttpTLSPlan struct {
+	mode, nonce, directory, assetsDirectory, sourcePath string
+	source                                              map[string]any
+	sourceData                                          []byte
+	material                                            xhttpTLSMaterial
+	trust                                               []byte
+	downloadName                                        string
+	origin                                              *httptest.Server
+	pending                                             map[string]net.Listener
+	backendPort, uploadPort, downloadPort, privatePort  int
+	caFiles                                             []xhttpTLSCAFile
+}
+
+func (p *xhttpTLSPlan) closePending() {
+	for name, listener := range p.pending {
+		_ = listener.Close()
+		delete(p.pending, name)
+	}
+}
+
+func (p *xhttpTLSPlan) claim(t *testing.T, name string) net.Listener {
+	t.Helper()
+	listener := p.pending[name]
+	if listener == nil {
+		t.Fatal("XHTTP TLS reservation already consumed", name)
+	}
+	delete(p.pending, name)
+	return listener
+}
+
+func xhttpTLSWriteNew(t *testing.T, path string, data []byte) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
 		t.Fatal(err)
 	}
-	nonce := hex.EncodeToString(nonceBytes[:])
+	_, writeError := file.Write(data)
+	closeError := file.Close()
+	if writeError != nil || closeError != nil {
+		t.Fatal("XHTTP TLS private input write failed", writeError, closeError)
+	}
+}
+
+func (p *xhttpTLSPlan) saveSource(t *testing.T) {
+	t.Helper()
+	data, err := json.Marshal(p.source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	xhttpTLSWriteNew(t, p.sourcePath, data)
+	p.sourceData = data
+}
+
+func planXHTTPTLS(t *testing.T, mode, directory string, reservePrivate bool) *xhttpTLSPlan {
+	t.Helper()
+	if mode != "independent" && mode != "wrong_ca" && mode != "wrong_sni" {
+		t.Fatal("unknown XHTTP TLS planned mode")
+	}
+	p := &xhttpTLSPlan{mode: mode, directory: directory, assetsDirectory: filepath.Join(directory, "assets"),
+		sourcePath: filepath.Join(directory, "source.json"), material: makeXHTTPTLSMaterial(t), pending: map[string]net.Listener{}}
+	t.Cleanup(p.closePending)
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatal(err)
+	}
+	p.nonce = hex.EncodeToString(nonce[:])
+	p.origin = httptest.NewUnstartedServer(nil)
+	p.pending["origin"] = p.origin.Listener
+	reserve := func(name string) int {
+		listener, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.pending[name] = listener
+		return listener.Addr().(*net.TCPAddr).Port
+	}
+	p.backendPort, p.uploadPort, p.downloadPort = reserve("backend"), reserve("upload"), reserve("download")
+	if reservePrivate {
+		p.privatePort = reserve("private")
+	}
+	p.downloadName, p.trust = "download-tls.invalid", p.material.ca
+	if mode == "wrong_ca" {
+		p.trust = p.material.foreign
+	}
+	if mode == "wrong_sni" {
+		p.downloadName = "wrong-download.invalid"
+	}
+	if err := os.Mkdir(p.assetsDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	caPath, downloadCAPath := filepath.Join(p.assetsDirectory, "upload-ca.pem"), filepath.Join(p.assetsDirectory, "download-ca.pem")
+	for _, entry := range []struct {
+		path string
+		data []byte
+	}{{caPath, p.material.ca}, {downloadCAPath, p.trust}} {
+		xhttpTLSWriteNew(t, entry.path, entry.data)
+		p.caFiles = append(p.caFiles, xhttpTLSCAFile{entry.path, fmt.Sprintf("%x", sha256.Sum256(entry.data))})
+	}
+	tlsSettings := func(name, ca string) map[string]any {
+		return map[string]any{"serverName": name, "alpn": []string{"h2"}, "disableSystemRoot": true, "masterKeyLog": "",
+			"certificates": []any{map[string]any{"usage": "verify", "certificateFile": ca}}}
+	}
+	headers := xhttpHeaderData()
+	headers["X-Fixture-Nonce"] = p.nonce
+	download := map[string]any{"address": "endpoint.invalid", "port": p.downloadPort, "network": "xhttp", "security": "tls",
+		"tlsSettings": tlsSettings(p.downloadName, downloadCAPath), "sockopt": map[string]any{"tcpKeepAliveIdle": 7},
+		"xhttpSettings": map[string]any{"path": "/download", "host": "download.invalid", "headers": headers}}
+	stream := map[string]any{"network": "xhttp", "security": "tls", "tlsSettings": tlsSettings("upload-tls.invalid", caPath),
+		"sockopt": map[string]any{"penetrate": false}, "xhttpSettings": map[string]any{"path": "/upload", "host": "upload.invalid",
+			"mode": "packet-up", "headers": headers, "downloadSettings": download}}
+	p.source = map[string]any{"log": map[string]any{"loglevel": "none"}, "inbounds": []any{}, "outbounds": []any{
+		map[string]any{"tag": "proxy", "protocol": "vless", "settings": map[string]any{"address": "endpoint.invalid", "port": p.uploadPort,
+			"id": "11111111-1111-4111-8111-111111111111", "encryption": "none"}, "streamSettings": stream},
+		map[string]any{"tag": "direct", "protocol": "freedom"}, map[string]any{"tag": "block", "protocol": "blackhole"}},
+		"dns": map[string]any{"hosts": map[string]any{"endpoint.invalid": "127.0.0.2"}, "queryStrategy": "UseIPv4", "servers": []string{"tcp://9.9.9.9"}}}
+	return p
+}
+
+func runNativeXHTTPTLS(t *testing.T, mode string) {
+	plan := planXHTTPTLS(t, mode, t.TempDir(), false)
+	plan.saveSource(t)
+	activateXHTTPTLS(t, plan, func(t *testing.T) ([]byte, int) { return prepare(t, plan.source) })
+}
+
+func activateXHTTPTLS(t *testing.T, plan *xhttpTLSPlan, preparedInput func(*testing.T) ([]byte, int)) {
+	mode, material, nonce := plan.mode, plan.material, plan.nonce
 	payload := append([]byte(nonce+":"), xhttpPayload()...)
 	observations := new(fixture)
 	var uploadHellos, downloadHellos, uploadH2, downloadH2, badCertificates atomic.Int64
@@ -180,7 +307,9 @@ func runNativeXHTTPTLS(t *testing.T, mode string) {
 		}
 	})
 
-	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	t.Cleanup(plan.closePending)
+	origin := plan.origin
+	origin.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		body, err := io.ReadAll(io.LimitReader(r.Body, int64(len(payload)+1)))
 		if mode != "independent" || err != nil || r.Method != "POST" || r.Host != "payload.invalid" ||
@@ -193,18 +322,14 @@ func runNativeXHTTPTLS(t *testing.T, mode string) {
 		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 		_, err = w.Write(body)
 		observations.fail(err)
-	}))
+	})
+	_ = plan.claim(t, "origin")
 	origin.Config.ReadHeaderTimeout = 5 * time.Second
 	origin.Start()
 	t.Cleanup(func() { origin.CloseClientConnections(); origin.Close() })
 	originAddress := netip.MustParseAddrPort(strings.TrimPrefix(origin.URL, "http://"))
 
-	reservation, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reservation.Close() })
-	backendPort := reservation.Addr().(*net.TCPAddr).Port
+	backendPort := plan.backendPort
 	const identity = "11111111-1111-4111-8111-111111111111"
 	backendSource := map[string]any{"log": map[string]any{"loglevel": "none"},
 		"inbounds": []any{map[string]any{"listen": "127.0.0.1", "port": backendPort, "protocol": "vless",
@@ -233,7 +358,7 @@ func runNativeXHTTPTLS(t *testing.T, mode string) {
 			t.Error(err)
 		}
 	})
-	if err := reservation.Close(); err != nil {
+	if err := plan.claim(t, "backend").Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := backendCore.Start(); err != nil {
@@ -241,14 +366,7 @@ func runNativeXHTTPTLS(t *testing.T, mode string) {
 	}
 	backend, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", backendPort))
 
-	downloadName := "download-tls.invalid"
-	trust := material.ca
-	if mode == "wrong_ca" {
-		trust = material.foreign
-	}
-	if mode == "wrong_sni" {
-		downloadName = "wrong-download.invalid"
-	}
+	downloadName, trust := plan.downloadName, plan.trust
 	// Prove the exact intended CA/name mismatch independently of a socket EOF.
 	leaf, err := x509.ParseCertificate(material.download.Certificate[0])
 	if err != nil {
@@ -292,7 +410,7 @@ func runNativeXHTTPTLS(t *testing.T, mode string) {
 			}
 			return certificate, nil
 		}}
-		l := listener(t, func(raw net.Conn) {
+		l := networkListenerFrom(t, plan.claim(t, role), func(raw net.Conn) {
 			_ = raw.SetDeadline(time.Now().Add(12 * time.Second))
 			secured := tls.Server(raw, tlsConfig)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -347,34 +465,13 @@ func runNativeXHTTPTLS(t *testing.T, mode string) {
 		t.Cleanup(func() { stopping.Store(true) })
 		return l.Addr().(*net.TCPAddr).Port
 	}
-	uploadPort, downloadPort := front("upload"), front("download")
-	caPath, downloadCAPath := filepath.Join(t.TempDir(), "upload-ca.pem"), filepath.Join(t.TempDir(), "download-ca.pem")
-	for path, data := range map[string][]byte{caPath: material.ca, downloadCAPath: trust} {
-		if err := os.WriteFile(path, data, 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	tlsSettings := func(name, ca string) map[string]any {
-		return map[string]any{"serverName": name, "alpn": []string{"h2"}, "disableSystemRoot": true, "masterKeyLog": "",
-			"certificates": []any{map[string]any{"usage": "verify", "certificateFile": ca}}}
-	}
-	headers := xhttpHeaderData()
-	headers["X-Fixture-Nonce"] = nonce
-	download := map[string]any{"address": "endpoint.invalid", "port": downloadPort, "network": "xhttp", "security": "tls",
-		"tlsSettings": tlsSettings(downloadName, downloadCAPath), "sockopt": map[string]any{"tcpKeepAliveIdle": 7},
-		"xhttpSettings": map[string]any{"path": "/download", "host": "download.invalid", "headers": headers}}
-	stream := map[string]any{"network": "xhttp", "security": "tls", "tlsSettings": tlsSettings("upload-tls.invalid", caPath),
-		"sockopt": map[string]any{"penetrate": false}, "xhttpSettings": map[string]any{"path": "/upload", "host": "upload.invalid",
-			"mode": "packet-up", "headers": headers, "downloadSettings": download}}
-	source := map[string]any{"log": map[string]any{"loglevel": "none"}, "inbounds": []any{}, "outbounds": []any{
-		map[string]any{"tag": "proxy", "protocol": "vless", "settings": map[string]any{"address": "endpoint.invalid", "port": uploadPort, "id": identity, "encryption": "none"}, "streamSettings": stream},
-		map[string]any{"tag": "direct", "protocol": "freedom"}, map[string]any{"tag": "block", "protocol": "blackhole"}},
-		"dns": map[string]any{"hosts": map[string]any{"endpoint.invalid": "127.0.0.2"}, "queryStrategy": "UseIPv4", "servers": []string{"tcp://9.9.9.9"}}}
-	before, err := json.Marshal(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prepared, port := prepare(t, source)
+	front("upload")
+	front("download")
+	source := plan.source
+	stream := source["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)
+	download := stream["xhttpSettings"].(map[string]any)["downloadSettings"].(map[string]any)
+	prepared, port := preparedInput(t)
+	before := plan.sourceData
 	after, _ := json.Marshal(source)
 	if !bytes.Equal(before, after) {
 		t.Fatal("native XHTTP TLS preparation mutated source")
@@ -402,6 +499,14 @@ func runNativeXHTTPTLS(t *testing.T, mode string) {
 	}
 	if err := os.WriteFile(specPath, specData, 0600); err != nil {
 		t.Fatal(err)
+	}
+	if _, exists := plan.pending["private"]; exists {
+		if port != plan.privatePort {
+			t.Fatal("Android native private port changed")
+		}
+		if err := plan.claim(t, "private").Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
 	defer cancel()

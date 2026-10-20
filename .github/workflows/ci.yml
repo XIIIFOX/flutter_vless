@@ -239,7 +239,7 @@ jobs:
         run: |
           python3 tool/build_native_routing_cli.py --output build/android-native-routing-check
           build/android-native-routing-check/xray native-routing check --config "$RUNNER_TEMP/android-routing-pair/config.json" --spec "$RUNNER_TEMP/android-routing-pair/spec.json" > build/android-native-routing-check/android-pair-check.log
-      - name: Test native Android logical proxy chains with exact Core input
+      - name: Test native Android logical chains and XHTTP TLS with exact Core input
         run: |
           python3 tool/test_android_logical_chain_runtime.py --self-test
           python3 tool/test_android_logical_chain_runtime.py --run-runtime
@@ -271,6 +271,8 @@ jobs:
             build/android_logical_chain_runtime/*.log
             build/android_logical_chain_runtime/result.json
             build/android_logical_chain_runtime/*/metadata.json
+            build/android_logical_chain_runtime/xhttp-tls/gradle-export.log
+            build/android_logical_chain_runtime/xhttp-tls/*/export/metadata.json
           if-no-files-found: ignore
           retention-days: 7
 

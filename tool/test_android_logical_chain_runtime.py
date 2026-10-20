@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""One actual Android-native-output SOCKS chain, only in Linux GitHub CI."""
+"""Exact Android-native-output SOCKS chain and XHTTP TLS, only in Linux GitHub CI."""
 from __future__ import annotations
 
 import argparse
+import collections
 import contextlib
 import hashlib
 import importlib.util
@@ -14,6 +15,7 @@ import platform
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -29,6 +31,10 @@ HARD_STOP = common.stop_owned_process
 EVIDENCE = ROOT / 'build/android_logical_chain_runtime'
 TEST = 'TestAndroidLogicalChainRuntime'
 MARKER = 'ANDROID_LOGICAL_CHAIN_RUNTIME_PASS=1'
+TLS_TEST = 'TestAndroidXHTTPTLSRuntime'
+TLS_MODES = ('independent', 'wrong_ca', 'wrong_sni')
+TLS_MARKER = 'ANDROID_XHTTP_TLS_H2_PASS'
+TLS_SOURCE = 'android_xhttp_tls_runtime_linux_test.go'
 MANIFEST_PATH = ROOT / 'third_party/xray-native-dns/pin-manifest.json'
 
 
@@ -102,6 +108,105 @@ def verify_export(directory):
     return {key: metadata[key] for key in ('version', 'configSHA256', 'sourceSHA256', 'preparedSHA256', 'privatePort', 'outerPort')}
 
 
+def verify_tls_runtime(log, result):
+    if (result.get('exit_code') != 0 or result.get('process_exit_code') != 0 or
+            result.get('timed_out') is not False or result.get('output_eof') is not True or
+            result.get('output_closed') is not True or result.get('output_errors') != []):
+        raise ValueError('Actual Android TLS output did not complete successfully')
+    marker = re.compile(r'^\s+' + re.escape(TLS_SOURCE) + r':\d+: ' + TLS_MARKER +
+                        r' mode=(independent|wrong_ca|wrong_sni)\r?$')
+    modes = []
+    for line in log.splitlines():
+        if TLS_MARKER not in line:
+            continue
+        match = marker.fullmatch(line)
+        if not match:
+            raise ValueError('Android TLS marker has an unexpected source or mode')
+        modes.append(match.group(1))
+    if collections.Counter(modes) != collections.Counter(TLS_MODES):
+        raise ValueError('Exactly three Android TLS mode markers are required')
+    selected = [TLS_TEST, *(TLS_TEST + '/' + mode for mode in TLS_MODES)]
+    for name in selected:
+        if len(re.findall(r'^\s*--- PASS: ' + re.escape(name) + r' \(', log, re.M)) != 1:
+            raise ValueError('Every selected Android TLS mode must pass exactly once')
+    if re.search(r'^\s*--- (?:FAIL|SKIP):', log, re.M) or not re.search(r'\nPASS\r?\n?\Z', log):
+        raise ValueError('Android TLS tests or cleanup failed, skipped or did not finish')
+
+
+def private_file(path, limit):
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600 or not 0 < info.st_size <= limit:
+        raise ValueError('Android TLS export requires bounded private regular files')
+    return path.read_bytes()
+
+
+def private_directory(path):
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700:
+        raise ValueError('Android TLS export requires private real directories')
+
+
+def verify_tls_exports(directory):
+    """Bind receipts only; exact configs and CA/source files stay private."""
+    private_directory(directory)
+    manifest = json.loads(private_file(directory / 'manifest.json', 32768))
+    if not isinstance(manifest, dict):
+        raise ValueError('Android TLS manifest must be an object')
+    entries = manifest.get('entries', [])
+    if (type(manifest.get('version')) is not int or manifest['version'] != 1 or
+            not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries) or
+            [entry.get('mode') for entry in entries] != list(TLS_MODES)):
+        raise ValueError('Android TLS manifest must contain the exact three fresh modes')
+    summaries = []
+    seen_ports = set()
+    for entry in entries:
+        mode = entry['mode']
+        owned = directory / mode
+        assets, output = owned / 'assets', owned / 'export'
+        for path in (owned, assets, output):
+            private_directory(path)
+        paths = {'sourcePath': owned / 'source.json', 'outputDirectory': output,
+                 'certificateAssetsDirectory': assets}
+        if any(entry.get(key) != str(path) for key, path in paths.items()):
+            raise ValueError('Android TLS export was retargeted outside its mode')
+        ports = {key: entry.get(key) for key in ('privatePort', 'uploadPort', 'downloadPort')}
+        if any(type(value) is not int or not 1 <= value <= 65535 for value in ports.values()):
+            raise ValueError('Android TLS listener ports must be exact numeric ports')
+        if len(set(ports.values())) != 3 or seen_ports.intersection(ports.values()):
+            raise ValueError('Android TLS mode reservations must remain distinct')
+        seen_ports.update(ports.values())
+        source_hash = hashlib.sha256(private_file(paths['sourcePath'], 1 << 20)).hexdigest()
+        if entry.get('sourceSHA256') != source_hash:
+            raise ValueError('Android TLS source hash changed after planning')
+        certificates = entry.get('caFiles')
+        ca_paths = [assets / 'upload-ca.pem', assets / 'download-ca.pem']
+        if (not isinstance(certificates, list) or len(certificates) != 2 or
+                any(not isinstance(record, dict) for record in certificates) or
+                any(record.get('path') != str(path) for record, path in zip(certificates, ca_paths))):
+            raise ValueError('Android TLS CA owners changed')
+        for record, path in zip(certificates, ca_paths):
+            if record.get('sha256') != hashlib.sha256(private_file(path, 32768)).hexdigest():
+                raise ValueError('Android TLS CA hash changed after planning')
+        data = private_file(output / 'config.json', 1 << 20)
+        metadata = json.loads(private_file(output / 'metadata.json', 32768))
+        if not isinstance(metadata, dict):
+            raise ValueError('Android TLS metadata must be an object')
+        if (type(metadata.get('version')) is not int or metadata['version'] != 1 or metadata.get('mode') != mode or
+                metadata.get('configSHA256') != hashlib.sha256(data).hexdigest() or
+                metadata.get('sourceSHA256') != source_hash or
+                not isinstance(metadata.get('preparedSHA256'), str) or
+                not re.fullmatch('[0-9a-f]{64}', metadata['preparedSHA256']) or
+                any(type(metadata.get(key)) is not int or metadata[key] != value for key, value in ports.items()) or
+                metadata.get('certificateAssetsDirectory') != str(assets) or metadata.get('caFiles') != certificates or
+                not isinstance(metadata.get('managedInboundTag'), str) or not metadata['managedInboundTag'] or
+                metadata.get('username') != 'session-user' or metadata.get('password') != 'session-password'):
+            raise ValueError('Android TLS native-output provenance or listener binding changed')
+        summaries.append({key: metadata[key] for key in
+                          ('version', 'mode', 'configSHA256', 'sourceSHA256', 'preparedSHA256', *ports)})
+        summaries[-1]['caSHA256'] = [record['sha256'] for record in certificates]
+    return summaries
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-runtime', action='store_true')
@@ -124,8 +229,9 @@ def main(argv=None):
     metadata_path = ROOT / 'example/android/gradle/verification-metadata.xml'
     metadata_before = metadata_path.read_bytes()
     kotlin_cache_before = (ROOT / 'example/android/.kotlin').exists()
-    report = {'success': False, 'selected_test': TEST, 'source_sha256': before, 'results': [],
-              'scope': 'ordinary pinned Core using exact actual Android preparation+manager output; local IPv4 double SOCKS only, no TUN/device'}
+    report = {'success': False, 'selected_test': TEST, 'selected_tls_test': TLS_TEST,
+              'source_sha256': before, 'results': [],
+              'scope': 'ordinary pinned Core using exact actual Android preparation+manager output; IPv4 double SOCKS and XHTTP TLS/h2 only, no TUN/device'}
     source = source_before = copied_before = None
     previous_handlers = {}
     try:
@@ -162,6 +268,9 @@ def main(argv=None):
         run('actual-android-chain', [str(binary), '-test.run=^' + TEST + '$', '-test.v', '-test.timeout=200s'], 215, runtime=True)
         verify_runtime((EVIDENCE / 'actual-android-chain.log').read_text(), report['results'][-1])
         report['native_export'] = verify_export(EVIDENCE / 'export-pair')
+        run('actual-android-xhttp-tls', [str(binary), '-test.run=^' + TLS_TEST + '$', '-test.v', '-test.timeout=240s'], 255, runtime=True)
+        verify_tls_runtime((EVIDENCE / 'actual-android-xhttp-tls.log').read_text(), report['results'][-1])
+        report['native_tls_exports'] = verify_tls_exports(EVIDENCE / 'xhttp-tls')
         report['success'] = True
     except (OSError, ValueError, RuntimeError, KeyError, helpers.Interrupted) as error:
         report['error'] = type(error).__name__ + ': ' + str(error)
@@ -189,7 +298,118 @@ class AndroidChainRunnerTests(unittest.TestCase):
         return '    fixture.go:1: ' + MARKER + '\n--- PASS: ' + TEST + ' (0.01s)\nPASS\n'
 
     def good_result(self):
-        return {'exit_code': 0, 'output_eof': True, 'output_closed': True, 'output_errors': []}
+        return {'exit_code': 0, 'process_exit_code': 0, 'timed_out': False,
+                'output_eof': True, 'output_closed': True, 'output_errors': []}
+
+    def good_tls_log(self):
+        body = ''.join('    ' + TLS_SOURCE + ':123: ' + TLS_MARKER + ' mode=' + mode + '\n' +
+                       '    --- PASS: ' + TLS_TEST + '/' + mode + ' (0.01s)\n' for mode in TLS_MODES)
+        return body + '--- PASS: ' + TLS_TEST + ' (0.03s)\nPASS\n'
+
+    def make_tls_exports(self, directory):
+        directory.mkdir(mode=0o700)
+        entries = []
+
+        def write(path, data):
+            path.write_bytes(data)
+            path.chmod(0o600)
+
+        for index, mode in enumerate(TLS_MODES):
+            owned = directory / mode; owned.mkdir(mode=0o700)
+            assets = owned / 'assets'; assets.mkdir(mode=0o700)
+            output = owned / 'export'; output.mkdir(mode=0o700)
+            source = json.dumps({'syntheticSource': mode}).encode()
+            config = json.dumps({'syntheticNativeOutput': mode}).encode()
+            write(owned / 'source.json', source)
+            write(output / 'config.json', config)
+            certificates = []
+            for role in ('upload', 'download'):
+                path = assets / (role + '-ca.pem')
+                data = ('synthetic CA bytes ' + mode + role).encode()
+                write(path, data)
+                certificates.append({'path': str(path), 'sha256': hashlib.sha256(data).hexdigest()})
+            ports = {'privatePort': 18100 + index * 10, 'uploadPort': 18101 + index * 10,
+                     'downloadPort': 18102 + index * 10}
+            entry = {'mode': mode, 'sourcePath': str(owned / 'source.json'),
+                     'sourceSHA256': hashlib.sha256(source).hexdigest(), 'outputDirectory': str(output),
+                     'certificateAssetsDirectory': str(assets), 'caFiles': certificates, **ports}
+            entries.append(entry)
+            metadata = {'version': 1, 'mode': mode, 'sourceSHA256': entry['sourceSHA256'],
+                        'preparedSHA256': 'b' * 64, 'configSHA256': hashlib.sha256(config).hexdigest(),
+                        'certificateAssetsDirectory': str(assets), 'caFiles': certificates, **ports,
+                        'managedInboundTag': 'generated-native-input',
+                        'username': 'session-user', 'password': 'session-password'}
+            write(output / 'metadata.json', json.dumps(metadata).encode())
+        manifest = {'version': 1, 'entries': entries}
+        write(directory / 'manifest.json', json.dumps(manifest).encode())
+        return manifest
+
+    def test_tls_requires_each_exact_source_marker_and_selected_mode(self):
+        good = self.good_tls_log()
+        verify_tls_runtime(good, self.good_result())
+        for body in (good.replace('mode=wrong_ca', 'mode=wrong_sni'),
+                     good.replace(TLS_SOURCE, 'stale_fixture.go'),
+                     good.replace(TLS_MARKER, TLS_MARKER + '_OLD'),
+                     good + '    ' + TLS_SOURCE + ':123: ' + TLS_MARKER + ' mode=independent\n',
+                     good.replace('    ' + TLS_SOURCE + ':123: ' + TLS_MARKER + ' mode=wrong_sni\n', ''),
+                     good.replace('--- PASS: ' + TLS_TEST + '/wrong_ca', '--- SKIP: ' + TLS_TEST + '/wrong_ca'),
+                     good.replace('--- PASS: ' + TLS_TEST + '/wrong_ca', '--- PASS: stale_test/wrong_ca'),
+                     good + '--- FAIL: owned_refusal_cleanup (0.01s)\n',
+                     good.removesuffix('PASS\n')):
+            with self.subTest(body=body), self.assertRaises(ValueError):
+                verify_tls_runtime(body, self.good_result())
+
+    def test_tls_rejects_partial_or_unsuccessful_output(self):
+        for key, value in [('exit_code', 1), ('process_exit_code', 1), ('timed_out', True),
+                           ('output_eof', False), ('output_closed', False), ('output_errors', ['failure'])]:
+            result = self.good_result(); result[key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                verify_tls_runtime(self.good_tls_log(), result)
+        result = self.good_result(); del result['output_eof']
+        with self.assertRaises(ValueError):
+            verify_tls_runtime(self.good_tls_log(), result)
+
+    def test_tls_export_binds_exact_mode_source_ports_ca_and_native_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            owned = Path(directory) / 'xhttp-tls'
+            self.make_tls_exports(owned)
+            summary = verify_tls_exports(owned)
+            self.assertEqual([row['mode'] for row in summary], list(TLS_MODES))
+            self.assertTrue(all(len(row['caSHA256']) == 2 for row in summary))
+            rendered = json.dumps(summary)
+            self.assertNotIn('session-password', rendered)
+            self.assertNotIn('syntheticNativeOutput', rendered)
+            self.assertNotIn(str(owned), rendered)
+
+    def test_tls_export_rejects_stale_retargeted_or_omitted_inputs(self):
+        for defect in ('source', 'config', 'ca', 'source-hash', 'prepared-hash', 'port', 'ca-binding',
+                       'retarget', 'missing', 'duplicate', 'foreign-mode', 'credentials', 'permission', 'symlink'):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
+                owned = Path(directory) / 'xhttp-tls'
+                manifest = self.make_tls_exports(owned)
+                output = owned / 'wrong_ca/export'
+                metadata = json.loads((output / 'metadata.json').read_text())
+                if defect in ('source', 'config', 'ca'):
+                    path = {'source': owned / 'wrong_ca/source.json', 'config': output / 'config.json',
+                            'ca': owned / 'wrong_ca/assets/download-ca.pem'}[defect]
+                    path.write_bytes(path.read_bytes() + b' ')
+                elif defect == 'source-hash': metadata['sourceSHA256'] = '0' * 64
+                elif defect == 'prepared-hash': metadata['preparedSHA256'] = None
+                elif defect == 'port': metadata['privatePort'] += 1
+                elif defect == 'ca-binding': metadata['caFiles'][1]['sha256'] = '0' * 64
+                elif defect == 'retarget': manifest['entries'][1]['outputDirectory'] = str(owned / 'independent/export')
+                elif defect == 'missing': manifest['entries'].pop()
+                elif defect == 'duplicate': manifest['entries'][2] = manifest['entries'][1]
+                elif defect == 'foreign-mode': metadata['mode'] = 'independent'
+                elif defect == 'credentials': metadata['password'] = 'stale-password'
+                elif defect == 'permission': (output / 'config.json').chmod(0o644)
+                elif defect == 'symlink':
+                    path = output / 'config.json'; other = output / 'old-config.json'
+                    path.rename(other); path.symlink_to(other.name)
+                (owned / 'manifest.json').write_text(json.dumps(manifest))
+                (output / 'metadata.json').write_text(json.dumps(metadata))
+                with self.assertRaises(ValueError):
+                    verify_tls_exports(owned)
 
     def test_interrupt_uses_the_actual_shared_exception(self):
         with self.assertRaises(helpers.Interrupted):
@@ -268,6 +488,73 @@ class AndroidChainRunnerTests(unittest.TestCase):
             (root / 'config.json').write_bytes(data + b' ')
             with self.assertRaises(ValueError):
                 verify_export(root)
+
+    def test_main_runs_both_bounded_wire_phases_from_one_compiled_binary(self):
+        # Exercise the actual main dispatch with inert commands and private temp
+        # files. A successful old-chain phase cannot qualify the new TLS phase.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            mobile = root / 'third_party/xray-mobile'
+            (mobile / 'native_dns_preservation').mkdir(parents=True)
+            (mobile / 'go.mod').write_text('module inert')
+            (mobile / 'native_dns_preservation/inert_test.go').write_text('package inert')
+            metadata = root / 'example/android/gradle/verification-metadata.xml'
+            metadata.parent.mkdir(parents=True)
+            metadata.write_text('unchanged')
+            manifest = root / 'pin.json'
+            manifest.write_text(json.dumps({'module': 'inert/core', 'module_version': 'v1', 'upstream_sha256': {}}))
+            output = root / 'evidence'
+            cache = root / 'cache'; cache.mkdir()
+            commands = []
+
+            def fake_checked(name, command, **options):
+                commands.append((name, command, options['seconds'], options.get('runtime', False)))
+                options['results'].append({'name': name, **self.good_result(),
+                                          'process_exit_code': 0, 'timed_out': False})
+                if name in ('core-pin', 'core-selection'):
+                    body = json.dumps({'Path': 'inert/core', 'Version': 'v1', 'Sum': 'inert', 'Dir': str(cache)})
+                elif name == 'actual-android-chain':
+                    body = self.good_log()
+                    pair = output / 'export-pair'; pair.mkdir()
+                    data = b'{"synthetic":true}'
+                    (pair / 'config.json').write_bytes(data)
+                    (pair / 'metadata.json').write_text(json.dumps({'version': 1,
+                        'configSHA256': hashlib.sha256(data).hexdigest(), 'sourceSHA256': 'a' * 64,
+                        'preparedSHA256': 'b' * 64, 'privatePort': 10807, 'outerPort': 19090}))
+                elif name == 'actual-android-xhttp-tls':
+                    body = self.good_tls_log()
+                    self.make_tls_exports(output / 'xhttp-tls')
+                else:
+                    body = ''
+                (output / (name + '.log')).write_text(body)
+
+            module = sys.modules[__name__]
+            with patch.object(module, 'ROOT', root), patch.object(module, 'EVIDENCE', output), \
+                 patch.object(module, 'MANIFEST_PATH', manifest), patch.object(module, 'authorized', return_value=True), \
+                 patch.object(module, 'source_snapshot', return_value={'inert': 'unchanged'}), \
+                 patch.object(module, 'checked', side_effect=fake_checked), \
+                 patch.object(module, 'verify_tls_runtime', wraps=verify_tls_runtime) as verify_tls, \
+                 patch.object(module, 'verify_tls_exports', wraps=verify_tls_exports) as verify_exports, \
+                 patch.object(helpers, 'validate_metadata', return_value=cache), \
+                 patch.object(helpers, 'tree_snapshot', return_value={'inert': 'unchanged'}), \
+                 patch.object(shutil, 'which', return_value='/inert/go'):
+                self.assertEqual(main(['--run-runtime']), 0)
+            verify_tls.assert_called_once()
+            self.assertEqual(verify_tls.call_args.args[0], self.good_tls_log())
+            verify_exports.assert_called_once_with(output / 'xhttp-tls')
+            report = json.loads((output / 'result.json').read_text())
+            self.assertEqual(report['selected_tls_test'], TLS_TEST)
+            self.assertEqual([row['mode'] for row in report['native_tls_exports']], list(TLS_MODES))
+            for key in ('source_unchanged', 'android_verification_metadata_restored',
+                        'new_kotlin_cache_removed', 'ordinary_core_cache_unchanged', 'copied_mobile_source_unchanged'):
+                self.assertIs(report[key], True)
+            compile_commands = [row for row in commands if row[0] == 'runtime-compile']
+            self.assertEqual(len(compile_commands), 1)
+            phases = [row for row in commands if row[3]]
+            binary = str(output / 'android-chain.test')
+            self.assertEqual(phases, [
+                ('actual-android-chain', [binary, '-test.run=^TestAndroidLogicalChainRuntime$', '-test.v', '-test.timeout=200s'], 215, True),
+                ('actual-android-xhttp-tls', [binary, '-test.run=^TestAndroidXHTTPTLSRuntime$', '-test.v', '-test.timeout=240s'], 255, True)])
 
     def test_inherited_core_and_browser_environment_is_sanitized(self):
         environment = helpers.child_environment({'XRAY_LOCATION_ASSET': 'outside', 'xray.browser.dialer': 'outside', 'KEEP': 'yes'})

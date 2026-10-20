@@ -11,6 +11,7 @@ on:
           - all
           - android-emulator
           - apple-runtime
+          - apple-host-policy
           - apple-fakedns
           - core-dns-context
           - native-config
@@ -33,6 +34,36 @@ on:
       - master
 
 jobs:
+  apple-host-policy:
+    if: github.event_name == 'workflow_dispatch' && inputs.validation == 'apple-host-policy'
+    name: Apple host startup policy
+    runs-on: ${{ inputs.apple_runner || 'macos-latest' }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test actual host managers and provider startup with inert boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/apple-host-policy
+          bash tool/test_ios_manager_policy.sh 2>&1 | tee build/apple-host-policy/ios-manager.log
+          bash tool/test_macos_manager_policy.sh 2>&1 | tee build/apple-host-policy/macos-manager.log
+          python3 tool/test_apple_start_owner.py
+          python3 tool/test_apple_cold_start_policy.py --receipts
+      - name: Preserve synthetic host startup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-host-policy-evidence
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            build/apple-host-policy/*.log
+            build/apple-start-owner-current/*.log
+            build/apple-start-owner-current/result.json
+            build/apple-cold-start-current/*.log
+            build/apple-cold-start-current/result.json
+
   acceptance-tools:
     if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'acceptance-tools' || inputs.validation == 'apple-runtime' || inputs.validation == 'apple-windows'
     name: Acceptance timing controls (${{ matrix.os }})

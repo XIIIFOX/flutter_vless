@@ -23,7 +23,7 @@ class NEVPNConnection {
     var connectedDate: Date?
     func startVPNTunnel() throws {
         SDK.startCalls += 1
-        SDK.startWasDisarmed.append(SDK.profile?.isOnDemandEnabled == false && SDK.profile?.onDemandRules == nil)
+        SDK.startWasDisarmed.append(SDK.profile?.isOnDemandEnabled == false && (SDK.profile?.onDemandRules ?? []).isEmpty)
         if SDK.failNextStart { SDK.failNextStart = false; throw SDKError.unavailable }
         status = .connecting
     }
@@ -52,6 +52,9 @@ class NEOnDemandRuleConnect: NEOnDemandRule {
 }
 enum SDKError: Error { case unavailable }
 enum SDK {
+    enum CandidateRefreshMutation: String, CaseIterable {
+        case onDemandEnabled, disabledManager, rulesWhileDisabled, normalizedEmptyRules
+    }
     static var routingCapability: Int64 = 0
     static var profile: NETunnelProviderManager?
     static var failAllLoads = false
@@ -68,6 +71,10 @@ enum SDK {
     static var failNextStart = false
     static var delayedStop = false
     static var providerResponse: Data?
+    static var nextCandidateRefreshMutation: CandidateRefreshMutation?
+    static var pendingCandidateRefreshMutation: (mutation: CandidateRefreshMutation, reference: Data)?
+    static var candidateRefreshMutations = 0
+    static var candidateReferenceUnchanged = false
 
     // Explicit external provider-admission boundary. Host start never invokes
     // this; the real provider's admission/rollback helper has separate tests.
@@ -85,6 +92,8 @@ enum SDK {
         failNextSave = false; loads = 0; notifyTemporaryConnections = false
         saves = 0; stopCalls = 0; startCalls = 0; startWasDisarmed = []; failNextStart = false
         delayedStop = false; providerResponse = nil
+        nextCandidateRefreshMutation = nil; pendingCandidateRefreshMutation = nil
+        candidateRefreshMutations = 0; candidateReferenceUnchanged = false
     }
 }
 func FLVlessCoreRoutingCapability() -> Int64 { SDK.routingCapability }
@@ -105,6 +114,18 @@ class NETunnelProviderManager {
     }
     func loadFromPreferences() async throws {
         if SDK.failNextRefresh { SDK.failNextRefresh = false; throw SDKError.unavailable }
+        if let pending = SDK.pendingCandidateRefreshMutation {
+            SDK.pendingCandidateRefreshMutation = nil
+            switch pending.mutation {
+            case .onDemandEnabled: isOnDemandEnabled = true; onDemandRules = [NEOnDemandRuleConnect()]
+            case .disabledManager: isEnabled = false
+            case .rulesWhileDisabled: onDemandRules = [NEOnDemandRuleConnect()]
+            case .normalizedEmptyRules: onDemandRules = []
+            }
+            let reference = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["xrayConfigReference"] as? Data
+            SDK.candidateReferenceUnchanged = reference == pending.reference
+            SDK.candidateRefreshMutations += 1
+        }
         if SDK.rearmOnNextRefresh && !isEnabled {
             SDK.rearmOnNextRefresh = false
             isEnabled = true
@@ -114,6 +135,13 @@ class NETunnelProviderManager {
     func saveToPreferences() async throws {
         if SDK.failNextSave { SDK.failNextSave = false; throw SDKError.unavailable }
         SDK.saves += 1; SDK.profile = self
+        // Only the next saved candidate reference can inject this readback;
+        // permission placeholders, loadAll calls and rollback saves cannot.
+        if let mutation = SDK.nextCandidateRefreshMutation,
+           let reference = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["xrayConfigReference"] as? Data {
+            SDK.nextCandidateRefreshMutation = nil
+            SDK.pendingCandidateRefreshMutation = (mutation, reference)
+        }
         if SDK.failAfterNextSave { SDK.failAfterNextSave = false; SDK.failNextRefresh = true }
     }
     func removeFromPreferences() async throws { SDK.profile = nil }

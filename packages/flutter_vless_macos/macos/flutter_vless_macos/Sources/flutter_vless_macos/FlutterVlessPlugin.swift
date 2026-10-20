@@ -1637,6 +1637,12 @@ final class PacketTunnelManager: ObservableObject {
             let readback = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
             guard try TunnelSecretProfile.reference(in: readback) == reference,
                   try store.read(reference) == config else { throw TunnelSecretError.profileVerificationFailed }
+            if !preserveRecoveryPolicy {
+                guard manager.isEnabled == activate, !manager.isOnDemandEnabled,
+                      (manager.onDemandRules ?? []).isEmpty else {
+                    throw TunnelSecretError.profileVerificationFailed
+                }
+            }
         } catch {
             // Roll back the prior reference and its policy together. A fresh
             // failed start stays disarmed; an established prior profile keeps

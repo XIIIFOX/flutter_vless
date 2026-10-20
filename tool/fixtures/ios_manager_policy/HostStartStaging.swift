@@ -72,6 +72,28 @@ func verifyHostStartStaging() async throws {
             && SDK.profile?.onDemandRules == nil && !manager.isRecoveryEnabled, "refresh-failure-restores-prior-off")
     }
 
+    for mutation in SDK.CandidateRefreshMutation.allCases {
+        SDK.reset()
+        let (manager, _) = await makeManager()
+        try await manager.saveToPreferences()
+        let prior = SDK.profile!.protocolConfiguration
+        SDK.nextCandidateRefreshMutation = mutation
+        var refused = false
+        do { try await manager.start() } catch TunnelSecretError.profileVerificationFailed { refused = true }
+        if mutation == .normalizedEmptyRules {
+            check(!refused && SDK.candidateRefreshMutations == 1 && SDK.candidateReferenceUnchanged
+                && SDK.startCalls == 1 && SDK.startWasDisarmed == [true] && SDK.profile?.isEnabled == true
+                && SDK.profile?.isOnDemandEnabled == false && SDK.profile?.onDemandRules?.isEmpty == true
+                && !manager.isRecoveryEnabled, "candidate-readback-normalized-empty-rules-accepted")
+        } else {
+            check(refused && SDK.candidateRefreshMutations == 1 && SDK.candidateReferenceUnchanged
+                && SDK.startCalls == 0 && SDK.profile?.protocolConfiguration === prior
+                && SDK.profile?.isEnabled == false && SDK.profile?.isOnDemandEnabled == false
+                && SDK.profile?.onDemandRules == nil && !manager.isRecoveryEnabled,
+                "candidate-readback-\(mutation.rawValue)-refused-before-os-start")
+        }
+    }
+
     SDK.reset()
     do {
         let (manager, keychain) = await makeManager()

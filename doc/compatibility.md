@@ -2001,6 +2001,10 @@ the prior profile and its prior policy together.
 If candidate storage succeeds but the later OS Start call throws, that candidate
 remains disarmed for manual retry; this branch does not restore the previous
 disconnected profile. Replacement of an active session is still refused.
+Before issuing the OS Start call, host readback also confirms the staged
+enabled flag, disabled On Demand and absent/empty rules. An unchanged secret
+reference alone is insufficient. Unexpected policy readback refuses Start and
+enters the existing prior-profile rollback; OS-normalized empty rules are valid.
 
 Failed-start cleanup tracks only saves attempted by that start and checks the
 immutable profile reference and provider ownership. An already armed recovery
@@ -2013,8 +2017,8 @@ in-flight OS saves across processes or qualify physical failure recovery.
 The actual provider entry and recovery helper pass 17 inert cases per Apple
 platform, including an independently stored late-commit snapshot. The existing
 injected preference suite passes 11 cases per module. Actual host-manager
-fixtures add 12 controls per platform for staging, failed OS Start, storage
-rollback, active identity, migration and explicit Stop. These checks use fake
+fixtures add 16 controls per platform for staging, failed OS Start, storage
+rollback, policy readback, active identity, migration and explicit Stop. These checks use fake
 Core, preferences and network settings and do not qualify physical VPN recovery.
 
 The preceding Apple/Android CI run at `55f1a11` passed Android native/runtime

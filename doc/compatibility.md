@@ -288,7 +288,9 @@ job passes all 342 native tests, including the eight real loopback tests.
 The isolated local ARM64 emulator also passes the controlled caller-root DNS and
 domain-routing/recovery tests with the Mac VPN enabled: actual DNS, HTTP, caller
 API, counters and Stop acknowledgements remain checked. The routing preview is
-present only in the instrumentation APK. The [Windows run at `b2f93e3`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39359055408)
+present only in the instrumentation APK. Live Android Stop during a stalled
+readiness probe remains a separate, unqualified acceptance gate.
+The [Windows run at `b2f93e3`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39359055408)
 passes all six jobs, including 20 inert packet-budget controls per system, both example
 builds and 460 proxy, portable and VPN rows across Windows 2022/2025. Its only
 change from `7dedb8f` corrects the generated test's port type to match production;

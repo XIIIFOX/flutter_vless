@@ -133,7 +133,10 @@ func TestNativeClassicLifetimeClosesBothFamilies(t *testing.T) {
 			defer cancel()
 			failures := nativeClassicSend(s, ctx)
 			nativeClassicAwait(t, d.reader.entered, "memory reader entry")
-			if len(failures) != 0 || d.calls.Load() != 1 || len(d.writer.snapshot()) != 1 || d.destination.Address.String() != address {
+			expected := xnet.ParseAddress(address)
+			if len(failures) != 0 || d.calls.Load() != 1 || len(d.writer.snapshot()) != 1 ||
+				d.destination.Network != xnet.Network_UDP || d.destination.Port != 18053 ||
+				d.destination.Address.Family() != expected.Family() || !d.destination.Address.IP().Equal(expected.IP()) {
 				t.Fatal("query control did not create the exact numeric ray")
 			}
 			cancel()

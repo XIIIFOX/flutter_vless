@@ -34,7 +34,7 @@ class AppleClassicProducerTests(unittest.TestCase):
 
 class AppleClassicPreparationTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(dir=ROOT / 'build')
+        self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name)
         self.mobile, self.source, self.destination = self.base / 'mobile', self.base / 'cache/Core', self.base / 'Core'

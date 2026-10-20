@@ -1,5 +1,9 @@
 ## 1.1.7
 
+* Prepare Apple transport endpoints from bounded IPv4/IPv6 candidate sets, preserving DNS TTLs and using documented OS synthesis for IPv4 literals on IPv6-only paths. Reprepare from the original configuration after path, wake, expiry or transport failures; serialize settings changes and scope native cleanup to the committed plan. Native NAT64/handover acceptance remains pending.
+
+* Enforce the selected interface on generated Apple physical sockets after optional/custom socket settings, including error returns. Add a distinct runtime capability and refuse unsupported artifacts before route installation; keep published SDK pins unchanged.
+
 * Admit bounded static DNS hosts aliases for remote named resolvers without rewriting caller DNS or TLS identity. Cancel obsolete Dart startup capability checks after Stop or a newer Start.
 
 * Include XHTTP HTTP/3 socket-first teardown in Apple Core source and preview preparation, with guarded pinned-source validation. Published SDK pins remain unchanged.

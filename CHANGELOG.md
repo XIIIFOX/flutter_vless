@@ -1,5 +1,9 @@
 ## 1.1.7
 
+* Prepare Apple transport endpoints from bounded IPv4/IPv6 candidate sets, preserving DNS TTLs and using documented OS synthesis for IPv4 literals on IPv6-only paths. Reprepare from the original configuration after path, wake, expiry or transport failures; serialize settings changes and scope native cleanup to the committed plan. Native NAT64/handover acceptance remains pending.
+
+* Enforce the selected interface on generated Apple physical sockets after optional/custom socket settings, including error returns. Add a distinct runtime capability and refuse unsupported artifacts before route installation; keep published SDK pins unchanged.
+
 * Stage new Apple VPN profiles with On Demand disabled and verify the stored policy before OS Start. Arm recovery after endpoint/configuration preflight and network settings succeed; scope failed-start cleanup to that start's immutable profile and report uncertain preference saves without claiming rollback.
 
 * Accept system-resolved IPv6 transport endpoints on iOS/macOS while preserving caller DNS, endpoint names and TLS identity. Discard endpoint results and failures after session cancellation; retain the IPv4-only resolver API.

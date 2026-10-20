@@ -26,7 +26,7 @@ ORDINARY_FILES = ('packages/flutter_vless_android/android/build_xray.sh',
                   'third_party/xray-mobile/go.mod', 'third_party/xray-mobile/go.sum',
                   'third_party/xray-vpn-routing/apply.py', 'third_party/xray-vpn-routing/pin-manifest.json',
                   *(('third_party/xray-native-dns/' + name) for name in
-                    ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'pin-manifest.json',
+                    ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py', 'pin-manifest.json',
                      'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go')))
 
 
@@ -147,7 +147,7 @@ def build(output, head, repository=ROOT):
             raise ValueError('One fresh ordinary Core receipt required')
         receipt = json.loads(receipts[0].read_text())
         if any(receipt.get(k) is not True for k in ('success', 'source_unchanged', 'module_cache_source_unchanged',
-                                                   'copies_unchanged', 'classic_dns_lifetime_applied', 'h3_lifetime_applied')) \
+                                                   'copies_unchanged', 'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'darwin_interface_binding_source_applied')) \
                 or type(receipt.get('routing_capability_expected')) is not int or receipt['routing_capability_expected'] != 0 \
                 or receipt.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial'] \
                 or any(receipt.get(k) is not False for k in ('runtime_executed', 'published')) \

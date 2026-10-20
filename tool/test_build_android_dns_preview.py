@@ -18,7 +18,7 @@ class AndroidDNSProducerTests(unittest.TestCase):
         self.capability = self.root/'third_party/xray-native-dns'
         (self.capability/'overlay/main').mkdir(parents=True)
         (self.capability/'overlay/main/fixture.go').write_text('package main\n')
-        for name in ('classic_lifetime_patch.py', 'h3_lifetime_patch.py'):
+        for name in ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py'):
             (self.capability/name).write_text('inert patch input\n')
         self.protection = self.root/'packages/flutter_vless_android/android/xray-protect'
         self.protection.mkdir(parents=True)
@@ -92,6 +92,8 @@ def copy_and_apply(source,destination,**kwargs):
         key = 'third_party/xray-native-dns/h3_lifetime_patch.py'
         self.assertTrue(result['success'])
         self.assertIs(result['h3_lifetime_applied'], True)
+        self.assertIs(result['darwin_interface_binding_source_applied'],True)
+        self.assertEqual(result['darwin_interface_binding_patch_sha256'],result['input_sha256']['third_party/xray-native-dns/darwin_interface_bind_patch.py'])
         self.assertIs(result['classic_dns_lifetime_applied'], True)
         self.assertEqual(result['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial'])
         self.assertEqual(result['h3_lifetime_patch_sha256'], result['input_sha256'][key])

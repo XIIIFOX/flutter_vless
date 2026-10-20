@@ -438,8 +438,10 @@ not the newer provider/startup code.
 
 The actual shield in Control Center opened Example with `action=openApp`.
 With `requireUnlock=true`, iOS presented Face ID; explicit Cancel left the VPN
-OFF. A second authentication outcome has no owner confirmation and is not
-counted as an accepted-authentication pass. With `requireUnlock=false`, tapping
+OFF. The owner later confirmed completing the second authentication. This is
+recorded as a late user report: its timing and the native authorization result
+were not captured together, so it is not a synchronized acceptance pass.
+With `requireUnlock=false`, tapping
 the same system control opened Example without an authentication prompt.
 Neither branch had a saved quick-start authorization or invoked Start.
 The configured shield SF Symbol rendered; compact control label/custom-symbol

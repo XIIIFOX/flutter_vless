@@ -7,7 +7,7 @@ class NETunnelProviderProtocol: NEVPNProtocol {
 }
 class NEOnDemandRule {}
 final class NEOnDemandRuleConnect: NEOnDemandRule { enum Kind { case any }; var interfaceTypeMatch = Kind.any }
-enum NEProviderStopReason { case userInitiated, providerFailed }
+enum NEProviderStopReason: Int { case userInitiated, providerFailed }
 let NEVPNErrorDomain = "fixture.vpn"
 enum NEVPNError: Int { case configurationStale = 4 }
 final class NETunnelProviderManager {
@@ -31,6 +31,7 @@ final class NETunnelProviderManager {
 }
 // ACTUAL_POLICY
 
+struct XrayEnvironmentSnapshot { static func capture() -> Self { Self() } }
 struct LocalProxyCredentials { static func generate() throws -> Self { Self() } }
 enum NativeRoutingIntent { case fixture; static func parse(_ value: Any?) throws -> Self? { nil } }
 enum NativeRoutingSpecError: Error { case invalidIntent }
@@ -40,22 +41,51 @@ enum NativeRoutingSpec {
     static func check(_ envelope: Envelope, capability: () -> Int64, check: (Data, Data) -> Int64) throws {}
 }
 struct Envelope { let configurationData = Data(), metadataData = Data() }
-struct TunnelPreparedConfig { let data = Data("{}".utf8), bootstrapAddresses = ["192.0.2.1"]; let routingEnvelope: Envelope? = nil }
+struct TunnelEndpointPath: Equatable {
+    var generation: UInt64 = 0
+    func rebased(generation: UInt64) -> Self { Self(generation: generation) }
+}
+struct TunnelEndpointCandidate {
+    struct Address { let isLoopback = false }; let address = Address()
+    var isSingleAttemptOnly: Bool { false }
+    func isUsable(on path: TunnelEndpointPath, at now: TimeInterval, allowFreshZeroTTL: Bool) -> Bool { true }
+}
+struct TunnelEndpointCandidates { let path: TunnelEndpointPath }
+struct TunnelEndpointSelection { let candidates: TunnelEndpointCandidates; let selected: TunnelEndpointCandidate }
+struct TunnelPreparedConfig {
+    let data = Data("{}".utf8), bootstrapAddresses = ["192.0.2.1"]
+    let routingEnvelope: Envelope? = nil
+    var endpointPath: TunnelEndpointPath?
+    var endpointSelections: [TunnelEndpointSelection] = []
+}
+final class TunnelPhysicalPathObserver {
+    var onChange: ((TunnelEndpointPath?) -> Void)?
+    func start(onChange: @escaping (TunnelEndpointPath?) -> Void) { self.onChange = onChange }
+    func initialSnapshot(deadline: TimeInterval) async throws -> TunnelEndpointPath { TunnelEndpointPath() }
+    func cancel() {}
+}
 enum TunnelSecretProfile { static func load(_ data: [String: Any], providerBundleIdentifier: String) throws -> Data { Data("{}".utf8) } }
 enum DesktopBypassPolicy { static func apply(to data: Data, cidrs: [String]) throws -> Data { data } }
 enum LocalProxyAccessPolicy { static func isTCPPortAvailable(_ port: Int) -> Bool { true } }
 enum TunnelXrayConfigPreparer {
     enum StartupError: Error { case endpointUnavailable, invalidConfiguration }
-    static func prepareForStartup(jsonData: Data, credentials: LocalProxyCredentials, routingIntent: NativeRoutingIntent?, tcpPortAvailable: (Int) -> Bool, resolveEndpoint: (String) async throws -> String?, isCurrent: () -> Bool) async throws -> TunnelPreparedConfig {
+    static func prepareForStartup(jsonData: Data, credentials: LocalProxyCredentials, routingIntent: NativeRoutingIntent?, tcpPortAvailable: (Int) -> Bool,
+        environmentSnapshot: XrayEnvironmentSnapshot, endpointPath: TunnelEndpointPath, selectedAttempt: UInt64,
+        resolveCandidates: (String) async throws -> TunnelEndpointCandidates, isCurrent: () -> Bool, attempts: Int) async throws -> TunnelPreparedConfig {
         Kernel.events.append("prepare")
+        Kernel.onPrepare?()
         if Kernel.failure == "endpoint" { throw StartupError.endpointUnavailable }
         if Kernel.failure == "config" { throw StartupError.invalidConfiguration }
-        return TunnelPreparedConfig()
+        return TunnelPreparedConfig(endpointPath: endpointPath, endpointSelections: [TunnelEndpointSelection(candidates: TunnelEndpointCandidates(path: endpointPath), selected: TunnelEndpointCandidate())])
     }
 }
-enum TunnelEndpointResolver { static func resolveEndpoint(_ value: String, event: (String) -> Void) async throws -> String? { "192.0.2.1" } }
+enum TunnelEndpointResolver {
+    static func resolveCandidates(_ value: String, on path: TunnelEndpointPath, deadline: TimeInterval,
+        isCurrent: @escaping () -> Bool, event: (String) -> Void) async throws -> TunnelEndpointCandidates { TunnelEndpointCandidates(path: path) }
+}
 final class TunnelDebugStore { static let shared = TunnelDebugStore(); func configure(groupIdentifier: String?, options: VlessNativeOptions) {} }
 func FLVlessCoreRoutingCapability() -> Int64 { 1 }
+func FLVlessCoreDarwinInterfaceBindingCapability() -> Int64 { Kernel.bindingCapability }
 func FLVlessHasCorePreflight() -> Bool { true }
 func FLVlessCheckCorePrivate(_ value: Data) -> Int64 { Kernel.events.append("check"); return Kernel.failure == "core" ? 3 : 0 }
 func FLVlessCheckCoreRoutingPrivate(_ data: Data, _ metadata: Data) -> Int64 { 0 }
@@ -74,35 +104,72 @@ final class NEPacketTunnelNetworkSettings {
 final class NEIPv4Settings { init(addresses: [String], subnetMasks: [String]) {}; var includedRoutes: [NEIPv4Route] = [], excludedRoutes: [NEIPv4Route] = [] }
 final class NEIPv4Route { init(destinationAddress: String, subnetMask: String) {}; static func `default`() -> Self { Self(destinationAddress: "0.0.0.0", subnetMask: "0.0.0.0") } }
 final class NEDNSSettings { init(servers: [String]) {}; var matchDomains: [String] = [] }
-struct FakeQueue { func async(execute: () -> Void) { execute() } }
+struct FakeQueue { func async(execute: () -> Void) { execute() }; func sync<T>(execute: () throws -> T) rethrows -> T { try execute() } }
 enum Kernel {
     static var events: [String] = [], failure = ""
+    static var bindingCapability: Int64 = 1
     static var profile = NETunnelProviderManager()
     static var onArm: (() -> Void)?, refreshFailures = 0
+    static var onPrepare: (() -> Void)?
+    static var onSettings: (() async -> Void)?
     static func reset(armed: Bool = false, failure: String = "") {
-        events = []; self.failure = failure; profile = NETunnelProviderManager(); onArm = nil; refreshFailures = 0
+        events = []; self.failure = failure; bindingCapability = 1; profile = NETunnelProviderManager(); onArm = nil; refreshFailures = 0; onPrepare = nil; onSettings = nil
         profile.isOnDemandEnabled = armed; profile.onDemandRules = armed ? [NEOnDemandRuleConnect()] : nil
     }
 }
+final class FixturePacketBridge { func shutdown() {} }
 final class Provider {
-    let sessionAdmission = TunnelSessionAdmission(), watchdogQueue = FakeQueue()
+    var packetBridge: FixturePacketBridge?
+    var packetBridgeEpoch: TunnelSessionAdmission.Epoch?
+    var packetBridgeToken: TunnelEndpointPlanAdmission.Token?
+    let sessionAdmission = TunnelSessionAdmission(), watchdogQueue = FakeQueue(), runtimeQueue = FakeQueue()
+    let forwardingLock = NSLock()
+    var forwardingReady = false, reasserting = false
+    var forwardingEpoch: TunnelSessionAdmission.Epoch?
+    var startupPreparation: (epoch: TunnelSessionAdmission.Epoch, task: Task<TunnelPreparedConfig, Error>)?
+    var runtimeSpec: RuntimeSpec?
     var protocolConfiguration: NEVPNProtocol? { Kernel.profile.protocolConfiguration }
     let tunnelMTU = 1500, dnsServers = ["10.0.85.53"]
-    struct RuntimeSpec {
-        let epoch: TunnelSessionAdmission.Epoch, options: VlessNativeOptions, config: Data, port: Int, geoAssetsDirectory: String?, credentials: LocalProxyCredentials, routingMetadata: Data?
-    }
+    let endpointAdmission = TunnelEndpointPlanAdmission()
+    let endpointCommitQueue = TunnelEndpointCommitQueue()
+    var installedSettingsKey: ProtectedSettingsKey?
+    var runtimeSource: RuntimeSource?, physicalPath: TunnelEndpointPath?
+    var observedPhysicalPath = false, selectedAttempt: UInt64 = 0
+    var runtimeRecoveryInFlight = false
+    var pathObserver: TunnelPhysicalPathObserver?
+    var endpointPreparation: (token: TunnelEndpointPlanAdmission.Token, task: Task<Void, Never>)?
+    func makePhysicalPathObserver() -> TunnelPhysicalPathObserver { TunnelPhysicalPathObserver() }
+    func refreshEndpointPlan(after delay: TimeInterval, epoch: TunnelSessionAdmission.Epoch, rotate: Bool) {}
+    // ACTUAL_PREPARATION_HELPERS
     func tunnelError(_ message: String) -> NSError { NSError(domain: "fixture.provider", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
     func setForwardingReady(_ value: Bool, epoch: TunnelSessionAdmission.Epoch) {}
-    func setStartupPreparation(_ value: Task<TunnelPreparedConfig, Error>?, epoch: TunnelSessionAdmission.Epoch) {}
+    func setStartupPreparation(_ value: Task<TunnelPreparedConfig, Error>?, epoch: TunnelSessionAdmission.Epoch) {
+        if let value { startupPreparation = (epoch, value) }
+        else if startupPreparation?.epoch == epoch { startupPreparation = nil }
+    }
     func parseConfig(jsonData: Data) -> (inboundPort: Int, unused: Int)? { (10808, 0) }
     func buildIPv4ExcludedRoutes(serverAddresses: [String]) -> [NEIPv4Route] { [] }
-    func setTunnelNetworkSettings(_ settings: NEPacketTunnelNetworkSettings?) async throws { Kernel.events.append(settings == nil ? "clear-settings" : "settings") }
-    func startTunnelWatchdog(_ spec: RuntimeSpec) -> Bool { Kernel.events.append("runtime-admission"); return sessionAdmission.activate(spec.epoch) }
+    func setTunnelNetworkSettings(_ settings: NEPacketTunnelNetworkSettings?) async throws {
+        Kernel.events.append(settings == nil ? "clear-settings" : "settings")
+        await Kernel.onSettings?()
+    }
+    func startTunnelWatchdog(_ spec: RuntimeSpec) -> Bool {
+        guard sessionAdmission.activate(spec.epoch) else { return false }
+        runtimeSpec = spec; Kernel.events.append("runtime-admission"); return true
+    }
+    func stopTunnelWatchdog(epoch: TunnelSessionAdmission.Epoch?) {
+        if runtimeSpec?.epoch == epoch || runtimeSource?.epoch == epoch {
+            pathObserver?.cancel(); pathObserver = nil; runtimeSource = nil; physicalPath = nil; runtimeSpec = nil
+        }
+    }
+    func stopNativeRuntime(ownedBy epoch: TunnelSessionAdmission.Epoch?) -> Bool { true }
+    // ACTUAL_STOP
     func scheduleNativeRecovery(after delay: Int, epoch: TunnelSessionAdmission.Epoch) {}
     // ACTUAL_START
 }
 @main struct Main {
     static func main() async {
+        setbuf(stdout, nil)
         var failures = 0, cases = 0
         func check(_ name: String, _ value: Bool) { cases += 1; if !value { failures += 1 }; print("APPLE_COLD_START_CASE=" + name + ";PASS=" + String(value)) }
         for failure in ["endpoint", "config", "core"] {
@@ -110,6 +177,27 @@ final class Provider {
             do { try await provider.startTunnel(); check("refusal-" + failure, false) }
             catch { check("refusal-" + failure, !Kernel.profile.isOnDemandEnabled && !Kernel.events.contains("arm") && !Kernel.events.contains("runtime-admission")) }
         }
+        Kernel.reset(); Kernel.bindingCapability = 0
+        do { try await Provider().startTunnel(); check("stock-runtime-binding-capability-refused", false) }
+        catch { check("stock-runtime-binding-capability-refused", !Kernel.events.contains("settings") && !Kernel.events.contains("arm") && !Kernel.events.contains("runtime-admission")) }
+        Kernel.reset(); let changedDuringLookup = Provider()
+        Kernel.onPrepare = {
+            Kernel.onPrepare = nil
+            _ = try? changedDuringLookup.endpointAdmission.refresh(changedDuringLookup.sessionAdmission.currentEpoch!)
+        }
+        do { try await changedDuringLookup.startTunnel()
+            check("initial-path-replaced-reprepares", Kernel.events.filter { $0 == "prepare" }.count == 2 && Kernel.events.filter { $0 == "runtime-admission" }.count == 1)
+        } catch { check("initial-path-replaced-reprepares", false) }
+        Kernel.reset(); let ownSettings = Provider()
+        Kernel.onSettings = {
+            Kernel.onSettings = nil
+            ownSettings.pathObserver?.onChange?(TunnelEndpointPath())
+        }
+        do { try await ownSettings.startTunnel()
+            check("own-settings-event-reprepares-without-second-write", Kernel.events.filter { $0 == "prepare" }.count == 2 &&
+                Kernel.events.filter { $0 == "settings" }.count == 1 && Kernel.events.filter { $0 == "arm" }.count == 1 &&
+                Kernel.events.filter { $0 == "runtime-admission" }.count == 1)
+        } catch { check("own-settings-event-reprepares-without-second-write", false) }
         Kernel.reset(); try? await Provider().startTunnel()
         let order = Kernel.events
         check("arm-after-settings-before-admission", Kernel.profile.isOnDemandEnabled && order.firstIndex(of: "settings")! < order.firstIndex(of: "arm")! && order.firstIndex(of: "arm")! < order.firstIndex(of: "runtime-admission")!)
@@ -118,6 +206,33 @@ final class Provider {
         Kernel.reset(); (Kernel.profile.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration?["options"] = ["reconnect": ["enabled": false], "protection": ["onDemand": "disabled"]]
         try? await Provider().startTunnel()
         check("disabled-never-arms", !Kernel.profile.isOnDemandEnabled && !Kernel.events.contains("arm") && Kernel.events.contains("runtime-admission"))
+        // Exercise actual Stop and two actual startTunnel entries on ONE provider.
+        // The fake OS stores the old write until its callback is explicitly released.
+        final class SettingsGate: @unchecked Sendable {
+            let entered = DispatchSemaphore(value: 0)
+            var continuation: CheckedContinuation<Void, Never>?
+            func wait() async { await withCheckedContinuation { continuation = $0; entered.signal() } }
+            func release() { continuation?.resume(); continuation = nil }
+        }
+        Kernel.reset(); let overlap = Provider(), gate = SettingsGate()
+        Kernel.onSettings = { await gate.wait() }
+        let oldStart = Task.detached { try await overlap.startTunnel() }
+        precondition(gate.entered.wait(timeout: .now() + 3) == .success)
+        await withCheckedContinuation { done in overlap.stopTunnel(with: .providerFailed) { done.resume() } }
+        Kernel.onSettings = nil
+        let newStart = Task.detached { try await overlap.startTunnel() }
+        for _ in 0..<1000 {
+            if Kernel.events.filter({ $0 == "prepare" }).count == 2 { break }
+            await Task.yield()
+        }
+        let oldStillOwnsSettingsSlot = Kernel.events.filter { $0 == "settings" }.count == 1 && !Kernel.events.contains("runtime-admission")
+        gate.release()
+        var oldCancelled = false, newSucceeded = false
+        do { try await oldStart.value } catch { oldCancelled = error is CancellationError }
+        do { try await newStart.value; newSucceeded = true } catch {}
+        check("Stop-newStart-settings-complete-FIFO", oldStillOwnsSettingsSlot && oldCancelled && newSucceeded &&
+            Kernel.events.filter { $0 == "settings" }.count == 2 && Kernel.events.filter { $0 == "runtime-admission" }.count == 1 &&
+            Kernel.events.filter { $0 == "arm" }.count == 1 && !Kernel.events.contains("clear-settings"))
         #if ARM_RECEIPT_TESTS
         Kernel.reset(); Kernel.refreshFailures = 1
         do { try await Provider().startTunnel(); check("late-arm-readback-failure", false) }

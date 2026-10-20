@@ -37,6 +37,8 @@ class ApplyGuards(unittest.TestCase):
                   mock.patch.object(applier, 'apply_classic_lifetime', create=True),
                   mock.patch.object(applier, 'apply_h3_lifetime', create=True),
                   mock.patch.object(applier, 'validate_h3_lifetime_source', create=True),
+                  mock.patch.object(applier, 'validate_darwin_interface_source', create=True),
+                  mock.patch.object(applier, 'apply_darwin_interface', create=True),
                   mock.patch.object(applier.subprocess, 'run', side_effect=AssertionError('No Go allowed in fake-copy guards'))):
                 yield source, target, root, original
 
@@ -137,6 +139,8 @@ class LifetimeApplyGuards(unittest.TestCase):
                   mock.patch.object(applier, 'MANIFEST', routing_manifest),
                   mock.patch.object(applier, 'patches', return_value=[]),
                   mock.patch.object(applier, 'apply_classic_lifetime') as classic,
+                  mock.patch.object(applier, 'validate_darwin_interface_source'),
+                  mock.patch.object(applier, 'apply_darwin_interface'),
                   mock.patch.object(applier.subprocess, 'run', side_effect=AssertionError('No Go allowed'))):
                 yield root, source, native, manifest, classic
 
@@ -144,7 +148,7 @@ class LifetimeApplyGuards(unittest.TestCase):
         classic = applier.classic_input_paths()
         self.assertEqual(len(classic), 4)
         self.assertNotIn(applier.CLASSIC / 'h3_lifetime_patch.py', classic)
-        self.assertEqual(applier.lifetime_input_paths(), [*classic, applier.CLASSIC / 'h3_lifetime_patch.py'])
+        self.assertEqual(applier.lifetime_input_paths(), [*classic, applier.CLASSIC / 'h3_lifetime_patch.py', applier.CLASSIC / 'darwin_interface_bind_patch.py'])
 
     def test_default_and_plain_lifetime_copies_apply_h3_but_classic_only_does_not(self):
         with self.fixture() as (root, source, native, manifest, classic):
@@ -251,6 +255,8 @@ class RunnerGuards(unittest.TestCase):
                     mock.patch.object(applier, 'patches', return_value=[('guarded.go', 'before\n', 'after\n')]), \
                     mock.patch.object(applier, 'apply_h3_lifetime', create=True), \
                     mock.patch.object(applier, 'validate_h3_lifetime_source', create=True), \
+                    mock.patch.object(applier, 'validate_darwin_interface_source', create=True), \
+                    mock.patch.object(applier, 'apply_darwin_interface', create=True), \
                     mock.patch.object(applier, 'apply_classic_lifetime', side_effect=classic, create=True):
                 routed = applier.copy_and_apply(source, root / 'routed', caches=[])
                 self.assertEqual(calls, [routed])

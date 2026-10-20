@@ -114,7 +114,9 @@ def main():
         report['copied_h3_sha256'] = copied_h3_before
         report.update(classic_dns_lifetime_applied=True, h3_lifetime_applied=True,
                       lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial'],
-                      h3_lifetime_patch_sha256=initial_hashes['third_party/xray-native-dns/h3_lifetime_patch.py'])
+                      h3_lifetime_patch_sha256=initial_hashes['third_party/xray-native-dns/h3_lifetime_patch.py'],
+                      darwin_interface_binding_source_applied=True,
+                      darwin_interface_binding_patch_sha256=initial_hashes['third_party/xray-native-dns/darwin_interface_bind_patch.py'])
         owned([os.sys.executable, str(PROTECTION / 'apply.py'), str(work)], cwd=ROOT,
               environment=environment, seconds=30)
         artifact = output / 'jniLibs' / args.arch / 'libxray_dns_preview.so'

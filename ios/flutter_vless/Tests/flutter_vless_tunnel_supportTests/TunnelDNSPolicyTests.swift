@@ -1521,3 +1521,21 @@ final class TunnelDNSPolicyTests: XCTestCase {
         XCTAssertFalse(prepared.data.isEmpty)
     }
 }
+
+final class TunnelCandidateDNSPolicyTests: XCTestCase {
+    func testCandidateCallerBindingConflictIsTransactional() throws {
+        var input: [String: Any] = ["dns": ["servers": ["tcp://9.9.9.9"], "hosts": ["caller.invalid": "192.0.2.53"]],
+            "inbounds": [["protocol": "socks", "port": 10808]],
+            "outbounds": [["tag": "proxy", "protocol": "socks", "settings": ["servers": [["address": "192.0.2.7", "port": 443]]],
+                           "streamSettings": ["sockopt": ["interface": "en8"]]]]]
+        let before = try JSONSerialization.data(withJSONObject: input, options: [.sortedKeys])
+        let path = TunnelEndpointPath(generation: 7, interfaceIndex: 4, interfaceName: "en0",
+                                      supportsIPv4: false, supportsIPv6: true, supportsDNS: true)
+        var queries = 0
+        XCTAssertNil(TunnelDNSPolicy.apply(to: &input, managedInboundTag: "managed",
+            environmentSnapshot: XrayEnvironmentSnapshot(rawEntries: []), endpointPath: path,
+            resolveIPv4: { host in queries += 1; XCTAssertEqual(host, "192.0.2.7"); return "64:ff9b::c000:207" }))
+        XCTAssertEqual(queries, 1)
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: input, options: [.sortedKeys]), before)
+    }
+}

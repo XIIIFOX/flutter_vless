@@ -42,6 +42,7 @@ public enum TunnelDNSPolicy {
     static func apply(to config: inout [String: Any], managedInboundTag: String,
                       generatedRuleCount: ((Int) -> Void)? = nil,
                       environmentSnapshot: XrayEnvironmentSnapshot = .capture(),
+                      endpointPath: TunnelEndpointPath? = nil,
                       resolveIPv4: (String) -> String?) -> [String]? {
         // Admission is transactional: a failed bootstrap must not partially
         // rewrite a caller dictionary which might be retried.
@@ -110,13 +111,17 @@ public enum TunnelDNSPolicy {
                 guard var peers = settings["peers"] as? [[String: Any]], !peers.isEmpty else { return nil }
                 for peer in peers.indices {
                     guard let target = endpoint(peers[peer]["endpoint"] as? String),
-                          let ip = pin(target.host, resolved: &resolved, addresses: &addresses, resolver: resolveIPv4) else { return nil }
+                          let ip = pin(target.host, resolved: &resolved, addresses: &addresses, resolveLiterals: endpointPath != nil, resolver: resolveIPv4) else { return nil }
                     // WireGuard resolves peers before DialSystem. Its identity
                     // is the public key, so pin its address at this boundary.
                     peers[peer]["endpoint"] = (ip.contains(":") ? "[\(ip)]" : ip) + ":\(target.port)"
+                    var physical = stream["sockopt"] as? [String: Any] ?? [:]
+                    guard bindPhysical(&physical, selected: ip, sendThrough: outbounds[index]["sendThrough"], path: endpointPath) else { return nil }
+                    if endpointPath != nil { stream["sockopt"] = physical }
                 }
                 settings["peers"] = peers
                 outbounds[index]["settings"] = settings
+                if endpointPath != nil { outbounds[index]["streamSettings"] = stream }
                 continue
             }
             let entries: [[String: Any]]
@@ -132,7 +137,7 @@ public enum TunnelDNSPolicy {
             }
             guard prepareStream(&stream, endpoints: endpoints, sendThrough: outbounds[index]["sendThrough"], allocator: &allocator, denied: denied,
                                 generated: &generated, rules: &privateRules, resolved: &resolved,
-                                addresses: &addresses, resolver: resolveIPv4) else { return nil }
+                                addresses: &addresses, endpointPath: endpointPath, resolver: resolveIPv4) else { return nil }
             outbounds[index]["streamSettings"] = stream
         }
         outbounds.append(contentsOf: generated)
@@ -263,7 +268,7 @@ public enum TunnelDNSPolicy {
     private static func prepareStream(_ stream: inout [String: Any], endpoints: [Endpoint], sendThrough: Any?,
         allocator: inout XrayServiceTags, denied: String, generated: inout [[String: Any]],
         rules: inout [[String: Any]], resolved: inout [String: String], addresses: inout Set<String>,
-        resolver: (String) -> String?, followDownload: Bool = true) -> Bool {
+        endpointPath: TunnelEndpointPath?, resolver: (String) -> String?, followDownload: Bool = true) -> Bool {
         guard stream["sockopt"] == nil || stream["sockopt"] is NSNull || stream["sockopt"] is [String: Any] else { return false }
         var sockopt = stream["sockopt"] as? [String: Any] ?? [:]
         guard sockopt["dialerProxy"] == nil || sockopt["dialerProxy"] is NSNull || sockopt["dialerProxy"] is String else { return false }
@@ -302,10 +307,11 @@ public enum TunnelDNSPolicy {
         if !chained {
             var pins: [(Endpoint, String)] = []
             for target in physicalTargets {
-                guard let ip = pin(target.host, resolved: &resolved, addresses: &addresses, resolver: resolver) else { return false }
+                guard let ip = pin(target.host, resolved: &resolved, addresses: &addresses, resolveLiterals: endpointPath != nil, resolver: resolver) else { return false }
                 pins.append((target, ip))
             }
-            if physicalTargets.contains(where: { !isLiteral($0.host) }) {
+            if physicalTargets.contains(where: { !isLiteral($0.host) })
+                || (endpointPath != nil && pins.contains(where: { !isLoopback($0.1) })) {
                 let loop = allocator.next("flutter-vless-bootstrap-loop")
                 let scope = allocator.next("flutter-vless-bootstrap-input")
                 sockopt["dialerProxy"] = loop
@@ -314,7 +320,8 @@ public enum TunnelDNSPolicy {
                     let leaf = allocator.next("flutter-vless-bootstrap-pin")
                     var physical = sockopt
                     physical.removeValue(forKey: "dialerProxy")
-                    physical["domainStrategy"] = "ForceIPv4"
+                    physical["domainStrategy"] = endpointPath == nil ? "ForceIPv4" : "AsIs"
+                    guard bindPhysical(&physical, selected: ip, sendThrough: sendThrough, path: endpointPath) else { return false }
                     var outbound: [String: Any] = ["tag": leaf, "protocol": "freedom", "settings": ["redirect": (ip.contains(":") ? "[\(ip)]" : ip) + ":0"],
                                                   "streamSettings": ["sockopt": physical]]
                     if let sendThrough { outbound["sendThrough"] = sendThrough }
@@ -341,7 +348,7 @@ public enum TunnelDNSPolicy {
                     guard let host = download["address"] as? String, let p = port(download["port"]),
                           prepareStream(&download, endpoints: [Endpoint(host: LocalProxyAccessPolicy.coreAddressText(host), port: p)], sendThrough: sendThrough, allocator: &allocator,
                                         denied: denied, generated: &generated, rules: &rules, resolved: &resolved,
-                                        addresses: &addresses, resolver: resolver, followDownload: false) else { return false }
+                                        addresses: &addresses, endpointPath: endpointPath, resolver: resolver, followDownload: false) else { return false }
                     extra["downloadSettings"] = download
                     settings["extra"] = extra
                 }
@@ -349,7 +356,7 @@ public enum TunnelDNSPolicy {
                 guard let host = download["address"] as? String, let p = port(download["port"]),
                       prepareStream(&download, endpoints: [Endpoint(host: LocalProxyAccessPolicy.coreAddressText(host), port: p)], sendThrough: sendThrough, allocator: &allocator,
                                     denied: denied, generated: &generated, rules: &rules, resolved: &resolved,
-                                    addresses: &addresses, resolver: resolver, followDownload: false) else { return false }
+                                    addresses: &addresses, endpointPath: endpointPath, resolver: resolver, followDownload: false) else { return false }
                 settings["downloadSettings"] = download
             }
             stream[key] = settings
@@ -382,13 +389,40 @@ public enum TunnelDNSPolicy {
     }
 
     private static func pin(_ host: String, resolved: inout [String: String], addresses: inout Set<String>,
-                            resolver: (String) -> String?) -> String? {
-        if isLiteral(host) { addresses.insert(host); return host }
+                            resolveLiterals: Bool = false, resolver: (String) -> String?) -> String? {
+        if !resolveLiterals && isLiteral(host) { addresses.insert(host); return host }
         guard let ip = resolved[hostKey(host)] ?? resolver(host), isLiteral(ip) else { return nil }
         resolved[hostKey(host)] = ip
         addresses.insert(ip)
         return ip
     }
+    private static func isLoopback(_ text: String) -> Bool {
+        TunnelEndpointAddress(text: text, source: .literal)?.isLoopback == true
+    }
+
+    /// Bind only the finite private socket, retaining caller restrictions. A
+    /// conflicting source/interface is refused rather than silently changed.
+    private static func bindPhysical(_ sockopt: inout [String: Any], selected: String,
+                                     sendThrough: Any?, path: TunnelEndpointPath?) -> Bool {
+        guard let path, !isLoopback(selected) else { return true }
+        guard path.interfaceIndex != 0, let name = path.interfaceName, !name.isEmpty,
+              !name.utf8.contains(0) else { return false }
+        if let original = sockopt["interface"], !(original is NSNull) {
+            guard let original = original as? String, original.isEmpty || original == name else { return false }
+        }
+        if let sendThrough, !(sendThrough is NSNull) {
+            guard let raw = sendThrough as? String else { return false }
+            let source = LocalProxyAccessPolicy.coreAddressText(raw)
+            if !source.isEmpty {
+                guard let source = TunnelEndpointAddress(text: source, source: .literal),
+                      let target = TunnelEndpointAddress(text: selected, source: .literal),
+                      source.family == target.family else { return false }
+            }
+        }
+        sockopt["interface"] = name
+        return true
+    }
+
     private static func inactiveAddressPortStrategy(_ value: Any?) -> Bool {
         guard let value, !(value is NSNull) else { return true }
         guard let strategy = value as? String else { return false }

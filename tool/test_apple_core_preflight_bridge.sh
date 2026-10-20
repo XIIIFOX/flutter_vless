@@ -25,6 +25,11 @@ extern void FLVlessTestCoreRoutingDiagnostics(int *, int *, int64_t *);
 int main(void) { @autoreleasepool {
     NSData *data = [@"abc" dataUsingEncoding:NSUTF8StringEncoding];
     assert(XRayStartPrivate(data, nil, NULL));
+#ifdef BINDING_CAP
+    assert(FLVlessCoreDarwinInterfaceBindingCapability() == (BINDING_CAP == 1 ? 1 : 0));
+#else
+    assert(FLVlessCoreDarwinInterfaceBindingCapability() == 0);
+#endif
 #ifdef WITH_RUNTIME
     assert(FLVlessHasCorePreflight());
     assert(FLVlessCheckCorePrivate(data) == 0);
@@ -86,6 +91,9 @@ int64_t XRayCheckPrivate(NSData *configuration) { return configuration.length ==
 static int checkCalls, startCalls;
 int MockRoutingCheckCalls(void) { return checkCalls; }
 int MockRoutingStartCalls(void) { return startCalls; }
+#ifdef BINDING_CAP
+int64_t XRayDarwinInterfaceBindingCapability(void) { return BINDING_CAP; }
+#endif
 #ifdef ROUTING_CAP
 int64_t XRayRoutingCapability(void) { return ROUTING_CAP; }
 #endif
@@ -147,10 +155,13 @@ for suffix in ("Check", "Start"):
     assert entry == anchor + offset, (suffix, anchor, entry, offset)
 PY
     printf 'BRIDGE_ANCHOR_SHAPE arch=%s offset=%s\n' "$ARCH" "$ENTRY_OFFSET"
-for variant in legacy current routing cap0 unknown missing-cap missing-check missing-start; do
+for variant in legacy current routing cap0 unknown missing-cap missing-check missing-start binding binding0 binding-unknown; do
     FLAGS=(-DLEGACY_RUNTIME)
     case "$variant" in
         current) FLAGS=(-DWITH_RUNTIME) ;;
+        binding) FLAGS=(-DWITH_RUNTIME -DBINDING_CAP=1) ;;
+        binding0) FLAGS=(-DWITH_RUNTIME -DBINDING_CAP=0) ;;
+        binding-unknown) FLAGS=(-DWITH_RUNTIME -DBINDING_CAP=2) ;;
         routing) FLAGS=(-DWITH_RUNTIME -DROUTING_CAP=1 -DROUTING_CHECK -DROUTING_START -DROUTING_AVAILABLE) ;;
         cap0) FLAGS=(-DWITH_RUNTIME -DROUTING_CAP=0 -DROUTING_CHECK -DROUTING_START) ;;
         unknown) FLAGS=(-DWITH_RUNTIME -DROUTING_CAP=2 -DROUTING_CHECK -DROUTING_START) ;;
@@ -171,6 +182,7 @@ for variant in legacy current routing cap0 unknown missing-cap missing-check mis
 done
 done
 echo 'PASS: optional Apple preflight bridge with legacy and capable runtime symbols'
+echo 'PASS: optional Darwin interface binding bridge requires exact capability one; missing/zero/unknown refuse'
 echo "PASS: optional Apple routing bridge requires all symbols and exact capability one; linked=$LINKED executed=$EXECUTED (available host architectures only)"
 
 IOS="$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy/CorePreflightPolicy.swift"

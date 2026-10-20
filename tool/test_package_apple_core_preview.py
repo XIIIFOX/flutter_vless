@@ -46,6 +46,9 @@ class AppleSDKPackagingTests(unittest.TestCase):
         bindings = {name: subject.digest(self.root/name) for name in [*subject.PRODUCER_INPUTS, 'third_party/xray-mobile/runtime.go']}
         self.producer = dict(success=True, source_unchanged=True, module_cache_source_unchanged=True,
                              copies_unchanged=True, classic_dns_lifetime_applied=True, h3_lifetime_applied=True,
+                             darwin_interface_binding_source_applied=True, darwin_interface_binding_capability_expected=1,
+                             darwin_interface_binding_tag='flutter_vless_darwin_interface_binding',
+                             darwin_interface_binding_patch_sha256=bindings[subject.BINDING_PATCH],
                              published=False, runtime_executed=False, routing_capability_expected=1,
                              routing_tag='flutter_vless_vpn_routing', lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial'],
                              core=self.pin['module_version'], core_module=self.pin['module'], core_sum=self.pin['module_sum'],
@@ -99,7 +102,7 @@ class AppleSDKPackagingTests(unittest.TestCase):
         self.assertTrue(result['success'])
         self.assertEqual(len(result['framework_sha256']), 5)
         self.assertEqual(len(result['strong_exports']), 3)
-        self.assertTrue(all(len(exports) == 5 for exports in result['strong_exports'].values()))
+        self.assertTrue(all(len(exports) == 6 for exports in result['strong_exports'].values()))
         self.assertEqual(result['head'], self.head)
         self.assertFalse(result['runtime_executed'] or result['installed'] or result['published'])
         archive = self.destination/result['archive']
@@ -131,6 +134,9 @@ class AppleSDKPackagingTests(unittest.TestCase):
         for key, value in [('success', False), ('h3_lifetime_applied', 1), ('published', 0),
                            ('runtime_executed', True), ('routing_capability_expected', True),
                            ('core_sum', 'foreign'), ('h3_lifetime_patch_sha256', 'c'*64),
+                           ('darwin_interface_binding_source_applied', False),
+                           ('darwin_interface_binding_capability_expected', True),
+                           ('darwin_interface_binding_patch_sha256', '0'*64),
                            ('lifetime_patch_scope', ['classic_dns'])]:
             with self.subTest(key=key):
                 self.producer = copy.deepcopy(original); self.producer[key] = value; self.write_receipts()

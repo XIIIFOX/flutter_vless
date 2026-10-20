@@ -106,6 +106,7 @@ echo "Verifying Go compilation..."
 go build ./... && echo "Go build OK" || { echo "ERROR: Go build failed"; exit 1; }
 
 gomobile bind \
+    -tags=flutter_vless_darwin_interface_binding \
     -a \
     -ldflags="-s -w -extldflags -lresolv" \
     -target=macos \

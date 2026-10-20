@@ -12,19 +12,36 @@ public struct TunnelParsedConfig: Equatable {
     }
 }
 
+public struct TunnelEndpointSelection: Equatable, Sendable {
+    public let logicalHost: String
+    public let candidates: TunnelEndpointCandidates
+    public let selected: TunnelEndpointCandidate
+
+    public init(logicalHost: String, candidates: TunnelEndpointCandidates, selected: TunnelEndpointCandidate) {
+        self.logicalHost = logicalHost
+        self.candidates = candidates
+        self.selected = selected
+    }
+}
+
 public struct TunnelPreparedConfig {
     public let data: Data
     public let logMessages: [String]
     public let proxyUsesXhttp: Bool
     public let bootstrapAddresses: [String]
     public let routingEnvelope: NativeRoutingEnvelope?
+    public let endpointPath: TunnelEndpointPath?
+    public let endpointSelections: [TunnelEndpointSelection]
 
-    public init(data: Data, logMessages: [String], proxyUsesXhttp: Bool, bootstrapAddresses: [String] = [], routingEnvelope: NativeRoutingEnvelope? = nil) {
+    public init(data: Data, logMessages: [String], proxyUsesXhttp: Bool, bootstrapAddresses: [String] = [], routingEnvelope: NativeRoutingEnvelope? = nil,
+                endpointPath: TunnelEndpointPath? = nil, endpointSelections: [TunnelEndpointSelection] = []) {
         self.data = data
         self.logMessages = logMessages
         self.proxyUsesXhttp = proxyUsesXhttp
         self.bootstrapAddresses = bootstrapAddresses
         self.routingEnvelope = routingEnvelope
+        self.endpointPath = endpointPath
+        self.endpointSelections = endpointSelections
     }
 }
 
@@ -38,6 +55,147 @@ public struct TunnelPreparedConfig {
 /// that connects locally but cannot fetch HTTP bytes.
 public enum TunnelXrayConfigPreparer {
     public enum StartupError: Error { case invalidConfiguration, endpointUnavailable }
+
+    /// Prepare from one immutable underlay generation. Candidate selection is
+    /// private to physical endpoints; caller DNS and logical destinations stay intact.
+    public static func prepareForStartup(
+        jsonData: Data,
+        credentials: LocalProxyCredentials,
+        routingIntent: NativeRoutingIntent? = nil,
+        tcpPortAvailable: ((Int) -> Bool)? = nil,
+        environmentSnapshot: XrayEnvironmentSnapshot = .capture(),
+        endpointPath: TunnelEndpointPath,
+        selectedAttempt: UInt64 = 0,
+        resolveCandidates: (String) async throws -> TunnelEndpointCandidates,
+        isCurrent: () -> Bool = { true },
+        attempts: Int = 5,
+        retryDelay: () async throws -> Void = { try await Task.sleep(nanoseconds: 3_000_000_000) },
+        now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) async throws -> TunnelPreparedConfig {
+        struct AnswerSnapshot {
+            let answers: TunnelEndpointCandidates
+            let lookupBegan: TimeInterval
+            let lookupFinished: TimeInterval
+        }
+        func checkOwnership() throws {
+            try Task.checkCancellation()
+            guard isCurrent() else { throw CancellationError() }
+        }
+        func key(_ host: String) -> String {
+            (host.hasSuffix(".") ? String(host.dropLast()) : host).lowercased()
+        }
+        func matchesLogicalHost(_ candidate: TunnelEndpointCandidate, _ host: String) -> Bool {
+            let literal = TunnelEndpointAddress(text: host, source: .literal)
+            switch candidate.origin {
+            case .literal:
+                return literal?.text == candidate.address.text
+            case .systemIPv4Translation(let original):
+                return literal?.family == .ipv4 && candidate.address.family == .ipv6
+                    && TunnelEndpointAddress(text: original, source: .literal)?.text == literal?.text
+            case .systemNameAnswer, .encryptedIPv4Answer:
+                return literal == nil
+            }
+        }
+        func usable(_ snapshot: AnswerSnapshot, host: String, at time: TimeInterval) -> [TunnelEndpointCandidate] {
+            snapshot.answers.candidates.filter { candidate in
+                let freshZero = candidate.isSingleAttemptOnly
+                    && candidate.receivedAt >= snapshot.lookupBegan && candidate.receivedAt <= snapshot.lookupFinished
+                return candidate.isUsable(on: endpointPath, at: time, allowFreshZeroTTL: freshZero)
+                    && matchesLogicalHost(candidate, host)
+            }
+        }
+        try checkOwnership()
+        let began = now()
+        guard began.isFinite else { throw StartupError.endpointUnavailable }
+        let deadline = began + 25
+        for attempt in 0..<max(1, attempts) {
+            try checkOwnership()
+            // Each preparation retry owns new answers. In particular, a zero-TTL
+            // record is never reused by another worker or preparation attempt.
+            var answers: [String: AnswerSnapshot] = [:]
+            var names: [String] = []
+            while true {
+                try checkOwnership()
+                guard now().isFinite, now() < deadline else { throw StartupError.endpointUnavailable }
+                var missingHost: String?
+                var expired = false
+                let discovery = prepareSnapshot(jsonData: jsonData, credentials: credentials,
+                    routingIntent: routingIntent, tcpPortAvailable: tcpPortAvailable,
+                    environmentSnapshot: environmentSnapshot, endpointPath: endpointPath) { host in
+                        guard let snapshot = answers[key(host)] else { missingHost = host; return nil }
+                        let values = usable(snapshot, host: host, at: now())
+                        guard !values.isEmpty else { expired = true; return nil }
+                        var ordinal = selectedAttempt
+                        for previous in names {
+                            if key(previous) == key(host) { break }
+                            guard let earlier = answers[key(previous)] else { expired = true; return nil }
+                            let count = usable(earlier, host: previous, at: now()).count
+                            guard count > 0 else { expired = true; return nil }
+                            ordinal /= UInt64(count)
+                        }
+                        return values[Int(ordinal % UInt64(values.count))].address.text
+                    }
+                try checkOwnership()
+                if expired { break }
+                if discovery != nil {
+                    // Mixed radix visits every combination without multiplication
+                    // overflow. The first discovered endpoint is the low digit.
+                    var ordinal = selectedAttempt
+                    var selections: [TunnelEndpointSelection] = []
+                    for host in names {
+                        guard let snapshot = answers[key(host)] else { throw StartupError.invalidConfiguration }
+                        let values = usable(snapshot, host: host, at: now())
+                        guard !values.isEmpty else { throw StartupError.endpointUnavailable }
+                        let index = Int(ordinal % UInt64(values.count))
+                        ordinal /= UInt64(values.count)
+                        selections.append(TunnelEndpointSelection(logicalHost: host, candidates: snapshot.answers,
+                                                                  selected: values[index]))
+                    }
+                    let selected = Dictionary(uniqueKeysWithValues: selections.map { (key($0.logicalHost), $0.selected.address.text) })
+                    guard let prepared = prepareSnapshot(jsonData: jsonData, credentials: credentials,
+                        routingIntent: routingIntent, tcpPortAvailable: tcpPortAvailable,
+                        environmentSnapshot: environmentSnapshot, endpointPath: endpointPath,
+                        resolveIPv4: { selected[key($0)] }) else { throw StartupError.invalidConfiguration }
+                    try checkOwnership()
+                    guard now() < deadline, selections.allSatisfy({ selection in
+                        guard let snapshot = answers[key(selection.logicalHost)] else { return false }
+                        return usable(snapshot, host: selection.logicalHost, at: now()).contains(selection.selected)
+                    }) else { throw StartupError.endpointUnavailable }
+                    guard prepared.bootstrapAddresses == Array(Set(selections.map { $0.selected.address.text })).sorted() else {
+                        throw StartupError.invalidConfiguration
+                    }
+                    return TunnelPreparedConfig(data: prepared.data, logMessages: prepared.logMessages,
+                        proxyUsesXhttp: prepared.proxyUsesXhttp, bootstrapAddresses: prepared.bootstrapAddresses,
+                        routingEnvelope: prepared.routingEnvelope, endpointPath: endpointPath, endpointSelections: selections)
+                }
+                guard let host = missingHost else { throw StartupError.invalidConfiguration }
+                guard answers.count < 64 else { throw StartupError.invalidConfiguration }
+                let lookupBegan = now()
+                let result: TunnelEndpointCandidates
+                do { result = try await resolveCandidates(host) }
+                catch { try checkOwnership(); throw error }
+                try checkOwnership()
+                let lookupFinished = now()
+                guard lookupFinished.isFinite, lookupFinished >= lookupBegan, lookupFinished < deadline,
+                      result.path == endpointPath else { throw StartupError.endpointUnavailable }
+                let snapshot = AnswerSnapshot(answers: result, lookupBegan: lookupBegan, lookupFinished: lookupFinished)
+                let values = usable(snapshot, host: host, at: lookupFinished)
+                guard !values.isEmpty else { break }
+                if values.contains(where: { !$0.address.isLoopback }) {
+                    guard endpointPath.interfaceIndex != 0, let name = endpointPath.interfaceName,
+                          !name.isEmpty, !name.utf8.contains(0) else { throw StartupError.endpointUnavailable }
+                }
+                names.append(host)
+                answers[key(host)] = snapshot
+            }
+            if attempt + 1 < attempts {
+                do { try await retryDelay() }
+                catch { try checkOwnership(); throw error }
+                try checkOwnership()
+            }
+        }
+        throw StartupError.endpointUnavailable
+    }
 
     /// Resolve only physical endpoints. The typed answer retains its actual
     /// numeric family; a system AAAA answer does not imply proven DNS64.
@@ -150,6 +308,20 @@ public enum TunnelXrayConfigPreparer {
         environmentSnapshot: XrayEnvironmentSnapshot = .capture(),
         resolveIPv4: (String) -> String? = { _ in nil }
     ) -> TunnelPreparedConfig? {
+        prepareSnapshot(jsonData: jsonData, credentials: credentials, routingIntent: routingIntent,
+            tcpPortAvailable: tcpPortAvailable, environmentSnapshot: environmentSnapshot,
+            endpointPath: nil, resolveIPv4: resolveIPv4)
+    }
+
+    private static func prepareSnapshot(
+        jsonData: Data,
+        credentials: LocalProxyCredentials,
+        routingIntent: NativeRoutingIntent?,
+        tcpPortAvailable: ((Int) -> Bool)?,
+        environmentSnapshot: XrayEnvironmentSnapshot,
+        endpointPath: TunnelEndpointPath?,
+        resolveIPv4: (String) -> String?
+    ) -> TunnelPreparedConfig? {
         do {
             let listenerBound = try LocalProxyAccessPolicy.bindingPortEnvironment(configData: jsonData, environmentSnapshot: environmentSnapshot)
             let bound = try XrayAddressEnvironment.bind(configData: listenerBound, environmentSnapshot: environmentSnapshot)
@@ -199,7 +371,7 @@ public enum TunnelXrayConfigPreparer {
 
             var dnsPrefixCount = 0
             guard let bootstrapAddresses = TunnelDNSPolicy.apply(to: &configJSON, managedInboundTag: managedTag,
-                generatedRuleCount: { dnsPrefixCount = $0 }, environmentSnapshot: environmentSnapshot, resolveIPv4: resolveIPv4) else {
+                generatedRuleCount: { dnsPrefixCount = $0 }, environmentSnapshot: environmentSnapshot, endpointPath: endpointPath, resolveIPv4: resolveIPv4) else {
                 return nil
             }
             messages.append("Configured system address DNS through the caller Core DNS policy")

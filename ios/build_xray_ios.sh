@@ -125,6 +125,7 @@ echo "H2BUF: building with $(go version) from patched GOROOT clone"
 
 rm -rf "$OUTPUT_XCFRAMEWORK"
 gomobile bind \
+    -tags=flutter_vless_darwin_interface_binding \
     -a \
     -ldflags="-s -w -extldflags -lresolv" \
     -target=ios \

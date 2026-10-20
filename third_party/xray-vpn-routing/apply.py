@@ -13,6 +13,7 @@ HERE = Path(__file__).resolve().parent
 MANIFEST = json.loads((HERE / 'pin-manifest.json').read_text())
 CLASSIC = HERE.parent / 'xray-native-dns'
 H3_PATH = 'transport/internet/splithttp/dialer.go'
+DARWIN_PATH = 'transport/internet/sockopt_darwin.go'
 
 
 def classic_input_paths():
@@ -22,7 +23,7 @@ def classic_input_paths():
 
 
 def lifetime_input_paths():
-    return [*classic_input_paths(), CLASSIC / 'h3_lifetime_patch.py']
+    return [*classic_input_paths(), CLASSIC / 'h3_lifetime_patch.py', CLASSIC / 'darwin_interface_bind_patch.py']
 
 
 def apply_classic_lifetime(root):
@@ -89,15 +90,45 @@ def apply_h3_lifetime(root):
     patch.apply(root, replace)
 
 
+def validate_darwin_interface_source(root):
+    """Check binding patch and upstream before creating a disposable copy."""
+    inputs = [CLASSIC / 'darwin_interface_bind_patch.py', CLASSIC / 'pin-manifest.json']
+    if any(path.is_symlink() or not path.is_file() for path in inputs):
+        raise ValueError('Darwin interface inputs must be real files')
+    manifest = json.loads(inputs[1].read_text())
+    if any(manifest[key] != MANIFEST[key] for key in ('module', 'module_version', 'module_sum', 'core_commit')):
+        raise ValueError('Darwin interface and routing Core pins differ')
+    path = root / DARWIN_PATH
+    if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != manifest['upstream_sha256'][DARWIN_PATH]:
+        raise ValueError('Pinned Darwin interface source mismatch: ' + DARWIN_PATH)
+    return inputs[0]
+
+
+def apply_darwin_interface(root):
+    patch_path = validate_darwin_interface_source(root)
+    def replace(name, before, after):
+        if name != DARWIN_PATH:
+            raise ValueError('Darwin interface attempted an unrelated edit')
+        path = root / name
+        source = path.read_text()
+        if source.count(before) != 1:
+            raise ValueError('Pinned Darwin interface replacement mismatch')
+        path.write_text(source.replace(before, after))
+    spec = importlib.util.spec_from_file_location('routing_darwin_interface', patch_path)
+    patch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(patch)
+    patch.apply(root, replace)
+
+
 def copy_and_apply_classic(source, destination, *, go='go', caches=None):
-    return copy_and_apply(source, destination, go=go, caches=caches, routing=False, h3=False)
+    return copy_and_apply(source, destination, go=go, caches=caches, routing=False, h3=False, darwin_binding=False)
 
 
-def copy_and_apply_lifetimes(source, destination, *, go='go', caches=None, routing=False, h3=True):
-    return copy_and_apply(source, destination, go=go, caches=caches, routing=routing, h3=h3)
+def copy_and_apply_lifetimes(source, destination, *, go='go', caches=None, routing=False, h3=True, darwin_binding=True):
+    return copy_and_apply(source, destination, go=go, caches=caches, routing=routing, h3=h3, darwin_binding=darwin_binding)
 
 
-def copy_and_apply(source, destination, *, go='go', caches=None, routing=True, h3=True):
+def copy_and_apply(source, destination, *, go='go', caches=None, routing=True, h3=True, darwin_binding=True):
     source, destination = Path(source).resolve(), Path(destination).absolute()
     if destination.exists() or destination.is_symlink():
         raise ValueError('Destination must be new')
@@ -119,6 +150,8 @@ def copy_and_apply(source, destination, *, go='go', caches=None, routing=True, h
             raise ValueError('Pinned source mismatch: ' + relative)
     if h3:
         validate_h3_lifetime_source(source)
+    if darwin_binding:
+        validate_darwin_interface_source(source)
     # Validate every replacement before copying; no source or cache mutation.
     replacements = patches() if routing else []
     for relative, before, _ in replacements:
@@ -141,6 +174,8 @@ def copy_and_apply(source, destination, *, go='go', caches=None, routing=True, h
     apply_classic_lifetime(destination)
     if h3:
         apply_h3_lifetime(destination)
+    if darwin_binding:
+        apply_darwin_interface(destination)
     return destination
 
 

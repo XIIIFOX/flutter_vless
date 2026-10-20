@@ -24,6 +24,8 @@ CLASSIC_PATCH = CAPABILITY / 'classic_lifetime_patch.py'
 CLASSIC_OVERLAY = CAPABILITY / 'overlay/app/dns'
 H3_PATCH = CAPABILITY / 'h3_lifetime_patch.py'
 H3_DIALER = 'transport/internet/splithttp/dialer.go'
+BINDING_PATCH = CAPABILITY / 'darwin_interface_bind_patch.py'
+BINDING_SOURCE = 'transport/internet/sockopt_darwin.go'
 SWIFT = ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos'
 SELECTED_TEST = 'TestNativeDNSPreservation'
 PROTOCOL_TEST = 'TestNativeProtocolPreparation'
@@ -162,6 +164,40 @@ def prepare_lifetime_core(source, destination, manifest, *, classic_apply=None, 
             'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial']}
 
 
+def prepare_protected_core(source, destination, manifest):
+    """Add mandatory Darwin binding without changing either lifetime scope."""
+    source, destination = Path(source), Path(destination)
+    expected = manifest['upstream_sha256']
+    if BINDING_PATCH.is_symlink() or not BINDING_PATCH.is_file() or (source / BINDING_SOURCE).is_symlink() \
+            or digest(source / BINDING_SOURCE) != expected.get(BINDING_SOURCE):
+        raise ValueError('Pinned Darwin binding input mismatch before preparation')
+    patch_hash = digest(BINDING_PATCH)
+    report = prepare_lifetime_core(source, destination, manifest)
+    before = {path.relative_to(destination).as_posix(): digest(path) for path in destination.rglob('*') if path.is_file()}
+    def replace(name, old, new):
+        if name != BINDING_SOURCE:
+            raise ValueError('Darwin binding attempted an unrelated copy edit')
+        path = destination / name
+        text = path.read_text()
+        if text.count(old) != 1:
+            raise ValueError('Pinned Darwin binding replacement boundary changed')
+        path.write_text(text.replace(old, new))
+    spec = importlib.util.spec_from_file_location('preservation_darwin_binding', BINDING_PATCH)
+    patch = importlib.util.module_from_spec(spec); spec.loader.exec_module(patch)
+    patch.apply(destination, replace)
+    paths = list(destination.rglob('*'))
+    if any(path.is_symlink() for path in paths):
+        raise ValueError('Darwin binding introduced a source symlink')
+    after = {path.relative_to(destination).as_posix(): digest(path) for path in paths if path.is_file()}
+    if set(before) != set(after) or {name for name in before if before[name] != after[name]} != {BINDING_SOURCE}:
+        raise ValueError('Darwin binding must change exactly its owned file')
+    if digest(BINDING_PATCH) != patch_hash or any(digest(source / name) != value for name, value in expected.items()):
+        raise ValueError('Darwin binding source input changed during preparation')
+    report['darwin_interface_binding'] = {'source_applied': True, 'patch_sha256': patch_hash,
+        'changed_upstream': {BINDING_SOURCE: after[BINDING_SOURCE]}}
+    return report
+
+
 def source_snapshot():
     paths = [Path(__file__).resolve(), ROOT / 'tool/test_native_dns_preservation_runner.py', ROOT / 'tool/test_native_dns_context_runtime.py',
              ROOT / 'third_party/xray-native-dns/pin-manifest.json', MOBILE / 'go.mod', MOBILE / 'go.sum',
@@ -169,7 +205,10 @@ def source_snapshot():
              WINDOWS / 'xray_config_test.cpp', WINDOWS / 'asset_location.h', WINDOWS / 'preparation_report.h',
              WINDOWS / 'third_party/nlohmann/json.hpp']
     paths.append(CLASSIC_PATCH)
-    paths.extend([H3_PATCH, ROOT / 'tool/test_h3_lifetime_patch.py'])
+    paths.extend([H3_PATCH, ROOT / 'tool/test_h3_lifetime_patch.py', BINDING_PATCH,
+                  ROOT / 'tool/test_darwin_interface_bind_patch.py',
+                  ROOT / 'tool/test_darwin_interface_bind_semantics.py',
+                  ROOT / 'tool/test_darwin_interface_bind_semantics_runner.py'])
     paths.extend(sorted(CLASSIC_OVERLAY.glob('native_classic_*.go')))
     paths.append(ROOT / 'tool/fixtures/compatibility/protocols.json')
     paths.append(ROOT / 'tool/fixtures/compatibility/inactive-tls.json')
@@ -403,7 +442,10 @@ def main():
         module_flags = []
         if arguments.run_runtime:
             lifetime_core = EVIDENCE / 'LifetimeCore'
-            report.update(prepare_lifetime_core(core_source, lifetime_core, manifest))
+            report.update(prepare_protected_core(core_source, lifetime_core, manifest))
+            report['darwin_binding_copy_sha256'] = digest(lifetime_core / BINDING_SOURCE)
+            if report['darwin_binding_copy_sha256'] != report['darwin_interface_binding']['changed_upstream'][BINDING_SOURCE]:
+                raise RuntimeError('Prepared Darwin binding copy differs')
             report['h3_lifetime_copy_sha256'] = digest(lifetime_core / H3_DIALER)
             if report['h3_lifetime_copy_sha256'] != report['h3_lifetime_patch']['changed_upstream'][H3_DIALER]:
                 raise RuntimeError('Prepared H3 lifetime copy does not match its preparation receipt')
@@ -415,6 +457,8 @@ def main():
                     '-replace=' + manifest['module'] + '=' + str(lifetime_core)], 30, MOBILE)
             if digest(lifetime_core / H3_DIALER) != report['h3_lifetime_copy_sha256']:
                 raise RuntimeError('H3 lifetime prepared copy changed before compilation')
+            if digest(lifetime_core / BINDING_SOURCE) != report['darwin_binding_copy_sha256']:
+                raise RuntimeError('Darwin binding copy changed before compilation')
             module_flags = ['-modfile=' + str(modfile)]
         binary = EVIDENCE / ('acceptance.test.exe' if os.name == 'nt' else 'acceptance.test')
         checked('acceptance-compile', [arguments.go, 'test', *module_flags, '-c', '-o', str(binary), './native_dns_preservation'], 300, MOBILE)
@@ -477,6 +521,10 @@ def main():
             report['h3_lifetime_copy_unchanged'] = digest(lifetime_core / H3_DIALER) == report['h3_lifetime_copy_sha256']
             if not report['h3_lifetime_copy_unchanged']:
                 raise RuntimeError('H3 lifetime prepared copy changed during verification')
+        if lifetime_core is not None:
+            report['darwin_binding_copy_unchanged'] = digest(lifetime_core / BINDING_SOURCE) == report['darwin_binding_copy_sha256']
+            if not report['darwin_binding_copy_unchanged']:
+                raise RuntimeError('Darwin binding copy changed during verification')
         if source_snapshot() != report['source_sha256']:
             raise RuntimeError('Production preparer/acceptance source changed during verification')
         report['source_snapshot_unchanged'] = True
@@ -486,6 +534,14 @@ def main():
         report['error'] = str(error)
         print('Native DNS preservation check failed: ' + str(error), file=sys.stderr)
     finally:
+        if lifetime_core is not None and 'darwin_binding_copy_sha256' in report:
+            try:
+                report['darwin_binding_copy_unchanged'] = digest(lifetime_core / BINDING_SOURCE) == report['darwin_binding_copy_sha256']
+            except OSError:
+                report['darwin_binding_copy_unchanged'] = False
+            if not report['darwin_binding_copy_unchanged']:
+                report['success'] = False
+                report['error'] = 'Darwin binding copy changed during verification'
         if lifetime_core is not None and 'h3_lifetime_copy_sha256' in report:
             try:
                 report['h3_lifetime_copy_unchanged'] = digest(lifetime_core / H3_DIALER) == report['h3_lifetime_copy_sha256']

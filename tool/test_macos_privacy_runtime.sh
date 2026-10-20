@@ -67,6 +67,8 @@ from pathlib import Path
 import os, sys
 text=Path(sys.argv[1]).read_text()
 assert "RUNTIME=26.10.17" in text, "Unexpected embedded Xray version"
+if os.environ.get('REQUIRE_DARWIN_INTERFACE_BINDING') == '1':
+    assert text.splitlines().count('APPLE_DARWIN_INTERFACE_BIND_CAPABILITY_PASS=1') == 1
 assert text.splitlines().count('APPLE_FAKEDNS_SDK_PASS=2') == 1
 assert text.splitlines().count('APPLE_DNS_DATA_MAPS_SDK_PASS=2') == 1, 'Missing or duplicate Apple DNS data maps SDK gate'
 if os.environ.get('APPLE_RUNTIME_PROBE_MODE') == 'fakedns-only':

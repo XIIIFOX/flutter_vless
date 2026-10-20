@@ -63,7 +63,7 @@ def validate(preview, head, repository=ROOT):
         raise ValueError('Ordinary Core receipt changed')
     receipt = json.loads(receipt_path.read_text())
     if any(receipt.get(k) is not True for k in ('success', 'source_unchanged', 'module_cache_source_unchanged',
-                                               'copies_unchanged', 'classic_dns_lifetime_applied', 'h3_lifetime_applied')) \
+                                               'copies_unchanged', 'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'darwin_interface_binding_source_applied')) \
             or type(receipt.get('routing_capability_expected')) is not int or receipt['routing_capability_expected'] != 0 \
             or receipt.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial'] \
             or receipt.get('selected_abis') != list(builder.ABIS) \
@@ -71,7 +71,8 @@ def validate(preview, head, repository=ROOT):
         raise ValueError('Ordinary lifetime proof differs')
     if set(receipt['source_sha256']) != ordinary_names \
             or any(sources.get(name) != value for name, value in receipt['source_sha256'].items()) \
-            or receipt['h3_lifetime_patch_sha256'] != sources[builder.H3]:
+            or receipt['h3_lifetime_patch_sha256'] != sources[builder.H3] \
+            or receipt.get('darwin_interface_binding_patch_sha256') != sources['third_party/xray-native-dns/darwin_interface_bind_patch.py']:
         raise ValueError('Ordinary lifetime source provenance differs')
     pin = json.loads((repository / 'third_party/xray-vpn-routing/pin-manifest.json').read_text())
     if any(receipt.get(key) != pin[field] for key, field in [('core_module', 'module'), ('core', 'module_version'),

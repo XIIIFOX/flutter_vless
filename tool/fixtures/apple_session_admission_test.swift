@@ -4,7 +4,34 @@ import Foundation
 // methods below; no Xray, HEV, NetworkExtension, socket or resolver is linked.
 typealias NativeDiagnosticMessage = String
 struct LocalProxyCredentials {}
-struct TunnelPreparedConfig {}
+struct NativeRoutingIntent {}
+struct XrayEnvironmentSnapshot {}
+struct FixtureEnvelope { let configurationData: Data, metadataData: Data }
+struct TunnelEndpointPath: Equatable {
+    var generation: UInt64 = 0
+    var interfaceIndex: UInt32 = 1
+    func rebased(generation: UInt64) -> Self { Self(generation: generation, interfaceIndex: interfaceIndex) }
+}
+struct TunnelEndpointCandidate {
+    var expiry: TimeInterval? = nil
+    var singleAttempt = false
+    var isSingleAttemptOnly: Bool { singleAttempt }
+    func isUsable(on path: TunnelEndpointPath, at now: TimeInterval, allowFreshZeroTTL: Bool) -> Bool {
+        expiry.map { now < $0 || (singleAttempt && allowFreshZeroTTL) } ?? true
+    }
+}
+struct TunnelEndpointCandidates { let path: TunnelEndpointPath }
+struct TunnelEndpointSelection { let candidates: TunnelEndpointCandidates; let selected: TunnelEndpointCandidate }
+struct TunnelPreparedConfig {
+    var data = Data(), bootstrapAddresses = ["192.0.2.1"]
+    var routingEnvelope: FixtureEnvelope? = nil
+    var endpointPath: TunnelEndpointPath? = TunnelEndpointPath()
+    var endpointSelections: [TunnelEndpointSelection] = []
+}
+final class TunnelPhysicalPathObserver {
+    var onChange: ((TunnelEndpointPath?) -> Void)?
+    func cancel() {}
+}
 struct FixtureOptions {
     var retries = 0
     var reconnectEnabled = true
@@ -68,7 +95,28 @@ final class TunnelPacketBridge {
     func pause() {}
     func shutdown() {}
 }
+enum FixtureSleep {
+    static var hold = false
+    static var delays: [UInt64] = []
+    static func sleep(nanoseconds: UInt64) async throws {
+        delays.append(nanoseconds)
+        if hold { try await Task.sleep(nanoseconds: 10_000_000_000) }
+        else { await Task.yield(); try Task.checkCancellation() }
+    }
+}
+final class FixtureAsyncGate: @unchecked Sendable {
+    let entered = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    func wait() async {
+        await withCheckedContinuation { value in
+            lock.lock(); continuation = value; lock.unlock(); entered.signal()
+        }
+    }
+    func release() { lock.lock(); let value = continuation; continuation = nil; lock.unlock(); value?.resume() }
+}
 enum SyntheticFailure: Error { case core }
+enum TunnelXrayConfigPreparer { enum StartupError: Error { case invalidConfiguration } }
 
 // Records production scheduling without sleeping or invoking native work.
 // One control holds delayed callbacks to prove drain refusal cannot hot-loop.
@@ -106,7 +154,14 @@ final class FixtureProvider: @unchecked Sendable {
     var forwardingEpoch: TunnelSessionAdmission.Epoch?
     var startupPreparation: (epoch: TunnelSessionAdmission.Epoch, task: Task<TunnelPreparedConfig, Error>)?
     var protocolConfiguration: NEVPNProtocol?
-    var watchdogTimer: DispatchSourceTimer?, pathMonitor: NWPathMonitor?
+    var watchdogTimer: DispatchSourceTimer?, pathObserver: TunnelPhysicalPathObserver?
+    let endpointAdmission = TunnelEndpointPlanAdmission(), endpointCommitQueue = TunnelEndpointCommitQueue()
+    var installedSettingsKey: ProtectedSettingsKey?
+    var runtimeSource: RuntimeSource?, physicalPath: TunnelEndpointPath?
+    var observedPhysicalPath = true
+    var selectedAttempt: UInt64 = 0
+    var endpointPreparation: (token: TunnelEndpointPlanAdmission.Token, task: Task<Void, Never>)?
+    var lastEndpointHealthCheck: Date = .distantPast
     var watchdogPolicy = TunnelWatchdogFailurePolicy(failureThreshold: 3)
     var watchdogSuspended = false, watchdogInboundHealthy = false
     var watchdogInboundPort: Int?, recoveryCheck: DispatchWorkItem?
@@ -124,7 +179,9 @@ final class FixtureProvider: @unchecked Sendable {
     var hasStartedHEV = false, hevStopSignal: DispatchGroup?
     let hevLifecycle = TunnelProcessLifecycle()
     var nativeRuntimeEpoch: TunnelSessionAdmission.Epoch?
+    var nativeRuntimeToken: TunnelEndpointPlanAdmission.Token?
     var packetBridge: TunnelPacketBridge?, packetBridgeEpoch: TunnelSessionAdmission.Epoch?
+    var packetBridgeToken: TunnelEndpointPlanAdmission.Token?
     var hevLogURL: URL?
     // Read counters only after their owner queue is drained.
     var coreStarts = 0, workerStarts = 0, coreStops = 0, healthChecks = 0
@@ -140,7 +197,7 @@ final class FixtureProvider: @unchecked Sendable {
         coreHook?()
         if rejectCore { throw SyntheticFailure.core }
     }
-    func startSocks5Tunnel(serverPort: Int, credentials: LocalProxyCredentials, epoch: TunnelSessionAdmission.Epoch) throws {
+    func startSocks5Tunnel(serverPort: Int, credentials: LocalProxyCredentials, epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token) throws {
         workerStarts += 1
         hasStartedHEV = true
         hevLifecycle.beginStart(); hevLifecycle.markThreadEntered()
@@ -165,21 +222,84 @@ final class FixtureProvider: @unchecked Sendable {
     func socksHTTPHealthCheck(port: Int, credentials: LocalProxyCredentials, budget: LocalProxyIOBudget) -> String {
         httpHealthChecks += 1; return "ok"
     }
+    var originalPreparationInputs: [Data] = []
+    var preparationHook: (() async throws -> Void)?
+    var preflightHook: (() throws -> Void)?
+    var settingsHook: (() async throws -> Void)?
+    var settingGenerations: [UInt64] = []
+    var rejectPreparation = false, rejectPreflight = false
+    var preparationExpiry: TimeInterval?
+    var preparationAddresses = ["192.0.2.1"]
+    func prepareEndpointConfig(_ source: RuntimeSource, token: TunnelEndpointPlanAdmission.Token, path: TunnelEndpointPath, attempt: UInt64) async throws -> TunnelPreparedConfig {
+        originalPreparationInputs.append(source.config)
+        try await preparationHook?()
+        if rejectPreparation { throw SyntheticFailure.core }
+        guard sessionAdmission.isCurrent(source.epoch), endpointAdmission.isCurrent(token) else { throw CancellationError() }
+        let data = source.config + Data("-generated-\(attempt)".utf8)
+        return TunnelPreparedConfig(data: data, bootstrapAddresses: preparationAddresses,
+            routingEnvelope: FixtureEnvelope(configurationData: data, metadataData: data + Data("-metadata".utf8)),
+            endpointPath: path,
+            endpointSelections: preparationExpiry.map { [TunnelEndpointSelection(candidates: TunnelEndpointCandidates(path: path), selected: TunnelEndpointCandidate(expiry: $0))] } ?? [])
+    }
+    func tunnelError(_ message: String) -> NSError { NSError(domain: "fixture", code: 1) }
+    func parseConfig(jsonData: Data) -> (inboundPort: Int, unused: Int)? { (10808, 0) }
+    func checkEndpointPreflight(_ spec: RuntimeSpec, prepared: TunnelPreparedConfig, source: RuntimeSource) throws {
+        try preflightHook?()
+        if rejectPreflight { throw SyntheticFailure.core }
+        guard sessionAdmission.isCurrent(spec.epoch), endpointAdmission.isCurrent(spec.token), spec.isFresh() else { throw CancellationError() }
+    }
+    func protectedNetworkSettings(_ spec: RuntimeSpec) -> UInt64 { spec.token.generation }
+    func setTunnelNetworkSettings(_ generation: UInt64) async throws {
+        settingGenerations.append(generation)
+        try await settingsHook?()
+    }
     // SOURCE_PROVIDER_METHODS
-    func spec(_ epoch: TunnelSessionAdmission.Epoch, options: FixtureOptions = FixtureOptions()) -> RuntimeSpec {
-        RuntimeSpec(epoch: epoch, options: options, config: Data(), port: 10808, geoAssetsDirectory: nil, credentials: LocalProxyCredentials())
+    func spec(_ epoch: TunnelSessionAdmission.Epoch, options: FixtureOptions = FixtureOptions(), config: Data = Data("original-source".utf8)) -> RuntimeSpec {
+        let token = try! endpointAdmission.begin(epoch)
+        let path = TunnelEndpointPath(generation: token.generation)
+        let source = RuntimeSource(epoch: epoch, config: config, options: options, routingIntent: nil,
+            credentials: LocalProxyCredentials(), geoAssetsDirectory: nil, environment: XrayEnvironmentSnapshot())
+        runtimeSource = source; physicalPath = path; pathObserver = TunnelPhysicalPathObserver()
+        pathObserver?.onChange = { [weak self] path in self?.physicalPathChanged(path, epoch: epoch) }
+        let bytes = config + Data("-generated-0".utf8)
+        let prepared = TunnelPreparedConfig(data: bytes,
+            routingEnvelope: FixtureEnvelope(configurationData: bytes, metadataData: bytes + Data("-metadata".utf8)), endpointPath: path)
+        precondition(endpointAdmission.commit(token))
+        return RuntimeSpec(source: source, prepared: prepared, token: token, path: path, port: 10808)
     }
     func begin(options: FixtureOptions = FixtureOptions()) -> RuntimeSpec {
         let epoch = sessionAdmission.begin()
         setForwardingReady(false, epoch: epoch)
         let value = spec(epoch, options: options)
+        installedSettingsKey = ProtectedSettingsKey(value)
         precondition(startTunnelWatchdog(value))
         return value
     }
     func recover(_ epoch: TunnelSessionAdmission.Epoch) {
         watchdogQueue.sync { scheduleNativeRecovery(after: 0, epoch: epoch) }
     }
-    func flush() { watchdogQueue.sync {}; runtimeQueue.sync {}; watchdogQueue.sync {} }
+    func waitUntil(_ predicate: () -> Bool) {
+        for _ in 0..<1000 {
+            if predicate() { return }
+            Thread.sleep(forTimeInterval: 0.002)
+        }
+        precondition(predicate(), "bounded fake callback did not arrive")
+    }
+    func flushAsync() async {
+        for _ in 0..<1000 {
+            watchdogQueue.sync {}; runtimeQueue.sync {}; watchdogQueue.sync {}
+            await Task.yield()
+            if watchdogQueue.sync(execute: { !runtimeRecoveryInFlight }) { return }
+        }
+        precondition(!runtimeRecoveryInFlight, "bounded asynchronous transition did not settle")
+    }
+    func flush() {
+        for _ in 0..<200 {
+            watchdogQueue.sync {}; runtimeQueue.sync {}; watchdogQueue.sync {}
+            if watchdogQueue.sync(execute: { !runtimeRecoveryInFlight }) { return }
+            Thread.sleep(forTimeInterval: 0.002)
+        }
+    }
     func stop() async {
         await withCheckedContinuation { continuation in
             stopTunnel(with: NEProviderStopReason(rawValue: 1)) { continuation.resume() }
@@ -189,13 +309,14 @@ final class FixtureProvider: @unchecked Sendable {
 
 @main struct Probe {
     static func main() async {
+        setbuf(stdout, nil)
         // Actual recovery code passes its first check, then the fake native
         // drain blocks. Stop must return from revocation without that queue.
         let duringDrain = FixtureProvider(), spec = duringDrain.begin()
         let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
         duringDrain.drainHook = { entered.signal(); precondition(release.wait(timeout: .now() + 3) == .success) }
         let oldTimer = duringDrain.watchdogTimer?.event
-        let oldPath = duringDrain.pathMonitor?.pathUpdateHandler
+        let oldPath = duringDrain.pathObserver?.onChange
         duringDrain.watchdogQueue.sync { duringDrain.scheduleRecoveryCheck(epoch: spec.epoch) }
         let oldCheck = duringDrain.recoveryCheck
         duringDrain.recover(spec.epoch)
@@ -209,7 +330,7 @@ final class FixtureProvider: @unchecked Sendable {
         precondition(duringDrain.coreStarts == 0 && duringDrain.workerStarts == 0)
         duringDrain.wake()
         duringDrain.watchdogQueue.sync {
-            oldTimer?(); oldPath?(FixturePath()); oldCheck?.perform()
+            oldTimer?(); oldPath?(TunnelEndpointPath()); oldCheck?.perform()
             duringDrain.scheduleTunnelHealthCheck(trigger: "late", after: 0, epoch: spec.epoch)
         }
         duringDrain.reportTerminalFailure("late worker failure", code: 1, epoch: spec.epoch)
@@ -304,11 +425,11 @@ final class FixtureProvider: @unchecked Sendable {
         sleptCheck.watchdogQueue.sync { sleepingCheck?.perform() }
         sleepingCheck?.cancel()
         let slotClearedWhileSleeping = sleptCheck.recoveryCheck == nil && sleptCheck.healthChecks == checksBeforeSleep
-        sleptCheck.wake()
+        sleptCheck.wake(); sleptCheck.flush()
         sleptCheck.watchdogQueue.sync { _ = sleptCheck.performTunnelHealthCheck(trigger: "after-wake", epoch: checkSpec.epoch) }
         let rearmedCheck = sleptCheck.recoveryCheck
         let rearmedAfterWake = rearmedCheck != nil && rearmedCheck !== sleepingCheck
-            && sleptCheck.healthChecks == checksBeforeSleep + 1
+            && sleptCheck.healthChecks >= checksBeforeSleep + 1
         await sleptCheck.stop()
         guard slotClearedWhileSleeping && rearmedAfterWake else {
             print("FAIL recovery check firing during sleep stranded the retry slot after wake")
@@ -338,12 +459,12 @@ final class FixtureProvider: @unchecked Sendable {
         // A new authorized epoch works; callbacks and teardown from the old
         // epoch cannot touch its workers, watchdog, readiness or retry state.
         let newer = FixtureProvider(), old = newer.begin()
-        let lateTimer = newer.watchdogTimer?.event, latePath = newer.pathMonitor?.pathUpdateHandler
+        let lateTimer = newer.watchdogTimer?.event, latePath = newer.pathObserver?.onChange
         await newer.stop()
         let fresh = newer.begin(); newer.recover(fresh.epoch); newer.flush()
         precondition(newer.coreStarts == 1 && newer.workerStarts == 1 && newer.isForwardingReady())
         let stopsBefore = newer.coreStops, healthBefore = newer.healthChecks
-        newer.watchdogQueue.sync { lateTimer?(); latePath?(FixturePath()) }
+        newer.watchdogQueue.sync { lateTimer?(); latePath?(TunnelEndpointPath()) }
         newer.reportTerminalFailure("old failure", code: 1, epoch: old.epoch)
         precondition(!newer.startTunnelWatchdog(old))
         newer.stopTunnelWatchdog(epoch: old.epoch)
@@ -368,20 +489,19 @@ final class FixtureProvider: @unchecked Sendable {
         _ = try? await task.value
         print("PASS preparation cancellation is epoch-scoped")
 
-        // Actual recovery must reuse the admitted pair, without rebuilding its
-        // digest/credentials or falling back to the ordinary native entry point.
+        // Recovery must regenerate a paired document from immutable source.
         let retained = FixtureProvider(), retainedEpoch = retained.sessionAdmission.begin()
-        let configBytes = Data("final-config-canary".utf8), metadataBytes = Data("final-spec-canary".utf8)
-        let retainedSpec = FixtureProvider.RuntimeSpec(epoch: retainedEpoch, options: FixtureOptions(retries: 2),
-            config: configBytes, port: 10808, geoAssetsDirectory: nil, credentials: LocalProxyCredentials(), routingMetadata: metadataBytes)
+        let original = Data("original-config-canary".utf8)
+        let retainedSpec = retained.spec(retainedEpoch, options: FixtureOptions(retries: 2), config: original)
         precondition(retained.startTunnelWatchdog(retainedSpec))
         retained.recover(retainedEpoch); retained.flush()
         retained.recover(retainedEpoch); retained.flush()
         precondition(retained.startedPairs.count == 2)
-        precondition(retained.startedPairs.allSatisfy { $0.0 == configBytes && $0.1 == metadataBytes })
-        precondition(retained.runtimeSpec?.config == configBytes && retained.runtimeSpec?.routingMetadata == metadataBytes)
+        precondition(retained.originalPreparationInputs == [original])
+        precondition(retained.startedPairs.allSatisfy { $0.1 == $0.0 + Data("-metadata".utf8) })
+        precondition(retained.startedPairs[0].0 != retained.startedPairs[1].0)
         await retained.stop()
-        print("PASS native recovery retains exact admitted routing config and metadata")
+        print("PASS native recovery regenerates paired routing config and metadata from original source")
 
         // Unexpected errors remain diagnostic failures rather than silently
         // being treated as Stop/cancellation.
@@ -461,13 +581,14 @@ final class FixtureProvider: @unchecked Sendable {
         if cancelledRetryUncounted && actualFailureCountedOnce && furtherStartsRefused {
             print("PASS sleep-cancelled retry preserves finite budget and one actual failed retry exhausts it")
         } else {
-            print("FAIL sleep consumed the finite retry budget or real failed starts escaped its limit")
+            print("FAIL sleep consumed the finite retry budget or real failed starts escaped its limit", cancelledRetryUncounted, actualFailureCountedOnce, furtherStartsRefused, limited.coreStarts, limited.workerStarts, limited.recoveryFailures, limited.recoveryExhausted, realRetryEnteredWithBudget)
             budgetFailures += 1
         }
         // A failed drain performs no attempt, but its explicit retry pause must
         // still be honored rather than repeatedly scheduling immediate work.
         let undrained = FixtureProvider(), undrainedSpec = undrained.begin()
         undrained.runtimeQueue.holdDelayed = true
+        FixtureSleep.hold = true; FixtureSleep.delays = []
         undrained.rejectWorkerStop = true
         undrained.hasStartedHEV = true
         undrained.hevLifecycle.beginStart(); undrained.hevLifecycle.markThreadEntered()
@@ -475,9 +596,9 @@ final class FixtureProvider: @unchecked Sendable {
         let drainPauses = undrained.runtimeQueue.scheduledDelays()
         let noAttemptAndBoundedPause = undrained.coreStarts == 0 && undrained.workerStarts == 0
             && undrained.recoveryFailures == 0 && !undrained.initialRuntimeAttempted
-            && drainPauses.count == 2 && drainPauses[1] >= 2.5
+            && drainPauses.count == 1 && FixtureSleep.delays.contains(where: { $0 >= 2_500_000_000 })
         await undrained.stop()
-        undrained.runtimeQueue.releaseHeld(); undrained.flush()
+        undrained.runtimeQueue.releaseHeld(); undrained.flush(); FixtureSleep.hold = false
         if noAttemptAndBoundedPause && undrained.coreStarts == 0 {
             print("PASS failed native drain retains attempt budget and honors the explicit bounded recovery pause")
         } else {
@@ -549,6 +670,201 @@ final class FixtureProvider: @unchecked Sendable {
             print("FAIL cancellation after CONNECT admitted HTTP or consumed a cancelled health sample")
             budgetFailures += 1
         }
+        // The one pending DNS lookup deliberately ignores Task cancellation.
+        // A newer path must start its own plan, not await or adopt the old answer.
+        let lateLookup = FixtureProvider(), lookupSpec = lateLookup.begin(options: FixtureOptions(retries: 3))
+        lateLookup.recover(lookupSpec.epoch); lateLookup.flush()
+        let lookupGate = FixtureAsyncGate(), lookupStops = lateLookup.coreStops
+        lateLookup.preparationHook = { await lookupGate.wait() }
+        lateLookup.watchdogQueue.sync { lateLookup.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: lookupSpec.epoch) }
+        precondition(lookupGate.entered.wait(timeout: .now() + 3) == .success)
+        precondition(lateLookup.coreStops == lookupStops && lateLookup.isForwardingReady())
+        lateLookup.preparationHook = nil
+        lateLookup.watchdogQueue.sync { lateLookup.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 3), epoch: lookupSpec.epoch) }
+        lateLookup.flush(); let latestLookupToken = lateLookup.nativeRuntimeToken, latestLookupStops = lateLookup.coreStops
+        lookupGate.release(); lateLookup.flush()
+        precondition(lateLookup.coreStarts == 2 && lateLookup.nativeRuntimeToken == latestLookupToken)
+        lateLookup.runtimeQueue.sync { precondition(!lateLookup.stopNativeRuntime(ownedBy: lookupSpec.epoch, token: lookupSpec.token)) }
+        lateLookup.reportTerminalFailure("old same-session worker failed", code: 1, epoch: lookupSpec.epoch, token: lookupSpec.token)
+        lateLookup.flush()
+        precondition(lateLookup.coreStops == latestLookupStops && lateLookup.isForwardingReady())
+        await lateLookup.stop()
+        print("PASS late DNS answer and same-session old teardown/error cannot replace or stop newer plan")
+
+        for refusal in ["lookup", "preflight"] {
+            let preserved = FixtureProvider(), preservedSpec = preserved.begin(options: FixtureOptions(retries: 1))
+            preserved.recover(preservedSpec.epoch); preserved.flush()
+            let before = preserved.coreStops
+            if refusal == "lookup" { preserved.rejectPreparation = true }
+            else { preserved.rejectPreflight = true }
+            preserved.watchdogQueue.sync { preserved.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: preservedSpec.epoch) }
+            preserved.flush()
+            precondition(preserved.coreStarts == 1 && preserved.coreStops == before && preserved.isForwardingReady())
+            precondition(preserved.settingGenerations.isEmpty && preserved.recoveryExhausted)
+            precondition(preserved.originalPreparationInputs.allSatisfy { $0 == preserved.runtimeSource!.config })
+            await preserved.stop()
+        }
+        print("PASS lookup/preflight refusal preserves working old worker and consumes finite preparation budget")
+
+        let staleCheck = FixtureProvider(), checkPlan = staleCheck.begin(options: FixtureOptions(retries: 3))
+        staleCheck.recover(checkPlan.epoch); staleCheck.flush()
+        let checkEntered = DispatchSemaphore(value: 0), checkRelease = DispatchSemaphore(value: 0)
+        staleCheck.preflightHook = {
+            staleCheck.preflightHook = nil; checkEntered.signal()
+            precondition(checkRelease.wait(timeout: .now() + 3) == .success)
+        }
+        let beforeCheckStops = staleCheck.coreStops
+        staleCheck.watchdogQueue.sync { staleCheck.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: checkPlan.epoch) }
+        precondition(checkEntered.wait(timeout: .now() + 3) == .success)
+        staleCheck.watchdogQueue.sync { staleCheck.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 3), epoch: checkPlan.epoch) }
+        precondition(staleCheck.coreStops == beforeCheckStops && staleCheck.isForwardingReady())
+        checkRelease.signal(); staleCheck.flush()
+        precondition(staleCheck.coreStarts == 2 && staleCheck.settingGenerations.count == 1 && staleCheck.runtimeSpec?.path.interfaceIndex == 3)
+        await staleCheck.stop()
+        print("PASS path change during Core preflight discards old candidate before drain")
+
+        let staleDrain = FixtureProvider(), drainPlan = staleDrain.begin(options: FixtureOptions(retries: 3))
+        staleDrain.recover(drainPlan.epoch); staleDrain.flush()
+        staleDrain.drainHook = {
+            staleDrain.watchdogQueue.sync { staleDrain.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 3), epoch: drainPlan.epoch) }
+        }
+        staleDrain.watchdogQueue.sync { staleDrain.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: drainPlan.epoch) }
+        staleDrain.waitUntil { staleDrain.watchdogQueue.sync { staleDrain.runtimeSpec?.path.interfaceIndex == 3 && !staleDrain.runtimeRecoveryInFlight } }
+        staleDrain.flush()
+        precondition(staleDrain.coreStarts == 2 && staleDrain.settingGenerations.count == 1)
+        await staleDrain.stop()
+        print("PASS superseded drain completion installs no obsolete settings or native runtime")
+
+        let ordered = FixtureProvider(), orderedSpec = ordered.begin(options: FixtureOptions(retries: 3))
+        ordered.recover(orderedSpec.epoch); ordered.flush()
+        let settingsGate = FixtureAsyncGate()
+        ordered.settingsHook = { await settingsGate.wait() }
+        ordered.watchdogQueue.sync { ordered.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: orderedSpec.epoch) }
+        precondition(settingsGate.entered.wait(timeout: .now() + 3) == .success)
+        ordered.settingsHook = nil
+        ordered.watchdogQueue.sync { ordered.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 3), epoch: orderedSpec.epoch) }
+        ordered.waitUntil { ordered.originalPreparationInputs.count == 2 }
+        precondition(ordered.settingGenerations.count == 1 && ordered.coreStarts == 1 && !ordered.isForwardingReady(), "new settings overtook pending callback")
+        settingsGate.release(); await ordered.flushAsync()
+        precondition(ordered.settingGenerations.count == 2 && ordered.settingGenerations[0] < ordered.settingGenerations[1], "settings FIFO generations")
+        precondition(ordered.coreStarts == 2 && ordered.runtimeSpec?.path.interfaceIndex == 3 && ordered.isForwardingReady())
+        await ordered.stop()
+        print("PASS asynchronous settings complete FIFO and stale completion cannot start Core")
+
+        let stopSettings = FixtureProvider(), stopSettingsSpec = stopSettings.begin(options: FixtureOptions(retries: 3))
+        stopSettings.recover(stopSettingsSpec.epoch); stopSettings.flush()
+        let stoppedSettingsGate = FixtureAsyncGate()
+        stopSettings.settingsHook = { await stoppedSettingsGate.wait() }
+        stopSettings.watchdogQueue.sync { stopSettings.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: stopSettingsSpec.epoch) }
+        precondition(stoppedSettingsGate.entered.wait(timeout: .now() + 3) == .success)
+        await stopSettings.stop(); stoppedSettingsGate.release(); stopSettings.flush()
+        precondition(stopSettings.coreStarts == 1 && !stopSettings.isForwardingReady() && stopSettings.nativeRuntimeToken == nil)
+        print("PASS explicit Stop revokes held settings completion before any replacement Core or HEV")
+
+        let expired = FixtureProvider(), expirySpec = expired.begin(options: FixtureOptions(retries: 1))
+        expired.recover(expirySpec.epoch); expired.flush()
+        expired.preparationExpiry = ProcessInfo.processInfo.systemUptime - 1
+        let expiryStops = expired.coreStops
+        expired.watchdogQueue.sync { expired.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: expirySpec.epoch) }
+        expired.flush()
+        precondition(expired.coreStarts == 1 && expired.coreStops == expiryStops && expired.settingGenerations.isEmpty && expired.isForwardingReady())
+        await expired.stop()
+        print("PASS expired selected address cannot newly drain old runtime or alter routes")
+
+        let unavailable = FixtureProvider(), unavailableSpec = unavailable.begin(options: FixtureOptions(retries: 2))
+        unavailable.recover(unavailableSpec.epoch); unavailable.flush()
+        let unavailableStops = unavailable.coreStops
+        unavailable.watchdogQueue.sync { unavailable.physicalPathChanged(nil, epoch: unavailableSpec.epoch) }
+        unavailable.flush()
+        precondition(unavailable.coreStarts == 1 && unavailable.coreStops == unavailableStops && unavailable.isForwardingReady())
+        unavailable.watchdogQueue.sync { unavailable.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 7), epoch: unavailableSpec.epoch) }
+        unavailable.flush()
+        precondition(unavailable.coreStarts == 2 && unavailable.runtimeSpec?.path.interfaceIndex == 7)
+        await unavailable.stop()
+        print("PASS absent physical snapshot preserves old runtime and a later real path regenerates it")
+
+        let ttlRefresh = FixtureProvider(), ttlSpec = ttlRefresh.begin(options: FixtureOptions(retries: 2))
+        ttlRefresh.recover(ttlSpec.epoch); ttlRefresh.flush()
+        let ttlSource = ttlRefresh.runtimeSource!, ttlPath = ttlSpec.path
+        let timed = TunnelPreparedConfig(data: ttlSpec.config, endpointPath: ttlPath,
+            endpointSelections: [TunnelEndpointSelection(candidates: TunnelEndpointCandidates(path: ttlPath), selected: TunnelEndpointCandidate(expiry: ProcessInfo.processInfo.systemUptime - 1))])
+        ttlRefresh.watchdogQueue.sync {
+            ttlRefresh.runtimeSpec = FixtureProvider.RuntimeSpec(source: ttlSource, prepared: timed, token: ttlSpec.token, path: ttlPath, port: ttlSpec.port)
+            ttlRefresh.watchdogTimer?.event?()
+        }
+        await ttlRefresh.flushAsync()
+        precondition(ttlRefresh.coreStarts == 2 && ttlRefresh.originalPreparationInputs == [ttlSource.config])
+        await ttlRefresh.stop()
+        print("PASS selected positive TTL expiry triggers original-source re-preparation before a new native attempt")
+
+        let zeroTTL = FixtureProvider(), zeroSpec = zeroTTL.begin(options: FixtureOptions(retries: 2))
+        zeroTTL.recover(zeroSpec.epoch); zeroTTL.flush()
+        let zeroSource = zeroTTL.runtimeSource!, zeroPath = zeroSpec.path
+        let single = TunnelPreparedConfig(data: zeroSpec.config, endpointPath: zeroPath,
+            endpointSelections: [TunnelEndpointSelection(candidates: TunnelEndpointCandidates(path: zeroPath), selected: TunnelEndpointCandidate(expiry: ProcessInfo.processInfo.systemUptime - 1, singleAttempt: true))])
+        zeroTTL.watchdogQueue.sync {
+            zeroTTL.runtimeSpec = FixtureProvider.RuntimeSpec(source: zeroSource, prepared: single, token: zeroSpec.token, path: zeroPath, port: zeroSpec.port)
+            zeroTTL.watchdogTimer?.event?(); zeroTTL.watchdogTimer?.event?()
+        }
+        zeroTTL.flush()
+        precondition(zeroTTL.coreStarts == 1 && zeroTTL.originalPreparationInputs.isEmpty)
+        zeroTTL.recover(zeroSpec.epoch); await zeroTTL.flushAsync()
+        precondition(zeroTTL.coreStarts == 2 && zeroTTL.originalPreparationInputs == [zeroSource.config])
+        await zeroTTL.stop()
+        print("PASS fresh zero TTL causes no timer spin and later retry still performs a new lookup")
+
+        let sameSettings = FixtureProvider(), sameSpec = sameSettings.begin(options: FixtureOptions(retries: 3))
+        sameSettings.recover(sameSpec.epoch); sameSettings.flush()
+        sameSettings.watchdogQueue.sync { sameSettings.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 1), epoch: sameSpec.epoch) }
+        await sameSettings.flushAsync()
+        precondition(sameSettings.originalPreparationInputs.count == 1 && sameSettings.coreStarts == 2 && sameSettings.settingGenerations.isEmpty)
+        sameSettings.preparationAddresses = ["198.51.100.7"]
+        sameSettings.watchdogQueue.sync { sameSettings.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 1), epoch: sameSpec.epoch) }
+        await sameSettings.flushAsync()
+        precondition(sameSettings.originalPreparationInputs.count == 2 && sameSettings.settingGenerations.count == 1)
+        await sameSettings.stop()
+        print("PASS equal public path still re-resolves; identical settings skip write but changed selected address writes")
+
+        let staleSame = FixtureProvider(), staleSameSpec = staleSame.begin(options: FixtureOptions(retries: 3))
+        staleSame.recover(staleSameSpec.epoch); staleSame.flush()
+        let staleSameGate = FixtureAsyncGate()
+        staleSame.settingsHook = { await staleSameGate.wait() }
+        staleSame.watchdogQueue.sync { staleSame.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: staleSameSpec.epoch) }
+        precondition(staleSameGate.entered.wait(timeout: .now() + 3) == .success)
+        staleSame.settingsHook = nil
+        staleSame.watchdogQueue.sync { staleSame.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: staleSameSpec.epoch) }
+        staleSameGate.release(); await staleSame.flushAsync()
+        precondition(staleSame.originalPreparationInputs.count == 2 && staleSame.settingGenerations.count == 1 && staleSame.coreStarts == 2)
+        precondition(staleSame.installedSettingsKey == FixtureProvider.ProtectedSettingsKey(staleSame.runtimeSpec!))
+        await staleSame.stop()
+        print("PASS successful stale settings callback is retained only for exact same-epoch installed key")
+
+        let failedSettings = FixtureProvider(), failedSettingsSpec = failedSettings.begin(options: FixtureOptions(retries: 2))
+        failedSettings.recover(failedSettingsSpec.epoch); failedSettings.flush()
+        failedSettings.settingsHook = { throw SyntheticFailure.core }
+        failedSettings.watchdogQueue.sync { failedSettings.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: failedSettingsSpec.epoch) }
+        await failedSettings.flushAsync()
+        precondition(failedSettings.installedSettingsKey == nil && failedSettings.coreStarts == 1 && failedSettings.settingGenerations.count >= 1)
+        await failedSettings.stop()
+        print("PASS failed settings callback invalidates installed-key knowledge and never admits Core")
+
+        #if MACOS_PROVIDER
+        let bridgeFailure = FixtureProvider(), bridgeSpec = bridgeFailure.begin(options: FixtureOptions(retries: 1))
+        bridgeFailure.recover(bridgeSpec.epoch); bridgeFailure.flush()
+        bridgeFailure.packetBridge = TunnelPacketBridge()
+        bridgeFailure.packetBridgeEpoch = bridgeSpec.epoch; bridgeFailure.packetBridgeToken = bridgeSpec.token
+        bridgeFailure.rejectCore = true
+        bridgeFailure.recover(bridgeSpec.epoch); await bridgeFailure.flushAsync()
+        if bridgeFailure.coreStarts == 2 && bridgeFailure.nativeRuntimeToken == nil &&
+            bridgeFailure.packetBridge == nil && bridgeFailure.packetBridgeToken == nil {
+            print("PASS drained old packet bridge cannot refuse cleanup of replacement Core startup failure")
+        } else {
+            print("FAIL old bridge token stranded replacement Core failure cleanup")
+            budgetFailures += 1
+        }
+        await bridgeFailure.stop()
+        #endif
+
         if budgetFailures != 0 { exit(1) }
     }
 }

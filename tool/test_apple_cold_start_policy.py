@@ -25,17 +25,32 @@ def main():
         support = ROOT / base / (prefix + "_tunnel_support")
         privacy = ROOT / base / (prefix + "_privacy")
         text = (ROOT / provider).read_text()
+        fixture_path = ROOT / "tool/fixtures/apple_cold_start_policy.swift"
+        fixture_source = fixture_path.read_bytes()
+        plan_path = support / "TunnelEndpointPlanAdmission.swift"
+        plan_source = plan_path.read_bytes()
         marker = "    " + ("open override" if platform == "macos" else "override") + " func startTunnel("
         start = text.index(marker)
         end = text.index("\n    }\n", start) + len("\n    }\n")
         entry = text[start:end].replace("open override func", "func", 1).replace("override func", "func", 1)
+        def actual_block(marker):
+            begin = text.index(marker)
+            finish = text.index("\n    }\n", begin) + len("\n    }\n")
+            return text[begin:finish].replace("private struct", "struct").replace("private func", "func")
+        extras = "\n".join(actual_block(marker) for marker in (
+            "    private struct RuntimeSource", "    private struct RuntimeSpec", "    private struct ProtectedSettingsKey",
+            "    private func prepareInitialRuntimeSpec", "    private func physicalPathChanged", "    private func prepareEndpointConfig", "    private func checkEndpointPreflight",
+            "    private func protectedNetworkSettings", "    private func installProtectedSettings", "    private func onRuntimeQueue"))
+        stop_marker = "    " + ("open override" if platform == "macos" else "override") + " func stopTunnel("
+        stop = actual_block(stop_marker).replace("open override func", "func", 1).replace("override func", "func", 1)
         helper_path = support / "TunnelOnDemandPolicy.swift"
-        helper = helper_path.read_text()
+        helper_source = helper_path.read_bytes()
+        helper = helper_source.decode()
         helper = "\n".join(line for line in helper.splitlines() if not line.startswith("import NetworkExtension") and not line.startswith("import flutter_vless"))
         helper = helper.replace("public ", "")  # fake OS types are intentionally internal
         generated = output / (platform + ".swift")
-        generated.write_text((ROOT / "tool/fixtures/apple_cold_start_policy.swift").read_text().replace("// ACTUAL_POLICY", helper).replace("// ACTUAL_START", entry))
-        inputs = [privacy / "VlessNativeOptions.swift", privacy / "CorePreflightPolicy.swift", support / "TunnelSessionAdmission.swift", generated]
+        generated.write_text((ROOT / "tool/fixtures/apple_cold_start_policy.swift").read_text().replace("// ACTUAL_POLICY", helper).replace("// ACTUAL_START", entry).replace("// ACTUAL_PREPARATION_HELPERS", extras).replace("// ACTUAL_STOP", stop))
+        inputs = [privacy / "VlessNativeOptions.swift", privacy / "CorePreflightPolicy.swift", support / "TunnelSessionAdmission.swift", support / "TunnelEndpointPlanAdmission.swift", generated]
         binary = output / platform
         command = ["xcrun", "swiftc", "-O", "-parse-as-library"]
         if args.receipts:
@@ -46,7 +61,9 @@ def main():
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=25)
         log = output / (platform + ".log")
         log.write_text(run.stdout + run.stderr)
-        results[platform] = {"exit": run.returncode, "provider_sha256": hashlib.sha256((ROOT / provider).read_bytes()).hexdigest(), "policy_sha256": hashlib.sha256(helper_path.read_bytes()).hexdigest(), "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()}
+        assert (ROOT / provider).read_text() == text and helper_path.read_bytes() == helper_source
+        assert fixture_path.read_bytes() == fixture_source and plan_path.read_bytes() == plan_source
+        results[platform] = {"exit": run.returncode, "fixture_sha256": hashlib.sha256(fixture_source).hexdigest(), "endpoint_plan_sha256": hashlib.sha256(plan_source).hexdigest(), "provider_sha256": hashlib.sha256((ROOT / provider).read_bytes()).hexdigest(), "policy_sha256": hashlib.sha256(helper_path.read_bytes()).hexdigest(), "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()}
         print(platform, run.returncode, run.stdout, flush=True)
     (output / "result.json").write_text(json.dumps({"results": results, "fake_only": True, "real_Core_network_preferences_devices": False}, indent=2) + "\n")
     assert all(value["exit"] == 0 for value in results.values()), results

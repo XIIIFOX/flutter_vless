@@ -92,6 +92,8 @@ class AndroidPreviewControls(unittest.TestCase):
         self.receipt_path = self.preview / 'fresh-jni/classic-preview-security-android-classic.fixture.json'
         self.receipt = {'success': True, 'source_unchanged': True, 'module_cache_source_unchanged': True,
                         'copies_unchanged': True, 'classic_dns_lifetime_applied': True, 'h3_lifetime_applied': True,
+                        'darwin_interface_binding_source_applied': True,
+                        'darwin_interface_binding_patch_sha256': builder.digest(self.root/'third_party/xray-native-dns/darwin_interface_bind_patch.py'),
                         'routing_capability_expected': 0, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial'],
                         'runtime_executed': False, 'published': False, 'selected_abis': list(builder.ABIS),
                         'source_sha256': {name: builder.digest(self.root / name) for name in builder.ordinary_inputs(self.root)},

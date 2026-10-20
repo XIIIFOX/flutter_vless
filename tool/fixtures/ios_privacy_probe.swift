@@ -79,6 +79,12 @@ func runModes() async {
     setbuf(stdout, nil)
     ProbePhaseReceipt.start()
     print("MODES_BEGIN")
+    if ProcessInfo.processInfo.environment["REQUIRE_DARWIN_INTERFACE_BINDING"] == "1" {
+        guard FLVlessCoreDarwinInterfaceBindingCapability() == 1 else {
+            print("APPLE_DARWIN_INTERFACE_BIND_CAPABILITY_FAILED"); exit(1)
+        }
+        print("APPLE_DARWIN_INTERFACE_BIND_CAPABILITY_PASS=1")
+    }
     runRawRuntimeProbe()
     do { try await runLocalAuthRuntimeChecks() } catch { print("AUTH_RUNTIME_FAILED"); exit(1) }
     do { try runDomainRoutingChecks() } catch { print("DOMAIN_ROUTING_FAILED"); exit(1) }

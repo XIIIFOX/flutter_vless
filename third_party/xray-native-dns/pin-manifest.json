@@ -29,7 +29,10 @@
     "infra/conf/xray.go": "01d1808afc8478373a201990c55d0ef2c037939f083a4cde96f29cf04135b7bb",
     "proxy/dns/dns.go": "f7c129a446b72cb350c852dac25bf84be2bbb479e253f831a029bee99f2617df",
     "proxy/dokodemo/dokodemo.go": "dff9629cbf27841f063493659cd64f28c5f13f33f7d2a846e158e1c1b26a9076",
-    "app/dns/nameserver_udp.go": "d5f53d45c9170c6b6c6a91af6f078b6c2f453b22a7679df818c643a23cf59a7f"
+    "app/dns/nameserver_udp.go": "d5f53d45c9170c6b6c6a91af6f078b6c2f453b22a7679df818c643a23cf59a7f",
+    "transport/internet/sockopt_darwin.go": "3afc4d2334118367a411777069a4890655616d9ae98f0ab44ff51f3e85ea31ea",
+    "transport/internet/sockopt.go": "1a5afaf4997d1c4b58b50e247df649f9761efef394c66bdc48d9609e5dce8445",
+    "transport/internet/system_dialer.go": "378eaf449cc4ac458592be26d2077e618954e5c1ce4cace8cf8cc0312b9dc46b"
   },
   "module": "github.com/xtls/xray-core",
   "module_version": "v1.260327.1-0.20261017152356-92ccc939aaf4",

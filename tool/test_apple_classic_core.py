@@ -56,6 +56,7 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.lose_replacement = False
         self.mutate_cache = False
         self.inputs = [ROOT / 'third_party/xray-native-dns/overlay/app/dns' / name for name in helper.HELPERS]
+        self.inputs.append(ROOT / 'third_party/xray-native-dns/darwin_interface_bind_patch.py')
         self.inputs.append(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py')
         copier = SimpleNamespace(copy_and_apply_lifetimes=self.copy, lifetime_input_paths=lambda: self.inputs,
                                  copy_and_apply_classic=mock.Mock(side_effect=AssertionError('ordinary producer must include H3')),
@@ -121,6 +122,8 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.assertEqual(before, helper.tree(self.source))
         self.assertFalse(report['runtime_executed'])
         self.assertTrue(report['h3_lifetime_applied'])
+        self.assertTrue(report['darwin_interface_binding_source_applied'])
+        self.assertEqual(report['darwin_interface_binding_capability_expected'],1)
         self.assertEqual(report['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial'])
         self.assertEqual(report['h3_lifetime_patch_sha256'], helper.digest(self.inputs[-1]))
         self.assertIn('no full native-DNS context overlay', report['scope'])

@@ -21,6 +21,12 @@ int64_t FLVlessCheckCorePrivate(NSData *configuration) {
 // generated entries then replace only the weak name. No consumer linker flags,
 // runtime lookup or trial Check/Start is needed.
 __attribute__((weak)) int64_t XRayRoutingCapability(void) { return 0; }
+__attribute__((weak)) int64_t XRayDarwinInterfaceBindingCapability(void) { return 0; }
+
+int64_t FLVlessCoreDarwinInterfaceBindingCapability(void) {
+    int64_t (*volatile capability)(void) = XRayDarwinInterfaceBindingCapability;
+    return capability() == 1 ? 1 : 0;
+}
 
 __attribute__((used, noinline, visibility("hidden")))
 int64_t FLVlessUnavailableRoutingCheck(NSData *configuration, NSData *specification) {

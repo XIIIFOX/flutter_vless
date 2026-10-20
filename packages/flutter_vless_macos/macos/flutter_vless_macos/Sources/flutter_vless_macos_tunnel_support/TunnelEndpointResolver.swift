@@ -7,11 +7,14 @@ import flutter_vless_macos_privacy
 /// whether it was synthesized by DNS64; no NAT64 prefix or reachability is inferred.
 public struct TunnelEndpointAddress: Equatable, Sendable {
     public enum Family: Equatable, Sendable { case ipv4, ipv6 }
-    public enum Source: Equatable, Sendable { case systemNameAnswer, encryptedIPv4Answer }
+    public enum Source: Equatable, Sendable { case literal, systemNameAnswer, systemIPv4Translation, encryptedIPv4Answer }
 
     public let text: String
     public let family: Family
     public let source: Source
+
+    /// Loopback chains stay local; physical path family hints do not apply.
+    public var isLoopback: Bool { text.hasPrefix("127.") || text == "::1" }
 
     public init?(text: String, source: Source) {
         // Reject embedded NUL before handing the text to a C-string parser.
@@ -46,13 +49,87 @@ public struct TunnelEndpointAddress: Equatable, Sendable {
 }
 
 /// Used only for VPN transport endpoints, before virtual DNS is installed.
-/// mDNSResponder can be blocked while includeAllNetworks is starting on macOS.
+/// mDNSResponder can be blocked while includeAllNetworks is starting on Apple platforms.
 /// Bound and cancel that lookup, then use the tunnel's DNS upstream over HTTPS
 /// from the provider process. Never turn off protection to bootstrap a tunnel.
-enum TunnelEndpointResolver {
+public enum TunnelEndpointResolver {
+    public enum CandidateFailure: Error, Equatable { case deadlineExceeded }
+
+    /// Resolve a generation-bound set. DNSService collection is interface scoped;
+    /// encrypted fallback and documented literal synthesis use the process default.
+    /// That provenance does not claim which interface a later Core socket uses.
+    public static func resolveCandidates(_ host: String, on path: TunnelEndpointPath,
+        deadline: TimeInterval, isCurrent: @escaping () -> Bool = { true },
+        event: (NativeDiagnosticMessage) -> Void = { _ in }) async throws -> TunnelEndpointCandidates {
+        try await resolveCandidates(host, on: path, deadline: deadline,
+            system: { host, path, deadline in
+                try await TunnelEndpointDNSCollection.collect(host, path: path, deadline: deadline, isCurrent: isCurrent)
+            }, synthesis: { host, deadline in
+                try await TunnelIPv4SynthesisWorker.shared.resolve(host, deadline: deadline, isCurrent: isCurrent)
+            }, fallback: { host, timeout in try await encryptedLookup(host, timeout: timeout) },
+            isCurrent: isCurrent, event: event)
+    }
+
+    static func resolveCandidates(_ host: String, on path: TunnelEndpointPath, deadline: TimeInterval,
+        now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        system: (String, TunnelEndpointPath, TimeInterval) async throws -> [TunnelEndpointCandidate],
+        synthesis: (String, TimeInterval) async throws -> [String],
+        fallback: (String, TimeInterval) async throws -> String?,
+        isCurrent: () -> Bool = { true },
+        event: (NativeDiagnosticMessage) -> Void = { _ in }) async throws -> TunnelEndpointCandidates {
+        func check() throws {
+            try Task.checkCancellation()
+            guard isCurrent() else { throw CancellationError() }
+            guard deadline.isFinite, now().isFinite, now() < deadline else { throw CandidateFailure.deadlineExceeded }
+        }
+        func result(_ values: [TunnelEndpointCandidate]) -> TunnelEndpointCandidates {
+            TunnelEndpointCandidates(path: path, candidates: values)
+        }
+        try check()
+        guard !host.isEmpty, host.utf8.count <= 253, !host.utf8.contains(0) else { return result([]) }
+        let literalText = host.hasPrefix("[") && host.hasSuffix("]") ? String(host.dropFirst().dropLast()) : host
+        if let literal = TunnelEndpointAddress(text: literalText, source: .literal) {
+            if literal.isLoopback || literal.family == .ipv6 || path.supportsIPv4 {
+                let value = TunnelEndpointCandidate(address: literal, origin: .literal, receivedAt: now())
+                return result(value.isUsable(on: path, at: now()) ? [value] : [])
+            }
+            guard path.supportsIPv6 else { return result([]) }
+            let values: [String]
+            do { values = try await synthesis(literal.text, deadline) }
+            catch { try check(); throw error }
+            try check()
+            return result(values.compactMap { text in
+                guard let address = TunnelEndpointAddress(text: text, source: .systemIPv4Translation), address.family == .ipv6 else { return nil }
+                return TunnelEndpointCandidate(address: address, origin: .systemIPv4Translation(originalIPv4: literal.text), receivedAt: now())
+            })
+        }
+        let values: [TunnelEndpointCandidate]
+        do { values = try await system(host, path, deadline) }
+        catch { try check(); throw error }
+        try check()
+        let usable = result(values).usable(at: now(), allowFreshZeroTTL: true)
+        if !usable.isEmpty { return result(usable) }
+        // Preserve protected-start bootstrap without leaking local/private names.
+        // This HTTPS lookup is process-default, not DNSService interface scoped.
+        guard path.supportsIPv4, isPublicHostname(host) else { return result([]) }
+        event("System endpoint DNS unavailable; trying encrypted endpoint bootstrap")
+        do {
+            let raw = try await fallback(host, min(5, deadline - now()))
+            try check()
+            guard let raw, let address = TunnelEndpointAddress(text: raw, source: .encryptedIPv4Answer) else { return result([]) }
+            event("Encrypted endpoint bootstrap completed")
+            return result([TunnelEndpointCandidate(address: address, origin: .encryptedIPv4Answer, receivedAt: now())])
+        } catch {
+            try check()
+            if error is CancellationError { throw error }
+            event("Encrypted endpoint bootstrap unavailable")
+            return result([])
+        }
+    }
+
     /// Preserve IPv4-first selection, then try a system AAAA answer before the
     /// existing encrypted IPv4 fallback. This does not synthesize IPv4 literals.
-    static func resolveEndpoint(_ host: String,
+    public static func resolveEndpoint(_ host: String,
                             event: (NativeDiagnosticMessage) -> Void = { _ in }) async throws -> TunnelEndpointAddress? {
         try await resolveEndpoint(host, system: { host, family in
             try await SystemEndpointLookup.resolve(host, timeout: 2, family: family)
@@ -74,7 +151,7 @@ enum TunnelEndpointResolver {
         return try await encryptedAddress(host, fallback: fallback, event: event)
     }
 
-    static func resolveIPv4(_ host: String,
+    public static func resolveIPv4(_ host: String,
                             event: (NativeDiagnosticMessage) -> Void = { _ in }) async throws -> String? {
         try await resolveIPv4(host, system: {
             try await SystemEndpointLookup.resolve($0, timeout: 2)
@@ -116,17 +193,21 @@ enum TunnelEndpointResolver {
     }
 
     static func encryptedLookup(_ host: String) async throws -> String? {
-        guard isPublicHostname(host) else { return nil }
+        try await encryptedLookup(host, timeout: 5)
+    }
+
+    private static func encryptedLookup(_ host: String, timeout: TimeInterval) async throws -> String? {
+        guard isPublicHostname(host), timeout.isFinite, timeout > 0 else { return nil }
         // An IP URL avoids recursively asking the unavailable system resolver.
         // Use normal platform certificate validation, no trust overrides.
         var url = URLComponents(string: "https://1.1.1.1/dns-query")!
         url.queryItems = [URLQueryItem(name: "name", value: host), URLQueryItem(name: "type", value: "A")]
-        var request = URLRequest(url: url.url!, timeoutInterval: 5)
+        var request = URLRequest(url: url.url!, timeoutInterval: timeout)
         request.setValue("application/dns-json", forHTTPHeaderField: "Accept")
         request.cachePolicy = .reloadIgnoringLocalCacheData
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 5
-        configuration.timeoutIntervalForResource = 5
+        configuration.timeoutIntervalForRequest = timeout
+        configuration.timeoutIntervalForResource = timeout
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         configuration.urlCredentialStorage = nil

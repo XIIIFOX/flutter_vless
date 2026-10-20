@@ -14,7 +14,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = ('app/dns/dns.go', 'app/dns/nameserver_udp.go', 'transport/internet/udp/dispatcher.go',
-            'transport/internet/splithttp/dialer.go')
+            'transport/internet/splithttp/dialer.go', 'transport/internet/sockopt_darwin.go')
 HELPERS = ('native_classic_lifetime.go', 'native_classic_lifetime_test.go')
 
 
@@ -81,6 +81,8 @@ def reference_hashes(source, parent):
         patch.apply(reference, replace)
         h3 = load(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py', 'ordinary_h3_reference')
         h3.apply(reference, replace)
+        binding = load(ROOT / 'third_party/xray-native-dns/darwin_interface_bind_patch.py', 'ordinary_darwin_binding_reference')
+        binding.apply(reference, replace)
         return {relative: digest(reference / relative) for relative in UPSTREAM}
 
 
@@ -141,9 +143,12 @@ def prepare(mobile, destination, go):
     if tree(source) != before or tree(effective) != existing or any(digest(ROOT / name) != value for name, value in input_hashes.items()):
         raise ValueError('Core source or patch inputs changed')
     report = {'stage': 'pre-build-preparation', 'mode': mode, 'module': module, 'version': version, 'sum': checksum,
-              'scope': 'Classic DNS and XHTTP H3 lifetime only; no full native-DNS context overlay',
+              'scope': 'Classic DNS/XHTTP H3 lifetime and mandatory Darwin interface binding; no full native-DNS context overlay',
               'h3_lifetime_applied': True, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial'],
               'h3_lifetime_patch_sha256': digest(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py'),
+              'darwin_interface_binding_source_applied': True,
+              'darwin_interface_binding_patch_sha256': digest(ROOT / 'third_party/xray-native-dns/darwin_interface_bind_patch.py'),
+              'darwin_interface_binding_capability_expected': 1,
               'replacement': str(effective), 'source_sha256': input_hashes,
               'upstream_cache_unchanged': True, 'replacement_unchanged_after_prepare': True,
               'core_copy_sha256': existing, 'runtime_executed': False}

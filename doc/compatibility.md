@@ -2037,6 +2037,41 @@ remains bound to `5c7abc1`. New physical application/failure-recovery acceptance
 is still open. Android's unchanged native/runtime paths also pass the
 [corresponding native job at `55f1a11`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39452930916/job/118732236267).
 
+The next Apple IPv6 increment prepares a bounded set of scoped A/AAAA endpoint
+candidates with TTL and session/path ownership. IPv4 literals on IPv6-only paths
+use [Apple's documented `getaddrinfo(AF_UNSPEC, AI_DEFAULT)` synthesis](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/NetworkingOverview/UnderstandingandPreparingfortheIPv6Transition/UnderstandingandPreparingfortheIPv6Transition.html); no NAT64
+prefix is inferred from an address or path flag. That syscall is process-default,
+not interface-scoped, and its native worker cannot be cancelled; cancellation
+and deadlines discard its result and keep the outstanding worker bounded.
+A selected interface does not prove that synthesis used that interface.
+
+Recovery retains the immutable original configuration and regenerates the
+selected endpoint/configuration/metadata together. Candidate failure before
+commit preserves the old worker. Path/wake/expiry/transport changes invalidate
+pending plans; a FIFO settings boundary and distinct committed runtime token
+prevent an older callback from installing over a later plan or stopping its
+worker. A successful-settings key covers the epoch, concrete physical path and
+selected endpoint exclusions; unchanged requests still re-resolve but avoid
+another OS settings write. Before the first On Demand arming attempt, a bounded
+startup transaction can reprepare a superseded plan and reuse that exact write.
+Policy arming itself is not retried by this loop. Caller DNS, logical endpoints
+and TLS identity remain intact. Loopback endpoints stay local. Multi-homed per-dialsite plans and complete per-Core-dial
+zero-TTL semantics remain open.
+
+The guarded Darwin Core edit enforces mandatory interface binding on every
+normal exit after optional/custom socket settings, including errors the system
+dialer can ignore. A final binding failure overrides an optional error with the
+Core's propagated binding-error type. Its separate optional
+ABI reports zero for stock artifacts; generated physical-socket plans require
+capability one before routes are installed. Published SDK pins are unchanged.
+The new Swift cases use injected resolver, monitor, Core and OS-settings
+boundaries: 19 candidate, 14 preparation and 15 path-observer cases per module;
+28 iOS/29 macOS actual-provider recovery controls and 21 cold-start controls per
+platform. The latter controls extract production functions into inert fixtures.
+These source tests do not establish actual DNS64 behavior, native
+notification effects after our settings writes, or physical handover. Runtime
+and device qualification of this increment is pending.
+
 Current implementation/acceptance status (1.1.7, unreleased):
 
 | Item | Status | Evidence and remaining work |

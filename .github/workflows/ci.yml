@@ -508,6 +508,7 @@ jobs:
         run: flutter pub get
       - name: Test PacketTunnel Swift helper
         run: |
+          python3 tool/test_apple_cold_start_policy.py --receipts
           python3 tool/test_build_apple_core_preview.py
           python3 tool/test_apple_classic_core.py
           bash tool/test_apple_address_binding.sh
@@ -520,6 +521,24 @@ jobs:
       - name: Check shared compatibility corpus against pinned Xray Core
         working-directory: third_party/xray-mobile
         run: go test -count=1 .
+      - name: Check mandatory Darwin interface ordering with fake OS faults
+        timeout-minutes: 5
+        run: |
+          python3 tool/test_darwin_interface_bind_patch.py
+          python3 tool/test_darwin_interface_bind_semantics_runner.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import importlib.util, json, subprocess
+          root=Path.cwd()
+          pin=json.loads((root/'third_party/xray-native-dns/pin-manifest.json').read_text())
+          metadata=json.loads(subprocess.check_output(['go','mod','download','-json',pin['module']+'@'+pin['module_version']],cwd=root/'third_party/xray-mobile',text=True,timeout=180))
+          assert all(metadata.get(k)==pin[v] for k,v in [('Path','module'),('Version','module_version'),('Sum','module_sum')])
+          spec=importlib.util.spec_from_file_location('darwin_interface_copier',root/'third_party/xray-vpn-routing/apply.py')
+          copier=importlib.util.module_from_spec(spec);spec.loader.exec_module(copier)
+          source=Path(metadata['Dir'])
+          copier.copy_and_apply_lifetimes(source,root/'build/darwin-interface-binding/Core')
+          PY
+          python3 tool/test_darwin_interface_bind_semantics.py --core-copy build/darwin-interface-binding/Core --output build/darwin-interface-binding/semantic
       - name: Check optional bridge and build unpublished iOS Core preview
         run: |
           tool/test_apple_core_preflight_bridge.sh
@@ -546,7 +565,7 @@ jobs:
           trap 'xcrun simctl shutdown "$SIMULATOR_UDID"; xcrun simctl delete "$SIMULATOR_UDID"' EXIT
           xcrun simctl boot "$SIMULATOR_UDID"
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b
-          REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 tool/test_ios_privacy_runtime.sh
+          REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 REQUIRE_DARWIN_INTERFACE_BINDING=1 tool/test_ios_privacy_runtime.sh
           HEV=ios/flutter_vless/.build/artifacts/tun2sockskit/HevSocks5Tunnel/HevSocks5Tunnel.xcframework
           # The checksum-pinned simulator HEV slice is a link-only stub.
           # Its packet runtime must be checked on a physical iOS device.
@@ -586,7 +605,7 @@ jobs:
         run: |
           bash tool/test_macos_tunnel_support.sh
           bash tool/test_macos_manager_policy.sh
-          REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 bash tool/test_macos_privacy_runtime.sh
+          REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 REQUIRE_DARWIN_INTERFACE_BINDING=1 bash tool/test_macos_privacy_runtime.sh
           HEV=ios/flutter_vless/.build/artifacts/tun2sockskit/HevSocks5Tunnel/HevSocks5Tunnel.xcframework
           bash tool/test_macos_packet_bridge.sh "$HEV/macos-arm64_x86_64"
       - name: Preserve Apple synthetic runtime evidence
@@ -597,6 +616,9 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           path: |
+            build/darwin-interface-binding/semantic/source.json
+            build/darwin-interface-binding/semantic/semantic-go.log
+            build/darwin-interface-binding/semantic/execution.json
             build/ios_privacy_runtime_probe/runtime.log
             build/macos_privacy_runtime_probe/runtime.log
             build/ios_packet_bridge_probe/runtime.log

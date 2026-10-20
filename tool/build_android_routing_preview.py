@@ -31,7 +31,7 @@ def source_hashes():
     paths += sorted(MOBILE.glob('*.go')) + sorted((MOBILE/'nativecli').rglob('*.go')) + sorted((CAPABILITY/'overlay').rglob('*.go'))
     paths += sorted(PROTECT.glob('*.py')) + sorted(PROTECT.glob('*.go'))
     classic = ROOT/'third_party/xray-native-dns'
-    paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+    paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
     if MOBILE.is_symlink() or (MOBILE/'nativecli').is_symlink() or any(path.is_symlink() for path in paths) or any(
             path.is_symlink() for base in (MOBILE/'nativecli', CAPABILITY/'overlay') for path in base.rglob('*')):
         raise ValueError('Routing source symlinks are unsupported')
@@ -46,9 +46,11 @@ def validate_receipt(receipt, arch, raw):
                 'classic_dns_lifetime_applied': True,
                 'h3_lifetime_applied': True, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial'],
                 'h3_lifetime_patch_sha256': source_hashes()['third_party/xray-native-dns/h3_lifetime_patch.py'],
+                'darwin_interface_binding_source_applied': True,
+                'darwin_interface_binding_patch_sha256': source_hashes()['third_party/xray-native-dns/darwin_interface_bind_patch.py'],
                 }
     if any(receipt.get(k) != v for k, v in expected.items()) or receipt.get('routing_capability_expected') is True \
-            or any(receipt.get(k) is not True for k in ('classic_dns_lifetime_applied', 'h3_lifetime_applied')):
+            or any(receipt.get(k) is not True for k in ('classic_dns_lifetime_applied', 'h3_lifetime_applied', 'darwin_interface_binding_source_applied')):
         raise ValueError('Routing build pin, protection or fixed tag evidence differs')
     if any(receipt.get(k) is not False for k in ('runtime_executed','published')):
         raise ValueError('Routing build must remain unpublished and unexecuted')

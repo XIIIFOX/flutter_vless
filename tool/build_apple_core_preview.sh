@@ -18,7 +18,7 @@ mkdir -p "$OUTPUT"
 OUTPUT="$(cd "$OUTPUT" && pwd)"
 test ! -e "$OUTPUT/XRay.xcframework" || { echo 'Output already exists; preserve or remove it explicitly' >&2; exit 2; }
 MOBILE="$ROOT/third_party/xray-mobile"
-BIND_TAG=""
+BIND_TAG="-tags=flutter_vless_darwin_interface_binding"
 if true; then
     # gomobile creates its own per-architecture modules. Use a disposable
     # mobile module too, so no ambient -modfile propagation is required.
@@ -52,7 +52,7 @@ def inputs():
     paths = [root/'tool/build_apple_core_preview.sh', mobile/'go.mod', mobile/'go.sum', capability/'apply.py', capability/'pin-manifest.json']
     paths += sorted(mobile.glob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
     classic = root/'third_party/xray-native-dns'
-    paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+    paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
     if any(p.is_symlink() for p in paths): raise ValueError('Input symlinks are unsupported')
     return {str(p.relative_to(root)):digest(p) for p in paths}
 before, cache_before = inputs(), tree(source)
@@ -72,12 +72,16 @@ state = {'success':False, 'core':version, 'core_module':module, 'core_sum':check
          'routing_capability_expected':1 if routing else 0, 'classic_dns_lifetime_applied':True,
          'h3_lifetime_applied':True, 'lifetime_patch_scope':['classic_dns','xhttp_h3_dial'],
          'h3_lifetime_patch_sha256':before['third_party/xray-native-dns/h3_lifetime_patch.py'],
+         'darwin_interface_binding_source_applied':True,
+         'darwin_interface_binding_capability_expected':1,
+         'darwin_interface_binding_tag':'flutter_vless_darwin_interface_binding',
+         'darwin_interface_binding_patch_sha256':before['third_party/xray-native-dns/darwin_interface_bind_patch.py'],
          'runtime_executed':False, 'published':False}
 (work/'inputs.json').write_text(json.dumps(state,indent=2)+'\n')
 PY
     if [[ "$ROUTING" == 1 ]]; then
         MOBILE="$OUTPUT/routing/mobile"
-        BIND_TAG="-tags=flutter_vless_vpn_routing"
+        BIND_TAG="-tags=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding"
     else
         MOBILE="$OUTPUT/classic/mobile"
     fi
@@ -109,6 +113,7 @@ pin = subprocess.check_output(['go','list','-m','-f','{{.Version}}','github.com/
 assert pin.endswith('92ccc939aaf4'), 'Unexpected Xray Core pin'
 headers=list((output/'XRay.xcframework').rglob('XRay.objc.h'))
 assert headers and all('XRayCheckPrivate' in p.read_text() for p in headers), 'Missing preflight bridge'
+assert all('XRayDarwinInterfaceBindingCapability' in p.read_text() for p in headers), 'Missing mandatory Darwin binding bridge'
 if True:
     work = output/('routing' if routing else 'classic')
     state = json.loads((work/'inputs.json').read_text())
@@ -125,7 +130,7 @@ if True:
     paths = [root/'tool/build_apple_core_preview.sh', mobile/'go.mod', mobile/'go.sum', capability/'apply.py', capability/'pin-manifest.json']
     paths += sorted(mobile.glob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
     classic = root/'third_party/xray-native-dns'
-    paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+    paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
     assert not any(p.is_symlink() for p in paths), 'Input became a symlink'
     assert state['source_sha256'] == {str(p.relative_to(root)):digest(p) for p in paths}, 'Build input changed'
     assert state['module_cache_before_sha256'] == tree(Path(state['core_source'])), 'Original Core cache changed'

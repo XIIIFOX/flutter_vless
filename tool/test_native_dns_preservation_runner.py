@@ -507,7 +507,10 @@ class PreservationRunnerGuards(unittest.TestCase):
         self.exercise_runtime_main(self.h3_log().replace('mode=raw_numeric', 'mode=unknown'),
                                    expected_exit=1, mutate_inputs=True)
 
-    def exercise_runtime_main(self, h3_output=None, expected_exit=0, mutate_owned=False, mutate_inputs=False):
+    def test_runtime_main_refuses_mutated_owned_binding_even_after_selected_tests_pass(self):
+        self.exercise_runtime_main(expected_exit=1,mutate_binding=True)
+
+    def exercise_runtime_main(self, h3_output=None, expected_exit=0, mutate_owned=False, mutate_inputs=False, mutate_binding=False):
         h3_output = self.h3_log() if h3_output is None else h3_output
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
@@ -525,7 +528,11 @@ class PreservationRunnerGuards(unittest.TestCase):
                 path = destination / runner.H3_DIALER
                 path.parent.mkdir(parents=True)
                 path.write_text('prepared H3 dialer')
-                return {'classic_lifetime_patch': {'kind': 'classic-udp-lifetime-only'},
+                binding = destination / runner.BINDING_SOURCE
+                binding.parent.mkdir(parents=True,exist_ok=True)
+                binding.write_text('prepared Darwin mandatory binding')
+                return {'darwin_interface_binding': {'source_applied': True, 'changed_upstream': {runner.BINDING_SOURCE: runner.digest(binding)}},
+                        'classic_lifetime_patch': {'kind': 'classic-udp-lifetime-only'},
                         'h3_lifetime_patch': {'kind': 'xhttp-h3-dial-lifetime-only',
                                               'changed_upstream': {runner.H3_DIALER: runner.digest(path)}},
                         'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial']}
@@ -567,6 +574,8 @@ class PreservationRunnerGuards(unittest.TestCase):
                     (evidence / 'actual-xhttp-h3-lifetime.log').write_text(h3_output)
                     if mutate_owned:
                         (evidence / 'LifetimeCore' / runner.H3_DIALER).write_text('mutated H3 dialer')
+                    if mutate_binding:
+                        (evidence / 'LifetimeCore' / runner.BINDING_SOURCE).write_text('mutated mandatory binding')
                     inputs_changed = mutate_inputs
             with mock.patch.object(runner, 'EVIDENCE', evidence), \
                     mock.patch.object(runner.sys, 'argv', ['runner', '--run-runtime']), \
@@ -580,7 +589,7 @@ class PreservationRunnerGuards(unittest.TestCase):
                     mock.patch.object(runner, 'require_xhttp_h3_lifetime_runtime',
                                       wraps=runner.require_xhttp_h3_lifetime_runtime) as h3_verify, \
                     mock.patch.object(runner.common, 'checked', side_effect=checked), \
-                    mock.patch.object(runner, 'prepare_lifetime_core', side_effect=prepare_copy) as prepare:
+                    mock.patch.object(runner, 'prepare_protected_core', side_effect=prepare_copy) as prepare:
                 self.assertEqual(runner.main(), expected_exit)
             h3_verify.assert_called_once()
             self.assertEqual(h3_verify.call_args.args[0], h3_output)
@@ -619,10 +628,13 @@ class PreservationRunnerGuards(unittest.TestCase):
                 self.assertEqual(report['results'][-1]['selected_tests'], ['TestNativeXHTTPH3Lifetime'])
                 self.assertEqual(report['results'][-1]['h3_lifetime_modes'], ['raw_numeric', 'native_cnc_windows'])
             else:
-                expected_error = ('H3 lifetime prepared copy changed during verification' if mutate_owned else
+                expected_error = ('Darwin binding copy changed during verification' if mutate_binding else
+                                  'H3 lifetime prepared copy changed during verification' if mutate_owned else
                                   'Production preparer/acceptance source changed during verification' if mutate_inputs else
                                   'Exact H3 lifetime modes missing or duplicated')
                 self.assertEqual(report['error'], expected_error)
+                if mutate_binding:
+                    self.assertFalse(report['darwin_binding_copy_unchanged'])
                 if mutate_owned:
                     self.assertFalse(report['h3_lifetime_copy_unchanged'])
                 if mutate_inputs:

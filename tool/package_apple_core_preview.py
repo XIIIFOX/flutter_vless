@@ -12,14 +12,15 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPORTS = ('XRayStartPrivate', 'XRayCheckPrivate', 'XRayRoutingCapability',
-           'XRayCheckRoutingPrivate', 'XRayStartRoutingPrivate')
+           'XRayCheckRoutingPrivate', 'XRayStartRoutingPrivate', 'XRayDarwinInterfaceBindingCapability')
 PACKAGING_INPUTS = ('.github/workflows/apple-sdk-preview.yml',
                     'tool/package_apple_core_preview.py', 'tool/test_package_apple_core_preview.py')
 H3_PATCH = 'third_party/xray-native-dns/h3_lifetime_patch.py'
+BINDING_PATCH = 'third_party/xray-native-dns/darwin_interface_bind_patch.py'
 PRODUCER_INPUTS = ('tool/build_apple_core_preview.sh', 'third_party/xray-mobile/go.mod',
                    'third_party/xray-mobile/go.sum', 'third_party/xray-vpn-routing/apply.py',
                    'third_party/xray-vpn-routing/pin-manifest.json',
-                   'third_party/xray-native-dns/classic_lifetime_patch.py', H3_PATCH,
+                   'third_party/xray-native-dns/classic_lifetime_patch.py', H3_PATCH, BINDING_PATCH,
                    'third_party/xray-native-dns/pin-manifest.json',
                    'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime.go',
                    'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime_test.go')
@@ -106,12 +107,15 @@ def package(preview, destination, head, repository=ROOT):
     producer, summary = receipts['routing-preview.json'], receipts['preview.json']
     pin = json.loads((repository/'third_party/xray-vpn-routing/pin-manifest.json').read_text())
     for key in ('success', 'source_unchanged', 'module_cache_source_unchanged', 'copies_unchanged',
-                'classic_dns_lifetime_applied', 'h3_lifetime_applied'):
+                'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'darwin_interface_binding_source_applied'):
         if producer.get(key) is not True:
             raise ValueError('Incomplete producer evidence: ' + key)
     if any(producer.get(key) is not False for key in ('published', 'runtime_executed')) \
             or producer.get('routing_capability_expected') != 1 or isinstance(producer['routing_capability_expected'], bool) \
             or producer.get('routing_tag') != 'flutter_vless_vpn_routing' \
+            or type(producer.get('darwin_interface_binding_capability_expected')) is not int \
+            or producer.get('darwin_interface_binding_capability_expected') != 1 \
+            or producer.get('darwin_interface_binding_tag') != 'flutter_vless_darwin_interface_binding' \
             or producer.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial']:
         raise ValueError('Producer scope differs')
     for field, key in (('core', 'module_version'), ('core_module', 'module'),
@@ -130,6 +134,8 @@ def package(preview, destination, head, repository=ROOT):
     git_bindings(repository, head, sources)
     if producer.get('h3_lifetime_patch_sha256') != sources.get(H3_PATCH) or H3_PATCH not in sources:
         raise ValueError('H3 patch input is not bound')
+    if producer.get('darwin_interface_binding_patch_sha256') != sources.get(BINDING_PATCH) or BINDING_PATCH not in sources:
+        raise ValueError('Darwin binding patch input is not bound')
     packaging = {name: digest(repository/name) for name in PACKAGING_INPUTS}
     git_bindings(repository, head, packaging)
     copies = [(Path(producer['core_source']), 'module_cache_before_sha256'),
@@ -202,7 +208,8 @@ def package(preview, destination, head, repository=ROOT):
                 'architectures': architectures, 'strong_exports': symbols,
                 'core_commit': pin['core_commit'], 'core_module': pin['module'],
                 'core_version': pin['module_version'], 'core_sum': pin['module_sum'],
-                'h3_lifetime_patch_sha256': sources[H3_PATCH], 'routing_capability_expected': 1,
+                'h3_lifetime_patch_sha256': sources[H3_PATCH], 'routing_capability_expected': 1, 'darwin_interface_binding_capability_expected': 1,
+                'darwin_interface_binding_patch_sha256': sources[BINDING_PATCH],
                 'runtime_executed': False, 'installed': False, 'published': False}
     (destination/'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     return manifest

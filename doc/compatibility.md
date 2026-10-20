@@ -146,7 +146,7 @@ Track the small delivery gates separately from the eight full requirements:
 | Preserve caller DNS and private A/AAAA path | Qualified controlled baseline on all four native platforms | Caller DNS and controlled FakeDNS Core/Android TUN/Windows TUN/both released Apple SDK gates pass. Combined Apple HEV/FakeDNS, physical devices and wider DNS semantics remain open. |
 | DNS dictionary data, remote URL data and system-hosts flag | Qualified controlled increment | Shared five-profile preparation, all four public message adapters and Android JVM controls pass. Expanded Core traffic passes all three OS jobs at f5e0a88; both released Apple SDKs and Android's augmented CallerRoot DNS tests pass at e2acc10. Physical/system-VPN and wider DNS acceptance remain separate. |
 | IPv6 caller DNS server addresses | Preparation qualified; UDP/TCP runtime pending | Both Apple preparers and Windows preserve numeric IPv6 servers and static resolver mappings, including mixed address families. The 33 inert preparation cases pass; exact IPv6 destinations carried through an IPv4 proxy still require the new remote Core traffic gate. Android already admits these address families. |
-| Classic UDP DNS shutdown | Implementation and remote acceptance in progress | New real-traffic checks receive the expected DNS answers, but unmodified pinned Core retains the detached UDP channel after Close. The shared lifetime patch closes the channel and cleanup timer, fences late normal/EDNS sends and retains caller policy; both address families require the new runtime gate. |
+| Classic UDP DNS shutdown | Qualified controlled Core increment; physical IPv6 DNS unresolved | The shared lifetime patch closes the channel and cleanup timer, fences late normal/EDNS sends and retains caller policy. The exact UDP/TCP IPv6 and paired UDP IPv4 gates pass on all three Core systems at 4a52394. The bounded iPhone candidate below stops and restores safely, but its A query times out. |
 | Protocol/transport preparation and controlled XHTTP | Qualified | Shared pinned-Core corpus and controlled payloads; the exhaustive external-server matrix is deferred. |
 | Typed transport headers and XHTTP download policy | Qualified controlled increment | The ten-profile transport dictionary corpus checks 18 raw maps and effective pinned-Core headers through both native preparers, public import/start/delay on all four message adapters and Android's actual prepare/build path. This covers data preservation, not a full transport handshake matrix. |
 | Routing attribute dictionary data | Preparation qualified | Shared literal regex corpus, all four public import/start/delay adapters, Android producer and actual pinned-Core attribute matching pass. Both native preparers retain the exact compiled rule; this is separate from system-VPN traffic. |
@@ -196,6 +196,33 @@ leak. The subsequent guarded lifetime patch also covers IPv4 controls. Runtime
 preparation tests that use this patch report a checked disposable Core copy and
 alternate module file explicitly; their pure default baseline remains upstream
 Core. No module-cache source or published runtime pin is changed.
+
+The [corrected runtime run at `4a52394`](https://github.com/XIIIFOX/flutter_vless/actions/runs/39369095981)
+passes all three Core systems. Each actual native preparer passes four IPv6 DNS
+modes (UDP/TCP with `UseIP`/`UseIPv4`) and two IPv4 UDP controls, with exact target
+address/port, query/answer counts, zero OS resolver calls and post-Close channel
+and callback drain before generic fixture cleanup. macOS checks both Apple and
+Windows preparation; the other systems each check Windows preparation. All six
+Classic memory-only controls pass per system, retaining existing XHTTP traffic
+and independent-download checks. The preceding fixture repairs change tests
+only. Latest Ubuntu text-artifact collection returned zero bytes; its complete
+canonical log and the preceding production-equivalent source artifact are
+retained, without claiming verification of the missing latest artifact.
+The source-build paths for Android, Apple and the desktop routing CLI consume
+the same narrow lifetime patch. Published binary pins remain unchanged.
+
+The fresh signed physical iPhone product at `c72bd03` includes that same Classic
+lifetime implementation. One derivative of the first supplied profile selects
+a single public numeric IPv6 UDP resolver through its original proxy, with
+`UseIPv4`, no hosts shortcut and no alternate resolver. The actual app connects,
+but its managed A query times out after four seconds; AAAA returns successful
+NODATA. The candidate is therefore **inconclusive**, and its VPN browser phase
+is not entered. This does not establish proxy IPv6/UDP reachability or identify
+a wrapper defect. No retry or second Start is used. Exact full Stop ACK,
+independent provider absence, prior options/profile restoration and a fresh
+OFF Safari page showing the original direct address are checked. The owned app,
+USB forwarder and helpers are then stopped. This is a safe restoration result,
+not physical IPv6 DNS qualification.
 
 The physical iPhone preview at `ae68d75` also checks A and AAAA requests from
 an actual app UDP socket to this virtual resolver with caller `UseIPv4` and no

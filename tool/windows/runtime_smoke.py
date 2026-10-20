@@ -10,6 +10,7 @@ import base64
 import hashlib
 import http.client
 import json
+import ntpath
 import os
 from pathlib import Path
 import re
@@ -1360,6 +1361,24 @@ def numeric_ipv6_refusal(event, spec, core_pid, owned, after_record):
             and event.get("FilterRTID") in owned)
 
 
+def numeric_ipv6_core_identity(rows, parent):
+    # Native Launch quotes every token. Select the ordinary run worker, never
+    # its same-image API/preflight children. Commands/config paths stay private.
+    assert type(rows) is list and len(rows) <= 64 and type(parent) is int and parent > 0, "Core run worker identity invalid"
+    selected = []
+    for row in rows:
+        if type(row) is not dict or type(row.get("ParentProcessId")) is not int or row["ParentProcessId"] != parent:
+            continue
+        pid, image, command = row.get("ProcessId"), row.get("ExecutablePath"), row.get("CommandLine")
+        if type(pid) is not int or pid <= 0 or type(image) is not str or not image or type(command) is not str or len(command) > 32768:
+            continue
+        match = re.fullmatch(r'"([^"\x00-\x1f]+)" "run" "-config" "([^"\x00-\x1f]+)"', command)
+        if match and ntpath.normcase(ntpath.normpath(match[1])) == ntpath.normcase(ntpath.normpath(image)):
+            selected.append(dict(ProcessId=pid, ExecutablePath=image))
+    assert len(selected) == 1, "Core run worker identity missing or ambiguous"
+    return selected[0]
+
+
 def numeric_ipv6_security_records(data, refusals=False):
     # wevtutil /uni:true emits XML bytes, without provider message rendering.
     assert type(data) is bytes and 0 < len(data) <= 2 * 1024 * 1024, "Security XML size invalid"
@@ -1555,7 +1574,7 @@ def numeric_ipv6_gate(probe, directory, results, variant="routing"):
         while "START_RETURN=1" not in service_log.read_text(errors="replace"):
             assert service.poll() is None and time.monotonic() < ready_until, "Numeric IPv6 service did not become ready"
             time.sleep(0.1)
-        core = json.loads(ps(f"$p=@(Get-CimInstance Win32_Process | Where-Object {{ $_.ParentProcessId -eq {service.pid} -and $_.Name -eq 'xray.exe' }}); if($p.Count -ne 1){{throw 'Owned Core identity ambiguous'}}; $p | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress"))
+        core = numeric_ipv6_core_identity(json.loads(ps(f"ConvertTo-Json -InputObject @(Get-CimInstance Win32_Process | Where-Object {{ $_.ParentProcessId -eq {service.pid} -and $_.Name -eq 'xray.exe' }} | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine) -Compress")), service.pid)
         core_pid = int(core["ProcessId"])
         core_hash = hashlib.sha256(Path(core["ExecutablePath"]).read_bytes()).hexdigest()
         assert core_hash == hashlib.sha256((directory / "xray.exe").read_bytes()).hexdigest()

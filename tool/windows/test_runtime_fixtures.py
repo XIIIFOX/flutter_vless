@@ -23,6 +23,46 @@ def question(name):
 
 class RuntimeFixtureTest(unittest.TestCase):
     @staticmethod
+    def core_process(pid=77, parent=70, mode='"run" "-config"', image=None):
+        executable = image or (r"C:\Windows\Temp\flutter-vless-protected-" + "a" * 64 + r"\xray.exe")
+        config = executable.rsplit("\\", 1)[0] + r"\private config.json"
+        return dict(ProcessId=pid, ParentProcessId=parent, ExecutablePath=executable,
+                    CommandLine=f'"{executable}" {mode} "{config}"')
+
+    def test_numeric_ipv6_core_identity_selects_run_worker_beside_same_image_api(self):
+        main = self.core_process()
+        api = self.core_process(pid=78, mode='"api" "statsquery"')
+        api["CommandLine"] = f'"{api["ExecutablePath"]}" "api" "statsquery" "-server=127.0.0.1:10086"'
+        selected = runtime.numeric_ipv6_core_identity([api, main], 70)
+        self.assertEqual(dict(ProcessId=77, ExecutablePath=main["ExecutablePath"]), selected)
+        self.assertNotIn("CommandLine", selected)
+        self.assertNotIn("private config", json.dumps(selected))
+
+    def test_numeric_ipv6_core_identity_refuses_missing_duplicate_or_foreign_worker(self):
+        main = self.core_process()
+        for rows in ([], [self.core_process(mode='"api" "statsquery"')],
+                     [main, self.core_process(pid=79)], [self.core_process(parent=71)],
+                     [self.core_process(pid=True)], [self.core_process(mode='"run" "-test"')],
+                     [self.core_process(mode='"native-routing" "run"')]):
+            with self.subTest(rows=rows), self.assertRaisesRegex(AssertionError, "Core run worker identity"):
+                runtime.numeric_ipv6_core_identity(rows, 70)
+        with self.assertRaises(AssertionError): runtime.numeric_ipv6_core_identity([main], True)
+
+    def test_numeric_ipv6_core_identity_requires_exact_quoted_native_launch_grammar(self):
+        main = self.core_process(image=r"C:\Windows\Temp\Vless Space Ω\xray.exe")
+        # Executable path casing/separators may differ in CIM metadata.
+        command = main["CommandLine"]
+        accepted = dict(main, ExecutablePath=main["ExecutablePath"].upper().replace("\\", "/"))
+        self.assertEqual(77, runtime.numeric_ipv6_core_identity([accepted], 70)["ProcessId"])
+        for bad in (command.replace('"run"', 'run'), command.replace('"-config"', '"-test"'),
+                    command + ' "extra"', command.replace('private config.json"', 'private config.json'),
+                    command.replace('"run"', '"run" "-test"'),
+                    command.replace('xray.exe"', 'other.exe"', 1),
+                    command.replace('private config.json', 'private\nconfig.json')):
+            with self.subTest(command=bad), self.assertRaisesRegex(AssertionError, "Core run worker identity"):
+                runtime.numeric_ipv6_core_identity([dict(main, CommandLine=bad)], 70)
+
+    @staticmethod
     def security_xml(record="101", fields=None, kind="5157"):
         values = dict(ProcessID="0x4d", SourcePort="050001", FilterRTID="0x384",
                       DestAddress="fd00:85:2::3", DestPort="18443", Protocol="6")

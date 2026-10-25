@@ -24,6 +24,7 @@ Runtime release notes for this train:
 * [Android v26.10.21-protect1](xray-android-v26.10.21-protect1.md)
 * [iOS v26.10.21](xray-ios-v26.10.21.md)
 * [macOS v26.10.21](xray-macos-v26.10.21.md)
+* [Validation and remaining work](xray-v26.10.21-validation.md)
 
 ### Registry blockers before publishing the plugin
 

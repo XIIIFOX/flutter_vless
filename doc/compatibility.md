@@ -34,6 +34,15 @@ artifact before release.
 Linux runners below test Xray Core and shared native preparation. The Flutter
 plugin does not include a Linux implementation.
 
+## Xray 26.10.21 runtime update (2026-10-25)
+
+The unreleased 1.1.7 source tree consumes the separately published Android,
+iOS and macOS 26.10.21 runtimes. The Windows workflow pins the official 26.10.21
+archive and tests its routing-enabled companion. Native publication does not
+publish the Flutter packages or complete the wider compatibility matrix below.
+See the [runtime validation and remaining work](release/xray-v26.10.21-validation.md)
+for the exact CI/device scope and the separate pub.dev version blockers.
+
 ## Android
 
 The Android implementation includes 16KB page size support for modern Android

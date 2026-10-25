@@ -23,8 +23,15 @@ def apply(root, replace):
     replace('proxy/socks/protocol.go',
             '\t"github.com/xtls/xray-core/transport/internet"',
             '\t"github.com/xtls/xray-core/transport/internet"\n\t"github.com/xtls/xray-core/features/routing"')
-    # A revoked control socket can fail while writing the UDP Associate reply,
-    # before processTCP installs its idle timer. Cleanup must still close both.
+    # The constructor now installs a timer whose zero timeout calls Close
+    # synchronously. Claim closure before stopping it, without a reentrant Once.
+    replace('proxy/socks/temp_udp_listen.go',
+            'type TempUDPConn struct {\n',
+            'type TempUDPConn struct {\n\tnativeInputClosed atomic.Bool\n')
+    replace('proxy/socks/temp_udp_listen.go',
+            'func (c *TempUDPConn) Close() error {\n',
+            'func (c *TempUDPConn) Close() error {\n\tif c.nativeInputClosed.Swap(true) { return nil }\n')
+    # Also retain cleanup for a partially constructed connection without a timer.
     replace('proxy/socks/temp_udp_listen.go',
             '\tc.Timer.SetTimeout(0)\n',
             '\tif c.Timer != nil { c.Timer.SetTimeout(0) }\n')

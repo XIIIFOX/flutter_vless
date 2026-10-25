@@ -146,4 +146,19 @@ func TestNativeUDPEarlyHandshakeCloseNeedsNoTimer(t *testing.T) {
 	if err := conn.Close(); err != nil || packet.closes != 1 || control.closes != 1 {
 		t.Fatal("early cleanup did not close owned sockets")
 	}
+	if err := conn.Close(); err != nil || packet.closes != 1 || control.closes != 1 {
+		t.Fatal("second cleanup closed owned sockets again")
+	}
+}
+
+func TestNativeUDPPartialCloseWithoutTimerIsIdempotent(t *testing.T) {
+	packet := &nativeUDPFakePacket{}
+	control := &nativeUDPControl{}
+	conn := &TempUDPConn{PacketConn: packet, AssociatedTCPConn: control}
+	if err := conn.Close(); err != nil || packet.closes != 1 || control.closes != 1 {
+		t.Fatal("partial cleanup did not close owned sockets")
+	}
+	if err := conn.Close(); err != nil || packet.closes != 1 || control.closes != 1 {
+		t.Fatal("second partial cleanup closed owned sockets again")
+	}
 }

@@ -13,7 +13,7 @@ void main() {
   print('ANDROID_XRAY_SMOKE_TEST_ENTRY');
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('Android Xray runtime reports v26.10.17', (tester) async {
+  testWidgets('Android Xray runtime reports v26.10.21', (tester) async {
     if (!Platform.isAndroid) {
       return;
     }
@@ -25,7 +25,7 @@ void main() {
     // ignore: avoid_print
     print('ANDROID_XRAY_CORE_VERSION=$version');
 
-    expect(version, contains('26.10.17'));
+    expect(version, startsWith('Xray 26.10.21 '));
     expect(version.toLowerCase(), isNot(contains('not found')));
     expect(version.toLowerCase(), isNot(startsWith('error:')));
   });

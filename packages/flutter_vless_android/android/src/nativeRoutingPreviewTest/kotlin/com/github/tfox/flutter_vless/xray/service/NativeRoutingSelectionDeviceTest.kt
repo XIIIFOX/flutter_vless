@@ -66,11 +66,11 @@ class NativeRoutingSelectionDeviceTest {
         assertEquals(preview,XrayCoreManager.runtimeExecutable(context,true))
         assertNotEquals(preview,XrayCoreManager.runtimeExecutable(context,false))
         assertTrue("Actual optional CLI lacks capability1",XrayCoreManager.supportsNativeRouting(context))
-        // Ordinary official runtime remains independently packaged and cannot silently accept the new option.
-        val stock=ProcessBuilder(XrayCoreManager.runtimeExecutable(context,false).absolutePath,"native-routing","capabilities")
+        // The public 26.10.21 runtime also carries routing1; its APK entry stays independent of the preview.
+        val published=ProcessBuilder(XrayCoreManager.runtimeExecutable(context,false).absolutePath,"native-routing","capabilities")
             .redirectErrorStream(true)
-        stock.environment().remove("FLUTTER_VLESS_PROTECT_SOCKET")
-        assertFalse("Legacy runtime unexpectedly advertised the optional factory",NativeRoutingCommand.capabilities(BoundedCoreCommand.capture(stock.start(),maxBytes=4096)))
+        published.environment().remove("FLUTTER_VLESS_PROTECT_SOCKET")
+        assertTrue("Published runtime lacks routing capability1",NativeRoutingCommand.capabilities(BoundedCoreCommand.capture(published.start(),maxBytes=4096)))
     }
     private fun request(source:JSONObject, selection:Map<String,Any>, reconnect:Boolean=true):Int {
         val result=AtomicInteger(-1); val completed=CountDownLatch(1)

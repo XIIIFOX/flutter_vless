@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = 'v1.260327.1-0.20261017152356-92ccc939aaf4'
+VERSION = json.loads((ROOT / 'third_party/xray-vpn-routing/pin-manifest.json').read_text())['module_version']
 MODULE = 'github.com/xtls/xray-core'
 CHECKSUM = 'h1:fixture-core-sum='
 
@@ -19,7 +19,8 @@ GO = r'''
 import json,os,pathlib,sys
 a=sys.argv[1:];p=pathlib.Path
 with open(os.environ['CALLS'],'a') as f:f.write(json.dumps({'tool':'go','args':a,'cwd':os.getcwd()})+'\n')
-if a[:2]==['mod','download']:
+if a==['env','GOVERSION']: print(os.environ.get('MOCK_GO_VERSION','go1.27.3'))
+elif a[:2]==['mod','download']:
  print(json.dumps({'Path':'github.com/xtls/xray-core','Version':os.environ['PIN_VERSION'],'Sum':os.environ.get('PIN_SUM','h1:fixture-core-sum='),'Dir':os.environ['FAKE_CORE']}))
 elif a[:2]==['mod','edit']:
  target=next((x.split('=',1)[1] for x in a if x.startswith('-modfile=')),str(p.cwd()/'go.mod'))
@@ -103,6 +104,14 @@ class ApplePreviewBuilderTest(unittest.TestCase):
 
     def recorded(self):
         return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+
+    def test_old_root_CA_toolchain_refused_before_source_copy(self):
+        env = dict(self.env, MOCK_GO_VERSION='go1.27.2')
+        result = self.run_builder('ios', self.output, '--vpn-routing', environment=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Go 1.27.3', result.stderr)
+        self.assertFalse(self.output.exists())
+        self.assertEqual([call['args'] for call in self.recorded()], [['env', 'GOVERSION']])
 
     def test_default_uses_combined_lifetime_disposable_core_without_routing_tag(self):
         result=self.run_builder('ios',self.output)

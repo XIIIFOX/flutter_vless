@@ -2,37 +2,46 @@ EXPERIMENTAL
 
 # Xray Integration Setup for Windows
 
-This plugin requires Xray-core version 25.10.15 or later to be available on the system.
+Provide Xray-core alongside the application; the plugin does not download it.
 
 ## Installation Steps
 
 ### 1. Download Xray-core
 
-For flutter_vless 1.1.7, use Xray-core **v26.10.17** (upstream pre-release):
-- [Official v26.10.17 release](https://github.com/XTLS/Xray-core/releases/tag/v26.10.17)
-- [Windows x64 archive](https://github.com/XTLS/Xray-core/releases/download/v26.10.17/Xray-windows-64.zip)
+For flutter_vless 1.1.7, use the official Xray-core **v26.10.21** security update:
+- [Official v26.10.21 release](https://github.com/XTLS/Xray-core/releases/tag/v26.10.21)
+- [Windows x64 archive](https://github.com/XTLS/Xray-core/releases/download/v26.10.21/Xray-windows-64.zip)
 - Look for `Xray-windows-64.zip` or `Xray-windows-32.zip` depending on your system
+
+The Windows x64 archive SHA-256 is
+`fc58c39ee2f2717b4c54d28d374362389e5319b20ae44aea76ea45a5243ec827`.
+This checksum applies only to the x64 archive. The upstream release includes
+other architectures with their own checksums.
 
 ### 2. Extract Xray Executable
 
 Extract the downloaded archive and locate `xray.exe`.
 
-//TODO: auto download xray
-//TODO: add about geoip.dat files for Windows
-//TODO: add release notes about assets folder info
+Keep compatible `geoip.dat` and `geosite.dat` files alongside `xray.exe` when
+your configuration uses geodata. Existing explicit asset-directory options
+continue to select caller-provided files.
+The upstream archive now carries a lite GeoIP dataset. A profile using a list
+such as `geoip:us` needs a compatible full dataset; updating the executable does
+not require overwriting an existing caller-provided data directory.
+This repository's Windows validation and example bundle retain the full project
+GeoDAT from `android_runtime/xray_android/src/main/assets/` during the runtime update.
 
 ### 3. Place Xray Executable
 
-The plugin will automatically search for `xray.exe` in the following locations (in order):
+The plugin searches these paths relative to the running application (in order):
 
-1. Current working directory: `./xray.exe`
-2. Current directory subfolder: `./xray/xray.exe`
-3. Parent directory: `../xray.exe`
-4. Parent directory subfolder: `../xray/xray.exe`
-5. AppData folder: `%APPDATA%/flutter_vless/xray.exe`
-6. Program Files: `%PROGRAMFILES%/Xray/xray.exe`
+1. `xray.exe`
+2. `xray/xray.exe`
+3. `data/flutter_assets/xray/xray.exe`
+4. `data/flutter_assets/windows/xray/xray.exe`
 
-**Recommended location**: Place `xray.exe` in your Flutter app's directory or in `%APPDATA%/flutter_vless/`
+Place the runtime in your built application's `xray/` directory. CWD, PATH,
+AppData, parent directories and linked/reparse-point files are not searched.
 
 ### 4. Verify Installation
 

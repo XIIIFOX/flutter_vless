@@ -127,12 +127,12 @@ class AppleFakeDNSOnlyModeTest(unittest.TestCase):
         for platform in ('ios', 'macos'):
             script = (self.root / ('tool/test_' + platform + '_privacy_runtime.sh')).read_text()
             body = script.rsplit('python3 - "$OUT/runtime.log" <<\'PY\'\n', 1)[1].split('\nPY', 1)[0]
-            valid = 'RUNTIME=26.10.17\nAPPLE_FAKEDNS_SDK_PASS=2\nAPPLE_DNS_DATA_MAPS_SDK_PASS=2\n'
+            valid = 'RUNTIME=26.10.21\nAPPLE_FAKEDNS_SDK_PASS=2\nAPPLE_DNS_DATA_MAPS_SDK_PASS=2\n'
             cases = [(valid, True), ('APPLE_FAKEDNS_SDK_PASS=2\n', False),
-                     (valid.replace('26.10.17', '26.10.18'), False),
-                     (valid.replace('26.10.17', '26.10.170'), False),
-                     (valid + 'RUNTIME=26.10.17\n', False),
-                     ('RUNTIME=26.10.17\n', False), (valid + 'APPLE_FAKEDNS_SDK_PASS=2\n', False),
+                     (valid.replace('26.10.21', '26.10.18'), False),
+                     (valid.replace('26.10.21', '26.10.210'), False),
+                     (valid + 'RUNTIME=26.10.21\n', False),
+                     ('RUNTIME=26.10.21\n', False), (valid + 'APPLE_FAKEDNS_SDK_PASS=2\n', False),
                      (valid + 'synthetic-password-canary\n', False)]
             with tempfile.TemporaryDirectory() as folder:
                 log = Path(folder) / 'runtime.log'
@@ -165,7 +165,7 @@ class AppleFakeDNSOnlyModeTest(unittest.TestCase):
                 for mode in ('full', 'fakedns-only'):
                     for count in (0, 2):
                         with self.subTest(platform=platform, mode=mode, count=count):
-                            log.write_text('RUNTIME=26.10.17\nAPPLE_FAKEDNS_SDK_PASS=2\n' + 'APPLE_DNS_DATA_MAPS_SDK_PASS=2\n' * count)
+                            log.write_text('RUNTIME=26.10.21\nAPPLE_FAKEDNS_SDK_PASS=2\n' + 'APPLE_DNS_DATA_MAPS_SDK_PASS=2\n' * count)
                             failure = None
                             with mock.patch.dict(os.environ, {'APPLE_RUNTIME_PROBE_MODE': mode}), \
                                     mock.patch.object(sys, 'argv', ['-', str(log)]), contextlib.redirect_stdout(io.StringIO()):

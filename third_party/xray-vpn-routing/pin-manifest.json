@@ -1,11 +1,11 @@
 {
   "capability": "native-vpn-routing-source-preview-v1",
-  "core_commit": "92ccc939aaf4f8965f369cf0b142e005aeaa11d5",
+  "core_commit": "1b1647cd9ddf0abc34b981d4611fc03bcac1ca74",
   "module": "github.com/xtls/xray-core",
-  "module_version": "v1.260327.1-0.20261017152356-92ccc939aaf4",
-  "module_sum": "h1:FlGykoNEWRZN5ExwxSEU5lnuEWU5CD3SJFyKKWLChl8=",
+  "module_version": "v1.260327.1-0.20261021115930-1b1647cd9ddf",
+  "module_sum": "h1:Eqz6sj4Up2NtymyVY2UtXNpHZqJGrMwKsXnGOySyUNI=",
   "upstream_sha256": {
-    "go.mod": "31fe6bd6c04eb2738e157b850236b1376cbbac3f33e974256bb7325c8c764250",
+    "go.mod": "7034fa6ca85b9919e634c06c69bde4e181818d8423f7c8d0e44f68ea5c6f5e60",
     "app/dispatcher/default.go": "29100330a020d75b5f4b77b8eec20779960a8768e765c99c1003e2b1475746fb",
     "app/proxyman/inbound/inbound.go": "1bc6e0581f17379fb41e0f85aa6e29ac2f21ec87926dffcb3fb488cb64a19681",
     "app/proxyman/inbound/always.go": "f64783e9a8d256348953fb62afe211482f2df60e48f8bf643b77a2cfa9b6c0fe",

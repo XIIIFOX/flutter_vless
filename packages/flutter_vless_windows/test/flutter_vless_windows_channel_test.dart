@@ -37,4 +37,17 @@ void main() {
 
     expect(await FlutterVlessWindows().getProviderDebugSnapshot(), isEmpty);
   });
+
+  test('getCoreVersion preserves the native 26.10.21 runtime version', () async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return '26.10.21';
+    });
+
+    expect(await FlutterVlessWindows().getCoreVersion(), '26.10.21');
+    expect(calls.single.method, 'getCoreVersion');
+    expect(calls.single.arguments, isNull);
+  });
 }

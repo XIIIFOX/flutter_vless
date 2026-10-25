@@ -86,7 +86,7 @@ def reference_hashes(source, parent):
         return {relative: digest(reference / relative) for relative in UPSTREAM}
 
 
-def prepare(mobile, destination, go):
+def prepare(mobile, destination, go, *, routing=False):
     mobile, destination = mobile.resolve(), destination.resolve()
     if mobile == ROOT / 'third_party/xray-mobile' or not (mobile / 'go.mod').is_file():
         raise ValueError('A copied build module is required')
@@ -108,9 +108,13 @@ def prepare(mobile, destination, go):
             raise ValueError('Pinned lifetime upstream mismatch')
     inputs = [Path(__file__).resolve(), ROOT / 'third_party/xray-vpn-routing/apply.py',
               ROOT / 'third_party/xray-vpn-routing/pin-manifest.json', *copier.lifetime_input_paths()]
+    if routing:
+        inputs += sorted((ROOT / 'third_party/xray-vpn-routing/overlay').rglob('*.go'))
     input_hashes = {str(path.relative_to(ROOT)): digest(path) for path in inputs}
     replacement = selected.get('Replace')
     if replacement is not None:
+        if routing:
+            raise ValueError('Routing release preparation requires a fresh Core copy')
         if not isinstance(replacement, dict) or not replacement.get('Dir'):
             raise ValueError('Unsupported existing Core replacement')
         effective = Path(replacement['Dir'])
@@ -131,7 +135,8 @@ def prepare(mobile, destination, go):
                 raise ValueError('Existing Core lacks exact Classic helper')
         mode = 'validated-existing-replacement'
     else:
-        effective = copier.copy_and_apply_lifetimes(source, destination, go=go)
+        effective = (copier.copy_and_apply(source, destination, go=go) if routing
+                     else copier.copy_and_apply_lifetimes(source, destination, go=go))
         existing = tree(effective)
         run(go, ['mod', 'edit', '-replace=' + module + '=' + str(effective)], mobile, 30)
         mode = 'new-lifetime-copy'
@@ -142,8 +147,11 @@ def prepare(mobile, destination, go):
         raise ValueError('Build lost the checked Core replacement')
     if tree(source) != before or tree(effective) != existing or any(digest(ROOT / name) != value for name, value in input_hashes.items()):
         raise ValueError('Core source or patch inputs changed')
-    report = {'stage': 'pre-build-preparation', 'mode': mode, 'module': module, 'version': version, 'sum': checksum,
+    report = {'success': False, 'stage': 'pre-build-preparation', 'mode': mode, 'module': module, 'version': version, 'sum': checksum,
               'scope': 'Classic DNS/XHTTP H3 lifetime and mandatory Darwin interface binding; no full native-DNS context overlay',
+              'routing_capability_expected': 1 if routing else 0,
+              'core_commit': pin.get('core_commit'), 'core_source': str(source),
+              'module_cache_before_sha256': before,
               'h3_lifetime_applied': True, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial'],
               'h3_lifetime_patch_sha256': digest(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py'),
               'darwin_interface_binding_source_applied': True,
@@ -156,14 +164,55 @@ def prepare(mobile, destination, go):
     return report
 
 
+def verify(mobile, go):
+    """Post-compiler check of the same copied Core and all producer inputs."""
+    mobile = mobile.resolve()
+    path = mobile.parent / 'classic-core-inputs.json'
+    report = json.loads(path.read_text())
+    pin = manifest()
+    if any(report.get(key) != pin[pin_key] for key, pin_key in
+           [('module', 'module'), ('version', 'module_version'), ('sum', 'module_sum'), ('core_commit', 'core_commit')]):
+        raise ValueError('Prepared Core pin changed')
+    selected = metadata(go, ['list', '-m', '-json', report['module']], mobile)
+    if selected.get('Path') != report['module'] or selected.get('Version') != report['version'] \
+            or Path(selected.get('Replace', {}).get('Dir', '')).resolve() != Path(report['replacement']).resolve():
+        raise ValueError('Build lost the checked Core replacement')
+    if tree(Path(report['core_source'])) != report['module_cache_before_sha256'] \
+            or tree(Path(report['replacement'])) != report['core_copy_sha256'] \
+            or any(digest(ROOT / name) != checksum for name, checksum in report['source_sha256'].items()):
+        raise ValueError('Core source or patch inputs changed during build')
+    version = run(go, ['env', 'GOVERSION'], mobile, 30).strip()
+    import re
+    match = re.fullmatch(r'go(\d+)\.(\d+)\.(\d+)', version)
+    if not match or tuple(map(int, match.groups())) < (1, 27, 3):
+        raise ValueError('Go 1.27.3 or newer is required for root CA filtering')
+    goroot = Path(run(go, ['env', 'GOROOT'], mobile, 30).strip()).resolve()
+    scratch = goroot / 'src/net/http/internal/http2/transport.go'
+    if 'const max = 128 << 10 // H2BUF patch (flutter_vless issue #23)' not in scratch.read_text():
+        raise ValueError('Canonical release requires the 128 KiB H2BUF patch')
+    report.update(success=True, stage='post-build-verified', go_version=version,
+                  root_ca_filter_toolchain_minimum='go1.27.3', h2buf_cap_kib=128,
+                  h2buf_source_sha256=digest(scratch), module_cache_source_unchanged=True,
+                  core_copy_unchanged=True, runtime_executed=False, published=False)
+    path.write_text(json.dumps(report, indent=2) + '\n')
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--mobile', type=Path, required=True)
-    parser.add_argument('--destination', type=Path, required=True)
+    parser.add_argument('--destination', type=Path)
     parser.add_argument('--go', default='go')
+    parser.add_argument('--vpn-routing', action='store_true')
+    parser.add_argument('--verify', action='store_true')
     arguments = parser.parse_args()
     try:
-        prepare(arguments.mobile, arguments.destination, arguments.go)
+        if arguments.verify:
+            verify(arguments.mobile, arguments.go)
+        else:
+            if arguments.destination is None:
+                parser.error('--destination is required for preparation')
+            prepare(arguments.mobile, arguments.destination, arguments.go, routing=arguments.vpn_routing)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
         raise SystemExit('Classic DNS/XHTTP H3 build preparation failed')
     print('APPLE_CLASSIC_DNS_PREPARED=1')

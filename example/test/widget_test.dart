@@ -34,7 +34,7 @@ void main() {
       final pending = Completer<Object?>();
       var starts = 0, stops = 0;
       channels((call) async {
-        if (call.method == 'getCoreVersion') return '26.10.17';
+        if (call.method == 'getCoreVersion') return '26.10.21';
         if (call.method == 'requestPermission') {
           return phase == 'permission' ? pending.future : true;
         }
@@ -73,7 +73,7 @@ void main() {
     final first = Completer<Object?>(), second = Completer<Object?>();
     var permissions = 0, starts = 0, stops = 0;
     channels((call) async {
-      if (call.method == 'getCoreVersion') return '26.10.17';
+      if (call.method == 'getCoreVersion') return '26.10.21';
       if (call.method == 'requestPermission') {
         return ++permissions == 1 ? first.future : second.future;
       }
@@ -108,7 +108,7 @@ void main() {
       (tester) async {
     final start = Completer<Object?>(), stop = Completer<Object?>();
     channels((call) async {
-      if (call.method == 'getCoreVersion') return '26.10.17';
+      if (call.method == 'getCoreVersion') return '26.10.21';
       if (call.method == 'requestPermission') return true;
       if (call.method == 'startVless') return start.future;
       if (call.method == 'stopVless') return stop.future;
@@ -141,7 +141,7 @@ void main() {
       var starts = 0, initializations = 0;
       channels((call) async {
         if (call.method == 'initializeVless') initializations++;
-        if (call.method == 'getCoreVersion') return '26.10.17';
+        if (call.method == 'getCoreVersion') return '26.10.21';
         if (call.method == 'getCapabilities') return {'optionsVersion': 1};
         if (call.method == 'requestPermission') return permission.future;
         if (call.method == 'startVless') starts++;
@@ -190,7 +190,7 @@ void main() {
     var checks = 0;
     var starts = 0;
     messenger.setMockMethodCallHandler(channel, (call) async {
-      if (call.method == 'getCoreVersion') return '26.10.17';
+      if (call.method == 'getCoreVersion') return '26.10.21';
       if (call.method == 'requestPermission') return true;
       if (call.method == 'getSecurityCapabilities') {
         if (++checks == 1) return pending.future;
@@ -246,7 +246,7 @@ void main() {
     final pending = Completer<Object?>();
     var starting = false;
     messenger.setMockMethodCallHandler(channel, (call) async {
-      if (call.method == 'getCoreVersion') return '26.10.17';
+      if (call.method == 'getCoreVersion') return '26.10.21';
       if (call.method == 'requestPermission') return true;
       if (call.method == 'startVless') {
         starting = true;
@@ -313,7 +313,7 @@ void main() {
     const canary = 'CANARY-private-native-configuration';
     var starts = 0;
     messenger.setMockMethodCallHandler(channel, (call) async {
-      if (call.method == 'getCoreVersion') return '26.10.17';
+      if (call.method == 'getCoreVersion') return '26.10.21';
       if (call.method == 'requestPermission') return true;
       if (call.method != 'startVless') return null;
       starts++;
@@ -359,7 +359,7 @@ void main() {
       final calls = <MethodCall>[];
       var reject = false;
       messenger.setMockMethodCallHandler(channel, (call) async {
-        if (call.method == 'getCoreVersion') return '26.10.17';
+        if (call.method == 'getCoreVersion') return '26.10.21';
         if (call.method == 'getSecurityCapabilities') {
           return {'certificateAssetsDirectory': true};
         }
@@ -422,7 +422,7 @@ void main() {
     const channel = MethodChannel('flutter_vless');
     const status = MethodChannel('flutter_vless/status');
     messenger.setMockMethodCallHandler(channel, (call) async {
-      if (call.method == 'getCoreVersion') return '26.10.17';
+      if (call.method == 'getCoreVersion') return '26.10.21';
       if (call.method == 'getProviderDebugSnapshot') return '';
       return null;
     });
@@ -461,7 +461,7 @@ void main() {
     const status = MethodChannel('flutter_vless/status');
     messenger.setMockMethodCallHandler(channel, (call) async {
       if (call.method == 'requestPermission') return true;
-      if (call.method == 'getCoreVersion') return '26.10.17';
+      if (call.method == 'getCoreVersion') return '26.10.21';
       return null;
     });
     messenger.setMockMethodCallHandler(status, (_) async => null);

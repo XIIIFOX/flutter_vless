@@ -4,12 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 XRAY_MOBILE_DIR="${XRAY_MOBILE_DIR:-$REPO_ROOT/third_party/xray-mobile}"
-XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.10.17}"
-XRAY_CORE_REF="${XRAY_CORE_REF:-92ccc939aaf4f8965f369cf0b142e005aeaa11d5}"
+XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.10.21}"
+XRAY_CORE_REF="${XRAY_CORE_REF:-$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["core_commit"])' "$REPO_ROOT/third_party/xray-vpn-routing/pin-manifest.json")}"
 XRAY_MACOS_DEPLOYMENT_TARGET="${XRAY_MACOS_DEPLOYMENT_TARGET:-13.0}"
 BUILD_DIR="${BUILD_DIR:-$REPO_ROOT/build/xray_macos}"
 OUTPUT_XCFRAMEWORK="${OUTPUT_XCFRAMEWORK:-$SCRIPT_DIR/XRay.xcframework}"
-export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.0}"
+export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.3}"
 
 export MACOSX_DEPLOYMENT_TARGET="$XRAY_MACOS_DEPLOYMENT_TARGET"
 export CGO_CFLAGS="${CGO_CFLAGS:-} -mmacosx-version-min=$XRAY_MACOS_DEPLOYMENT_TARGET"
@@ -18,6 +18,17 @@ export CGO_LDFLAGS="${CGO_LDFLAGS:-} -mmacosx-version-min=$XRAY_MACOS_DEPLOYMENT
 
 if ! command -v go >/dev/null 2>&1; then
     echo "Error: Go is required."
+    exit 1
+fi
+
+GO_VERSION="$(go env GOVERSION)"
+if [[ ! "$GO_VERSION" =~ ^go([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+    echo "Error: Go 1.27.3 or newer is required for root CA filtering."
+    exit 1
+fi
+GO_MAJOR="${BASH_REMATCH[1]}"; GO_MINOR="${BASH_REMATCH[2]}"; GO_PATCH="${BASH_REMATCH[3]}"
+if [ "$GO_MAJOR" -lt 1 ] || { [ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -lt 27 ]; } || { [ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -eq 27 ] && [ "$GO_PATCH" -lt 3 ]; }; then
+    echo "Error: Go 1.27.3 or newer is required for root CA filtering."
     exit 1
 fi
 
@@ -45,7 +56,7 @@ echo "Using vendored xray-mobile source from $XRAY_MOBILE_DIR"
 # Xray-core uses calendar release tags but keeps the original module path.
 go get "github.com/xtls/xray-core@$XRAY_CORE_REF"
 python3 "$REPO_ROOT/tool/prepare_apple_classic_core.py" \
-    --mobile "$PWD" --destination "$PWD/../Core-classic" --go "$(command -v go)"
+    --mobile "$PWD" --destination "$PWD/../Core-classic" --go "$(command -v go)" --vpn-routing
 MOBILE_VERSION="$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
 go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
 mkdir -p "$BUILD_DIR/tools"
@@ -103,10 +114,10 @@ echo "H2BUF: building with $(go version) from patched GOROOT clone"
 
 # Verify our file compiles before proceeding
 echo "Verifying Go compilation..."
-go build ./... && echo "Go build OK" || { echo "ERROR: Go build failed"; exit 1; }
+go build -tags=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding ./... && echo "Go build OK" || { echo "ERROR: Go build failed"; exit 1; }
 
 gomobile bind \
-    -tags=flutter_vless_darwin_interface_binding \
+    -tags=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding \
     -a \
     -ldflags="-s -w -extldflags -lresolv" \
     -target=macos \
@@ -206,6 +217,8 @@ if [ -n "$FINAL_SLICE" ]; then
 fi
 
 echo ""
+python3 "$REPO_ROOT/tool/prepare_apple_classic_core.py" --mobile "$PWD" --go "$(command -v go)" --verify
+
 echo "=== SUCCESS ==="
 echo "Created $OUTPUT_XCFRAMEWORK (static library xcframework)"
 echo ""

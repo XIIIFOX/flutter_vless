@@ -28,7 +28,7 @@ class RoutingCLIBuilderTest(unittest.TestCase):
         self.core = self.cache / 'core'; self.core.mkdir()
         self.go = self.root / 'go'; self.go.write_text('inert tool; never executed')
         self.output = self.root / 'build with spaces'
-        self.version = 'v1.260327.1-0.20261017152356-92ccc939aaf4'
+        self.version = 'v1.260327.1-0.20261021115930-1b1647cd9ddf'
         self.module = 'github.com/xtls/xray-core'
         self.checksum = 'h1:synthetic-reviewed-sum='
         (self.mobile / 'go.mod').write_text('module ' + builder.cli.MODULE + '\ngo 1.27\nrequire ' + self.module + ' ' + self.version + '\n')
@@ -42,7 +42,7 @@ class RoutingCLIBuilderTest(unittest.TestCase):
         (self.capability / 'overlay/main/native_routing_cli.go').write_text('package main\n')
         (self.capability / 'apply.py').write_text('from pathlib import Path\nimport shutil\ndef copy_and_apply(source,destination,**kwargs):\n shutil.copytree(source,destination)\n overlay=Path(__file__).parent/"overlay"\n for path in overlay.rglob("*.go"):\n  target=Path(destination)/path.relative_to(overlay)\n  target.parent.mkdir(parents=True,exist_ok=True)\n  shutil.copyfile(path,target)\n return Path(destination)\n')
         self.manifest = {'module': self.module, 'module_version': self.version, 'module_sum': self.checksum,
-                         'core_commit': '92ccc939aaf4f8965f369cf0b142e005aeaa11d5', 'capability': 'native-vpn-routing-source-preview-v1',
+                         'core_commit': '1b1647cd9ddf0abc34b981d4611fc03bcac1ca74', 'capability': 'native-vpn-routing-source-preview-v1',
                          'upstream_sha256': {name: hashlib.sha256((self.core / name).read_bytes()).hexdigest() for name in ('go.mod', 'fixture.go')}}
         (self.capability / 'pin-manifest.json').write_text(json.dumps(self.manifest))
         self.calls = []

@@ -1,10 +1,10 @@
 {
-  "core_commit": "92ccc939aaf4f8965f369cf0b142e005aeaa11d5",
+  "core_commit": "1b1647cd9ddf0abc34b981d4611fc03bcac1ca74",
   "upstream_sha256": {
     "transport/internet/dialer.go": "ed2825ff30a2bfdfacf8681cd1af81d96179103ccff0a0b0b42f4ea64db451d4",
     "app/proxyman/outbound/handler.go": "77d3085a461b30a6a4d25273ba1487c9715655e1a6cfeafe17d6df0605f2c453",
     "proxy/freedom/freedom.go": "da88b4394315870465f44684b58f1bc4177f12d440a3d4e7a4747a7de1332d88",
-    "go.mod": "31fe6bd6c04eb2738e157b850236b1376cbbac3f33e974256bb7325c8c764250",
+    "go.mod": "7034fa6ca85b9919e634c06c69bde4e181818d8423f7c8d0e44f68ea5c6f5e60",
     "features/dns/localdns/client.go": "3d3f620349a047361a177e1fce7a958ae13e2dfbbf440b676d2dbbd38afaca68",
     "app/dns/nameserver_local.go": "5c7128ace2ee1e1acc5fa7da1d6583ded130749601891052c6928ee2d040bd77",
     "app/dns/nameserver.go": "ed7a8438714e9e3a2f84e164aa5719e6ab948afe01a49ce71e8767b71ed2ee68",
@@ -15,7 +15,7 @@
     "transport/internet/udp/dispatcher.go": "76bdf02b75c5c71c424bc177c4f6284d15b4b23c271b2b5653de0ced61b86dfe",
     "proxy/socks/protocol.go": "3b6723cb8c358da8ca26c7f4672b578a3e9de5bd30c291e7ee5da30df5195cbd",
     "proxy/socks/server.go": "6247a63dc3d4d14f7e0d0cd52582692e9507bb85970ae3bdb67dd89537e1c363",
-    "proxy/socks/temp_udp_listen.go": "14ce91f83c617fce7c35b6cb668c2443a544c8b760bafb3b13a336caff06b34f",
+    "proxy/socks/temp_udp_listen.go": "538a8937f93bb50eb25220e83d2fa9f11b1288cb64f51b314cbf5c3e0d8b8935",
     "transport/internet/splithttp/dialer.go": "ed4ec0d02b7f4bed517f1326c534186e7648af81fe0c974f601a1e933666d0cd",
     "transport/internet/memory_settings.go": "333dad0111e0d215460aa2b1f376a032f79c2f12837b40911077662a7e35edcb",
     "infra/conf/transport_sockopt.go": "9fba6eab1f52d0dac18c26b12f828a04762dfe44f08c123218da53faf45b32e3",
@@ -32,11 +32,11 @@
     "app/dns/nameserver_udp.go": "d5f53d45c9170c6b6c6a91af6f078b6c2f453b22a7679df818c643a23cf59a7f",
     "transport/internet/sockopt_darwin.go": "3afc4d2334118367a411777069a4890655616d9ae98f0ab44ff51f3e85ea31ea",
     "transport/internet/sockopt.go": "1a5afaf4997d1c4b58b50e247df649f9761efef394c66bdc48d9609e5dce8445",
-    "transport/internet/system_dialer.go": "378eaf449cc4ac458592be26d2077e618954e5c1ce4cace8cf8cc0312b9dc46b"
+    "transport/internet/system_dialer.go": "6c95ad946aef9c53f7d43bdd72c5a7571dbdaf45a7a877e3e7a990d1cbe26cf2"
   },
   "module": "github.com/xtls/xray-core",
-  "module_version": "v1.260327.1-0.20261017152356-92ccc939aaf4",
-  "module_sum": "h1:FlGykoNEWRZN5ExwxSEU5lnuEWU5CD3SJFyKKWLChl8=",
+  "module_version": "v1.260327.1-0.20261021115930-1b1647cd9ddf",
+  "module_sum": "h1:Eqz6sj4Up2NtymyVY2UtXNpHZqJGrMwKsXnGOySyUNI=",
   "capability": "native-dns-context-preview-1",
   "published": false
 }

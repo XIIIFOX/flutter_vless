@@ -14,6 +14,14 @@ if [[ "$#" == 3 ]]; then
     ROUTING=1
 fi
 case "$PLATFORM" in ios|macos) ;; *) echo 'Expected ios or macos' >&2; exit 2 ;; esac
+test ! -e "$OUTPUT/XRay.xcframework" || { echo 'Output already exists; preserve or remove it explicitly' >&2; exit 2; }
+GO_VERSION="$(go env GOVERSION)"
+python3 - "$GO_VERSION" <<'PYVERSION'
+import re, sys
+match = re.fullmatch(r'go(\d+)\.(\d+)\.(\d+)', sys.argv[1])
+if not match or tuple(map(int, match.groups())) < (1, 27, 3):
+    raise SystemExit('Go 1.27.3 or newer is required for root CA filtering')
+PYVERSION
 mkdir -p "$OUTPUT"
 OUTPUT="$(cd "$OUTPUT" && pwd)"
 test ! -e "$OUTPUT/XRay.xcframework" || { echo 'Output already exists; preserve or remove it explicitly' >&2; exit 2; }
@@ -110,7 +118,8 @@ from pathlib import Path
 import hashlib, json, subprocess, sys
 output, platform, routing, root = Path(sys.argv[1]), sys.argv[2], sys.argv[3] == '1', Path(sys.argv[4])
 pin = subprocess.check_output(['go','list','-m','-f','{{.Version}}','github.com/xtls/xray-core'],text=True).strip()
-assert pin.endswith('92ccc939aaf4'), 'Unexpected Xray Core pin'
+expected_pin = json.loads((root/'third_party/xray-vpn-routing/pin-manifest.json').read_text())['module_version']
+assert pin == expected_pin, 'Unexpected Xray Core pin'
 headers=list((output/'XRay.xcframework').rglob('XRay.objc.h'))
 assert headers and all('XRayCheckPrivate' in p.read_text() for p in headers), 'Missing preflight bridge'
 assert all('XRayDarwinInterfaceBindingCapability' in p.read_text() for p in headers), 'Missing mandatory Darwin binding bridge'

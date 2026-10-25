@@ -24,6 +24,10 @@ class AppleClassicProducerTests(unittest.TestCase):
         self.assertLess(hook, source.index('go mod tidy'))
         self.assertIn('--mobile "$PWD"', source)
         self.assertIn('--destination "$PWD/../Core-classic"', source)
+        self.assertIn('--vpn-routing', source)
+        self.assertIn('-tags=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding', source)
+        self.assertIn('go1.27.3', source)
+        self.assertIn('--verify', source)
 
     def test_legacy_ios_requires_classic_after_pin(self):
         self.require_hook('ios/build_xray_ios.sh')
@@ -47,7 +51,7 @@ class AppleClassicPreparationTests(unittest.TestCase):
             path = self.source / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('original ' + relative)
-        self.pin = {'module': 'synthetic.invalid/core', 'module_version': 'v1.0.0', 'module_sum': 'h1:synthetic',
+        self.pin = {'module': 'synthetic.invalid/core', 'module_version': 'v1.0.0', 'module_sum': 'h1:synthetic', 'core_commit': '1'*40,
                     'upstream_sha256': {name: helper.digest(self.source / name) for name in self.upstream}}
         self.selected = {'Path': self.pin['module'], 'Version': self.pin['module_version']}
         self.downloaded = {'Path': self.pin['module'], 'Version': self.pin['module_version'],
@@ -55,10 +59,15 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.calls, self.copies, self.edits = [], [], []
         self.lose_replacement = False
         self.mutate_cache = False
+        self.go_version = 'go1.27.3'
+        self.goroot = self.base / 'private-goroot'
+        self.scratch = self.goroot / 'src/net/http/internal/http2/transport.go'
+        self.scratch.parent.mkdir(parents=True)
+        self.scratch.write_text('const max = 128 << 10 // H2BUF patch (flutter_vless issue #23)\n')
         self.inputs = [ROOT / 'third_party/xray-native-dns/overlay/app/dns' / name for name in helper.HELPERS]
         self.inputs.append(ROOT / 'third_party/xray-native-dns/darwin_interface_bind_patch.py')
         self.inputs.append(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py')
-        copier = SimpleNamespace(copy_and_apply_lifetimes=self.copy, lifetime_input_paths=lambda: self.inputs,
+        copier = SimpleNamespace(copy_and_apply=self.copy, copy_and_apply_lifetimes=self.copy, lifetime_input_paths=lambda: self.inputs,
                                  copy_and_apply_classic=mock.Mock(side_effect=AssertionError('ordinary producer must include H3')),
                                  classic_input_paths=lambda: self.inputs[:-1])
         patches = mock.patch.multiple(helper, manifest=lambda: self.pin, applier=lambda: copier,
@@ -97,6 +106,10 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.fail('unexpected Go metadata command')
 
     def run_go(self, go, arguments, mobile, timeout):
+        if arguments == ['env', 'GOVERSION']:
+            return self.go_version
+        if arguments == ['env', 'GOROOT']:
+            return str(self.goroot)
         if arguments == ['env', 'GOMODCACHE']:
             return str(self.source.parent)
         if arguments[:2] == ['mod', 'edit']:
@@ -131,6 +144,49 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.assertEqual(report['source_sha256'].get('third_party/xray-vpn-routing/pin-manifest.json'),
                          helper.digest(ROOT / 'third_party/xray-vpn-routing/pin-manifest.json'))
         self.assertTrue((self.base / 'classic-core-inputs.json').is_file())
+
+    def test_canonical_routing_prepares_exact_new_copy_and_binds_overlay_inputs(self):
+        report = helper.prepare(self.mobile, self.destination, 'inert-go', routing=True)
+        self.assertEqual(report['routing_capability_expected'], 1)
+        self.assertEqual(report['core_commit'], self.pin['core_commit'])
+        self.assertEqual(report['module_cache_before_sha256'], helper.tree(self.source))
+        self.assertFalse(report['success'])
+        self.assertTrue(any(name.startswith('third_party/xray-vpn-routing/overlay/') for name in report['source_sha256']))
+
+    def test_routing_cannot_relabel_existing_ordinary_replacement(self):
+        self.existing()
+        with self.assertRaisesRegex(ValueError, 'fresh Core copy'):
+            helper.prepare(self.mobile, self.destination, 'inert-go', routing=True)
+        self.assertEqual(self.edits, [])
+        self.assertEqual(self.copies, [])
+
+    def test_postbuild_verifies_actual_copy_toolchain_and_h2buf(self):
+        helper.prepare(self.mobile, self.destination, 'inert-go', routing=True)
+        report = helper.verify(self.mobile, 'inert-go')
+        self.assertTrue(report['success'])
+        self.assertEqual(report['go_version'], 'go1.27.3')
+        self.assertEqual(report['h2buf_cap_kib'], 128)
+        self.assertTrue(report['module_cache_source_unchanged'] and report['core_copy_unchanged'])
+
+    def test_postbuild_old_CA_toolchain_or_wrong_h2buf_cannot_succeed(self):
+        helper.prepare(self.mobile, self.destination, 'inert-go', routing=True)
+        self.go_version = 'go1.27.2'
+        with self.assertRaisesRegex(ValueError, 'root CA filtering'):
+            helper.verify(self.mobile, 'inert-go')
+        self.go_version = 'go1.27.3'
+        self.scratch.write_text('const max = 512 << 10')
+        with self.assertRaisesRegex(ValueError, '128 KiB'):
+            helper.verify(self.mobile, 'inert-go')
+
+    def test_postbuild_Core_or_cache_mutation_cannot_succeed(self):
+        helper.prepare(self.mobile, self.destination, 'inert-go', routing=True)
+        for directory in (self.destination, self.source):
+            target = directory / self.upstream[0]
+            before = target.read_bytes()
+            target.write_bytes(before+b' changed during compiler')
+            with self.assertRaisesRegex(ValueError, 'changed during build'):
+                helper.verify(self.mobile, 'inert-go')
+            target.write_bytes(before)
 
     def test_h3_input_is_attested_in_ordinary_receipt(self):
         report = self.prepare()

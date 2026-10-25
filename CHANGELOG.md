@@ -131,7 +131,7 @@
 * Separate quick-profile reuse from automatic recovery authorization; add bounded worker retry policies, configurable Apple On Demand and explicit Android OS-managed Always-on handling while retaining mandatory VPN protection.
 * Add example settings, cross-language field/policy tests, native tile cold-reconnect checks, Apple setup tests and Windows workflow coverage. Physical iPhone, supplied-link routing and physical Android checks remain a separate validation phase.
 
-* Update Xray-core on Android, iOS, macOS and the Windows runtime workflow to `v26.10.17` (upstream pre-release), pinned to commit `92ccc939aaf4f8965f369cf0b142e005aeaa11d5`.
+* Update Xray-core on Android, iOS, macOS and the Windows runtime workflow to `v26.10.21`, pinned to commit `1b1647cd9ddf0abc34b981d4611fc03bcac1ca74`. Rebuild native runtimes with Go 1.27.3 and the updated fallback CA bundle for the upstream certificate-trust security fix. Keep the plugin release train at 1.1.7; native runtime publication is separate from package publication.
 * Rebuild Android runtimes for all four ABIs and Apple XCFrameworks; update hosted runtime URLs, source pins and artifact checksums.
 * Adapt the Android socket-protection overlay to upstream controller failure propagation while preserving protected DNS and fallback dialers.
 * Refresh example desktop runtimes and geodata from verified upstream release archives.

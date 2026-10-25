@@ -61,7 +61,7 @@ void main() {
     messenger.setMockMethodCallHandler(channel, (call) async {
       if (call.method == 'getCapabilities') return {'optionsVersion': 1};
       if (call.method == 'initializeVless') initialized = call.arguments;
-      if (call.method == 'getCoreVersion') return '26.10.17';
+      if (call.method == 'getCoreVersion') return '26.10.21';
       return null;
     });
     messenger.setMockMethodCallHandler(status, (_) async => null);

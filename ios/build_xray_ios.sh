@@ -1,12 +1,12 @@
 #!/bin/bash
 set -euo pipefail
-export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.0}"
+export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.3}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 XRAY_MOBILE_DIR="${XRAY_MOBILE_DIR:-$REPO_ROOT/third_party/xray-mobile}"
-XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.10.17}"
-XRAY_CORE_REF="${XRAY_CORE_REF:-92ccc939aaf4f8965f369cf0b142e005aeaa11d5}"
+XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.10.21}"
+XRAY_CORE_REF="${XRAY_CORE_REF:-$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["core_commit"])' "$REPO_ROOT/third_party/xray-vpn-routing/pin-manifest.json")}"
 IOS_VERSION="${IOS_VERSION:-15.0}"
 BUILD_DIR="${BUILD_DIR:-$SCRIPT_DIR/build_xray_ios}"
 OUTPUT_XCFRAMEWORK="${OUTPUT_XCFRAMEWORK:-$SCRIPT_DIR/XRay.xcframework}"
@@ -17,15 +17,13 @@ if ! command -v go >/dev/null 2>&1; then
 fi
 
 GO_VERSION="$(go env GOVERSION)"
-if [[ ! "$GO_VERSION" =~ ^go([0-9]+)\.([0-9]+) ]]; then
-    echo "Error: unable to parse Go version '$GO_VERSION'. Go 1.27 or newer is required."
+if [[ ! "$GO_VERSION" =~ ^go([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+    echo "Error: Go 1.27.3 or newer is required for root CA filtering."
     exit 1
 fi
-GO_MAJOR="${BASH_REMATCH[1]}"
-GO_MINOR="${BASH_REMATCH[2]}"
-if [ "$GO_MAJOR" -lt 1 ] || { [ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -lt 27 ]; }; then
-    echo "Error: Go 1.27 or newer is required for the stdlib http2 layout used by the H2BUF patch."
-    echo "Your Go version: $(go version)"
+GO_MAJOR="${BASH_REMATCH[1]}"; GO_MINOR="${BASH_REMATCH[2]}"; GO_PATCH="${BASH_REMATCH[3]}"
+if [ "$GO_MAJOR" -lt 1 ] || { [ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -lt 27 ]; } || { [ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -eq 27 ] && [ "$GO_PATCH" -lt 3 ]; }; then
+    echo "Error: Go 1.27.3 or newer is required for root CA filtering."
     exit 1
 fi
 
@@ -51,7 +49,7 @@ echo "Using vendored xray-mobile source from $XRAY_MOBILE_DIR"
 # Pin by the release commit so Go resolves it to the matching v1.YYMMDD.0 module version.
 go get "github.com/xtls/xray-core@$XRAY_CORE_REF"
 python3 "$REPO_ROOT/tool/prepare_apple_classic_core.py" \
-    --mobile "$PWD" --destination "$PWD/../Core-classic" --go "$(command -v go)"
+    --mobile "$PWD" --destination "$PWD/../Core-classic" --go "$(command -v go)" --vpn-routing
 MOBILE_VERSION="$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
 go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
 mkdir -p "$BUILD_DIR/tools"
@@ -125,12 +123,14 @@ echo "H2BUF: building with $(go version) from patched GOROOT clone"
 
 rm -rf "$OUTPUT_XCFRAMEWORK"
 gomobile bind \
-    -tags=flutter_vless_darwin_interface_binding \
+    -tags=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding \
     -a \
     -ldflags="-s -w -extldflags -lresolv" \
     -target=ios \
     -iosversion="$IOS_VERSION" \
     -o "$OUTPUT_XCFRAMEWORK" \
     github.com/EbrahimTahernejad/xray-mobile
+
+python3 "$REPO_ROOT/tool/prepare_apple_classic_core.py" --mobile "$PWD" --go "$(command -v go)" --verify
 
 echo "Created $OUTPUT_XCFRAMEWORK"

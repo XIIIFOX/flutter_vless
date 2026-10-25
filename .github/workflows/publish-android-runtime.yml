@@ -6,7 +6,7 @@ on:
       xray_runtime_version:
         description: Xray runtime Maven artifact version
         required: true
-        default: "26.10.17-protect1"
+        default: "26.10.21-protect1"
       existing_deployment_id:
         description: Existing Central Portal deployment ID to publish instead of uploading a new bundle
         required: false
@@ -14,7 +14,7 @@ on:
       publishing_type:
         description: Central Portal publishing mode
         required: true
-        default: USER_MANAGED
+        default: AUTOMATIC
         type: choice
         options:
           - USER_MANAGED
@@ -25,21 +25,36 @@ jobs:
     name: Publish xray-android AAR to Maven Central
     runs-on: ubuntu-latest
     environment: maven-central
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+      - uses: actions/setup-python@v5
+        if: ${{ inputs.existing_deployment_id == '' }}
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v6
+        if: ${{ inputs.existing_deployment_id == '' }}
+        with:
+          go-version: "1.27.3"
+          cache-dependency-path: third_party/xray-mobile/go.sum
       - name: Install Android SDK platform
         if: ${{ inputs.existing_deployment_id == '' }}
         run: |
           sdk_manager_path="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)"
           test -n "$sdk_manager_path"
-          "$sdk_manager_path" "platforms;android-36"
-      - name: Upload Maven Central deployment
+          "$sdk_manager_path" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+      - name: Test final candidate provenance without executing runtime code
         if: ${{ inputs.existing_deployment_id == '' }}
-        run: tool/publish_android_runtime_maven.sh
+        run: python3 tool/test_android_runtime_preview.py
+      - name: Compile four ABIs, verify and sign exact AAR, upload Central deployment
+        if: ${{ inputs.existing_deployment_id == '' }}
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/28.2.13676358"
+          tool/publish_android_runtime_maven.sh
         env:
           XRAY_RUNTIME_VERSION: ${{ inputs.xray_runtime_version }}
           CENTRAL_PUBLISHING_TYPE: ${{ inputs.publishing_type }}
@@ -48,14 +63,17 @@ jobs:
           SIGNING_IN_MEMORY_KEY: ${{ secrets.SIGNING_IN_MEMORY_KEY }}
           SIGNING_IN_MEMORY_KEY_PASSWORD: ${{ secrets.SIGNING_IN_MEMORY_KEY_PASSWORD }}
       - name: Preserve the exact signed Maven artifacts
-        if: ${{ inputs.existing_deployment_id == '' && success() }}
+        if: ${{ inputs.existing_deployment_id == '' && always() }}
         uses: actions/upload-artifact@v4
         with:
           name: xray-android-${{ inputs.xray_runtime_version }}-maven
           path: |
-            android_runtime/xray_android/build/repo/dev/tfox/fluttervless/xray-android/${{ inputs.xray_runtime_version }}/
-            android_runtime/xray_android/build/xray-android-${{ inputs.xray_runtime_version }}-central-bundle.zip
-          if-no-files-found: error
+            build/android-runtime-release/project/build/repo/dev/tfox/fluttervless/xray-android/${{ inputs.xray_runtime_version }}/
+            build/android-runtime-release/preview.json
+            build/android-runtime-release/fresh-jni/*.json
+            build/android-runtime-release/logs/*.log
+            build/android-runtime-release-artifact/
+          if-no-files-found: warn
           retention-days: 30
       - name: Publish existing Maven Central deployment
         if: ${{ inputs.existing_deployment_id != '' }}

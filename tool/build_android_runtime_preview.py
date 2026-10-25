@@ -12,6 +12,9 @@ import subprocess
 import test_native_dns_context_runtime as processes
 
 ROOT = Path(__file__).resolve().parents[1]
+CORE_TAG = 'v26.10.21'
+RELEASE_VERSION = '26.10.21-protect1'
+GO_VERSION = 'go1.27.3'
 ABIS = ('arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64')
 RUNTIME = 'android_runtime/xray_android'
 H3 = 'third_party/xray-native-dns/h3_lifetime_patch.py'
@@ -77,11 +80,12 @@ def git_head(repository):
 def preview_version(head):
     if not re.fullmatch('[0-9a-f]{40}', head):
         raise ValueError('Exact Git head required')
-    return '26.10.17-h3-preview.' + head[:12]
+    return '26.10.21-h3-preview.' + head[:12]
 
 
-def core_copy(receipt_name, repository):
-    match = re.fullmatch(r'classic-preview-(security-android-classic\.[A-Za-z0-9]+)\.json', receipt_name)
+def core_copy(receipt_name, repository, routing=False):
+    mode = 'routing' if routing else 'classic'
+    match = re.fullmatch(mode + r'-preview-(security-android-' + mode + r'\.[A-Za-z0-9]+)\.json', receipt_name)
     if not match:
         raise ValueError('Ordinary Core receipt name differs')
     path = repository / 'build' / match.group(1) / 'Core'
@@ -95,12 +99,17 @@ def checked(name, command, output, environment, results, *, cwd=ROOT, seconds=60
     processes.checked(name, command, cwd=cwd, environment=environment, seconds=seconds, results=results)
 
 
-def build(output, head, repository=ROOT):
+def build(output, head, repository=ROOT, *, release=False):
     # Refuse before child commands, mkdir, dependency resolution or copying.
     if os.environ.get('CI') != 'true' or os.environ.get('GITHUB_ACTIONS') != 'true' \
             or os.uname().sysname != 'Linux':
         raise ValueError('Android preview builds require Linux GitHub Actions')
-    version = preview_version(head)
+    preview = preview_version(head)  # Exact head validation applies in both modes.
+    version = RELEASE_VERSION if release else preview
+    signing = {key: os.environ[key] for key in ('SIGNING_IN_MEMORY_KEY', 'SIGNING_IN_MEMORY_KEY_PASSWORD')
+               if os.environ.get(key)}
+    if release and len(signing) != 2:
+        raise ValueError('Final Maven candidate requires signing credentials')
     if git_head(repository) != head:
         raise ValueError('Checkout head differs')
     output = output.absolute()
@@ -131,24 +140,29 @@ def build(output, head, repository=ROOT):
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(repository / RUNTIME / 'src/main' / name, destination)
     environment = {k: v for k, v in os.environ.items()
-                   if not k.startswith(('SIGNING_', 'CENTRAL_', 'XRAY_', 'V2RAY_'))}
-    environment.update(GOTOOLCHAIN='local', GOWORK='off', GOFLAGS='', XRAY_NATIVE_ROUTING='0',
-                       XRAY_VERSION='v26.10.17', TARGET_DIR=str(output / 'fresh-jni'))
+                   if not k.startswith(('SIGNING_', 'CENTRAL_', 'MAVEN_CENTRAL_', 'XRAY_', 'V2RAY_'))}
+    environment.update(GOTOOLCHAIN='local', GOWORK='off', GOFLAGS='', XRAY_NATIVE_ROUTING='1' if release else '0',
+                       XRAY_VERSION=CORE_TAG, TARGET_DIR=str(output / 'fresh-jni'))
     environment.update({name: '1' for name in ('XRAY_BUILD_ARM64', 'XRAY_BUILD_ARMV7', 'XRAY_BUILD_X86', 'XRAY_BUILD_X86_64')})
-    result = {'schema': 1, 'success': False, 'head': head, 'version': version,
+    result = {'schema': 1, 'success': False, 'head': head, 'version': version, 'release_candidate': release,
               'source_sha256': inputs, 'pinned_HEV_geodata_sha256': pinned,
               'runtime_executed': False, 'installed': False, 'published': False, 'results': []}
-    copied, cache, receipt, staged_before, fresh_before = None, None, None, None, None
+    copied, mobile_copy, cache, receipt, staged_before, fresh_before = None, None, None, None, None, None
     try:
+        go_version = subprocess.check_output(['go', 'version'], cwd=repository, env=environment,
+                                            text=True, timeout=10).strip()
+        if not re.fullmatch(r'go version ' + re.escape(GO_VERSION) + r' linux/(amd64|arm64)', go_version):
+            raise ValueError('Go 1.27.3 security toolchain required')
+        result['Go_toolchain_version'] = go_version
         checked('ordinary-core-build', ['bash', str(repository / 'packages/flutter_vless_android/android/build_xray.sh')],
                 output, environment, result['results'], cwd=repository, seconds=1200)
-        receipts = list((output / 'fresh-jni').glob('classic-preview-*.json'))
+        receipts = list((output / 'fresh-jni').glob(('routing' if release else 'classic') + '-preview-*.json'))
         if len(receipts) != 1:
             raise ValueError('One fresh ordinary Core receipt required')
         receipt = json.loads(receipts[0].read_text())
         if any(receipt.get(k) is not True for k in ('success', 'source_unchanged', 'module_cache_source_unchanged',
                                                    'copies_unchanged', 'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'darwin_interface_binding_source_applied')) \
-                or type(receipt.get('routing_capability_expected')) is not int or receipt['routing_capability_expected'] != 0 \
+                or type(receipt.get('routing_capability_expected')) is not int or receipt['routing_capability_expected'] != int(release) \
                 or receipt.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial'] \
                 or any(receipt.get(k) is not False for k in ('runtime_executed', 'published')) \
                 or receipt.get('selected_abis') != list(ABIS):
@@ -163,7 +177,15 @@ def build(output, head, repository=ROOT):
             destination = project / 'src/main/jniLibs' / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, destination)
-        copied = core_copy(receipts[0].name, repository)
+        copied = core_copy(receipts[0].name, repository, routing=release)
+        if release:
+            mobile_copy = copied.parent / 'mobile'
+            if receipt.get('routing_tags') != ['flutter_vless_vpn_routing_cli', 'flutter_vless_vpn_routing'] \
+                    or Path(receipt.get('output_directory', '')).resolve() != (output / 'fresh-jni').resolve() \
+                    or Path(receipt.get('core_replacement', '')).resolve() != copied.resolve() \
+                    or Path(receipt.get('mobile_replacement', '')).resolve() != mobile_copy.resolve() \
+                    or tree(mobile_copy) != receipt.get('mobile_copy_sha256'):
+                raise ValueError('Routing mobile copy or fixed tags differ')
         cache = Path(receipt['core_source'])
         if not cache.is_absolute() or tree(copied) != receipt['core_copy_sha256'] \
                 or tree(cache) != receipt['module_cache_before_sha256']:
@@ -178,7 +200,8 @@ def build(output, head, repository=ROOT):
         result['staged_runtime_sha256'] = staged_before
         checked('isolated-aar-build', [str(repository / 'example/android/gradlew'), '-p', str(project), '--no-daemon',
                 '--max-workers=2', '-PxrayRuntimeVersion=' + version, 'clean', 'verifyRuntimeInputs',
-                'publishReleasePublicationToLocalBuildRepository'], output, environment, result['results'],
+                'publishReleasePublicationToLocalBuildRepository'], output,
+                dict(environment, **signing) if release else environment, result['results'],
                 cwd=repository, seconds=600)
         repo = project / 'build/repo'
         result['maven_files_sha256'] = tree(repo)
@@ -190,6 +213,8 @@ def build(output, head, repository=ROOT):
             'source_unchanged': lambda: ordinary_inputs(repository) == ordinary_names and all(
                 digest(repository / safe_relative(name)) == value for name, value in inputs.items()),
             'copied_source_unchanged': lambda: copied is not None and tree(copied) == receipt['core_copy_sha256'],
+            'copied_mobile_source_unchanged': lambda: not release or (mobile_copy is not None and
+                tree(mobile_copy) == receipt['mobile_copy_sha256']),
             'module_cache_source_unchanged': lambda: cache is not None and tree(cache) == receipt['module_cache_before_sha256'],
             'staged_runtime_unchanged': lambda: staged_before is not None and tree(project / 'src/main') == staged_before,
             'fresh_outputs_unchanged': lambda: fresh_before is not None and tree(output / 'fresh-jni') == fresh_before,
@@ -211,9 +236,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--head', required=True)
+    parser.add_argument('--release', action='store_true', help='Signed final26.10.21-protect1 candidate; never publish')
     args = parser.parse_args()
     try:
-        build(args.output, args.head)
+        build(args.output, args.head, release=args.release)
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
         parser.exit(1, 'Unpublished Android runtime build failed: ' + str(error) + '\n')
 

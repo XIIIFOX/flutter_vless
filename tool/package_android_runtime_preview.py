@@ -18,7 +18,8 @@ from verify_android_dns_preview import elf_alignment
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGING_INPUTS = ('.github/workflows/android-runtime-preview.yml', 'tool/package_android_runtime_preview.py',
                     'tool/test_android_runtime_preview.py', 'tool/verify_android_dns_preview.py',
-                    'tool/build_android_dns_preview.py')
+                    'tool/build_android_dns_preview.py', '.github/workflows/publish-android-runtime.yml',
+                    'tool/build_android_runtime_maven.sh', 'tool/publish_android_runtime_maven.sh')
 
 
 def git_blob(repository, head, name):
@@ -35,8 +36,26 @@ def git_bindings(repository, head, bindings):
             raise ValueError('Exact Git source provenance differs: ' + name)
 
 
-def validate(preview, head, repository=ROOT):
-    version = builder.preview_version(head)
+def signed_artifacts(repo, version):
+    prefix = f'dev/tfox/fluttervless/xray-android/{version}/xray-android-{version}'
+    result = {}
+    for suffix in ('.aar', '.pom', '-sources.jar', '-javadoc.jar'):
+        for ending in (suffix, suffix + '.asc'):
+            name = prefix + ending
+            path = repo / name
+            if path.is_symlink() or not path.is_file():
+                raise ValueError('Missing signed Maven artifact or signature')
+            if ending.endswith('.asc'):
+                value = path.read_bytes()
+                if len(value) > 1024 * 1024 or not value.startswith(b'-----BEGIN PGP SIGNATURE-----') \
+                        or not value.rstrip().endswith(b'-----END PGP SIGNATURE-----'):
+                    raise ValueError('Maven signature format differs')
+            result[name] = digest(path)
+    return result
+
+
+def validate(preview, head, repository=ROOT, *, release=False):
+    version = builder.RELEASE_VERSION if release else builder.preview_version(head)
     if git_head(repository) != head:
         raise ValueError('Checkout head differs')
     if preview.is_symlink() or (repository / 'build').resolve() not in preview.resolve().parents:
@@ -44,10 +63,14 @@ def validate(preview, head, repository=ROOT):
     tree(preview)  # Refuse any symlink before following receipt paths.
     result = json.loads((preview / 'preview.json').read_text())
     if result.get('schema') != 1 or result.get('head') != head or result.get('version') != version \
+            or result.get('release_candidate') is not release \
             or any(result.get(k) is not True for k in ('success', 'source_unchanged', 'copied_source_unchanged',
                 'module_cache_source_unchanged', 'staged_runtime_unchanged', 'fresh_outputs_unchanged')) \
             or any(result.get(k) is not False for k in ('runtime_executed', 'installed', 'published')):
         raise ValueError('Preview producer evidence is incomplete')
+    if not re.fullmatch(r'go version ' + re.escape(builder.GO_VERSION) + r' linux/(amd64|arm64)',
+                        result.get('Go_toolchain_version', '')):
+        raise ValueError('Go 1.27.3 security toolchain proof required')
     sources = result['source_sha256']
     ordinary_names = set(builder.ordinary_inputs(repository))
     if set(sources) != set(builder.WRAPPER_INPUTS) | ordinary_names:
@@ -64,7 +87,7 @@ def validate(preview, head, repository=ROOT):
     receipt = json.loads(receipt_path.read_text())
     if any(receipt.get(k) is not True for k in ('success', 'source_unchanged', 'module_cache_source_unchanged',
                                                'copies_unchanged', 'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'darwin_interface_binding_source_applied')) \
-            or type(receipt.get('routing_capability_expected')) is not int or receipt['routing_capability_expected'] != 0 \
+            or type(receipt.get('routing_capability_expected')) is not int or receipt['routing_capability_expected'] != int(release) \
             or receipt.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial'] \
             or receipt.get('selected_abis') != list(builder.ABIS) \
             or any(receipt.get(k) is not False for k in ('runtime_executed', 'published')):
@@ -78,9 +101,18 @@ def validate(preview, head, repository=ROOT):
     if any(receipt.get(key) != pin[field] for key, field in [('core_module', 'module'), ('core', 'module_version'),
                                                            ('core_sum', 'module_sum'), ('core_commit', 'core_commit')]):
         raise ValueError('Core pin differs')
-    copied = builder.core_copy(receipt_name.name, repository)
+    copied = builder.core_copy(receipt_name.name, repository, routing=release)
     if tree(copied) != receipt['core_copy_sha256']:
         raise ValueError('Ordinary copied source changed')
+    if release:
+        mobile = copied.parent / 'mobile'
+        if result.get('copied_mobile_source_unchanged') is not True \
+                or receipt.get('routing_tags') != ['flutter_vless_vpn_routing_cli', 'flutter_vless_vpn_routing'] \
+                or Path(receipt.get('output_directory', '')).resolve() != (preview / 'fresh-jni').resolve() \
+                or Path(receipt.get('core_replacement', '')).resolve() != copied.resolve() \
+                or Path(receipt.get('mobile_replacement', '')).resolve() != mobile.resolve() \
+                or tree(mobile) != receipt.get('mobile_copy_sha256'):
+            raise ValueError('Routing mobile copy or fixed tags changed')
     cache = Path(receipt['core_source'])
     if not cache.is_absolute() or preview.resolve() == cache.resolve() or preview.resolve() in cache.resolve().parents \
             or tree(cache) != receipt['module_cache_before_sha256']:
@@ -115,6 +147,7 @@ def validate(preview, head, repository=ROOT):
     maven = tree(repo)
     if maven != result['maven_files_sha256']:
         raise ValueError('Maven output changed')
+    signed = signed_artifacts(repo, version) if release else {}
     coordinates = f'dev/tfox/fluttervless/xray-android/{version}/xray-android-{version}'
     aar_name = coordinates + '.aar'
     if result['aar'] != 'project/build/repo/' + aar_name:
@@ -154,12 +187,15 @@ def validate(preview, head, repository=ROOT):
             value = hashlib.sha256()
             xray = item.filename.startswith('jni/') and item.filename.endswith('/libxray.so')
             output = Path(temporary) / item.filename.split('/')[1] if xray else None
+            version_found, version_tail = False, b''
             with archive.open(item) as source:
                 if output is not None:
                     with output.open('xb') as destination:
                         for block in iter(lambda: source.read(1024 * 1024), b''):
                             value.update(block)
                             destination.write(block)
+                            version_found |= builder.CORE_TAG.encode() in version_tail + block
+                            version_tail = block[-len(builder.CORE_TAG):]
                 else:
                     for block in iter(lambda: source.read(1024 * 1024), b''):
                         value.update(block)
@@ -167,9 +203,14 @@ def validate(preview, head, repository=ROOT):
             if item.filename in expected and value.hexdigest() != expected[item.filename]:
                 raise ValueError('AAR runtime bytes differ')
             if xray:
+                if not version_found:
+                    raise ValueError('AAR Core build version marker differs')
                 abi = item.filename.split('/')[1]
                 alignments[abi] = elf_alignment(output, abi)
     return {'selected_abis': list(builder.ABIS), 'version': version, 'aar_relative': aar_name,
+            'release_candidate': release, 'routing_capability_expected': int(release),
+            'Go_toolchain_version': result['Go_toolchain_version'], 'signed_artifacts_sha256': signed,
+            'Core_build_tag_marker': builder.CORE_TAG,
             'aar_sha256': digest(aar), 'AAR_members_sha256': members, 'ELF_LOAD_alignments': alignments,
             'runtime_members_sha256': expected, 'maven_files_sha256': maven,
             'source_sha256': sources, 'packaging_source_sha256': packaging,
@@ -180,12 +221,41 @@ def validate(preview, head, repository=ROOT):
                                         'core-build-receipt.json': digest(receipt_path)}}
 
 
-def package(preview, output, head, repository=ROOT):
+def central_members(repo, signed):
+    """Preserve the exact signed files; checksums are transport metadata only."""
+    members = {}
+    for name, expected in signed.items():
+        data = (repo / safe_relative(name)).read_bytes()
+        if hashlib.sha256(data).hexdigest() != expected:
+            raise ValueError('Signed Maven artifact changed')
+        members[name] = data
+        for algorithm in ('md5', 'sha1', 'sha256', 'sha512'):
+            members[name + '.' + algorithm] = hashlib.new(algorithm, data).hexdigest().encode('ascii')
+    return members
+
+
+def verify_bundle(path, expected):
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 512 * 1024 * 1024:
+        raise ValueError('Central bundle size/path differs')
+    found = {}
+    with zipfile.ZipFile(path) as archive:
+        for item in archive.infolist():
+            safe_relative(item.filename)
+            if item.filename not in expected or item.filename in found or item.is_dir() \
+                    or item.flag_bits & 1 or item.file_size > 256 * 1024 * 1024 \
+                    or (item.external_attr >> 16) & 0o170000 not in (0, 0o100000):
+                raise ValueError('Unexpected Central bundle member')
+            found[item.filename] = hashlib.sha256(archive.read(item)).hexdigest()
+    if found != expected:
+        raise ValueError('Central bundle bytes differ')
+
+
+def package(preview, output, head, repository=ROOT, *, release=False):
     if output.exists() or output.is_symlink() or preview.resolve() == output.resolve() \
             or preview.resolve() in output.resolve().parents or (repository / 'build').resolve() not in output.resolve().parents \
             or any(p.is_symlink() for p in output.parents if p.exists()):
         raise ValueError('Artifact output must be new and outside preview inputs')
-    checked = validate(preview, head, repository)
+    checked = validate(preview, head, repository, release=release)
     result = json.loads((preview / 'preview.json').read_text())
     members = {'maven/' + name: value for name, value in checked['maven_files_sha256'].items()}
     members.update(checked['producer_receipts_sha256'])
@@ -211,13 +281,70 @@ def package(preview, output, head, repository=ROOT):
                 for block in iter(lambda: source.read(1024 * 1024), b''):
                     value.update(block)
             found[item.name] = value.hexdigest()
-    if found != members or validate(preview, head, repository) != checked:
+    if found != members or validate(preview, head, repository, release=release) != checked:
         raise ValueError('Artifact/source changed during packaging')
+    central = {}
+    if release:
+        content = central_members(preview / 'project/build/repo', checked['signed_artifacts_sha256'])
+        bundle = output / f'xray-android-{builder.RELEASE_VERSION}-central-bundle.zip'
+        with zipfile.ZipFile(bundle, 'x', compression=zipfile.ZIP_DEFLATED) as zipped:
+            for name, data in sorted(content.items()):
+                item = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
+                item.external_attr = 0o100644 << 16
+                item.compress_type = zipfile.ZIP_DEFLATED
+                zipped.writestr(item, data)
+        expected = {name: hashlib.sha256(data).hexdigest() for name, data in content.items()}
+        verify_bundle(bundle, expected)
+        central = {'central_bundle': bundle.name, 'central_bundle_sha256': digest(bundle),
+                   'central_bundle_members_sha256': expected}
     manifest = dict(checked, schema=1, success=True, head=head, platform='android',
                     archive=archive.name, archive_sha256=digest(archive), members_sha256=members,
-                    lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial'], routing_capability_expected=0,
-                    runtime_executed=False, installed=False, published=False)
+                    lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial'],
+                    runtime_executed=False, installed=False, published=False, **central)
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    return manifest
+
+
+def verify_release(preview, output, head, repository=ROOT):
+    if output.is_symlink() or not output.is_dir() or (repository / 'build').resolve() not in output.resolve().parents \
+            or any(p.is_symlink() for p in output.parents if p.exists()):
+        raise ValueError('Release artifact directory differs')
+    checked = validate(preview, head, repository, release=True)
+    manifest = json.loads((output / 'manifest.json').read_text())
+    if any(manifest.get(key) != value for key, value in checked.items()) \
+            or manifest.get('head') != head or manifest.get('success') is not True \
+            or any(manifest.get(k) is not False for k in ('runtime_executed', 'installed', 'published')):
+        raise ValueError('Release artifact/source differs')
+    name = f'xray-android-{builder.RELEASE_VERSION}-central-bundle.zip'
+    bundle = output / name
+    content = central_members(preview / 'project/build/repo', checked['signed_artifacts_sha256'])
+    expected = {key: hashlib.sha256(data).hexdigest() for key, data in content.items()}
+    if manifest.get('central_bundle') != name or digest(bundle) != manifest.get('central_bundle_sha256') \
+            or manifest.get('central_bundle_members_sha256') != expected:
+        raise ValueError('Central bundle artifact changed')
+    verify_bundle(bundle, expected)
+    archive = output / 'android-runtime-preview.tar.gz'
+    expected_members = {'maven/' + key: value for key, value in checked['maven_files_sha256'].items()}
+    expected_members.update(checked['producer_receipts_sha256'])
+    if manifest.get('archive') != archive.name or archive.is_symlink() \
+            or archive.stat().st_size > 512 * 1024 * 1024 \
+            or digest(archive) != manifest.get('archive_sha256') \
+            or manifest.get('members_sha256') != expected_members:
+        raise ValueError('Release provenance archive differs')
+    found = {}
+    with tarfile.open(archive, 'r:gz') as packed:
+        for item in packed:
+            safe_relative(item.name)
+            if not item.isfile() or item.name not in expected_members or item.name in found \
+                    or item.size > 256 * 1024 * 1024:
+                raise ValueError('Release provenance archive member differs')
+            value = hashlib.sha256()
+            with packed.extractfile(item) as source:
+                for block in iter(lambda: source.read(1024 * 1024), b''):
+                    value.update(block)
+            found[item.name] = value.hexdigest()
+    if found != expected_members:
+        raise ValueError('Release provenance archive bytes differ')
     return manifest
 
 
@@ -226,9 +353,16 @@ def main():
     parser.add_argument('--preview', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--head', required=True)
+    parser.add_argument('--release', action='store_true')
+    parser.add_argument('--verify-only', action='store_true', help='Recheck exact signed release before upload')
     args = parser.parse_args()
     try:
-        result = package(args.preview, args.output, args.head)
+        if args.verify_only:
+            if not args.release:
+                raise ValueError('Verify-only requires final release mode')
+            result = verify_release(args.preview, args.output, args.head)
+        else:
+            result = package(args.preview, args.output, args.head, release=args.release)
     except (OSError, ValueError, KeyError, TypeError, ET.ParseError, zipfile.BadZipFile, tarfile.TarError) as error:
         parser.exit(1, 'Unpublished Android runtime packaging failed: ' + str(error) + '\n')
     print('ANDROID_RUNTIME_PREVIEW_PACKAGED=' + result['archive_sha256'])

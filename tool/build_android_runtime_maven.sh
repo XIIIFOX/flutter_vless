@@ -2,10 +2,30 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Final releases are compiled in an owned CI tree. The stock-input path below
+# remains available for historical fake-JVM fixtures, never for a new version.
+if [ "${XRAY_BUILD_FRESH_RELEASE:-0}" = 1 ]; then
+  test "${XRAY_RUNTIME_VERSION:-26.10.21-protect1}" = "26.10.21-protect1"
+  test "${XRAY_CORE_VERSION:-26.10.21}" = "26.10.21"
+  RELEASE_HEAD="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+  python3 "$ROOT_DIR/tool/build_android_runtime_preview.py" \
+    --output "$ROOT_DIR/build/android-runtime-release" --head "$RELEASE_HEAD" --release
+  python3 "$ROOT_DIR/tool/package_android_runtime_preview.py" \
+    --preview "$ROOT_DIR/build/android-runtime-release" \
+    --output "$ROOT_DIR/build/android-runtime-release-artifact" --head "$RELEASE_HEAD" --release
+  python3 "$ROOT_DIR/tool/package_android_runtime_preview.py" \
+    --preview "$ROOT_DIR/build/android-runtime-release" \
+    --output "$ROOT_DIR/build/android-runtime-release-artifact" --head "$RELEASE_HEAD" --release --verify-only
+  exit 0
+fi
 PROJECT_DIR="$ROOT_DIR/android_runtime/xray_android"
 GRADLE_WRAPPER="${GRADLE_WRAPPER:-$ROOT_DIR/example/android/gradlew}"
 XRAY_RUNTIME_VERSION="${XRAY_RUNTIME_VERSION:-26.10.17-protect1}"
 XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-26.10.17}"
+if [ "$XRAY_RUNTIME_VERSION" != "26.10.17-protect1" ] || [ "$XRAY_CORE_VERSION" != "26.10.17" ]; then
+  echo "New runtime versions require the fresh CI release producer; stock binaries cannot be relabelled." >&2
+  exit 2
+fi
 
 python3 "$ROOT_DIR/tool/verify_android_runtime_inputs.py"
 

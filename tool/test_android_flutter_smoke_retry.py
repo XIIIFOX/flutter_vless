@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import test_android_flutter_smoke as smoke
 
-PASS = smoke.TEST_ENTRY + '\nANDROID_XRAY_CORE_VERSION=Xray26.10.17\n🎉 3 tests passed.\n'
+PASS = smoke.TEST_ENTRY + '\nANDROID_XRAY_CORE_VERSION=Xray26.10.21\n🎉 3 tests passed.\n'
 
 
 def alive(pid):
@@ -76,7 +76,7 @@ class SmokeProcessTest(unittest.TestCase):
         for tail in ('🎉 13 tests passed.', '🎉 30 tests passed.', 'quoted "🎉 3 tests passed."',
                      '🎉 3 tests passed.\n00:04 +3: still running',
                      '00:03 +3: All tests passed!\nloading another test'):
-            output = smoke.TEST_ENTRY + '\nANDROID_XRAY_CORE_VERSION=26.10.17\n' + tail
+            output = smoke.TEST_ENTRY + '\nANDROID_XRAY_CORE_VERSION=26.10.21\n' + tail
             result, _ = self.attempt(f'print({output!r},flush=True)')
             self.assertEqual(125, result['exit_code']); self.assertEqual('unqualified', result['reason'])
 

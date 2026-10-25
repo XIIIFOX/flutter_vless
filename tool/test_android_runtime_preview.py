@@ -1,11 +1,14 @@
 """Synthetic files/command doubles only: no Gradle, Go, Core or network."""
 import ast
 import hashlib
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
 import shutil
 import struct
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -19,7 +22,7 @@ import package_android_runtime_preview as package
 HEAD = 'a' * 40
 
 
-def elf(abi, tag=b'fresh H3'):
+def elf(abi, tag=b'fresh H3 v26.10.21'):
     wide, machine = {'arm64-v8a': (True, 183), 'armeabi-v7a': (False, 40),
                      'x86': (False, 3), 'x86_64': (True, 62)}[abi]
     data = bytearray(160)
@@ -46,7 +49,7 @@ class AndroidPreviewControls(unittest.TestCase):
         self.preview = self.root / 'build/preview'
         self.project = self.preview / 'project'
         self.version = builder.preview_version(HEAD)
-        for name in [*builder.WRAPPER_INPUTS, builder.H3,
+        for name in [*builder.WRAPPER_INPUTS, *package.PACKAGING_INPUTS, builder.H3,
                      *builder.ORDINARY_FILES,
                      'third_party/xray-mobile/fixture.go', 'third_party/xray-mobile/nativecli/main.go',
                      'third_party/xray-vpn-routing/overlay/app/fixture.go',
@@ -60,7 +63,7 @@ class AndroidPreviewControls(unittest.TestCase):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(('synthetic source: ' + name).encode())
-        self.pin = {'module': 'fixture.core', 'module_version': 'v26.10.17', 'module_sum': 'h1:fixture',
+        self.pin = {'module': 'fixture.core', 'module_version': 'v26.10.21', 'module_sum': 'h1:fixture',
                     'core_commit': 'fixture-commit'}
         (self.root / 'third_party/xray-vpn-routing/pin-manifest.json').write_text(json.dumps(self.pin))
         pins = {}
@@ -116,6 +119,7 @@ class AndroidPreviewControls(unittest.TestCase):
         inputs = {name: builder.digest(self.root / name) for name in builder.WRAPPER_INPUTS}
         inputs.update(self.receipt['source_sha256'])
         self.result = {'schema': 1, 'success': True, 'head': HEAD, 'version': self.version,
+                       'release_candidate': False, 'Go_toolchain_version': 'go version go1.27.3 linux/amd64',
                        'source_sha256': inputs, 'pinned_HEV_geodata_sha256': {k: v for k, v in pins.items() if not k.endswith('/libxray.so')},
                        'runtime_executed': False, 'installed': False, 'published': False, 'results': [],
                        'core_build_receipt': self.receipt_path.relative_to(self.preview).as_posix(),
@@ -152,7 +156,7 @@ class AndroidPreviewControls(unittest.TestCase):
                 mock.patch.object(package, 'git_blob', side_effect=lambda root, head, name: (root / name).read_bytes(), create=True):
             return package.validate(self.preview, HEAD, self.root)
 
-    def build_with_double(self, output, *, mutation=None, failure=None):
+    def build_with_double(self, output, *, mutation=None, failure=None, release=False):
         commands = []
         self.build_commands = commands
         def checked(name, command, out, environment, results, **options):
@@ -162,14 +166,169 @@ class AndroidPreviewControls(unittest.TestCase):
             results.append({'name': name, 'exit_code': 0})
             if name == 'ordinary-core-build':
                 shutil.copytree(self.preview / 'fresh-jni', out / 'fresh-jni')
+                if release:
+                    path = next((out / 'fresh-jni').glob('routing-preview-*.json'))
+                    value = json.loads(path.read_text())
+                    value['output_directory'] = str(out / 'fresh-jni')
+                    path.write_text(json.dumps(value))
             else:
                 shutil.copytree(self.repo, out / 'project/build/repo')
             if mutation is not None:
                 mutation(name, out)
+        environment = {'CI': 'true', 'GITHUB_ACTIONS': 'true'}
+        if release:
+            environment.update(SIGNING_IN_MEMORY_KEY='synthetic-private-signing-key',
+                               SIGNING_IN_MEMORY_KEY_PASSWORD='synthetic-signing-password')
+        with mock.patch.dict(os.environ, environment, clear=True), \
+                mock.patch.object(builder.os, 'uname', return_value=mock.Mock(sysname='Linux')), \
+                mock.patch.object(builder.subprocess, 'check_output', return_value='go version go1.27.3 linux/amd64\n'), \
+                mock.patch.object(builder, 'git_head', return_value=HEAD), mock.patch.object(builder, 'checked', side_effect=checked):
+            return builder.build(output, HEAD, self.root, release=release), commands
+
+    def release_fixture(self):
+        old_version = self.version
+        self.version = '26.10.21-protect1'
+        new_core = self.root / 'build/security-android-routing.fixture/Core'
+        shutil.copytree(self.core, new_core)
+        self.core = new_core
+        mobile = new_core.parent / 'mobile'
+        self.write(mobile / 'main.go', b'synthetic source-bound routing CLI')
+        self.receipt_path.unlink()
+        self.receipt_path = self.preview / 'fresh-jni/routing-preview-security-android-routing.fixture.json'
+        self.receipt.update(routing_capability_expected=1,
+                            routing_tags=['flutter_vless_vpn_routing_cli', 'flutter_vless_vpn_routing'],
+                            core_copy_sha256=builder.tree(self.core), mobile_copy_sha256=builder.tree(mobile),
+                            core_replacement=str(new_core), mobile_replacement=str(mobile),
+                            output_directory=str(self.preview / 'fresh-jni'))
+        old = self.repo / 'dev/tfox/fluttervless/xray-android' / old_version
+        target = old.with_name(self.version)
+        old.rename(target)
+        for path in list(target.iterdir()):
+            path.rename(path.with_name(path.name.replace(old_version, self.version)))
+        self.aar = target / f'xray-android-{self.version}.aar'
+        (target / f'xray-android-{self.version}.pom').write_text(
+            '<project><groupId>dev.tfox.fluttervless</groupId><artifactId>xray-android</artifactId>'
+            '<version>' + self.version + '</version></project>')
+        for suffix in ('-sources.jar', '-javadoc.jar'):
+            (target / ('xray-android-' + self.version + suffix)).write_bytes(b'synthetic archive')
+        for suffix in ('.aar', '.pom', '-sources.jar', '-javadoc.jar'):
+            (target / ('xray-android-' + self.version + suffix + '.asc')).write_bytes(
+                b'-----BEGIN PGP SIGNATURE-----\nsynthetic presence only\n-----END PGP SIGNATURE-----\n')
+        self.result.update(version=self.version, release_candidate=True,
+                           copied_mobile_source_unchanged=True,
+                           core_build_receipt=self.receipt_path.relative_to(self.preview).as_posix(),
+                           aar=self.aar.relative_to(self.preview).as_posix())
+        self.save()
+
+    def validate_release(self):
+        with mock.patch.object(package, 'git_head', return_value=HEAD), \
+                mock.patch.object(package, 'git_blob', side_effect=lambda root, head, name: (root / name).read_bytes()):
+            return package.validate(self.preview, HEAD, self.root, release=True)
+
+    def test_final_release_requires_routing_and_signing_byte_provenance(self):
+        self.release_fixture()
+        checked = self.validate_release()
+        self.assertEqual('26.10.21-protect1', checked['version'])
+        self.assertEqual(1, checked['routing_capability_expected'])
+        self.assertEqual(8, len(checked['signed_artifacts_sha256']))
+
+    def test_final_release_rejects_unsigned_or_missing_signature(self):
+        self.release_fixture()
+        (self.aar.parent / (self.aar.name + '.asc')).unlink()
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'signed|signature'):
+            self.validate_release()
+
+    def test_final_release_rejects_ordinary_capability_zero(self):
+        self.release_fixture()
+        self.receipt['routing_capability_expected'] = 0
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'lifetime|capability'):
+            self.validate_release()
+
+    def test_final_release_rejects_stale_mobile_copy_and_old_Go(self):
+        self.release_fixture()
+        path = self.core.parent / 'mobile/main.go'
+        path.write_bytes(b'drift after compiler')
+        with self.assertRaisesRegex(ValueError, 'mobile|copied'):
+            self.validate_release()
+        path.write_bytes(b'synthetic source-bound routing CLI')
+        self.result['Go_toolchain_version'] = 'go version go1.27.0 linux/amd64'
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'Go|toolchain'):
+            self.validate_release()
+
+    def test_final_release_refuses_missing_signing_before_children_and_output(self):
+        output = self.root / 'build/no-signing'
         with mock.patch.dict(os.environ, {'CI': 'true', 'GITHUB_ACTIONS': 'true'}, clear=True), \
                 mock.patch.object(builder.os, 'uname', return_value=mock.Mock(sysname='Linux')), \
-                mock.patch.object(builder, 'git_head', return_value=HEAD), mock.patch.object(builder, 'checked', side_effect=checked):
-            return builder.build(output, HEAD, self.root), commands
+                mock.patch.object(builder, 'checked') as child, \
+                self.assertRaisesRegex(ValueError, 'signing'):
+            builder.build(output, HEAD, self.root, release=True)
+        self.assertFalse(output.exists())
+        child.assert_not_called()
+
+    def test_final_release_refuses_foreign_output_receipt(self):
+        self.release_fixture()
+        self.receipt['output_directory'] = str(self.root / 'other-output')
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'copy|tags'):
+            self.validate_release()
+
+    def test_final_release_builder_compiles_all_ABIs_before_signing_without_secret_receipt(self):
+        self.release_fixture()
+        result, commands = self.build_with_double(self.root / 'build/final-release', release=True)
+        self.assertTrue(result['success'])
+        self.assertEqual('1', commands[0][2]['XRAY_NATIVE_ROUTING'])
+        self.assertNotIn('SIGNING_IN_MEMORY_KEY', commands[0][2])
+        self.assertEqual('synthetic-private-signing-key', commands[1][2]['SIGNING_IN_MEMORY_KEY'])
+        self.assertNotIn('synthetic-private-signing-key', json.dumps(result))
+        self.assertEqual('26.10.21-protect1', result['version'])
+
+    def test_final_release_central_bundle_roundtrip_and_corruption_rejected(self):
+        self.release_fixture()
+        output = self.root / 'build/release-artifact'
+        with mock.patch.object(package, 'git_head', return_value=HEAD), \
+                mock.patch.object(package, 'git_blob', side_effect=lambda root, head, name: (root / name).read_bytes()):
+            manifest = package.package(self.preview, output, HEAD, self.root, release=True)
+            self.assertEqual(40, len(manifest['central_bundle_members_sha256']))
+            self.assertEqual(manifest, package.verify_release(self.preview, output, HEAD, self.root))
+            bundle = output / manifest['central_bundle']
+            with zipfile.ZipFile(bundle, 'a') as archive:
+                archive.writestr('unexpected.txt', b'not published')
+            with self.assertRaisesRegex(ValueError, 'bundle|artifact'):
+                package.verify_release(self.preview, output, HEAD, self.root)
+
+    def test_final_release_provenance_archive_mutation_is_rejected(self):
+        self.release_fixture()
+        output = self.root / 'build/provenance-artifact'
+        with mock.patch.object(package, 'git_head', return_value=HEAD), \
+                mock.patch.object(package, 'git_blob', side_effect=lambda root, head, name: (root / name).read_bytes()):
+            manifest = package.package(self.preview, output, HEAD, self.root, release=True)
+            (output / manifest['archive']).write_bytes(b'changed archive')
+            with self.assertRaisesRegex(ValueError, 'provenance archive'):
+                package.verify_release(self.preview, output, HEAD, self.root)
+
+    def test_actual_publisher_status_parser_never_calls_uploaded_published(self):
+        source = (Path(__file__).resolve().parent / 'publish_android_runtime_maven.sh').read_text()
+        marker = 'state="$(DEPLOYMENT_ID="$DEPLOYMENT_ID" python3 - "$status_file" <<\'PY\'\n'
+        body = source.split(marker, 1)[1].split('\nPY\n', 1)[0]
+        for state, published in [('VALIDATING', False), ('PUBLISHING', False), ('FAILED', False), ('PUBLISHED', True)]:
+            with self.subTest(state=state):
+                path = self.root / 'publication-status.json'
+                path.write_text(json.dumps({'deploymentState': state}))
+                with mock.patch.dict(os.environ, {'DEPLOYMENT_ID': 'synthetic-deployment'}, clear=True), \
+                        mock.patch.object(sys, 'argv', ['publisher-status', str(path)]), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    exec(compile(body, '<actual-publisher-status>', 'exec'), {})
+                result = json.loads((self.root / 'central-deployment.json').read_text())
+                self.assertEqual(published, result['published'])
+                self.assertEqual('synthetic-deployment', result['deployment_id'])
+        path.write_text('{"deploymentState":"UNKNOWN"}')
+        with mock.patch.dict(os.environ, {'DEPLOYMENT_ID': 'synthetic-deployment'}, clear=True), \
+                mock.patch.object(sys, 'argv', ['publisher-status', str(path)]), \
+                self.assertRaises(SystemExit):
+            exec(compile(body, '<actual-publisher-status>', 'exec'), {})
 
     def test_missing_H3_receipt_is_not_candidate_provenance(self):
         self.receipt['h3_lifetime_applied'] = False
@@ -252,6 +411,16 @@ class AndroidPreviewControls(unittest.TestCase):
         self.repack()
         self.save()
         with self.assertRaisesRegex(ValueError, 'ABI|target'):
+            self.validate()
+
+    def test_old_Core_version_fails_even_if_fresh_hashes_are_updated(self):
+        data = elf('arm64-v8a', b'freshly rebuilt but wrong v26.10.17')
+        self.write(self.preview / 'fresh-jni/arm64-v8a/libxray.so', data)
+        self.write(self.project / 'src/main/jniLibs/arm64-v8a/libxray.so', data)
+        self.receipt['artifacts_sha256']['arm64-v8a/libxray.so'] = hashlib.sha256(data).hexdigest()
+        self.repack()
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'version marker'):
             self.validate()
 
     def test_pinned_HEV_mutation_is_rejected(self):

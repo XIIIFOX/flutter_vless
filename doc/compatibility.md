@@ -42,6 +42,8 @@ archive and tests its routing-enabled companion. Native publication does not
 publish the Flutter packages or complete the wider compatibility matrix below.
 See the [runtime validation and remaining work](release/xray-v26.10.21-validation.md)
 for the exact CI/device scope and the separate pub.dev version blockers.
+The [26 October fresh-profile follow-up](validation-2026-10-26.md) records newer
+Android/iPhone endpoint and routing checks, current CI results and their limits.
 
 ## Android
 

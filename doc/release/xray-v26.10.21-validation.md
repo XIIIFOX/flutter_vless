@@ -4,6 +4,11 @@ This update publishes native runtimes only. The Flutter source packages and
 example remain 1.1.7; no pub.dev publication or plugin 1.1.7 GitHub release is
 part of this update.
 
+Follow-up: [fresh-profile validation on 26 October](../validation-2026-10-26.md)
+records newer live profiles and successful standalone/combined Android Flutter
+smoke runs. The failed CI and earlier device observations below remain the
+historical evidence for the runtime update.
+
 ## Published runtimes
 
 | Platform | Published artifact | SHA-256 of the main payload |
@@ -97,5 +102,6 @@ is not in the currently published interface package. Follow the
 [registry publication order](README.md#registry-blockers-before-publishing-the-plugin)
 with free implementation versions and matching root minimum constraints before
 publishing the root plugin. No package versions are changed by this update.
-The unresolved CI Flutter launch/attach gate and the deferred live macOS VPN
-check are additional acceptance items before declaring the plugin release ready.
+The follow-up report records the current CI and device acceptance.
+The deferred live macOS VPN check and separate package publication constraints
+remain before declaring the plugin release ready.

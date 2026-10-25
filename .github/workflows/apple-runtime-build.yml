@@ -62,7 +62,7 @@ jobs:
           set -euo pipefail
           rm -rf packages/flutter_vless_macos/macos/XRay.xcframework
           cp -R build/apple-runtime/macos/XRay.xcframework packages/flutter_vless_macos/macos/XRay.xcframework
-          REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 REQUIRE_DARWIN_INTERFACE_BINDING=1 tool/test_macos_privacy_runtime.sh
+          REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 REQUIRE_DARWIN_INTERFACE_BINDING=1 bash tool/test_macos_privacy_runtime.sh
       - name: Verify static exports and architectures, then create release ZIP
         env:
           PLATFORM: ${{ matrix.platform }}

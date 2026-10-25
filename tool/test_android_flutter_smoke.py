@@ -71,7 +71,8 @@ class Markers:
         value = value.strip()
         if re.fullmatch(rb'Installing build/[^\r\n]{1,2048}\.apk\.\.\.(?: +[0-9,]+(?:\.[0-9]+)?(?:ms|s)| \(completed in [0-9,]+(?:\.[0-9]+)?(?:ms|s)\))', value):
             self.found['install_completed'] = True
-        if b'Dart VM Service on ' in value or b'Dart VM service is listening on ' in value:
+        if (b'Dart VM Service on ' in value or b'Dart VM service is listening on ' in value or
+                re.fullmatch(rb'VM Service URL on device: (?:https?|wss?)://\S+', value)):
             self.found['vm_service'] = True
         if verbose:
             return

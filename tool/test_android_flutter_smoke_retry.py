@@ -410,6 +410,20 @@ class SmokeStartupDiagnosticTest(unittest.TestCase):
             self.assertTrue(tracker.found['vm_service'])
             self.assertFalse(smoke.qualified(tracker.found))
 
+    def test_actual_verbose_device_vm_discovery_is_observed_without_a_public_status_url(self):
+        # Fresh Actions trace: Flutter discovers this URL before DDS connects,
+        # without emitting either of the user-facing VM-service status lines.
+        tracker = smoke.Markers()
+        tracker.feed(b'[        ] Waiting for VM Service port to be available...\n')
+        self.assertFalse(tracker.found['vm_service'])
+        tracker.feed(b'[+2010 ms] VM Service URL on device: http://127.0.0.1:1234/PRIVATE_SENTINEL/\n')
+        self.assertTrue(tracker.found['vm_service'])
+        self.assertFalse(smoke.qualified(tracker.found))
+        for text in (b'quoted VM Service URL on device: http://PRIVATE_SENTINEL\n',
+                     b'[   +1 ms] Waiting for VM Service URL on device: http://PRIVATE_SENTINEL\n'):
+            negative = smoke.Markers(); negative.feed(text)
+            self.assertFalse(negative.found['vm_service'])
+
     def test_install_start_or_quoted_completion_does_not_claim_installed(self):
         for value in (b'Installing build/app.apk...', b'quoted "' + self.completed_install.rstrip() + b'"\n'):
             tracker = smoke.Markers(); tracker.feed(value); tracker.finish()

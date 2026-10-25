@@ -10,18 +10,39 @@ the public `flutter_vless` package. Each publishable federated package keeps a
 separate `CHANGELOG.md` beside its `pubspec.yaml`; add a versioned entry there
 only when that package itself is being released.
 
-For 1.1.7, Android, iOS and macOS use Xray-core `v26.10.17`, pinned to
-commit `92ccc939aaf4f8965f369cf0b142e005aeaa11d5`. The upstream tag is
-marked as a pre-release. The root, Android, macOS and Windows packages move
-to 1.1.7; the unchanged platform interface stays on 1.1.2. Windows validation
-and example runtimes use the same upstream release. Package publication
-remains a separate release step.
+For the 1.1.7 worktree, Android, iOS and macOS target Xray-core `v26.10.21`,
+pinned to commit `1b1647cd9ddf0abc34b981d4611fc03bcac1ca74`. Native runtimes are
+rebuilt with Go 1.27.3 and the updated fallback RootCAs for the upstream
+certificate-trust security update. Windows uses the checksum-pinned official
+release and its separately tested routing-enabled runtime. Existing full
+project GeoDAT files remain selected; the upstream ZIP now contains lite GeoIP.
+This update publishes native runtime assets only. It does not publish a Flutter
+package or create a `v1.1.7` plugin release.
 
 Runtime release notes for this train:
 
-* [Android v26.10.17-protect1](xray-android-v26.10.17-protect1.md)
-* [iOS v26.10.17](xray-ios-v26.10.17.md)
-* [macOS v26.10.17](xray-macos-v26.10.17.md)
+* [Android v26.10.21-protect1](xray-android-v26.10.21-protect1.md)
+* [iOS v26.10.21](xray-ios-v26.10.21.md)
+* [macOS v26.10.21](xray-macos-v26.10.21.md)
+
+### Registry blockers before publishing the plugin
+
+All five local package versions remain `1.1.7` under the owner's current
+version constraint. A fresh pub.dev registry audit on 2026-10-25 confirms that
+Android, macOS and Windows implementation packages **already occupy version
+1.1.7**, and their published source differs from the current worktree. Those
+versions cannot be overwritten. The published interface is still `1.1.2` and
+does not contain the new Options, routing or preparation-report API.
+
+Before any future package publication, choose free implementation versions
+(for example `1.1.8`), update the root minimum implementation constraints to
+exclude the old `1.1.7` packages, and publish in this order: interface `1.1.7`,
+updated implementations, then root `flutter_vless` `1.1.7`. This runtime update
+does not make those version changes or publish those packages. Repository/Git
+consumers of the current work need the matching implementation and interface
+sources, as supplied by the example's local dependency overrides; published
+implementation `1.1.7` packages do not acquire new wrapper code from a root Git
+dependency.
 
 ## Local Checklist
 

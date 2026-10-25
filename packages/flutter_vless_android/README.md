@@ -4,7 +4,9 @@ The Android implementation of the `flutter_vless` plugin.
 
 ## Runtime
 
-Android runtime binaries and geodata are delivered through the Maven Central AAR dependency `dev.tfox.fluttervless:xray-android:26.10.17-protect1`. This keeps the Pub.dev package lightweight while preserving the same packaged Xray files in the final Android app.
+Android runtime binaries and geodata are delivered through the Maven Central AAR dependency `dev.tfox.fluttervless:xray-android:26.10.21-protect1`. This keeps the Pub.dev package lightweight while preserving the same packaged Xray files in the final Android app.
+
+This repository pin is a runtime-only update. It does not republish the existing Pub.dev `1.1.7` package.
 
 ## Emulator Support
 

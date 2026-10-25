@@ -65,6 +65,49 @@ license notices required by the license. See [NOTICE](NOTICE) and
 7. Security and runtime boundaries: [Security](doc/security.md)
 8. If something fails: [Troubleshooting](doc/troubleshooting.md)
 
+## Unreleased 1.1.7 From GitHub
+
+The `main` worktree uses Xray-core **26.10.21** through the separately published
+native runtimes. The Flutter plugin itself is not released by this runtime
+update. Existing pub.dev implementation packages named `1.1.7` contain older
+wrapper code; use the matching source packages when testing this branch.
+The bundled example already supplies local overrides. An external Git consumer
+can use:
+
+```yaml
+dependencies:
+  flutter_vless:
+    git:
+      url: https://github.com/XIIIFOX/flutter_vless.git
+      ref: main
+
+dependency_overrides:
+  flutter_vless_platform_interface:
+    git:
+      url: https://github.com/XIIIFOX/flutter_vless.git
+      ref: main
+      path: packages/flutter_vless_platform_interface
+  flutter_vless_android:
+    git:
+      url: https://github.com/XIIIFOX/flutter_vless.git
+      ref: main
+      path: packages/flutter_vless_android
+  flutter_vless_macos:
+    git:
+      url: https://github.com/XIIIFOX/flutter_vless.git
+      ref: main
+      path: packages/flutter_vless_macos
+  flutter_vless_windows:
+    git:
+      url: https://github.com/XIIIFOX/flutter_vless.git
+      ref: main
+      path: packages/flutter_vless_windows
+```
+
+For a reproducible application build, replace every `main` ref with the same
+reviewed commit. See the [release preparation guide](doc/release/README.md)
+for the remaining registry version and publication-order requirements.
+
 ## Try The Example First
 
 The example app is the quickest way to verify platform setup before copying the

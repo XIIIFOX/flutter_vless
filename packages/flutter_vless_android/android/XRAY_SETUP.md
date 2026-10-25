@@ -4,7 +4,7 @@ This guide explains how to build the native libraries (`libxray.so` and `libtun2
 
 Android runtime files are stored in `android_runtime/xray_android/src/main` and published as the Maven Central AAR `dev.tfox.fluttervless:xray-android`. They are not stored in the `flutter_vless_android` Pub.dev package.
 
-The current revision is `26.10.17-protect1`. The same AAR and its SHA-256 checksum are also available in [GitHub Releases](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.10.17-protect1).
+The current revision is `26.10.21-protect1`. The same AAR and its SHA-256 checksum are also available in [GitHub Releases](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.10.21-protect1).
 
 **Key Features:**
 - ✅ **Android 15+ Support**: Builds with 16KB page size alignment.
@@ -12,8 +12,8 @@ The current revision is `26.10.17-protect1`. The same AAR and its SHA-256 checks
 
 ## Prerequisites
 
-1. **Go (Golang)**: Version 1.26+ installed (pinned Xray requirement).
-2. **Android NDK**: Version r27+ (recommended).
+1. **Go (Golang)**: Version 1.27.3, including the upstream security certificate filtering.
+2. **Android NDK**: Version 28.2.13676358 (the release pin).
 3. **macOS/Linux**: Build scripts are designed for Unix-like environments.
 
 ## 1. Environment Setup
@@ -22,7 +22,7 @@ Export the path to your Android NDK.
 
 ```bash
 # Example (Adjust path to your NDK installation)
-export ANDROID_NDK_HOME="$HOME/Library/Android/sdk/ndk/27.0.12077973"
+export ANDROID_NDK_HOME="$HOME/Library/Android/sdk/ndk/28.2.13676358"
 ```
 
 ## 2. Build Xray (`libxray.so`)
@@ -65,21 +65,26 @@ If you see `0x1000`, it is **NOT** compatible with 16KB devices.
 The `flutter_vless_android` Pub.dev package consumes the Android device runtime through the Maven artifact:
 
 ```text
-dev.tfox.fluttervless:xray-android:26.10.17-protect1
+dev.tfox.fluttervless:xray-android:26.10.21-protect1
 ```
 
-After rebuilding `libxray.so`, `libtun2socks.so`, or the geodata files in `android_runtime/xray_android/src/main`, build the local Maven repository from the repository root:
+Final releases use the manual **Publish Android Runtime AAR** workflow with
+`xray_runtime_version=26.10.21-protect1` and `publishing_type=AUTOMATIC`.
+It compiles all four routing-capable Core ABIs from pinned source in GitHub
+Actions, retains reviewed HEV/geodata bytes, verifies the AAR and signs the exact
+Maven files. One bundle is uploaded; the workflow waits for that deployment to
+reach `PUBLISHED` and retains the signed artifacts and provenance on failure.
 
-```bash
-tool/build_android_runtime_maven.sh
-```
+The default `tool/build_android_runtime_maven.sh` path is a historical
+`26.10.17-protect1` stock-input fixture for fake JVM tests. It refuses new version
+labels. It is not the source of the current published runtime.
 
-For local Android wrapper or example builds before Maven Central publication, pass the local repository path:
+Verify an example build against the published dependency and committed checksums:
 
 ```bash
 cd example/android
 ./gradlew :app:assembleDebug \
-  -PflutterVlessAndroidRuntimeRepo="$PWD/../../android_runtime/xray_android/build/repo"
+  -PflutterVlessOfficialRuntimeVerification=true --dependency-verification=strict
 ```
 
 To upload the signed bundle to Maven Central, configure the Central Portal and signing environment variables documented in `android_runtime/xray_android/README.md`, then run:
@@ -90,7 +95,8 @@ tool/publish_android_runtime_maven.sh
 
 ## Protected VPN runtime
 
-`26.10.17-protect1` adds the protected socket runtime integration to Xray v26.10.17.
+`26.10.21-protect1` retains protected socket integration and adds native routing
+to Xray `v26.10.21`, with the reviewed Classic DNS and XHTTP lifecycle fixes.
 Use the matching plugin and Maven runtime revision together.
 An older runtime fails the VPN capability handshake; there is no implicit UID bypass.
 Proxy-only does not enable the socket broker. Explicit `BLOCKED_APPS` still bypass VPN.
@@ -102,6 +108,9 @@ substitutes a cleartext resolver. On Android 23–28, system A/AAAA queries are 
 other system record types require an explicit Xray DNS server. VPN mode rejects
 `xicmp` and `quic+local://` DNS because those upstream paths bypass controllers.
 Use protected `https+local://` or `tcp+local://` DNS instead.
+
+The repository's Maven pin update is separate from a Pub.dev package release;
+the already-published `flutter_vless_android` `1.1.7` package is unchanged.
 
 ## 6. Troubleshooting
 

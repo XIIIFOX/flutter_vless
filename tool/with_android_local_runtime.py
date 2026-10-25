@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit development build with locally built AAR verification, then restore official pins."""
+"""Historical26.10.17 stock-input fake-JVM fixture; never current published-runtime acceptance."""
 import fcntl
 import hashlib
 import json
@@ -50,7 +50,8 @@ with lock_path.open("w") as lock:
         if java.exists() and not env.get("JAVA_HOME"):
             env["JAVA_HOME"] = str(java)
         command = ["./gradlew", *(sys.argv[1:] or [":flutter_vless_android:testDebugUnitTest"]),
-                   "--dependency-verification=strict", f"-PflutterVlessAndroidRuntimeRepo={repo}"]
+                   "--dependency-verification=strict", f"-PflutterVlessAndroidRuntimeRepo={repo}",
+                   f"-PflutterVlessXrayRuntimeVersion={version}"]
         print("DEVELOPMENT runtime verification: local AAR; official release verification is separate", flush=True)
         result = subprocess.run(command, cwd=root / "example/android", env=env)
     finally:

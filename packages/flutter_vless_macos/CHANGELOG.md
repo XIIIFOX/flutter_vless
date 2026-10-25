@@ -4,11 +4,11 @@
 
 * Prepare Apple transport endpoints from bounded IPv4/IPv6 candidate sets, preserving DNS TTLs and using documented OS synthesis for IPv4 literals on IPv6-only paths. Reprepare from the original configuration after path, wake, expiry or transport failures; serialize settings changes and scope native cleanup to the committed plan. Native NAT64/handover acceptance remains pending.
 
-* Enforce the selected interface on generated Apple physical sockets after optional/custom socket settings, including error returns. Add a distinct runtime capability and refuse unsupported artifacts before route installation; keep published SDK pins unchanged.
+* Enforce the selected interface on generated Apple physical sockets after optional/custom socket settings, including error returns. Add a distinct runtime capability and refuse unsupported artifacts before route installation; require the matching runtime capability before route installation.
 
 * Admit bounded static DNS hosts aliases for remote named resolvers without rewriting caller DNS or TLS identity. Cancel obsolete Dart startup capability checks after Stop or a newer Start.
 
-* Include XHTTP HTTP/3 socket-first teardown in Apple Core source and preview preparation, with guarded pinned-source validation. Published SDK pins remain unchanged.
+* Include XHTTP HTTP/3 socket-first teardown in Apple Core source and preview preparation, with guarded pinned-source validation. The verified macOS runtime now includes this fix.
 
 * Exclude loopback-owned dormant socket edges from chain validation while retaining active chain errors and sender settings. Add shared preparation and controlled XHTTP redispatch regressions.
 
@@ -40,7 +40,7 @@
 
 * Prepare compatible FakeDNS pools without changing caller DNS or imported sniffing. Move owned IPv4/DNS addresses outside the default pool and reject native namespace conflicts before bootstrap; add shared regressions.
 * Scope proxy-only traffic to the selected inbound without retagging caller inputs. Keep missing/disabled directions unavailable internally and reset speed baselines across gaps/restarts; retain HEV VPN counters. Add shared consumer and controlled payload regressions.
-* Consume per-session VPN routing selections through host/provider admission and exact checked startup/recovery pairs. Require the optional routing ABI; published runtime pins remain unchanged.
+* Consume per-session VPN routing selections through host/provider admission and exact checked startup/recovery pairs. Require the enabled routing ABI in the verified native runtime.
 * Refuse nonempty root `env` before in-process Core preflight, including cached older checker calls. Expose a redacted `environment-policy` error while preserving the working session and original profile; scoped environment support remains open.
 * Add per-start/profile-delay `certificateAssetsDirectory` with typed TLS/XHTTP file binding before preflight and profile persistence. Keep absolute/inline material and reload options; caller files must stay accessible to the provider.
 * Admit XHTTP download settings with parent `sockopt.penetrate` using one closed upload/download pin scope. Preserve caller chains and inactive child socket settings; retain exact endpoint and active ECH checks, with shared preparation and payload regressions.
@@ -66,9 +66,9 @@
 * Configure native worker retry limits, Apple On Demand and bounded private diagnostics while preserving protected VPN policy and Keychain references.
 * Add isolated options/control tests and an idempotent host WidgetKit setup generator in the main package.
 
-* Update the universal arm64/x86_64 Xray runtime to `v26.10.17` (upstream pre-release), pinned to commit `92ccc939aaf4f8965f369cf0b142e005aeaa11d5`.
-* Update SwiftPM and CocoaPods to the matching verified `xray-macos-v26.10.17` XCFramework.
-* Preserve private startup, asset selection, authenticated local proxies and the 128 KiB HTTP/2 upload scratch cap.
+* Update the universal arm64/x86_64 Xray runtime to `v26.10.21`, pinned to commit `1b1647cd9ddf0abc34b981d4611fc03bcac1ca74`, using Go 1.27.3 for updated root CA filtering.
+* Update SwiftPM and CocoaPods to the matching verified `xray-macos-v26.10.21` XCFramework.
+* Preserve private preflight/startup, asset selection, authenticated local proxies and the 128 KiB HTTP/2 upload scratch cap. Retain routing capability 1, mandatory Darwin interface binding and Classic DNS/XHTTP HTTP/3 lifetime fixes in the runtime-only asset. The Flutter package remains 1.1.7 unreleased.
 
 ## 1.1.6
 

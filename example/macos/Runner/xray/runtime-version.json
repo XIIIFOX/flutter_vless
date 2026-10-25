@@ -1,0 +1,9 @@
+{
+  "version": "26.10.21",
+  "upstream_commit": "1b1647cd9ddf0abc34b981d4611fc03bcac1ca74",
+  "archive_url": "https://github.com/XTLS/Xray-core/releases/download/v26.10.21/Xray-macos-arm64-v8a.zip",
+  "archive_sha256": "926cc55fda2a8757dabe4f22dc98772f218ace025f101bd0b68aee232e59d5dc",
+  "binary_sha256": "94a9bfc0df6a0462552d535861f8a1580a0a6c94f7b0d30fe312daa0024ede2e",
+  "Go_version": "go1.27.3",
+  "scope": "Official arm64 standalone example tool; the plugin uses the separately released universal XCFramework. Existing full project GeoDAT unchanged."
+}

@@ -18,6 +18,29 @@
 - (void)logInput:(NSString* _Nullable)s;
 @end
 
+/**
+ * CheckPrivate performs Core's decode/build stages without creating a runtime,
+opening listeners, replacing coreInstance, or changing process environment.
+Nonempty Env is refused before Build: pinned Core applies every decoded Env
+entry process-wide, including null string values decoded as empty strings.
+This is an interim preflight limitation, not scoped support for the feature;
+the caller document and StartPrivate's existing Env behavior stay unchanged.
+It returns only a closed numeric result; no input, filenames or Core error
+strings cross the native boundary. This is an additive bridge capability.
+
+ABI 1: low byte = stage (0 success, 1 privacy, 2 decode, 3 build,
+4 internal failure, 5 environment policy); next byte = section (1 inbound, 2 outbound);
+remaining bits = index + 1, or zero when no safe location is available.
+ */
+FOUNDATION_EXPORT int64_t XRayCheckPrivate(NSData* _Nullable config);
+
+FOUNDATION_EXPORT int64_t XRayCheckRoutingPrivate(NSData* _Nullable config, NSData* _Nullable spec);
+
+/**
+ * This build cannot compile against a Core without the guarded binding patch.
+ */
+FOUNDATION_EXPORT int64_t XRayDarwinInterfaceBindingCapability(void);
+
 FOUNDATION_EXPORT NSString* _Nonnull XRayGetVersion(void);
 
 FOUNDATION_EXPORT BOOL XRayMeasureDelay(NSString* _Nullable url, int64_t* _Nullable ret0_, NSError* _Nullable* _Nullable error);
@@ -30,6 +53,12 @@ Uses VisitCounters which is available in xray-core features/stats.Manager.
 Caller parses "uplink" and "downlink" from counter names.
  */
 FOUNDATION_EXPORT NSString* _Nonnull XRayQueryStats(NSString* _Nullable tag);
+
+/**
+ * Only builds using the separately pinned optional Core overlay can compile
+this file. Default builds expose the same symbols with capability zero.
+ */
+FOUNDATION_EXPORT int64_t XRayRoutingCapability(void);
 
 /**
  * SetAssetLocation configures the directory used by Xray-core to load runtime
@@ -51,6 +80,8 @@ FOUNDATION_EXPORT BOOL XRayStart(NSData* _Nullable config, id<XRayLogger> _Nulla
 so an older local framework cannot silently bypass the mobile privacy policy.
  */
 FOUNDATION_EXPORT BOOL XRayStartPrivate(NSData* _Nullable config, id<XRayLogger> _Nullable logger, NSError* _Nullable* _Nullable error);
+
+FOUNDATION_EXPORT BOOL XRayStartRoutingPrivate(NSData* _Nullable config, NSData* _Nullable spec, id<XRayLogger> _Nullable logger, NSError* _Nullable* _Nullable error);
 
 FOUNDATION_EXPORT void XRayStop(void);
 

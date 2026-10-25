@@ -80,6 +80,26 @@ class SmokeProcessTest(unittest.TestCase):
             result, _ = self.attempt(f'print({output!r},flush=True)')
             self.assertEqual(125, result['exit_code']); self.assertEqual('unqualified', result['reason'])
 
+    def test_verbose_host_shutdown_does_not_replace_the_exact_reporter_summary(self):
+        output = (PASS + '[  +16 ms] Running 1 shutdown hook\n'
+                  '           a host-only continuation\n'
+                  '[        ] Shutdown hooks complete\n[   +2 ms] exiting with code 0\n')
+        result, raw = self.attempt(f'print({output!r},flush=True)')
+        self.assertEqual(0, result['exit_code'])
+        self.assertTrue(smoke.qualified(result['markers']))
+        self.assertIn(b'exiting with code 0', raw)
+
+    def test_verbose_trace_cannot_manufacture_success_or_hide_a_later_reporter_failure(self):
+        for ending in ('[   +1 ms] 🎉 3 tests passed.',
+                       '[   +1 ms] 00:03 +3: All tests passed!',
+                       '🎉 3 tests passed.\n[   +1 ms] trace\n00:04 +3 -1: Some tests failed.',
+                       '🎉 3 tests passed.\nquoted "[   +1 ms] trace"',
+                       '🎉 3 tests passed.\n[+1 ms] not a Flutter verbose prefix'):
+            output = smoke.TEST_ENTRY + '\nANDROID_XRAY_CORE_VERSION=Xray26.10.21\n' + ending
+            result, _ = self.attempt(f'print({output!r},flush=True)')
+            self.assertEqual(125, result['exit_code'])
+            self.assertEqual('unqualified', result['reason'])
+
     def test_live_partial_log_precedes_child_exit(self):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory); path = folder / 'live.log'; release = folder / 'release'
@@ -345,7 +365,7 @@ class SmokeContextTest(unittest.TestCase):
                 started = time.monotonic()
                 result = smoke.collect_failure_context('emulator-5554', folder, 1, timeout=1)
             self.assertLess(time.monotonic() - started, 3)
-            self.assertEqual({'crash', 'logcat', 'exit-info', 'app-pid'}, set(result))
+            self.assertEqual({'crash', 'logcat', 'exit-info', 'activity', 'app-pid'}, set(result))
             for name, report in result.items():
                 self.assertTrue(report['timed_out']); self.assertTrue(report['truncated'])
                 self.assertEqual(4096 if name == 'app-pid' else smoke.MAX_CONTEXT_BYTES, report['bytes_written'])
@@ -378,6 +398,17 @@ class SmokeStartupDiagnosticTest(unittest.TestCase):
                 tracker.finish()
                 self.assertEqual('installed_awaiting_test_entry', tracker.stage())
                 self.assertFalse(smoke.qualified(tracker.found))
+
+    def test_verbose_completed_install_keeps_stage_and_private_vm_observation(self):
+        output = (b'[+1233 ms] Installing build/app/outputs/flutter-apk/app-debug.apk... (completed in 1,233ms)\n'
+                  b'[   +1 ms] Dart VM service is listening on http://PRIVATE_VM_URL\n')
+        for size in (1, 17, 65536):
+            tracker = smoke.Markers()
+            for offset in range(0, len(output), size): tracker.feed(output[offset:offset + size])
+            tracker.finish()
+            self.assertEqual('installed_awaiting_test_entry', tracker.stage())
+            self.assertTrue(tracker.found['vm_service'])
+            self.assertFalse(smoke.qualified(tracker.found))
 
     def test_install_start_or_quoted_completion_does_not_claim_installed(self):
         for value in (b'Installing build/app.apk...', b'quoted "' + self.completed_install.rstrip() + b'"\n'):
@@ -439,6 +470,33 @@ class SmokeStartupDiagnosticTest(unittest.TestCase):
         self.assertEqual('OSError', report['attempts'][0]['startup_observation']['error'])
         self.assertNotIn('PRIVATE_CONTEXT_SENTINEL', console.getvalue())
 
+    def test_one_later_launch_snapshot_retains_preentry_window_without_retry_or_deadline_reset(self):
+        phases = []; commands = []
+        def collect(serial, folder, phase, **kwargs):
+            phases.append((phase, kwargs['timeout']))
+            return {'fixture': {'returncode': 0, 'timed_out': False}}
+        def runner(command, path, **kwargs):
+            commands.append(command)
+            value = {'stage': 'installed_awaiting_test_entry', 'elapsed_seconds': 100,
+                     'timeout_seconds': 600, 'markers': dict.fromkeys(smoke.Markers.patterns, False)}
+            for elapsed in (100, 110, 130, 160):
+                kwargs['progress'](dict(value, elapsed_seconds=elapsed))
+            value = dict(value, reason='timeout', exit_code=124, process_started=True,
+                         child_returncode=None, truncated=False, diagnostic_error=None,
+                         cleanup={'leader_reaped': True, 'pipe_closed': True, 'error': None})
+            kwargs['on_failure'](value)
+            return value
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()):
+            code = smoke.run_smoke('emulator-5554', Path(directory), runner=runner, collect=collect,
+                ownership=lambda *a, **k: True, cleanup_app=lambda *a, **k: {'returncode': 0},
+                pause=lambda _: self.fail('pre-entry timeout cannot retry'))
+            report = json.loads((Path(directory) / 'summary.json').read_text())
+        self.assertEqual(124, code); self.assertEqual(1, len(commands))
+        self.assertIn('--verbose', commands[0]); self.assertIn('expanded', commands[0])
+        self.assertEqual([('1-installed', 2), ('1-launch', 2), (1, 10)], phases)
+        self.assertEqual(100, report['attempts'][0]['startup_observation']['elapsed_seconds'])
+        self.assertEqual(130, report['attempts'][0]['launch_observation']['elapsed_seconds'])
+
     def test_context_pid_metadata_is_numeric_or_absent_and_private(self):
         for raw, code, expected in ((b'123 456\n', 0, {'state': 'running', 'pids': [123, 456]}),
                 (b'', 1, {'state': 'absent', 'pids': []}),
@@ -452,9 +510,32 @@ class SmokeStartupDiagnosticTest(unittest.TestCase):
                 result = smoke.collect_failure_context('emulator-5554', Path(directory), '1-installed', timeout=2)
                 self.assertEqual(expected, result['app-pid']['app_process'])
                 self.assertNotIn('PRIVATE_PID_SENTINEL', json.dumps(result))
-                self.assertTrue(all(item[1]['timeout'] == 2 for item in commands))
+                self.assertTrue(all(0 < item[1]['timeout'] <= 2 for item in commands))
                 self.assertTrue(all('force-stop' not in item[0] for item in commands))
                 self.assertEqual(4096, next(opts['max_bytes'] for command, opts in commands if 'pidof' in command))
+                focused = [command for command, _ in commands if any(arg.startswith('--pid=') for arg in command)]
+                self.assertEqual(len(expected['pids']) if expected['state'] == 'running' else 0, len(focused))
+                self.assertTrue(any('activities' in command for command, _ in commands))
+
+    def test_focused_logs_share_the_observation_budget_and_never_run_after_it_expires(self):
+        for remaining in (0, .25):
+            calls = []; now = [0]
+            def fake(command, path, **kwargs):
+                calls.append((command, kwargs))
+                smoke.write_private(path, b'123\n' if 'pidof' in command else b'')
+                return {'returncode': 0}
+            def clock():
+                value = now[0]; now[0] = 2 - remaining
+                return value
+            with tempfile.TemporaryDirectory() as directory, patch.object(smoke, 'capture', fake), \
+                 patch.object(smoke.time, 'monotonic', clock):
+                result = smoke.collect_failure_context('emulator-5554', Path(directory), 1, timeout=2)
+            focused = [opts for command, opts in calls if '--pid=123' in command]
+            if remaining:
+                self.assertEqual([remaining], [opts['timeout'] for opts in focused])
+            else:
+                self.assertEqual([], focused)
+                self.assertEqual('observation_budget_exhausted', result['app-logcat']['skipped'])
 
 
 class SmokeSignalTest(unittest.TestCase):
@@ -514,7 +595,7 @@ raise SystemExit(result)
             process = subprocess.Popen([sys.executable, str(driver), str(Path(smoke.__file__).parent), str(folder / 'out')],
                 env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
             try:
-                wait_for(lambda: len(list(pids.iterdir())) == 4)
+                wait_for(lambda: len(list(pids.iterdir())) == 5)
                 started = time.monotonic(); process.send_signal(signal.SIGTERM)
                 output = process.communicate(timeout=4)[0]
                 self.assertLess(time.monotonic() - started, 3)
@@ -530,6 +611,7 @@ raise SystemExit(result)
             finally:
                 if process.poll() is None: os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=2)
+                process.stdout.close()
                 for pid in pids.iterdir():
                     if alive(int(pid.name)): os.kill(int(pid.name), signal.SIGKILL)
 

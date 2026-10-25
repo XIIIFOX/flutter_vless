@@ -45,18 +45,36 @@ class Markers:
         self.tail = b''
         self.line = b''
         self.line_overflow = False
+        self.verbose_indent = None
 
     def _line(self, value):
         if value is None:  # An overlong line cannot become a tail-only success.
             self.found['summary3'] = self.found['standard_summary3'] = False
             return
-        value = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', value).strip()
-        if not value or value == b'::endgroup::':
+        value = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', value).rstrip()
+        if not value.strip() or value.strip() == b'::endgroup::':
             return
-        if re.fullmatch(rb'Installing build/[^\r\n]{1,2048}\.apk\.\.\. +[0-9,]+(?:\.[0-9]+)?(?:ms|s)', value):
+        # Flutter's VerboseLogger prefixes host messages; package:test writes
+        # its reporter directly to stdout. Keep the last *reporter* summary
+        # exact, without treating a quoted success inside a host trace as one.
+        # See flutter_tools/base/logger.dart VerboseLogger._emit and
+        # flutter_tools/test/runner.dart's direct stdout forwarding.
+        prefix = re.match(rb'^\[( {8}| *\+[1-9][0-9]{0,11} ms)\] ', value)
+        verbose = bool(prefix and prefix[1] == prefix[1].lstrip().rjust(8))
+        if verbose:
+            self.verbose_indent = b' ' * len(prefix[0])
+            value = value[len(prefix[0]):]
+        elif self.verbose_indent and value.startswith(self.verbose_indent):
+            return  # A continuation of that host message, never a test result.
+        else:
+            self.verbose_indent = None
+        value = value.strip()
+        if re.fullmatch(rb'Installing build/[^\r\n]{1,2048}\.apk\.\.\.(?: +[0-9,]+(?:\.[0-9]+)?(?:ms|s)| \(completed in [0-9,]+(?:\.[0-9]+)?(?:ms|s)\))', value):
             self.found['install_completed'] = True
         if b'Dart VM Service on ' in value or b'Dart VM service is listening on ' in value:
             self.found['vm_service'] = True
+        if verbose:
+            return
         self.found['summary3'] = value == '🎉 3 tests passed.'.encode()
         self.found['standard_summary3'] = re.fullmatch(
             rb'(?:[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})? +)?\+3: All tests passed!', value) is not None
@@ -281,17 +299,19 @@ def stream_attempt(command, path, *, cwd, cancellation, on_failure, progress=lam
 
 def collect_failure_context(serial, output, attempt, *, timeout=10, cancellation=None):
     """Bounded generic collector: the test-APK-specific collect() has the wrong UID/package."""
+    started = time.monotonic()
     commands = {'crash': ['logcat', '-d', '-b', 'crash', '-t', '200', '-v', 'threadtime'],
                 'logcat': ['logcat', '-d', '-b', 'main', '-b', 'system', '-t', '400', '-v', 'threadtime'],
                 'exit-info': ['shell', 'dumpsys', 'activity', 'exit-info', EXAMPLE_PACKAGE],
+                'activity': ['shell', 'dumpsys', 'activity', 'activities', EXAMPLE_PACKAGE],
                 'app-pid': ['shell', 'pidof', EXAMPLE_PACKAGE]}
     initial_signal = cancellation.signum if cancellation is not None else None
-    def one(item):
+    def one(item, *, budget=timeout):
         name, arguments = item
         try:
             path = output / f'flutter-smoke-{attempt}-{name}.log'
             result = capture(['adb', '-s', serial, *arguments],
-                             path, timeout=timeout,
+                             path, timeout=budget,
                              max_bytes=4096 if name == 'app-pid' else MAX_CONTEXT_BYTES,
                              cancelled=lambda: initial_signal is None and cancellation is not None and cancellation.signum is not None)
             if name == 'app-pid':
@@ -309,8 +329,21 @@ def collect_failure_context(serial, output, attempt, *, timeout=10, cancellation
             result = {'error': type(error).__name__}
         return name, result
     # Independent read-only captures share the same bounded observation window.
-    with ThreadPoolExecutor(max_workers=4, thread_name_prefix='smoke-context') as workers:
+    with ThreadPoolExecutor(max_workers=len(commands), thread_name_prefix='smoke-context') as workers:
         metadata = dict(workers.map(one, commands.items()))
+    # A generic system tail can lose every app line during a long VM-discovery
+    # wait. The numeric pidof result scopes an additional read-only app log;
+    # it uses only the remaining observation window, never a fresh timeout.
+    process = metadata.get('app-pid', {}).get('app_process', {})
+    if process.get('state') == 'running':
+        remaining = timeout - (time.monotonic() - started)
+        if remaining > 0:
+            items = [(f'app-logcat-{pid}', ['logcat', '-d', '-b', 'main', '-b', 'system',
+                       f'--pid={pid}', '-v', 'threadtime']) for pid in process['pids']]
+            with ThreadPoolExecutor(max_workers=len(items), thread_name_prefix='smoke-app-context') as workers:
+                metadata.update(workers.map(lambda item: one(item, budget=remaining), items))
+        else:
+            metadata['app-logcat'] = {'skipped': 'observation_budget_exhausted'}
     write_private(output / f'flutter-smoke-{attempt}-context.json', json.dumps(metadata, indent=2) + '\n')
     return metadata
 
@@ -389,29 +422,42 @@ def run_smoke(serial, output, *, runner=stream_attempt, pause=time.sleep,
         summary.update(stage='preflight_cancelled', exit_code=128 + state.signum)
         save(); progress(summary)
         return summary['exit_code']
-    command = ['flutter', 'test', 'integration_test/android_xray_runtime_smoke_test.dart', '-d', serial]
+    command = ['flutter', 'test', 'integration_test/android_xray_runtime_smoke_test.dart',
+               '--verbose', '--reporter', 'expanded', '-d', serial]
     for attempt in range(1, 3):
         failure_report = {}
         startup_observation = {}
+        launch_observation = {}
         def attempt_progress(value):
             progress(dict(value, attempt=attempt))
-            if (startup_observation or value['stage'] != 'installed_awaiting_test_entry'
+            if (value['stage'] != 'installed_awaiting_test_entry'
                     or value.get('markers', {}).get('entry') or state.signum is not None):
                 return
             remaining = value['timeout_seconds'] - value['elapsed_seconds']
             if remaining <= 0:
                 return
+            if not startup_observation:
+                observation = startup_observation
+                phase = f'{attempt}-installed'
+            elif (not launch_observation and value['elapsed_seconds'] -
+                  startup_observation['elapsed_seconds'] >= 30):
+                observation = launch_observation
+                phase = f'{attempt}-launch'
+            else:
+                return
             # This synchronous capture consumes the attempt's existing absolute
             # deadline; stream_attempt never restarts its clock after the hook.
-            startup_observation.update(stage=value['stage'], owned_process=value.get('owned_process'),
-                                       vm_service_observed=value.get('markers', {}).get('vm_service', False))
+            observation.update(stage=value['stage'], owned_process=value.get('owned_process'),
+                               elapsed_seconds=value['elapsed_seconds'],
+                               vm_service_observed=value.get('markers', {}).get('vm_service', False))
             summary['startup_observation'] = startup_observation
+            summary['launch_observation'] = launch_observation
             save()
             try:
-                startup_observation['context'] = collect(serial, output, f'{attempt}-installed',
+                observation['context'] = collect(serial, output, phase,
                     timeout=min(2, remaining), cancellation=state)
             except (Exception, KeyboardInterrupt) as error:
-                startup_observation['error'] = type(error).__name__
+                observation['error'] = type(error).__name__
             save()
         def on_failure(value):
             summary.update(stage=value['stage'], exit_code=value['exit_code'])
@@ -439,6 +485,7 @@ def run_smoke(serial, output, *, runner=stream_attempt, pause=time.sleep,
         result['attempt'] = attempt
         result['context'] = failure_report.get('context')
         result['startup_observation'] = startup_observation or None
+        result['launch_observation'] = launch_observation or None
         if result['process_started']:
             try:
                 result['example_cleanup'] = cleanup_app(serial, output, attempt, cancellation=state)
@@ -463,6 +510,7 @@ def run_smoke(serial, output, *, runner=stream_attempt, pause=time.sleep,
         summary.update(stage=result['stage'], exit_code=result['exit_code'])
         summary.pop('active_failure', None)
         summary.pop('startup_observation', None)
+        summary.pop('launch_observation', None)
         save()
         if summary.get('metadata_error') and result['exit_code'] == 0:
             result.update(reason='metadata_error', stage='summary_write', exit_code=125)

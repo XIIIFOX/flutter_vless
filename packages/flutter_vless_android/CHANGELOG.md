@@ -1,6 +1,6 @@
 ## 1.1.7
 
-* Runtime-only repository pin: use the published `26.10.21-protect1` AAR, rebuilt from Xray-core `v26.10.21` with Go `1.27.3`, protected socket handling, native routing and Classic/XHTTP lifetime fixes. Pin the independently verified Maven bytes. This source update does not republish or change the existing Pub.dev `1.1.7` package.
+* Runtime-only repository pin: use the published `26.10.29-protect1` AAR, rebuilt from Xray-core `v26.10.29` with Go `1.27.3`, protected socket handling, native routing and Classic/XHTTP lifetime fixes. Pin the independently verified Maven bytes. This source update does not republish or change the existing Pub.dev `1.1.7` package.
 
 * Retain immutable Quick Tile actions through unlock, permission, preflight and process launch. Revoke stale requests on options or session changes; disarm failed unstarted tile requests instead of retrying without their policy. Preserve established VPN and explicit app commands. Add actual-method JVM regressions.
 

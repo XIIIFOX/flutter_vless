@@ -10,8 +10,8 @@ the public `flutter_vless` package. Each publishable federated package keeps a
 separate `CHANGELOG.md` beside its `pubspec.yaml`; add a versioned entry there
 only when that package itself is being released.
 
-For the 1.1.7 worktree, Android, iOS and macOS target Xray-core `v26.10.21`,
-pinned to commit `1b1647cd9ddf0abc34b981d4611fc03bcac1ca74`. Native runtimes are
+For the 1.1.7 worktree, Android, iOS and macOS target Xray-core `v26.10.29`,
+pinned to commit `0afec66085a85191e9dd2a4a6646c7c9a94688d1`. Native runtimes are
 rebuilt with Go 1.27.3 and the updated fallback RootCAs for the upstream
 certificate-trust security update. Windows uses the checksum-pinned official
 release and its separately tested routing-enabled runtime. Existing full
@@ -21,10 +21,10 @@ package or create a `v1.1.7` plugin release.
 
 Runtime release notes for this train:
 
-* [Android v26.10.21-protect1](xray-android-v26.10.21-protect1.md)
-* [iOS v26.10.21](xray-ios-v26.10.21.md)
-* [macOS v26.10.21](xray-macos-v26.10.21.md)
-* [Validation and remaining work](xray-v26.10.21-validation.md)
+* [Android v26.10.29-protect1](xray-android-v26.10.29-protect1.md)
+* [iOS v26.10.29](xray-ios-v26.10.29.md)
+* [macOS v26.10.29](xray-macos-v26.10.29.md)
+* [Validation and remaining work](xray-v26.10.29-validation.md)
 
 ### Registry blockers before publishing the plugin
 

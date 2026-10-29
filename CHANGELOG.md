@@ -1,6 +1,6 @@
 ## 1.1.7
 
-* Update Xray-core on Android, iOS, macOS and the Windows runtime workflow to `v26.10.21`, pinned to commit `1b1647cd9ddf0abc34b981d4611fc03bcac1ca74`. Rebuild native runtimes with Go 1.27.3 and the updated fallback CA bundle for the upstream certificate-trust security fix. Keep the plugin release train at 1.1.7; native runtime publication is separate from package publication.
+* Update Xray-core on Android, iOS, macOS and the Windows runtime workflow to `v26.10.29`, pinned to commit `0afec66085a85191e9dd2a4a6646c7c9a94688d1`. Rebuild native runtimes with Go 1.27.3, preserve the updated fallback CA bundle and native routing, and rebase Darwin interface binding onto the upstream TCP keepalive correction. Keep the plugin release train at 1.1.7; native runtime publication is separate from package publication.
 
 * Cancel pending capability-gated starts after successful options/owner reinitialization on all four platforms. Preserve the pending request and status listener if native reinitialization fails. Keep Disconnect available in the example while permission or startup is pending; prevent older completions from clearing newer Start/Stop actions.
 

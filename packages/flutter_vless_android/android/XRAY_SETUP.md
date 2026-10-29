@@ -4,7 +4,7 @@ This guide explains how to build the native libraries (`libxray.so` and `libtun2
 
 Android runtime files are stored in `android_runtime/xray_android/src/main` and published as the Maven Central AAR `dev.tfox.fluttervless:xray-android`. They are not stored in the `flutter_vless_android` Pub.dev package.
 
-The current revision is `26.10.21-protect1`. The same AAR and its SHA-256 checksum are also available in [GitHub Releases](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.10.21-protect1).
+The current revision is `26.10.29-protect1`. The same AAR and its SHA-256 checksum are also available in [GitHub Releases](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.10.29-protect1).
 
 **Key Features:**
 - ✅ **Android 15+ Support**: Builds with 16KB page size alignment.
@@ -65,11 +65,11 @@ If you see `0x1000`, it is **NOT** compatible with 16KB devices.
 The `flutter_vless_android` Pub.dev package consumes the Android device runtime through the Maven artifact:
 
 ```text
-dev.tfox.fluttervless:xray-android:26.10.21-protect1
+dev.tfox.fluttervless:xray-android:26.10.29-protect1
 ```
 
 Final releases use the manual **Publish Android Runtime AAR** workflow with
-`xray_runtime_version=26.10.21-protect1` and `publishing_type=AUTOMATIC`.
+`xray_runtime_version=26.10.29-protect1` and `publishing_type=AUTOMATIC`.
 It compiles all four routing-capable Core ABIs from pinned source in GitHub
 Actions, retains reviewed HEV/geodata bytes, verifies the AAR and signs the exact
 Maven files. One bundle is uploaded; the workflow waits for that deployment to
@@ -95,8 +95,8 @@ tool/publish_android_runtime_maven.sh
 
 ## Protected VPN runtime
 
-`26.10.21-protect1` retains protected socket integration and adds native routing
-to Xray `v26.10.21`, with the reviewed Classic DNS and XHTTP lifecycle fixes.
+`26.10.29-protect1` retains protected socket integration and adds native routing
+to Xray `v26.10.29`, with the reviewed Classic DNS and XHTTP lifecycle fixes.
 Use the matching plugin and Maven runtime revision together.
 An older runtime fails the VPN capability handshake; there is no implicit UID bypass.
 Proxy-only does not enable the socket broker. Explicit `BLOCKED_APPS` still bypass VPN.

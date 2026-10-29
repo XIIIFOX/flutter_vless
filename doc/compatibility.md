@@ -34,6 +34,17 @@ artifact before release.
 Linux runners below test Xray Core and shared native preparation. The Flutter
 plugin does not include a Linux implementation.
 
+## Xray 26.10.29 runtime update (2026-10-30)
+
+The unreleased 1.1.7 source train targets the separately published Android,
+iOS and macOS 26.10.29 runtimes. Windows uses the verified official archive and
+its routing-enabled companion. The shared Darwin binding patch retains the
+upstream keepalive correction, and mobile Protobuf matches the reviewed Core
+dependency graph. See the [26.10.29 validation record](release/xray-v26.10.29-validation.md)
+for the exact public payloads, current CI/device results and deferred coverage.
+Native runtime publication does not publish the Flutter packages or complete
+the wider matrix below.
+
 ## Xray 26.10.21 runtime update (2026-10-25)
 
 The unreleased 1.1.7 source tree consumes the separately published Android,

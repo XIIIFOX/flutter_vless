@@ -148,7 +148,7 @@ Before publishing the Android wrapper to Pub.dev, keep these checks green:
 - The emulator smoke test prints an Xray version matching the runtime release.
 ## Consumer verification (1.1.7)
 
-The official runtime is `dev.tfox.fluttervless:xray-android:26.10.17-protect1`.
+The official runtime is `dev.tfox.fluttervless:xray-android:26.10.29-protect1`.
 Copy [verification-metadata.xml](../../example/android/gradle/verification-metadata.xml)
 into **your application's root** `android/gradle/` directory, and run Gradle with
 `--dependency-verification=strict`. Merge the component pins into any broader
@@ -158,13 +158,13 @@ version in `dev.tfox.fluttervless`. Library publication alone cannot enable a
 consumer's root Gradle verification.
 
 The AAR's pinned SHA-256 is
-`d1df973a19757c2a73683d8a5409c2f20cc1bc33059f48d6ddb1057790511afb`,
-from [the release asset](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.10.17-protect1)
+`ac498513218e640c6524e59eb5bba5431ff51c396f114931ada1837f79561ecb`,
+from [the release asset](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.10.29-protect1)
 and Maven Central. The GitHub AAR is the same published file; every AAR entry
 and all native binaries/geodata were independently matched to
 the repository inputs. The POM was reviewed against the committed publication
 definition (no dependencies or repositories), then pinned to
-`fbbf10b1e26172e9cb5f7a474297c902c0d5531c2139733f1516e20f3782c8d7`.
+`14a9499f793c94779f0a3a6cddd5dabf38c75865f2270912ef267c590959497b`.
 The empty sources/javadoc JARs are also pinned for IDE dependency resolution.
 No Gradle module metadata is published for this revision; a later unexpected
 module file is not trusted. These pins are intentionally not generated in CI.
@@ -174,15 +174,13 @@ Gradle rejection of changed AAR/POM files with identical coordinates, and builds
 the consuming example with strict verification. The official mode rejects runtime
 repository/version overrides; local development builds are a separate workflow.
 
-For development, build the local Maven repository with
-`tool/build_android_runtime_maven.sh`, then use
-`python3 tool/with_android_local_runtime.py :flutter_vless_android:testDebugUnitTest`.
-The build first verifies the committed native input manifest. The wrapper checks
-the local AAR's contents against those inputs, temporarily pins its exact local
-AAR/POM bytes while holding a build lock, runs strict Gradle verification, and
-restores the official metadata. It is explicitly labelled development verification
-and does not prove the published AAR. Never run another example Gradle build in
-parallel with that temporary development wrapper.
+For new native development, use the manual unpublished Android runtime preview
+workflow and its isolated, source-bound output. The stock-input branch of
+`tool/build_android_runtime_maven.sh` is retained for historical 26.10.17
+fake-JVM fixtures; it cannot build or relabel a 26.10.29 release. Canonical
+26.10.29 candidates use the fresh CI producer, strict provenance checks and one
+signed Central deployment. Do not treat a historical local wrapper run as
+verification of the current published runtime.
 
 To update a trusted release: review runtime source changes, reproduce and check
 all ABIs, publish the intended immutable artifact, compare the release-pipeline

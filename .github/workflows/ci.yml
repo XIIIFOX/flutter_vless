@@ -422,7 +422,7 @@ jobs:
               text = (root / package).read_text()
               tag = re.search(r'let xrayReleaseTag = "([^"]+)"', text).group(1)
               expected = re.search(r'let xrayChecksum = "([0-9a-f]{64})"', text).group(1)
-              assert tag == f'xray-{platform}-v26.10.21'
+              assert tag == f'xray-{platform}-v26.10.29'
               url = f'https://github.com/XIIIFOX/flutter_vless/releases/download/{tag}/XRay.xcframework.zip'
               archive = output / f'{platform}.zip'
               with urllib.request.urlopen(url, timeout=90) as response, archive.open('wb') as target:

@@ -67,7 +67,7 @@ license notices required by the license. See [NOTICE](NOTICE) and
 
 ## Unreleased 1.1.7 From GitHub
 
-The `main` worktree uses Xray-core **26.10.21** through the separately published
+The `main` worktree uses Xray-core **26.10.29** through the separately published
 native runtimes. The Flutter plugin itself is not released by this runtime
 update. Existing pub.dev implementation packages named `1.1.7` contain older
 wrapper code; use the matching source packages when testing this branch.

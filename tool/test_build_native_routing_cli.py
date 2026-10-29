@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -15,6 +16,37 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('desktop_routing_builder_subject', ROOT / 'tool/build_native_routing_cli.py')
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
+
+
+class ReviewedModuleGraphTest(unittest.TestCase):
+    def assert_runtime_requirements_match_core(self, mobile_text):
+        # Exact reviewed upstream bytes keep this file-only check independent
+        # of a local module cache or a build that silently resolves its graph.
+        pin = json.loads((ROOT / 'third_party/xray-vpn-routing/pin-manifest.json').read_text())
+        core = (ROOT / 'tool/fixtures/xray_core_v26.10.29.go.mod').read_bytes()
+        self.assertEqual(hashlib.sha256(core).hexdigest(), pin['upstream_sha256']['go.mod'])
+        pattern = r'^[ \t]*(\S+)[ \t]+(v\S+)(?:[ \t]+//.*)?$'
+        reviewed = dict(re.findall(pattern, core.decode(), re.M))
+        direct = re.search(r'^require \((.*?)^\)', mobile_text, re.M | re.S)
+        self.assertIsNotNone(direct, 'Missing reviewed mobile direct requirements')
+        actual = dict(re.findall(pattern, direct.group(1), re.M))
+        self.assertEqual(actual.pop(pin['module']), pin['module_version'])
+        self.assertEqual(set(actual), {
+            'github.com/apernet/quic-go', 'github.com/miekg/dns', 'golang.org/x/net',
+            'google.golang.org/grpc', 'google.golang.org/protobuf',
+        })
+        for module, version in actual.items():
+            self.assertEqual(version, reviewed[module], module + ' changes the copied Core graph')
+
+    def test_reviewed_mobile_runtime_requirements_match_pinned_core(self):
+        self.assert_runtime_requirements_match_core((ROOT / 'third_party/xray-mobile/go.mod').read_text())
+
+    def test_former_protobuf_constraint_is_rejected_before_build(self):
+        mobile = (ROOT / 'third_party/xray-mobile/go.mod').read_text()
+        old = mobile.replace('google.golang.org/protobuf v1.36.11', 'google.golang.org/protobuf v1.36.12')
+        self.assertNotEqual(old, mobile, 'Fault control must change the reviewed requirement')
+        with self.assertRaisesRegex(AssertionError, 'google.golang.org/protobuf'):
+            self.assert_runtime_requirements_match_core(old)
 
 
 class RoutingCLIBuilderTest(unittest.TestCase):

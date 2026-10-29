@@ -10,7 +10,7 @@ require (
 	github.com/xtls/xray-core v1.260327.1-0.20261029083850-0afec66085a8
 	golang.org/x/net v0.61.0
 	google.golang.org/grpc v1.84.0
-	google.golang.org/protobuf v1.36.12
+	google.golang.org/protobuf v1.36.11
 )
 
 require (

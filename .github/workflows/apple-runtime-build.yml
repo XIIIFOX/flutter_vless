@@ -26,6 +26,7 @@ jobs:
           cache-dependency-path: third_party/xray-mobile/go.sum
       - name: Check file-only producer and packaging guards
         run: |
+          python3 tool/test_build_native_routing_cli.py
           python3 tool/test_apple_classic_core.py
           python3 tool/test_package_apple_runtime_release.py
       - name: Build canonical routing-enabled runtime with private H2BUF toolchain

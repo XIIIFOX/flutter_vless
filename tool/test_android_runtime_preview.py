@@ -22,7 +22,7 @@ import package_android_runtime_preview as package
 HEAD = 'a' * 40
 
 
-def elf(abi, tag=b'fresh H3 v26.10.21'):
+def elf(abi, tag=b'fresh H3 v26.10.29'):
     wide, machine = {'arm64-v8a': (True, 183), 'armeabi-v7a': (False, 40),
                      'x86': (False, 3), 'x86_64': (True, 62)}[abi]
     data = bytearray(160)
@@ -63,7 +63,7 @@ class AndroidPreviewControls(unittest.TestCase):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(('synthetic source: ' + name).encode())
-        self.pin = {'module': 'fixture.core', 'module_version': 'v26.10.21', 'module_sum': 'h1:fixture',
+        self.pin = {'module': 'fixture.core', 'module_version': 'v26.10.29', 'module_sum': 'h1:fixture',
                     'core_commit': 'fixture-commit'}
         (self.root / 'third_party/xray-vpn-routing/pin-manifest.json').write_text(json.dumps(self.pin))
         pins = {}
@@ -187,7 +187,7 @@ class AndroidPreviewControls(unittest.TestCase):
 
     def release_fixture(self):
         old_version = self.version
-        self.version = '26.10.21-protect1'
+        self.version = '26.10.29-protect1'
         new_core = self.root / 'build/security-android-routing.fixture/Core'
         shutil.copytree(self.core, new_core)
         self.core = new_core
@@ -228,7 +228,7 @@ class AndroidPreviewControls(unittest.TestCase):
     def test_final_release_requires_routing_and_signing_byte_provenance(self):
         self.release_fixture()
         checked = self.validate_release()
-        self.assertEqual('26.10.21-protect1', checked['version'])
+        self.assertEqual('26.10.29-protect1', checked['version'])
         self.assertEqual(1, checked['routing_capability_expected'])
         self.assertEqual(8, len(checked['signed_artifacts_sha256']))
 
@@ -283,7 +283,7 @@ class AndroidPreviewControls(unittest.TestCase):
         self.assertNotIn('SIGNING_IN_MEMORY_KEY', commands[0][2])
         self.assertEqual('synthetic-private-signing-key', commands[1][2]['SIGNING_IN_MEMORY_KEY'])
         self.assertNotIn('synthetic-private-signing-key', json.dumps(result))
-        self.assertEqual('26.10.21-protect1', result['version'])
+        self.assertEqual('26.10.29-protect1', result['version'])
 
     def test_final_release_central_bundle_roundtrip_and_corruption_rejected(self):
         self.release_fixture()

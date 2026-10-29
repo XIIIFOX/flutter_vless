@@ -21,13 +21,13 @@ BEFORE = '''func applyOutboundSocketOptions(network string, address string, fd u
 
 		if config.TcpKeepAliveIdle > 0 || config.TcpKeepAliveInterval > 0 {
 			if config.TcpKeepAliveIdle > 0 {
-				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_KEEPALIVE, int(config.TcpKeepAliveInterval)); err != nil {
-					return errors.New("failed to set TCP_KEEPINTVL", err)
+				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_KEEPALIVE, int(config.TcpKeepAliveIdle)); err != nil {
+					return errors.New("failed to set TCP_KEEPALIVE", err)
 				}
 			}
 			if config.TcpKeepAliveInterval > 0 {
-				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, sysTCP_KEEPINTVL, int(config.TcpKeepAliveIdle)); err != nil {
-					return errors.New("failed to set TCP_KEEPIDLE", err)
+				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, sysTCP_KEEPINTVL, int(config.TcpKeepAliveInterval)); err != nil {
+					return errors.New("failed to set TCP_KEEPINTVL", err)
 				}
 			}
 			if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_KEEPALIVE, 1); err != nil {
@@ -94,13 +94,13 @@ func applyOutboundSocketOptions(network string, address string, fd uintptr, conf
 
 		if config.TcpKeepAliveIdle > 0 || config.TcpKeepAliveInterval > 0 {
 			if config.TcpKeepAliveIdle > 0 {
-				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_KEEPALIVE, int(config.TcpKeepAliveInterval)); err != nil {
-					return errors.New("failed to set TCP_KEEPINTVL", err)
+				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_KEEPALIVE, int(config.TcpKeepAliveIdle)); err != nil {
+					return errors.New("failed to set TCP_KEEPALIVE", err)
 				}
 			}
 			if config.TcpKeepAliveInterval > 0 {
-				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, sysTCP_KEEPINTVL, int(config.TcpKeepAliveIdle)); err != nil {
-					return errors.New("failed to set TCP_KEEPIDLE", err)
+				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, sysTCP_KEEPINTVL, int(config.TcpKeepAliveInterval)); err != nil {
+					return errors.New("failed to set TCP_KEEPINTVL", err)
 				}
 			}
 			if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_KEEPALIVE, 1); err != nil {

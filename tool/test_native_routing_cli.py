@@ -244,7 +244,7 @@ def main(argv=None):
             run(mode + '-main-pure', [str(tests), '-test.run', core_runner.test_pattern(MAIN_TESTS), '-test.v', '-test.timeout=20s'], seconds=30)
             core_runner.require_pass(mode + '-main-pure', MAIN_TESTS, report['results'])
             run(mode + '-version', [str(binary), *safe_cli_args(['version'])], seconds=20)
-            if not (EVIDENCE / (mode + '-version.log')).read_text(encoding='utf-8').startswith('Xray 26.10.21'):
+            if not (EVIDENCE / (mode + '-version.log')).read_text(encoding='utf-8').startswith('Xray 26.10.29'):
                 raise ValueError('Stock version does not identify the pinned Core release')
             code, capability = (0, 1) if optional else (32, 0)
             run(mode + '-capabilities', [str(binary), *safe_cli_args(['native-routing', 'capabilities'])], seconds=20, expected=code)

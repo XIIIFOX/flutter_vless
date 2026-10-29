@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-XRAY_VERSION="${XRAY_VERSION:-v26.10.21}"
+XRAY_VERSION="${XRAY_VERSION:-v26.10.29}"
 RELEASE_TAG="${RELEASE_TAG:-xray-macos-$XRAY_VERSION}"
 XCFRAMEWORK_PATH="${XCFRAMEWORK_PATH:-$REPO_ROOT/packages/flutter_vless_macos/macos/XRay.xcframework}"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/build/xray-macos-release}"
@@ -19,7 +19,7 @@ fi
 
 PREPARATION_RECEIPT="${PREPARATION_RECEIPT:-$REPO_ROOT/build/xray_macos/classic-core-inputs.json}"
 : "${SOURCE_HEAD:?Set SOURCE_HEAD to the exact committed producer revision}"
-[[ "$XRAY_VERSION" == v26.10.21 && "$RELEASE_TAG" == xray-macos-v26.10.21 ]] || { echo 'Unexpected canonical runtime release tag' >&2; exit 1; }
+[[ "$XRAY_VERSION" == v26.10.29 && "$RELEASE_TAG" == xray-macos-v26.10.29 ]] || { echo 'Unexpected canonical runtime release tag' >&2; exit 1; }
 python3 "$REPO_ROOT/tool/package_apple_runtime_release.py" --platform macos \
     --framework "$XCFRAMEWORK_PATH" --preparation "$PREPARATION_RECEIPT" \
     --output "$OUTPUT_DIR" --head "$SOURCE_HEAD"

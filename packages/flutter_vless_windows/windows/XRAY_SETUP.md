@@ -8,13 +8,13 @@ Provide Xray-core alongside the application; the plugin does not download it.
 
 ### 1. Download Xray-core
 
-For flutter_vless 1.1.7, use the official Xray-core **v26.10.21** security update:
-- [Official v26.10.21 release](https://github.com/XTLS/Xray-core/releases/tag/v26.10.21)
-- [Windows x64 archive](https://github.com/XTLS/Xray-core/releases/download/v26.10.21/Xray-windows-64.zip)
+For flutter_vless 1.1.7, use the official Xray-core **v26.10.29** runtime:
+- [Official v26.10.29 release](https://github.com/XTLS/Xray-core/releases/tag/v26.10.29)
+- [Windows x64 archive](https://github.com/XTLS/Xray-core/releases/download/v26.10.29/Xray-windows-64.zip)
 - Look for `Xray-windows-64.zip` or `Xray-windows-32.zip` depending on your system
 
 The Windows x64 archive SHA-256 is
-`fc58c39ee2f2717b4c54d28d374362389e5319b20ae44aea76ea45a5243ec827`.
+`fce33e81cccf50e7aab572b175519a50b5e0f9d2f5c8d1ed73012ea5c9ad4d58`.
 This checksum applies only to the x64 archive. The upstream release includes
 other architectures with their own checksums.
 

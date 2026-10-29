@@ -66,13 +66,13 @@ python3 - "$OUT/runtime.log" <<'PY'
 from pathlib import Path
 import os, sys
 text=Path(sys.argv[1]).read_text()
-assert text.splitlines().count("RUNTIME=26.10.21") == 1, "Unexpected embedded Xray version"
+assert text.splitlines().count("RUNTIME=26.10.29") == 1, "Unexpected embedded Xray version"
 if os.environ.get('REQUIRE_DARWIN_INTERFACE_BINDING') == '1':
     assert text.splitlines().count('APPLE_DARWIN_INTERFACE_BIND_CAPABILITY_PASS=1') == 1
 assert text.splitlines().count('APPLE_FAKEDNS_SDK_PASS=2') == 1
 assert text.splitlines().count('APPLE_DNS_DATA_MAPS_SDK_PASS=2') == 1, 'Missing or duplicate Apple DNS data maps SDK gate'
 if os.environ.get('APPLE_RUNTIME_PROBE_MODE') == 'fakedns-only':
-    assert text.splitlines().count('RUNTIME=26.10.21') == 1
+    assert text.splitlines().count('RUNTIME=26.10.29') == 1
     for marker in ['privacy-canary.invalid','synthetic-password-canary','d2719f44-f51f-4c35-aeae-246230d21f38','local-user-canary','local-password-canary']:
         assert marker not in text, 'Private marker escaped'
     print('PASS: stock Apple SDK FakeDNS only, 2 generations')

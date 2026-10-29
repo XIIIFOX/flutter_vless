@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 XRAY_MOBILE_DIR="${XRAY_MOBILE_DIR:-$REPO_ROOT/third_party/xray-mobile}"
-XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.10.21}"
+XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.10.29}"
 XRAY_CORE_REF="${XRAY_CORE_REF:-$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["core_commit"])' "$REPO_ROOT/third_party/xray-vpn-routing/pin-manifest.json")}"
 XRAY_MACOS_DEPLOYMENT_TARGET="${XRAY_MACOS_DEPLOYMENT_TARGET:-13.0}"
 BUILD_DIR="${BUILD_DIR:-$REPO_ROOT/build/xray_macos}"

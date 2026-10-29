@@ -12,8 +12,8 @@ import subprocess
 import test_native_dns_context_runtime as processes
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE_TAG = 'v26.10.21'
-RELEASE_VERSION = '26.10.21-protect1'
+CORE_TAG = 'v26.10.29'
+RELEASE_VERSION = '26.10.29-protect1'
 GO_VERSION = 'go1.27.3'
 ABIS = ('arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64')
 RUNTIME = 'android_runtime/xray_android'
@@ -80,7 +80,7 @@ def git_head(repository):
 def preview_version(head):
     if not re.fullmatch('[0-9a-f]{40}', head):
         raise ValueError('Exact Git head required')
-    return '26.10.21-h3-preview.' + head[:12]
+    return '26.10.29-h3-preview.' + head[:12]
 
 
 def core_copy(receipt_name, repository, routing=False):
@@ -236,7 +236,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--head', required=True)
-    parser.add_argument('--release', action='store_true', help='Signed final26.10.21-protect1 candidate; never publish')
+    parser.add_argument('--release', action='store_true', help='Signed final26.10.29-protect1 candidate; never publish')
     args = parser.parse_args()
     try:
         build(args.output, args.head, release=args.release)

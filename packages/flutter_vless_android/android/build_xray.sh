@@ -5,7 +5,7 @@ export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.3}"
 # Build the pinned source plus the reviewed Android FD-protection overlay.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-XRAY_VERSION="${XRAY_VERSION:-v26.10.21}"
+XRAY_VERSION="${XRAY_VERSION:-v26.10.29}"
 XRAY_NATIVE_ROUTING="${XRAY_NATIVE_ROUTING:-0}"
 case "$XRAY_NATIVE_ROUTING" in 0|1) ;; *) echo 'XRAY_NATIVE_ROUTING must be 0 or 1' >&2; exit 2 ;; esac
 if [ "$XRAY_NATIVE_ROUTING" = 1 ] && [ -z "${TARGET_DIR:-}" ]; then
@@ -16,8 +16,8 @@ TARGET_DIR="${TARGET_DIR:-../../../android_runtime/xray_android/src/main/jniLibs
 # Resolve without creating it in either mode; source/cache and selected-ABI
 # boundaries must pass before build_xray creates any output directory.
 TARGET_DIR="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$TARGET_DIR")"
-if [ "$XRAY_VERSION" != "v26.10.21" ]; then
-    echo "The protection overlay requires Xray v26.10.21; review before changing core versions." >&2
+if [ "$XRAY_VERSION" != "v26.10.29" ]; then
+    echo "The protection overlay requires Xray v26.10.29; review before changing core versions." >&2
     exit 1
 fi
 NDK_PATH="${ANDROID_NDK_HOME:-$HOME/Library/Android/sdk/ndk/28.2.13676358}"

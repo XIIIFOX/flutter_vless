@@ -83,7 +83,7 @@ def main(argv=None):
     output.mkdir(parents=True)
     raw = output/'raw'
     environment = dict(os.environ, ANDROID_NDK_HOME=str(args.ndk.resolve()), TARGET_DIR=str(raw), XRAY_NATIVE_ROUTING='1',
-                       GOTOOLCHAIN='local', GOWORK='off', XRAY_VERSION='v26.10.21')
+                       GOTOOLCHAIN='local', GOWORK='off', XRAY_VERSION='v26.10.29')
     environment.update({key: '1' if arch == args.arch else '0' for arch, key in FLAGS.items()})
     report = {'success': False, 'published': False, 'production_enabled': False, 'host_qualified': False,
               'runtime_executed': False, 'capability': CAPABILITY_ID, 'routing_capability_expected': 1, 'arch': args.arch}

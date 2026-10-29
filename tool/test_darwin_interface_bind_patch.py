@@ -44,6 +44,19 @@ class DarwinInterfaceBindPatchTests(unittest.TestCase):
         self.assertEqual(changed.count('NewBindError(errors.New('),3)
         self.assertTrue(changed.startswith('unrelated prefix\n')); self.assertTrue(changed.endswith('\nunrelated suffix\n'))
 
+    def test_upstream_keepalive_idle_and_interval_fix_survives_binding_overlay(self):
+        # Independent expected API/value pairs from Xray-core v26.10.29,
+        # commit 8a3c0cbf1dfef199bbcdd9667ad7d206492e1aa8 (#7219).
+        idle = 'unix.TCP_KEEPALIVE, int(config.TcpKeepAliveIdle)'
+        interval = 'sysTCP_KEEPINTVL, int(config.TcpKeepAliveInterval)'
+        for source in (patch.BEFORE, patch.AFTER):
+            self.assertIn(idle, source)
+            self.assertIn(interval, source)
+            self.assertNotIn('unix.TCP_KEEPALIVE, int(config.TcpKeepAliveInterval)', source)
+            self.assertNotIn('sysTCP_KEEPINTVL, int(config.TcpKeepAliveIdle)', source)
+        self.assertIn('errors.New("failed to set TCP_KEEPALIVE", err)', patch.AFTER)
+        self.assertIn('errors.New("failed to set TCP_KEEPINTVL", err)', patch.AFTER)
+
     def test_unknown_duplicate_or_changed_boundary_refused_before_write(self):
         for value in ['unknown future implementation',patch.BEFORE+patch.BEFORE,
                       self.original.replace('return err','return altered',1)]:

@@ -58,7 +58,7 @@
 * Add validated options/capabilities, interruptible exponential worker retries and configurable bounded diagnostics; retain WFP protection after retry exhaustion.
 * Cover options and tray behavior in the Windows runtime workflow.
 
-* Update the Windows runtime validation workflow and example setup to the official Xray-core `v26.10.21` security release, with a verified archive checksum and exact version check. The plugin remains unreleased `1.1.7`.
+* Update the Windows runtime validation workflow and example setup to the official Xray-core `v26.10.29` release, with a verified archive checksum and exact version check. The plugin remains unreleased `1.1.7`.
 * Pin the setup guide to the matching official Windows release archive.
 
 ## 1.1.6

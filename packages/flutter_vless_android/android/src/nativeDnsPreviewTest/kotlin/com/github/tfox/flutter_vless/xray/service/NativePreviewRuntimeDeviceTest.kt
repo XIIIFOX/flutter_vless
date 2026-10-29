@@ -492,7 +492,7 @@ class NativePreviewRuntimeDeviceTest {
 
     companion object {
         private const val CAPABILITY = "native-instance-preview-1"
-        private const val CORE_COMMIT = "1b1647cd9ddf0abc34b981d4611fc03bcac1ca74"
+        private const val CORE_COMMIT = "0afec66085a85191e9dd2a4a6646c7c9a94688d1"
         private const val MAX_OUTPUT = 16384
     }
 }

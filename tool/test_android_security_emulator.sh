@@ -63,7 +63,7 @@ fi
 if [ -n "${FLUTTER_VLESS_ANDROID_RUNTIME_REPO:-}" ] ||
    [ -n "${ORG_GRADLE_PROJECT_flutterVlessAndroidRuntimeRepo:-}" ] ||
    [ -n "${ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion:-}" ] ||
-   { [ -n "${XRAY_RUNTIME_VERSION:-}" ] && [ "$XRAY_RUNTIME_VERSION" != "26.10.21-protect1" ]; }; then
+   { [ -n "${XRAY_RUNTIME_VERSION:-}" ] && [ "$XRAY_RUNTIME_VERSION" != "26.10.29-protect1" ]; }; then
   echo "Security acceptance requires the committed official runtime; remove runtime overrides." >&2
   exit 2
 fi

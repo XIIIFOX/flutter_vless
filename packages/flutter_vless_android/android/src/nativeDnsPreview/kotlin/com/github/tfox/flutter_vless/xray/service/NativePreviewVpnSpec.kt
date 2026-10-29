@@ -29,7 +29,7 @@ internal class NativePreviewVpnInput private constructor(
 ) {
     companion object {
         const val CAPABILITY = "native-instance-preview-1"
-        const val CORE_COMMIT = "1b1647cd9ddf0abc34b981d4611fc03bcac1ca74"
+        const val CORE_COMMIT = "0afec66085a85191e9dd2a4a6646c7c9a94688d1"
         const val VIRTUAL_DNS = "198.18.0.53"
         private const val MAX_SOURCE = 512 * 1024
 

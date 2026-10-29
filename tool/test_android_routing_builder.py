@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = 'v1.260327.1-0.20261021115930-1b1647cd9ddf'
+VERSION = 'v1.260327.1-0.20261029083850-0afec66085a8'
 CORE = 'github.com/xtls/xray-core'
 MOBILE = 'github.com/EbrahimTahernejad/xray-mobile'
 SUM = 'h1:fixture-core='
@@ -108,7 +108,7 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
         (self.mobile/'nativecli/nativecli.go').write_text('package nativecli\n')
         capability = self.root/'third_party/xray-vpn-routing';(capability/'overlay/main').mkdir(parents=True)
         (capability/'overlay/main/native_routing_cli.go').write_text('package main\n')
-        (capability/'pin-manifest.json').write_text(json.dumps({'module':CORE,'module_version':VERSION,'module_sum':SUM,'core_commit':'1b1647cd9ddf','capability':'native-vpn-routing-source-preview-v1'}))
+        (capability/'pin-manifest.json').write_text(json.dumps({'module':CORE,'module_version':VERSION,'module_sum':SUM,'core_commit':'0afec66085a8','capability':'native-vpn-routing-source-preview-v1'}))
         (capability/'apply.py').write_text(ROUTING)
         classic=self.root/'third_party/xray-native-dns';(classic/'overlay/app/dns').mkdir(parents=True)
         for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go'):

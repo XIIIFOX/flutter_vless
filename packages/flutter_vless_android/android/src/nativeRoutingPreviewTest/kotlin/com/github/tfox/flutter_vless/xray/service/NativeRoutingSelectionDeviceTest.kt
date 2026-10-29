@@ -66,7 +66,7 @@ class NativeRoutingSelectionDeviceTest {
         assertEquals(preview,XrayCoreManager.runtimeExecutable(context,true))
         assertNotEquals(preview,XrayCoreManager.runtimeExecutable(context,false))
         assertTrue("Actual optional CLI lacks capability1",XrayCoreManager.supportsNativeRouting(context))
-        // The public 26.10.21 runtime also carries routing1; its APK entry stays independent of the preview.
+        // The public 26.10.29 runtime also carries routing1; its APK entry stays independent of the preview.
         val published=ProcessBuilder(XrayCoreManager.runtimeExecutable(context,false).absolutePath,"native-routing","capabilities")
             .redirectErrorStream(true)
         published.environment().remove("FLUTTER_VLESS_PROTECT_SOCKET")

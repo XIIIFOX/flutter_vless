@@ -43,7 +43,7 @@ type launcherResponse struct {
 func requireLauncherResponse(t *testing.T, result launcherResponse, status string) {
 	t.Helper()
 	if result.Status != status || result.Schema != 1 || result.Capability != nativeLauncherCapability ||
-		result.CoreCommit != "1b1647cd9ddf0abc34b981d4611fc03bcac1ca74" || result.HostQualified || result.SystemResolverAttempts != 0 {
+		result.CoreCommit != "0afec66085a85191e9dd2a4a6646c7c9a94688d1" || result.HostQualified || result.SystemResolverAttempts != 0 {
 		t.Fatal("native child did not report the exact unqualified capability/status")
 	}
 }

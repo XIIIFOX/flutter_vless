@@ -7,20 +7,20 @@ The wrapper exports `XRaySetAssetLocation` in addition to the lifecycle API.
 Keep this symbol when rebuilding: the iOS app and Packet Tunnel use it to set
 Xray's asset directory from inside the Go runtime.
 
-Current source target Xray-core version: `v26.10.21`.
-Release commit used by the manifest: `1b1647cd9ddf0abc34b981d4611fc03bcac1ca74`.
-Current verified runtime artifact tag: `xray-ios-v26.10.21`.
+Current source target Xray-core version: `v26.10.29`.
+Release commit used by the manifest: `0afec66085a85191e9dd2a4a6646c7c9a94688d1`.
+Current verified runtime artifact tag: `xray-ios-v26.10.29`.
 The privacy revision adds `XRayStartPrivate`; all iOS entry points require this
 symbol so an older cached framework fails to link instead of bypassing policy.
 It disables raw access/error output, sanitizes startup/runtime callbacks, and
 turns off REALITY debug prints and TLS key files, including XHTTP downloads and
-Realm finalmask TLS. The source build targets Xray-core 26.10.21; the H2BUF cap remains 128 KiB.
+Realm finalmask TLS. The source build targets Xray-core 26.10.29; the H2BUF cap remains 128 KiB.
 Canonical builds retain routing capability 1, mandatory Darwin interface binding,
 Classic DNS lifetime and XHTTP HTTP/3 lifetime fixes from the qualified previews.
 
 The verified public archive is available at
-`https://github.com/XIIIFOX/flutter_vless/releases/download/xray-ios-v26.10.21/XRay.xcframework.zip`
-with SHA-256 `66915e945357f1649eeeef131e31dc25ff486698a53d27b80e3a60d87e6d6d6e`.
+`https://github.com/XIIIFOX/flutter_vless/releases/download/xray-ios-v26.10.29/XRay.xcframework.zip`
+with SHA-256 `c6b2070b24e7f150fea5460fd2c42beef3dda92ad94439069e6b933e2cfeee55`.
 SwiftPM and CocoaPods verify this checksum when downloading the framework.
 A rebuild may produce a different archive checksum; use a new revision and
 coordinate both manifests with the exact artifact.
@@ -54,7 +54,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer ./ios/build_xray_ios.sh
 Useful overrides:
 
 ```bash
-XRAY_MOBILE_DIR=../third_party/xray-mobile XRAY_CORE_REF=1b1647cd9ddf0abc34b981d4611fc03bcac1ca74 IOS_VERSION=15.0 ./build_xray_ios.sh
+XRAY_MOBILE_DIR=../third_party/xray-mobile XRAY_CORE_REF=0afec66085a85191e9dd2a4a6646c7c9a94688d1 IOS_VERSION=15.0 ./build_xray_ios.sh
 ```
 
 The build script copies `XRAY_MOBILE_DIR` into `ios/build_xray_ios/xray-mobile`

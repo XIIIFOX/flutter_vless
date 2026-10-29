@@ -66,8 +66,8 @@
 * Configure native worker retry limits, Apple On Demand and bounded private diagnostics while preserving protected VPN policy and Keychain references.
 * Add isolated options/control tests and an idempotent host WidgetKit setup generator in the main package.
 
-* Update the universal arm64/x86_64 Xray runtime to `v26.10.21`, pinned to commit `1b1647cd9ddf0abc34b981d4611fc03bcac1ca74`, using Go 1.27.3 for updated root CA filtering.
-* Update SwiftPM and CocoaPods to the matching verified `xray-macos-v26.10.21` XCFramework.
+* Update the universal arm64/x86_64 Xray runtime to `v26.10.29`, pinned to commit `0afec66085a85191e9dd2a4a6646c7c9a94688d1`, using Go 1.27.3 for updated root CA filtering.
+* Update SwiftPM and CocoaPods to the matching verified `xray-macos-v26.10.29` XCFramework.
 * Preserve private preflight/startup, asset selection, authenticated local proxies and the 128 KiB HTTP/2 upload scratch cap. Retain routing capability 1, mandatory Darwin interface binding and Classic DNS/XHTTP HTTP/3 lifetime fixes in the runtime-only asset. The Flutter package remains 1.1.7 unreleased.
 
 ## 1.1.6

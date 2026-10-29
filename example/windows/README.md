@@ -6,10 +6,10 @@ This directory contains the Windows-specific files for the flutter_vless example
 
 Before running the example on Windows, you need to provide the Xray executable:
 
-1. **Download the official Xray-core v26.10.21 security release**:
-   - Visit: https://github.com/XTLS/Xray-core/releases/tag/v26.10.21
+1. **Download the official Xray-core v26.10.29 release**:
+   - Visit: https://github.com/XTLS/Xray-core/releases/tag/v26.10.29
    - Download `Xray-windows-64.zip` (or `Xray-windows-32.zip` for 32-bit systems)
-   - Verify the x64 archive SHA-256: `fc58c39ee2f2717b4c54d28d374362389e5319b20ae44aea76ea45a5243ec827`
+   - Verify the x64 archive SHA-256: `fce33e81cccf50e7aab572b175519a50b5e0f9d2f5c8d1ed73012ea5c9ad4d58`
 
 2. **Extract and place xray.exe**:
    - Extract the downloaded archive

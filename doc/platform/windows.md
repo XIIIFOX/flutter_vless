@@ -23,12 +23,22 @@ example bundles files from `example/windows/xray`. The plugin also supports
 application directory. It does not search the current working directory,
 PATH or AppData for runtime executables. Keep `wintun.dll` beside tun2socks.
 
+For XDRIVE S3/Google Drive or scheduled GeoDAT updates, use the
+[managed Core 26.10.29-r2 companion](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-windows-v26.10.29-r2).
+Extract its Core and full datasets into the same directory, retaining the
+compatible tunnel helper and Wintun files. Its `native-services capabilities`
+command returns bitmap `3`. A stock external Core remains supported for
+ordinary profiles; the Core version alone does not establish managed-service
+support. The plugin checks the actual selected executable before startup.
+
 ## VPN behavior
 
 VPN mode adds a separate authenticated loopback SOCKS adapter, virtual DNS and
 traffic protection. Imported listeners and their authentication/routing remain
 intact. Service ports and tags avoid collisions within the profile. Ambiguous
-configuration fields and unsupported IPv6 endpoints are rejected.
+configuration fields are rejected. Finite numeric IPv6 TCP proxy endpoints
+use the selected IPv6 interface and exact owned endpoint rules; other IPv6
+endpoint transports still require separate qualification.
 
 IPv6 is blocked while VPN forwarding is IPv4-only. DNS travels through the
 selected proxy without a physical resolver fallback. Xray domain rules remain

@@ -27,9 +27,9 @@ macOS implementation of the flutter_vless plugin.
       exit 0
     fi
 
-    DEFAULT_FRAMEWORK_URL="https://github.com/XIIIFOX/flutter_vless/releases/download/xray-macos-v26.10.29/XRay.xcframework.zip"
+    DEFAULT_FRAMEWORK_URL="https://github.com/XIIIFOX/flutter_vless/releases/download/xray-macos-v26.10.29-r2/XRay.xcframework.zip"
     FRAMEWORK_URL="${FLUTTER_VLESS_MACOS_FRAMEWORK_URL:-$DEFAULT_FRAMEWORK_URL}"
-    FRAMEWORK_SHA256="${FLUTTER_VLESS_MACOS_FRAMEWORK_SHA256:-9c451bd1e8db3ece6afbcb03ffdd4326035ea339a253b388ee83e2691cd5a1b1}"
+    FRAMEWORK_SHA256="${FLUTTER_VLESS_MACOS_FRAMEWORK_SHA256:-5ab6e5d0955f0896e3b0a979cd951599824353bbcf8f6f61aa3839acad34d83f}"
 
     rm -rf "$FRAMEWORK_DIR" "$FRAMEWORK_ZIP"
 

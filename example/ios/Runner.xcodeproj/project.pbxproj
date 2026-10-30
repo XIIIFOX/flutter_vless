@@ -17,6 +17,7 @@
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
 		60B5A00A04581CF0EC381DA4 /* flutter-vless-controls in Frameworks */ = {isa = PBXBuildFile; productRef = 05349992472FA2DFC7155F23 /* flutter-vless-controls */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
+		F02A10300000000000000001 /* AcceptanceWebDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02A10300000000000000002 /* AcceptanceWebDiagnostics.swift */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
 		78F1B1002E6D000000000001 /* flutter-vless-tunnel-support in Frameworks */ = {isa = PBXBuildFile; productRef = 78F1B1022E6D000000000001 /* flutter-vless-tunnel-support */; };
 		7C749573B7608B767CA8DCE7 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 88533641F6A3C96F19BFEC09 /* Pods_Runner.framework */; };
@@ -87,6 +88,7 @@
 		3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = AppFrameworkInfo.plist; path = Flutter/AppFrameworkInfo.plist; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		F02A10300000000000000002 /* AcceptanceWebDiagnostics.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AcceptanceWebDiagnostics.swift; sourceTree = "<group>"; };
 		77A2E0FFD1AD5A8793E2F9D5 /* Pods-Runner.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"; sourceTree = "<group>"; };
 		784666492D4C4C64000A1A5F /* FlutterFramework */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterFramework; path = Flutter/ephemeral/Packages/.packages/FlutterFramework; sourceTree = "<group>"; };
 		78DABEA22ED26510000E7860 /* flutter_vless */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = flutter_vless; path = ../../ios/flutter_vless; sourceTree = "<group>"; };
@@ -263,6 +265,7 @@
 				1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */,
 				1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */,
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
+				F02A10300000000000000002 /* AcceptanceWebDiagnostics.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 			);
 			path = Runner;
@@ -579,6 +582,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
+				F02A10300000000000000001 /* AcceptanceWebDiagnostics.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 				24F350D7E0187BB7F49910AA /* VlessControlIntent.swift in Sources */,
 			);

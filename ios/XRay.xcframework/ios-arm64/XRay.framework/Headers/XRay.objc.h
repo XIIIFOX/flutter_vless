@@ -41,6 +41,11 @@ FOUNDATION_EXPORT int64_t XRayCheckRoutingPrivate(NSData* _Nullable config, NSDa
  */
 FOUNDATION_EXPORT int64_t XRayDarwinInterfaceBindingCapability(void);
 
+/**
+ * These symbols exist only after both exact-source ownership patches apply.
+ */
+FOUNDATION_EXPORT int64_t XRayGeodataLifetimeCapability(void);
+
 FOUNDATION_EXPORT NSString* _Nonnull XRayGetVersion(void);
 
 FOUNDATION_EXPORT BOOL XRayMeasureDelay(NSString* _Nullable url, int64_t* _Nullable ret0_, NSError* _Nullable* _Nullable error);
@@ -84,6 +89,8 @@ FOUNDATION_EXPORT BOOL XRayStartPrivate(NSData* _Nullable config, id<XRayLogger>
 FOUNDATION_EXPORT BOOL XRayStartRoutingPrivate(NSData* _Nullable config, NSData* _Nullable spec, id<XRayLogger> _Nullable logger, NSError* _Nullable* _Nullable error);
 
 FOUNDATION_EXPORT void XRayStop(void);
+
+FOUNDATION_EXPORT int64_t XRayXdriveLifetimeCapability(void);
 
 @class XRayLogger;
 

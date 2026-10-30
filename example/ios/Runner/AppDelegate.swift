@@ -12,6 +12,7 @@ import NetworkExtension
   private var acceptanceRequestInFlight = false
   private var acceptanceVMReceiptToken: UUID?
   private var acceptanceVMReceiptObserver: NSObjectProtocol?
+  private var acceptanceWebFactory: AcceptanceWebDiagnosticsFactory?
 #endif
 
   override func application(
@@ -29,6 +30,13 @@ import NetworkExtension
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
 #if FLUTTER_VLESS_ACCEPTANCE_TESTING
     startAcceptanceVMReceipt(registry: engineBridge.pluginRegistry)
+    if ProcessInfo.processInfo.arguments.contains("--flutter-vless-acceptance-web-diagnostics"),
+       Bundle.main.bundleIdentifier == "dev.tfox.flutterXrayExample",
+       let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "FlutterVlessAcceptanceWeb") {
+      let factory = AcceptanceWebDiagnosticsFactory(registrar: registrar)
+      acceptanceWebFactory = factory
+      registrar.register(factory, withId: "dev.tfox.flutterXrayExample/acceptanceWeb")
+    }
     let channel = FlutterMethodChannel(
       name: "dev.tfox.flutterXrayExample/acceptance",
       binaryMessenger: engineBridge.applicationRegistrar.messenger()

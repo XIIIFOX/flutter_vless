@@ -1,0 +1,18 @@
+{
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {
+        "fragment": {
+          "packets": "tlshello",
+          "length": "100-200",
+          "interval": "10-20"
+        },
+        "noises": [
+          {"type": "rand", "packet": "8-16", "delay": "1-2", "applyTo": "ip"}
+        ]
+      }
+    }
+  ]
+}

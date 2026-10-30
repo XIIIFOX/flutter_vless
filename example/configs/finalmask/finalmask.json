@@ -1,0 +1,32 @@
+{
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {},
+      "streamSettings": {
+        "finalmask": {
+          "tcp": [
+            {
+              "type": "fragment",
+              "settings": {
+                "packets": "tlshello",
+                "length": "100-200",
+                "delay": "10-20"
+              }
+            }
+          ],
+          "udp": [
+            {
+              "type": "noise",
+              "settings": {
+                "reset": 0,
+                "noise": [{"rand": "8-16", "delay": "1-2"}]
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

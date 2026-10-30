@@ -144,7 +144,7 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
                    [('core_source', 'module_cache_before_sha256'), ('replacement', 'core_copy_sha256')]):
         raise ValueError('Framework changed during packaging')
     git_bindings(repository, head, sources)
-    manifest = {'success': True, 'platform': platform, 'head': head, 'release_version': '26.10.29', 'runtime_revision': 'r2',
+    manifest = {'success': True, 'platform': platform, 'head': head, 'release_version': '26.10.29', 'runtime_revision': 'r3',
                 'core_commit': pin['core_commit'], 'core_version': pin['module_version'], 'core_sum': pin['module_sum'],
                 'archive': archive.name, 'archive_sha256': digest(archive), 'framework_sha256': files,
                 'architectures': architectures, 'strong_exports': symbols, 'source_sha256': sources,

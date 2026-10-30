@@ -88,7 +88,7 @@ public enum GeoDatAssetPolicy {
 /// Both managed features are checked before any current session is released.
 public enum ManagedServiceAssetPolicy {
     public static func validate(_ data: Data, directory: String?, geodataCapability: Int64, xdriveCapability: Int64) throws {
-        if try XdriveServicePolicy.requiresLifetime(data), xdriveCapability != 1 { throw GeoDatAssetError.runtimeUnavailable }
+        if try XdriveServicePolicy.requiresLifetime(data), xdriveCapability != 2 { throw GeoDatAssetError.runtimeUnavailable }
         try GeoDatAssetPolicy.validate(data, directory: directory, lifetimeCapability: geodataCapability)
     }
 }

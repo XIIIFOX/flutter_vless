@@ -85,7 +85,7 @@ state = {'success':False, 'core':version, 'core_module':module, 'core_sum':check
          'h3_lifetime_patch_sha256':before['third_party/xray-native-dns/h3_lifetime_patch.py'],
          'xdrive_lifetime_patch_sha256':before['third_party/xray-native-dns/xdrive_lifetime_patch.py'],
          'geodata_lifetime_patch_sha256':before['third_party/xray-native-dns/geodata_lifetime_patch.py'],
-         'managed_service_lifetime_capabilities_expected':{'xdrive':1,'geodata':1},
+         'managed_service_lifetime_capabilities_expected':{'xdrive':2,'geodata':1},
          'darwin_interface_binding_source_applied':True,
          'darwin_interface_binding_capability_expected':1,
          'darwin_interface_binding_tag':'flutter_vless_darwin_interface_binding',

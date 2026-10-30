@@ -68,10 +68,11 @@ class XdriveServicePolicyTest {
 
     @Test fun capabilityReplyRejectsLegacyMalformedAndUnknownProtocols() {
         fun parse(raw: String) = ManagedServiceCapabilities.parse(raw.toByteArray())
+        assertEquals(7, parse("""{"stage":"capabilities","code":0,"managed_service_lifetimes":7}"""))
         assertEquals(3, parse("""{"stage":"capabilities","code":0,"managed_service_lifetimes":3}"""))
         for (raw in listOf("", "1", "[]", "{}", "version26.10.29",
             """{"stage":"capabilities","code":0,"capability":1}""",
-            """{"stage":"capabilities","code":0,"managed_service_lifetimes":4}""",
+            """{"stage":"capabilities","code":0,"managed_service_lifetimes":8}""",
             """{"stage":"capabilities","code":0,"managed_service_lifetimes":"3"}""",
             """{"stage":"capabilities","code":0,"managed_service_lifetimes":3} {}""",
             """{"stage":"capabilities","code":0,"managed_service_lifetimes":0,"managed_service_lifetimes":3}""",
@@ -86,10 +87,12 @@ class XdriveServicePolicyTest {
             .getJSONObject(0).getJSONObject("config")
         assertFalse(ManagedServiceCapabilities.allows(source.toString(), 0))
         assertFalse(ManagedServiceCapabilities.allows(source.toString(), ManagedServiceCapabilities.GEODATA))
+        for (old in listOf(2, 3, 4, 5)) assertFalse(ManagedServiceCapabilities.allows(source.toString(), old))
+        assertEquals(6, ManagedServiceCapabilities.required(source.toString()))
         assertTrue(ManagedServiceCapabilities.allows(source.toString(), ManagedServiceCapabilities.XDRIVE))
         source.put("geodata", JSONObject().put("cron", "@every 1m"))
-        assertEquals(3, ManagedServiceCapabilities.required(source.toString()))
+        assertEquals(7, ManagedServiceCapabilities.required(source.toString()))
         assertFalse(ManagedServiceCapabilities.allows(source.toString(), ManagedServiceCapabilities.XDRIVE))
-        assertTrue(ManagedServiceCapabilities.allows(source.toString(), 3))
+        assertTrue(ManagedServiceCapabilities.allows(source.toString(), 7))
     }
 }

@@ -12,7 +12,7 @@ private var proxyStartedData: [Data] = []
 private var prepareCount = 0
 private func FLVlessHasCorePreflight() -> Bool { available }
 private func FLVlessCoreGeodataLifetimeCapability() -> Int64 { 1 }
-private func FLVlessCoreXdriveLifetimeCapability() -> Int64 { 1 }
+private func FLVlessCoreXdriveLifetimeCapability() -> Int64 { 2 }
 private func FLVlessCheckCorePrivate(_ data: Data) -> Int64 {
     events.append("check"); checkedData.append(data)
     return rejectPreparedCheck && data == Data(#"{"fixture":"prepared-new"}"#.utf8) ? 3 : coreCode

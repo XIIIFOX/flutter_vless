@@ -80,11 +80,11 @@ func requireManagedServiceLifetimeCapabilities() {
     guard FLVlessCoreGeodataLifetimeCapability() == 1 else {
         print("APPLE_GEODATA_LIFETIME_CAPABILITY_FAILED"); exit(1)
     }
-    guard FLVlessCoreXdriveLifetimeCapability() == 1 else {
+    guard FLVlessCoreXdriveLifetimeCapability() == 2 else {
         print("APPLE_XDRIVE_LIFETIME_CAPABILITY_FAILED"); exit(1)
     }
     print("APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1")
-    print("APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=1")
+    print("APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=2")
 }
 func runModes() async {
     requireManagedServiceLifetimeCapabilities()

@@ -2,7 +2,9 @@ import Foundation
 
 @main struct GeoDatPolicyChecks {
     static func rejects(_ operation: () throws -> Void) {
-        do { try operation(); preconditionFailure("GeoDAT invalid preparation admitted") } catch {}
+        do { try operation() } catch { return }
+        FileHandle.standardError.write(Data("GeoDAT invalid preparation admitted\n".utf8))
+        exit(1)
     }
     static func main() throws {
         let manager=FileManager.default
@@ -43,6 +45,16 @@ import Foundation
         precondition(afterChildren==["custom.DAT"])
         let alias=Data(#"{"GEODATA":{"Cron":"@daily","Aſſets":[]}}"#.utf8)
         try GeoDatAssetPolicy.validate(alias,directory:nil,lifetimeCapability:1)
+        let cloud = Data(#"{"outbounds":[{"protocol":"socks","streamSettings":{"network":"xdrive","xdriveSettings":{"service":"s3","remoteFolder":"synthetic-idle-worker","secrets":["synthetic-access","synthetic-secret"],"s3":{"endpoint":"https://example.test","bucket":"synthetic","pathStyle":true}}}}]}"#.utf8)
+        for oldOrUnknown: Int64 in [0, 1, 3, -1] {
+            rejects { try ManagedServiceAssetPolicy.validate(cloud,directory:nil,geodataCapability:1,xdriveCapability:oldOrUnknown) }
+        }
+        try ManagedServiceAssetPolicy.validate(cloud,directory:nil,geodataCapability:1,xdriveCapability:2)
+        try ManagedServiceAssetPolicy.validate(cloud,directory:nil,geodataCapability:0,xdriveCapability:2)
+        try ManagedServiceAssetPolicy.validate(Data("{}".utf8),directory:nil,geodataCapability:0,xdriveCapability:0)
+        rejects { try ManagedServiceAssetPolicy.validate(reload,directory:nil,geodataCapability:0,xdriveCapability:2) }
+        try ManagedServiceAssetPolicy.validate(reload,directory:nil,geodataCapability:1,xdriveCapability:0)
+        print("PASS managed service exact Geo1/Xdrive2; r2 and unknown XDRIVE denied")
         print("PASS GeoDAT actual policy old-capability/default-readonly/custom-root/atomic-probe/cleanup")
     }
 }

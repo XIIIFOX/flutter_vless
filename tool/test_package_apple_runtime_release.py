@@ -55,7 +55,7 @@ class CanonicalPackageTests(unittest.TestCase):
         (self.root/'third_party/xray-vpn-routing/pin-manifest.json').write_text(json.dumps(self.pin))
         self.report['source_sha256'] = {name: builder.digest(self.root/name) for name in names}
         self.report.update(xdrive_lifetime_applied=True, geodata_lifetime_applied=True,
-                           managed_service_lifetime_capabilities_expected={'xdrive':1,'geodata':1},
+                           managed_service_lifetime_capabilities_expected={'xdrive':2,'geodata':1},
                            xdrive_lifetime_patch_sha256=builder.digest(self.root/'third_party/xray-native-dns/xdrive_lifetime_patch.py'),
                            geodata_lifetime_patch_sha256=builder.digest(self.root/'third_party/xray-native-dns/geodata_lifetime_patch.py'))
         self.receipt = self.root/'producer.json'
@@ -108,7 +108,9 @@ class CanonicalPackageTests(unittest.TestCase):
     def test_old_CA_toolchain_wrong_capability_or_h2buf_refused(self):
         framework=self.framework('ios');original=copy.deepcopy(self.report)
         for key,value in [('go_version','go1.27.2'),('routing_capability_expected',0),
-                          ('darwin_interface_binding_capability_expected',True),('h2buf_cap_kib',512),('success',False)]:
+                          ('darwin_interface_binding_capability_expected',True),
+                          ('managed_service_lifetime_capabilities_expected',{'xdrive':1,'geodata':1}),
+                          ('h2buf_cap_kib',512),('success',False)]:
             self.report=copy.deepcopy(original);self.report[key]=value
             with self.subTest(key=key),self.assertRaises(ValueError):self.run_package('ios',framework)
         self.assertFalse((self.root/'packed-ios').exists())

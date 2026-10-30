@@ -468,8 +468,9 @@ void AssetLocationCases() {
 void XdriveServiceCases() {
   using namespace flutter_vless::managed_services;
   Check(ParseCapabilities(R"({"stage":"capabilities","code":0,"managed_service_lifetimes":3})") == 3, "new managed runtime capability missing");
+  Check(ParseCapabilities(R"({"stage":"capabilities","code":0,"managed_service_lifetimes":7})") == 7, "worker-owned managed runtime capability missing");
   for (const auto* reply : {"", "{}", "1", R"({"stage":"capabilities","code":0,"capability":1})",
-      R"({"stage":"capabilities","code":0,"managed_service_lifetimes":4})",
+      R"({"stage":"capabilities","code":0,"managed_service_lifetimes":8})",
       R"({"stage":"capabilities","code":0,"managed_service_lifetimes":"3"})",
       R"({"stage":"capabilities","code":0,"managed_service_lifetimes":0,"managed_service_lifetimes":3})"})
     Check(ParseCapabilities(reply) == 0, "legacy/malformed managed capability accepted");
@@ -490,6 +491,8 @@ void XdriveServiceCases() {
     Check(proxy["settings"] == original["settings"], "unused logical protocol identity changed");
     Check(proxy["streamSettings"]["xdriveSettings"] == original["streamSettings"]["xdriveSettings"], "cloud identity/signing URL/prefix changed");
     Check(RequiresXdriveLifetime(final), "prepared cloud transport lost mandatory capability");
+    Check(Required(final) == 6, "XDRIVE did not require storage AND idle-worker ownership");
+    for (const auto old : {2u, 3u, 4u, 5u}) Check(!Allows(final, old), "r2/partial custom SDK admitted XDRIVE without worker ownership");
     Check(!Allows(final, 0) && !Allows(final, kGeodata) && Allows(final, kXdrive), "old/custom SDK admitted XDRIVE without owner capability");
   }
   for (const size_t index : {size_t{0}, size_t{2}}) {

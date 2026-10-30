@@ -4,7 +4,7 @@
 #include "geodata_assets.h"
 
 namespace flutter_vless::managed_services {
-constexpr unsigned kGeodata = 1, kXdrive = 2;
+constexpr unsigned kGeodata = 1, kXdriveStorage = 2, kXdriveWorkers = 4, kXdrive = kXdriveStorage | kXdriveWorkers;
 inline unsigned ParseCapabilities(const std::string& bytes) {
   if (bytes.empty() || bytes.size() > 4096) return 0;
   bool duplicate = false; std::set<std::string> seen;
@@ -16,7 +16,7 @@ inline unsigned ParseCapabilities(const std::string& bytes) {
       || !value.contains("code") || !value["code"].is_number_integer() || value["code"] != 0
       || !value.contains("managed_service_lifetimes") || !value["managed_service_lifetimes"].is_number_integer()) return 0;
   const auto result = value["managed_service_lifetimes"].get<int64_t>();
-  return result >= 0 && result <= 3 ? static_cast<unsigned>(result) : 0;
+  return result >= 0 && result <= 7 ? static_cast<unsigned>(result) : 0;
 }
 inline unsigned Required(const xray_config::Json& config) {
   return (geodata_assets::HasSchedule(config) ? kGeodata : 0) |

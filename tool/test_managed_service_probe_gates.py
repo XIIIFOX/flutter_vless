@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-MARKERS = ['APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1', 'APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=1']
+MARKERS = ['APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1', 'APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=2']
 
 
 class ManagedRuntimeProbeGates(unittest.TestCase):
@@ -27,6 +27,13 @@ class ManagedRuntimeProbeGates(unittest.TestCase):
                         self.qualifier(platform, bad)
                 self.qualifier(platform, '', required=False)
 
+    def test_published_r2_xdrive_one_and_unknown_values_are_rejected(self):
+        for platform in ('ios', 'macos'):
+            for old_or_unknown in ('0', '1', '3', '-1'):
+                with self.subTest(platform=platform, xdrive=old_or_unknown):
+                    with self.assertRaises(AssertionError):
+                        self.qualifier(platform, MARKERS[0] + '\nAPPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=' + old_or_unknown)
+
     def test_fakedns_shortcut_keeps_the_real_value_probe(self):
         for platform in ('ios', 'macos'):
             source = (ROOT / f'tool/test_{platform}_privacy_runtime.sh').read_text()
@@ -37,13 +44,13 @@ class ManagedRuntimeProbeGates(unittest.TestCase):
         self.assertIn('SIMCTL_CHILD_REQUIRE_MANAGED_SERVICE_LIFETIMES="${REQUIRE_MANAGED_SERVICE_LIFETIMES:-0}"',
                       (ROOT / 'tool/test_ios_privacy_runtime.sh').read_text())
 
-    def test_swift_probe_calls_both_exports_with_exact_one(self):
+    def test_swift_probe_calls_exports_with_exact_geo_one_and_xdrive_two(self):
         source = (ROOT / 'tool/fixtures/ios_privacy_probe.swift').read_text()
         begin = source.index('func requireManagedServiceLifetimeCapabilities() {')
         end = source.index('\n}\n', begin)
         body = source[begin:end]
         self.assertIn('FLVlessCoreGeodataLifetimeCapability() == 1', body)
-        self.assertIn('FLVlessCoreXdriveLifetimeCapability() == 1', body)
+        self.assertIn('FLVlessCoreXdriveLifetimeCapability() == 2', body)
         for marker in MARKERS:
             self.assertEqual(body.count(marker), 1)
 

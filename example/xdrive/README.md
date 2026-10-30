@@ -37,14 +37,15 @@ your deployment deliberately provides that fronting service.
 ## Native runtime requirement
 
 XDRIVE admission requires the managed service lifetime patch as well as Core
-26.10.29. The original public 26.10.29 runtime and custom runtimes without the
-capability are refused for active XDRIVE, before replacing a running session.
+26.10.29. The original public 26.10.29 runtime, the earlier r2 storage-only capability,
+and custom runtimes without worker ownership are refused for active XDRIVE,
+before replacing a running session.
 Updating only the Flutter package or checking the Core version is insufficient.
 
 | Platform | Required runtime capability |
 | --- | --- |
-| Android, Windows | `native-services capabilities`: code zero, `managed_service_lifetimes` containing bit `2` |
-| iOS, macOS | `XdriveLifetimeCapability()` exactly `1`, exposed through `FLVlessCoreXdriveLifetimeCapability()` |
+| Android, Windows | `native-services capabilities`: code zero, `managed_service_lifetimes` containing both storage bit `2` and worker bit `4` (`6`; `7` with GeoDAT) |
+| iOS, macOS | `XdriveLifetimeCapability()` exactly `2`, exposed through `FLVlessCoreXdriveLifetimeCapability()` |
 
 The producer builds require both managed lifetime patches. If GeoDAT scheduling
 is also enabled, its separate capability is required too. Use the immutable

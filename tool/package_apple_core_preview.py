@@ -43,7 +43,8 @@ def digest(path):
 def require_managed_lifetimes(report, sources):
     capabilities = report.get('managed_service_lifetime_capabilities_expected')
     if not isinstance(capabilities, dict) or set(capabilities) != {'xdrive', 'geodata'} \
-            or any(type(value) is not int or value != 1 for value in capabilities.values()):
+            or any(type(capabilities[key]) is not int or capabilities[key] != value
+                   for key, value in {'xdrive': 2, 'geodata': 1}.items()):
         raise ValueError('Managed-service capability contract differs')
     for label, path in [('xdrive', XDRIVE_PATCH), ('geodata', GEODATA_PATCH)]:
         if report.get(label+'_lifetime_applied') is not True or path not in sources \

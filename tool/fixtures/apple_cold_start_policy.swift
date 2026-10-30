@@ -334,4 +334,4 @@ final class Provider {
 }
 
 func FLVlessCoreGeodataLifetimeCapability() -> Int64 { 1 }
-func FLVlessCoreXdriveLifetimeCapability() -> Int64 { 1 }
+func FLVlessCoreXdriveLifetimeCapability() -> Int64 { 2 }

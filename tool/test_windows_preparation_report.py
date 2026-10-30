@@ -231,6 +231,10 @@ int main() try {
       && native_state.capability_calls == 1, "unsupported managed runtime persisted private input");
   native_state.capability_command = true;
   native_state.capabilities = R"({"stage":"capabilities","code":0,"managed_service_lifetimes":3})";
+  Require(!CheckPreparedConfig(cloud, runtime, checked, {}, &failure)
+      && failure == Stage::prepare && checked.empty() && native_state.written == exact
+      && native_state.capability_calls == 2, "older storage-only runtime persisted worker-owned cloud input");
+  native_state.capabilities = R"({"stage":"capabilities","code":0,"managed_service_lifetimes":7})";
   Require(CheckPreparedConfig(cloud, runtime, checked, {}, &failure)
       && native_state.written == cloud, "actual managed preflight gate refused the matching runtime");
   std::cout << "WINDOWS_PREPARATION_REPORT_CONSUMER_PASS=12\n";

@@ -161,4 +161,4 @@ final class Provider: @unchecked Sendable {
 }
 
 func FLVlessCoreGeodataLifetimeCapability() -> Int64 { 1 }
-func FLVlessCoreXdriveLifetimeCapability() -> Int64 { 1 }
+func FLVlessCoreXdriveLifetimeCapability() -> Int64 { 2 }

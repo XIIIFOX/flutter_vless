@@ -13,7 +13,7 @@ import test_native_dns_context_runtime as processes
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE_TAG = 'v26.10.29'
-RELEASE_VERSION = '26.10.29-protect2'
+RELEASE_VERSION = '26.10.29-protect3'
 GO_VERSION = 'go1.27.3'
 ABIS = ('arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64')
 RUNTIME = 'android_runtime/xray_android'
@@ -244,7 +244,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--head', required=True)
-    parser.add_argument('--release', action='store_true', help='Signed final26.10.29-protect2 candidate; never publish')
+    parser.add_argument('--release', action='store_true', help='Signed final 26.10.29-protect3 candidate; never publish')
     args = parser.parse_args()
     try:
         build(args.output, args.head, release=args.release)

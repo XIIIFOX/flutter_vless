@@ -36,7 +36,7 @@ int main(void) { @autoreleasepool {
     assert(FLVlessCoreGeodataLifetimeCapability() == 0);
 #endif
 #ifdef XDRIVE_LIFETIME_CAP
-    assert(FLVlessCoreXdriveLifetimeCapability() == (XDRIVE_LIFETIME_CAP == 1 ? 1 : 0));
+    assert(FLVlessCoreXdriveLifetimeCapability() == (XDRIVE_LIFETIME_CAP == 2 ? 2 : 0));
 #else
     assert(FLVlessCoreXdriveLifetimeCapability() == 0);
 #endif
@@ -171,15 +171,16 @@ for suffix in ("Check", "Start"):
     assert entry == anchor + offset, (suffix, anchor, entry, offset)
 PY
     printf 'BRIDGE_ANCHOR_SHAPE arch=%s offset=%s\n' "$ARCH" "$ENTRY_OFFSET"
-for variant in legacy current routing cap0 unknown missing-cap missing-check missing-start binding binding0 binding-unknown managed-both managed0 managed-unknown geodata-only xdrive-only; do
+for variant in legacy current routing cap0 unknown missing-cap missing-check missing-start binding binding0 binding-unknown managed-both managed-v1 managed0 managed-unknown geodata-only xdrive-only; do
     FLAGS=(-DLEGACY_RUNTIME)
     case "$variant" in
         current) FLAGS=(-DWITH_RUNTIME) ;;
-        managed-both) FLAGS=(-DWITH_RUNTIME -DGEODATA_LIFETIME_CAP=1 -DXDRIVE_LIFETIME_CAP=1) ;;
+        managed-both) FLAGS=(-DWITH_RUNTIME -DGEODATA_LIFETIME_CAP=1 -DXDRIVE_LIFETIME_CAP=2) ;;
+        managed-v1) FLAGS=(-DWITH_RUNTIME -DGEODATA_LIFETIME_CAP=1 -DXDRIVE_LIFETIME_CAP=1) ;;
         managed0) FLAGS=(-DWITH_RUNTIME -DGEODATA_LIFETIME_CAP=0 -DXDRIVE_LIFETIME_CAP=0) ;;
-        managed-unknown) FLAGS=(-DWITH_RUNTIME -DGEODATA_LIFETIME_CAP=2 -DXDRIVE_LIFETIME_CAP=2) ;;
+        managed-unknown) FLAGS=(-DWITH_RUNTIME -DGEODATA_LIFETIME_CAP=2 -DXDRIVE_LIFETIME_CAP=3) ;;
         geodata-only) FLAGS=(-DWITH_RUNTIME -DGEODATA_LIFETIME_CAP=1) ;;
-        xdrive-only) FLAGS=(-DWITH_RUNTIME -DXDRIVE_LIFETIME_CAP=1) ;;
+        xdrive-only) FLAGS=(-DWITH_RUNTIME -DXDRIVE_LIFETIME_CAP=2) ;;
 
         binding) FLAGS=(-DWITH_RUNTIME -DBINDING_CAP=1) ;;
         binding0) FLAGS=(-DWITH_RUNTIME -DBINDING_CAP=0) ;;

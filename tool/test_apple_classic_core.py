@@ -171,7 +171,7 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.assertEqual(report['h3_lifetime_patch_sha256'], helper.digest(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py'))
         self.assertTrue(report['xdrive_lifetime_applied'])
         self.assertTrue(report['geodata_lifetime_applied'])
-        self.assertEqual(report['managed_service_lifetime_capabilities_expected'], {'xdrive': 1, 'geodata': 1})
+        self.assertEqual(report['managed_service_lifetime_capabilities_expected'], {'xdrive': 2, 'geodata': 1})
         self.assertIn('no full native-DNS context overlay', report['scope'])
         self.assertEqual(report['stage'], 'pre-build-preparation')
         self.assertEqual(report['source_sha256'].get('third_party/xray-vpn-routing/pin-manifest.json'),

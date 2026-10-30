@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from package_apple_core_preview import digest, git_bindings
 
 ROOT = Path(__file__).resolve().parents[2]
-REVISION = '26.10.29-r2'
+REVISION = '26.10.29-r3'
 
 
 def capabilities(executable):
@@ -23,9 +23,9 @@ def capabilities(executable):
     if len(child.stdout) > 4096 or child.stderr:
         raise ValueError('Unexpected capability output')
     value = json.loads(child.stdout)
-    if value != {'stage': 'capabilities', 'code': 0, 'managed_service_lifetimes': 3} \
+    if value != {'stage': 'capabilities', 'code': 0, 'managed_service_lifetimes': 7} \
             or type(value.get('code')) is not int or type(value.get('managed_service_lifetimes')) is not int:
-        raise ValueError('Managed lifetime capabilities must equal 3')
+        raise ValueError('Managed lifetime capabilities must equal 7')
     return value
 
 

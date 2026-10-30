@@ -175,7 +175,7 @@ def prepare(mobile, destination, go, *, routing=False):
               'darwin_interface_binding_patch_sha256': digest(ROOT / 'third_party/xray-native-dns/darwin_interface_bind_patch.py'),
               'darwin_interface_binding_capability_expected': 1,
               'xdrive_lifetime_applied': True, 'geodata_lifetime_applied': True,
-              'managed_service_lifetime_capabilities_expected': {'xdrive': 1, 'geodata': 1},
+              'managed_service_lifetime_capabilities_expected': {'xdrive': 2, 'geodata': 1},
               'xdrive_lifetime_patch_sha256': digest(ROOT / 'third_party/xray-native-dns/xdrive_lifetime_patch.py'),
               'geodata_lifetime_patch_sha256': digest(ROOT / 'third_party/xray-native-dns/geodata_lifetime_patch.py'),
               'replacement': str(effective), 'source_sha256': input_hashes,

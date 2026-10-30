@@ -36,7 +36,7 @@ class Packaging(unittest.TestCase):
                            input_sha256={'fixture.py':'a'*64})
         self.producer = self.root/'producer.json'
         self.producer.write_text(json.dumps(self.report))
-        self.capability = {'stage':'capabilities','code':0,'managed_service_lifetimes':3}
+        self.capability = {'stage':'capabilities','code':0,'managed_service_lifetimes':7}
 
     def package(self):
         self.producer.write_text(json.dumps(self.report))
@@ -49,7 +49,7 @@ class Packaging(unittest.TestCase):
     def test_exact_core_and_full_geodata_archive(self):
         value = self.package()
         self.assertTrue(value['success']); self.assertFalse(value['published'])
-        self.assertEqual(value['runtime_revision'], '26.10.29-r2')
+        self.assertEqual(value['runtime_revision'], '26.10.29-r3')
         with zipfile.ZipFile(self.output/value['archive']) as packed:
             self.assertEqual(set(packed.namelist()), {'xray.exe','geoip.dat','geosite.dat','LICENSE.xray-core'})
             for name in ('xray.exe','geoip.dat','geosite.dat'): self.assertEqual(packed.read(name), (self.runtime/name).read_bytes())
@@ -80,7 +80,7 @@ class Packaging(unittest.TestCase):
 
     def test_capability_command_is_bounded_and_requires_both_services(self):
         from subprocess import CompletedProcess
-        for payload in [b'{"stage":"capabilities","code":0,"managed_service_lifetimes":1}', b'{"stage":"capabilities","code":false,"managed_service_lifetimes":3}', b'{}', b'x'*4097]:
+        for payload in [b'{"stage":"capabilities","code":0,"managed_service_lifetimes":1}', b'{"stage":"capabilities","code":0,"managed_service_lifetimes":3}', b'{"stage":"capabilities","code":false,"managed_service_lifetimes":7}', b'{}', b'x'*4097]:
             with self.subTest(payload=payload[:50]), patch.object(subject.sys, 'platform', 'win32'), patch.object(subject.subprocess, 'run', return_value=CompletedProcess([],0,payload,b'')) as child:
                 with self.assertRaises(ValueError): subject.capabilities(self.runtime/'xray.exe')
                 self.assertEqual(child.call_args.kwargs['timeout'], 10)

@@ -57,7 +57,7 @@ class AppleSDKPackagingTests(unittest.TestCase):
                              h3_lifetime_patch_sha256=bindings[subject.H3_PATCH], core_source=str(self.cache),
                              core_replacement=str(self.core), module_cache_before_sha256=subject.tree(self.cache),
                              core_copy_sha256=subject.tree(self.core), mobile_copy_sha256=subject.tree(self.mobile))
-        self.producer.update(managed_service_lifetime_capabilities_expected={'xdrive':1,'geodata':1},
+        self.producer.update(managed_service_lifetime_capabilities_expected={'xdrive':2,'geodata':1},
                              xdrive_lifetime_patch_sha256=bindings[subject.XDRIVE_PATCH],
                              geodata_lifetime_patch_sha256=bindings[subject.GEODATA_PATCH])
         self.summary = dict(platform='ios', core=self.pin['module_version'], preflightABI=1, published=False)
@@ -141,6 +141,7 @@ class AppleSDKPackagingTests(unittest.TestCase):
                            ('darwin_interface_binding_source_applied', False),
                            ('darwin_interface_binding_capability_expected', True),
                            ('darwin_interface_binding_patch_sha256', '0'*64),
+                           ('managed_service_lifetime_capabilities_expected', {'xdrive': 1, 'geodata': 1}),
                            ('lifetime_patch_scope', ['classic_dns'])]:
             with self.subTest(key=key):
                 self.producer = copy.deepcopy(original); self.producer[key] = value; self.write_receipts()

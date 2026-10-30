@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Final releases are compiled in an owned CI tree. The stock-input path below
 # remains available for historical fake-JVM fixtures, never for a new version.
 if [ "${XRAY_BUILD_FRESH_RELEASE:-0}" = 1 ]; then
-  test "${XRAY_RUNTIME_VERSION:-26.10.29-protect2}" = "26.10.29-protect2"
+  test "${XRAY_RUNTIME_VERSION:-26.10.29-protect3}" = "26.10.29-protect3"
   test "${XRAY_CORE_VERSION:-26.10.29}" = "26.10.29"
   RELEASE_HEAD="$(git -C "$ROOT_DIR" rev-parse HEAD)"
   python3 "$ROOT_DIR/tool/build_android_runtime_preview.py" \

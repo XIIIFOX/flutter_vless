@@ -6,7 +6,9 @@ import org.json.JSONTokener
 /** Fixed CLI reply only; absence, unknown bits and malformed replies deny admission. */
 internal object ManagedServiceCapabilities {
     const val GEODATA = 1
-    const val XDRIVE = 2
+    const val XDRIVE_STORAGE = 2
+    const val XDRIVE_WORKERS = 4
+    const val XDRIVE = 6 // Both owned storage and idle workers are mandatory.
     fun required(json: String): Int = (if (XrayGeodataAssets.hasSchedule(json)) GEODATA else 0) or
         (if (XdriveServicePolicy.requiresLifetime(json)) XDRIVE else 0)
     fun allows(json: String, capabilities: Int): Boolean = required(json).let { (it and capabilities) == it }
@@ -20,7 +22,7 @@ internal object ManagedServiceCapabilities {
                 value.keys().asSequence().toSet() != setOf("stage", "code", "managed_service_lifetimes") ||
                 value.opt("stage") != "capabilities" || value.opt("code") !is Int || value.getInt("code") != 0 ||
                 value.opt("managed_service_lifetimes") !is Int) 0
-            else value.getInt("managed_service_lifetimes").takeIf { it in 0..3 } ?: 0
+            else value.getInt("managed_service_lifetimes").takeIf { it in 0..7 } ?: 0
         }
     } catch (_: Exception) { 0 }
 }

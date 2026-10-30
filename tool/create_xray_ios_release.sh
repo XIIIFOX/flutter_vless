@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 XRAY_VERSION="${XRAY_VERSION:-v26.10.29}"
-RELEASE_TAG="${RELEASE_TAG:-xray-ios-$XRAY_VERSION-r2}"
+RELEASE_TAG="${RELEASE_TAG:-xray-ios-$XRAY_VERSION-r3}"
 XCFRAMEWORK_PATH="${XCFRAMEWORK_PATH:-$REPO_ROOT/ios/XRay.xcframework}"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/build/xray-ios-release}"
 NOTES_FILE="${NOTES_FILE:-$REPO_ROOT/doc/release/$RELEASE_TAG.md}"
@@ -19,7 +19,7 @@ fi
 
 PREPARATION_RECEIPT="${PREPARATION_RECEIPT:-$REPO_ROOT/ios/build_xray_ios/classic-core-inputs.json}"
 : "${SOURCE_HEAD:?Set SOURCE_HEAD to the exact committed producer revision}"
-[[ "$XRAY_VERSION" == v26.10.29 && "$RELEASE_TAG" == xray-ios-v26.10.29-r2 ]] || { echo 'Unexpected canonical runtime release tag' >&2; exit 1; }
+[[ "$XRAY_VERSION" == v26.10.29 && "$RELEASE_TAG" == xray-ios-v26.10.29-r3 ]] || { echo 'Unexpected canonical runtime release tag' >&2; exit 1; }
 python3 "$REPO_ROOT/tool/package_apple_runtime_release.py" --platform ios \
     --framework "$XCFRAMEWORK_PATH" --preparation "$PREPARATION_RECEIPT" \
     --output "$OUTPUT_DIR" --head "$SOURCE_HEAD"

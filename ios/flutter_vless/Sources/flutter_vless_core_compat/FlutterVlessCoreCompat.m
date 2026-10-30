@@ -33,7 +33,7 @@ int64_t FLVlessCoreGeodataLifetimeCapability(void) {
 }
 int64_t FLVlessCoreXdriveLifetimeCapability(void) {
     int64_t (*volatile capability)(void) = XRayXdriveLifetimeCapability;
-    return capability() == 1 ? 1 : 0;
+    return capability() == 2 ? 2 : 0;
 }
 
 

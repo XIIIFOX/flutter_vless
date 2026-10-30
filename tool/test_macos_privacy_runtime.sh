@@ -69,7 +69,7 @@ import os, sys
 text=Path(sys.argv[1]).read_text()
 assert text.splitlines().count("RUNTIME=26.10.29") == 1, "Unexpected embedded Xray version"
 if os.environ.get('REQUIRE_MANAGED_SERVICE_LIFETIMES') == '1':
-    for marker in ['APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1', 'APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=1']:
+    for marker in ['APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1', 'APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=2']:
         assert text.splitlines().count(marker) == 1, 'Missing or duplicate managed lifetime capability value'
 
 if os.environ.get('REQUIRE_DARWIN_INTERFACE_BINDING') == '1':

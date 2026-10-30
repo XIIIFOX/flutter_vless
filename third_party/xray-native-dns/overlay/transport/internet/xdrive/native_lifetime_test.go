@@ -74,8 +74,18 @@ func TestNativeXdriveSlotAndListenerWorkersFollowOwnedLifetime(t *testing.T) {
 	if parent.Err() != nil || coreContext.Err() != nil {
 		t.Fatal("cloud worker cancellation escaped to Core/caller")
 	}
-	if listener.Err() != context.Canceled {
+	// Owner cancellation links through context.AfterFunc, whose callback runs
+	// asynchronously. Observe completion, without assuming scheduler order.
+	select {
+	case <-listener.Done():
+		if listener.Err() != context.Canceled {
+			t.Fatal("listener closed without owned cancellation")
+		}
+	case <-time.After(time.Second):
 		t.Fatal("idle listener survived service owner Close")
+	}
+	if parent.Err() != nil || coreContext.Err() != nil {
+		t.Fatal("completed worker cancellation escaped to Core/caller")
 	}
 	select {
 	case _, open := <-connection.reader.chunks():

@@ -26,7 +26,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   Flutter: 71a624a5bc0c04062bf19101d501e466baf2fb47
-  flutter_vless: 8601f98acaf1fa5fee2231e7990f454695c208a6
+  flutter_vless: 603cc11b6903670c2d66a8f26971063e28835d27
   integration_test: 4a889634ef21a45d28d50d622cf412dc6d9f586e
   shared_preferences_foundation: a7c3904f2dedb3701dd1903cb152ef5e7df92422
 

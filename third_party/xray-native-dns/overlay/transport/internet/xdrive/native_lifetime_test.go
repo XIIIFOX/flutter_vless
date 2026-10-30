@@ -43,7 +43,7 @@ func TestNativeXdriveStorageCannotEscapeItsCoreOrCompiledSocketPolicy(t *testing
 	}
 	owner.Close()
 	owner.Close()
-	if owner.storage != nil || parent.Err() != nil || second.Err() != nil {
+	if owner.ResourceCount() != 0 || parent.Err() != nil || second.Err() != nil {
 		t.Fatal("close retained cache or cancelled a foreign owner")
 	}
 	select {

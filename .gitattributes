@@ -1,5 +1,13 @@
+# Producer source receipts bind the same text bytes on every runner.
+tool/** text=auto eol=lf
+third_party/** text=auto eol=lf
+.github/workflows/** text eol=lf
+
 *.a binary
 *.dat binary
 *.so binary
 example/macos/Runner/xray/xray binary
 ios/XRay.xcframework/**/XRay binary
+
+# Exact upstream fixture bytes are hash-bound on every CI operating system.
+tool/fixtures/xdrive-v26.10.29/** text eol=lf

@@ -32,6 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check routing fixture isolation
+        shell: bash
         run: |
           python tool/windows/test_runtime_fixtures.py
           python tool/windows/test_package_managed_runtime.py

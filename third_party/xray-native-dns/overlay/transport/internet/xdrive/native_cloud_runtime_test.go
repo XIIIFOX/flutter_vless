@@ -131,7 +131,7 @@ func TestAcceptanceXdriveS3RequestsSigningFrontingAndClose(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("S3 server handler did not drain")
 	}
-	if len(owner.storage) != 0 {
+	if owner.ResourceCount() != 0 {
 		t.Fatal("closed owner retained cloud cache")
 	}
 }
@@ -166,7 +166,7 @@ func TestAcceptanceXdriveGoogleDriveRequestsAndFreshOwner(t *testing.T) {
 				t.Fatal(err)
 			}
 		}()
-		if len(owner.storage) != 0 {
+		if owner.ResourceCount() != 0 {
 			t.Fatal("closed Drive cache retained")
 		}
 	}

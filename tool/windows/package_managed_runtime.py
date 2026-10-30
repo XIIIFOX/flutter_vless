@@ -56,7 +56,8 @@ def package(directory, producer_path, destination, head, repository=ROOT):
     rows = json.loads((directory/'proxy-results.json').read_text())
     if not rows or any(row.get('passed') is not True for row in rows):
         raise ValueError('Windows routing and cleanup acceptance is incomplete')
-    routed = {(row.get('host'), row.get('actual')) for row in rows if row.get('host')}
+    routed = {(row.get('host'), row.get('actual')) for row in rows
+              if isinstance(row.get('host'), str) and isinstance(row.get('actual'), str)}
     required_routes = {(host, result) for host in ('2ip.ru', '2ip.io', 'myip.com')
                        for result in ('DIRECT-FIXTURE', 'PROXY-FIXTURE')}
     if not required_routes.issubset(routed) or sum(row.get('check') == 'owned traffic counter sample' for row in rows) != 2:

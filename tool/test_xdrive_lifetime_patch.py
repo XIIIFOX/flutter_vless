@@ -49,7 +49,8 @@ class XdriveLifetimePatchTests(unittest.TestCase):
     def test_patched_core_owns_services_and_preserves_request_context(self):
         patch.apply(self.root, self.replace)
         core = (self.root / 'core/xray.go').read_text()
-        self.assertIn('xdrive.ContextWithNativeLifetime(server.ctx)', core)
+        self.assertIn('internet.ContextWithNativeServiceLifetime(server.ctx)', core)
+        self.assertNotIn('"github.com/xtls/xray-core/transport/internet/xdrive"', core)
         self.assertIn('if done { server.nativeXdriveLifetime.Close() }', core)
         self.assertLess(core.index('s.nativeXdriveLifetime.Close()'), core.index('for _, f := range s.features', core.index('func (s *Instance) Close')))
         source = (self.root / 'transport/internet/xdrive/xdrive.go').read_text()

@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Prepare XDRIVE S3 and Google Drive endpoints and check managed-service capabilities on the executable actually selected for startup. Validate writable GeoDAT targets before persisting private configuration. Package a managed Windows companion only after reverse domain routing, traffic, cleanup and exact-byte checks; ordinary external Core builds remain supported for profiles without managed services.
+
 * Bind tray commands to their displayed action and queued session owner. Reject stale menus after options, profile or connect/disconnect changes; add 31 portable actual-source cases and native tray regressions.
 
 * Admit finite numeric IPv6 TCP proxy endpoints using the selected IPv6 interface and exact owned Core/address/port firewall rules. Preserve prior sessions on rejected preparation and retain the checked interface during recovery.

@@ -1520,6 +1520,65 @@ final class TunnelDNSPolicyTests: XCTestCase {
         try prepared.data.write(to: URL(fileURLWithPath: destination))
         XCTAssertFalse(prepared.data.isEmpty)
     }
+    func testXdriveServiceEndpointsKeepIdentityAndBoundedBootstrap() throws {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("tool/fixtures/compatibility/xdrive-services.json").path) { break }
+            root.deleteLastPathComponent()
+        }
+        let fixtures = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tool/fixtures/compatibility/xdrive-services.json"))) as? [[String: Any]])
+        XCTAssertEqual(fixtures.count, 13)
+        for fixture in fixtures {
+            let name = try XCTUnwrap(fixture["name"] as? String)
+            let source = try XCTUnwrap(fixture["config"] as? [String: Any])
+            let before = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            var lookups: [String] = []
+            let prepared = TunnelXrayConfigPreparer.prepare(jsonData: before, credentials: Self.credentials,
+                tcpPortAvailable: { _ in true }, resolveIPv4: { host in
+                    lookups.append(host); return "192.0.2.17"
+                })
+            if fixture["accepted"] as? Bool == true {
+                let result = try XCTUnwrap(prepared, name)
+                XCTAssertEqual(Set(lookups), Set(try XCTUnwrap(fixture["bootstrapHosts"] as? [String])), name)
+                let final = try XCTUnwrap(JSONSerialization.jsonObject(with: result.data) as? [String: Any])
+                let inputProxy = try XCTUnwrap((source["outbounds"] as? [[String: Any]])?.first)
+                let proxy = try XCTUnwrap((final["outbounds"] as? [[String: Any]])?.first)
+                XCTAssertEqual(proxy["settings"] as? NSDictionary, inputProxy["settings"] as? NSDictionary, name)
+                let oldStream = try XCTUnwrap(inputProxy["streamSettings"] as? [String: Any])
+                let stream = try XCTUnwrap(proxy["streamSettings"] as? [String: Any])
+                XCTAssertEqual(stream["xdriveSettings"] as? NSDictionary, oldStream["xdriveSettings"] as? NSDictionary, name)
+                XCTAssertEqual(stream["address"] as? String, oldStream["address"] as? String, name)
+                XCTAssertEqual(stream["port"] as? Int, oldStream["port"] as? Int, name)
+            } else {
+                XCTAssertNil(prepared, name)
+                XCTAssertTrue(lookups.isEmpty, name)
+            }
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), before, name)
+        }
+        // Cloud listeners also make protected service requests. A literal-only
+        // proxy ensures an ignored inbound cannot pass via another DNS lookup.
+        for index in [0, 2] {
+            let fixture = fixtures[index]
+            var source = try XCTUnwrap(fixture["config"] as? [String: Any])
+            let original = try XCTUnwrap((source["outbounds"] as? [[String: Any]])?.first)
+            let stream = try XCTUnwrap(original["streamSettings"] as? [String: Any])
+            source["outbounds"] = [["protocol": "socks", "tag": "proxy", "settings": ["servers": [["address": "192.0.2.99", "port": 443]]]],
+                ["protocol": "freedom", "tag": "direct"]]
+            source["inbounds"] = [["tag": "cloud-in", "listen": "127.0.0.1", "port": 8443,
+                "protocol": "vless", "settings": ["decryption": "none", "clients": [["id": "11111111-1111-4111-8111-111111111111"]]],
+                "streamSettings": stream]]
+            let before = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+            var lookups: [String] = []
+            let result = try XCTUnwrap(TunnelXrayConfigPreparer.prepare(jsonData: before, credentials: Self.credentials,
+                tcpPortAvailable: { _ in true }, resolveIPv4: { lookups.append($0); return "192.0.2.17" }))
+            XCTAssertEqual(Set(lookups), Set(try XCTUnwrap(fixture["bootstrapHosts"] as? [String])))
+            let final = try XCTUnwrap(JSONSerialization.jsonObject(with: result.data) as? [String: Any])
+            let inbound = try XCTUnwrap((final["inbounds"] as? [[String: Any]])?.first { $0["tag"] as? String == "cloud-in" })
+            XCTAssertEqual((inbound["streamSettings"] as? [String: Any])?["xdriveSettings"] as? NSDictionary, stream["xdriveSettings"] as? NSDictionary)
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys]), before)
+        }
+    }
+
 }
 
 final class TunnelCandidateDNSPolicyTests: XCTestCase {

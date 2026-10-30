@@ -1,5 +1,11 @@
 ## 1.1.7
 
+* Prepare XDRIVE S3 and Google Drive API endpoints on Android, iOS, macOS and Windows while preserving cloud credentials, signing identities and optional fronting settings. Bind cloud client caches and requests to their owning Core instance, and require the matching managed-service runtime capability before startup.
+
+* Support scheduled GeoDAT updates with Core-compatible HTTPS, asset-count and interval checks, writable target validation and bounded cancellation on Stop. Preserve downloaded Android datasets when seeding bundled assets; add update examples and cross-platform filesystem regressions.
+
+* Add legacy Freedom fragment/noises to finalmask migration examples, pinned-Core transport-security checks, and Apple NAT64 endpoint provenance and expiry regressions.
+
 * Update Xray-core on Android, iOS, macOS and the Windows runtime workflow to `v26.10.29`, pinned to commit `0afec66085a85191e9dd2a4a6646c7c9a94688d1`. Rebuild native runtimes with Go 1.27.3, preserve the updated fallback CA bundle and native routing, and rebase Darwin interface binding onto the upstream TCP keepalive correction. Keep the plugin release train at 1.1.7; native runtime publication is separate from package publication.
 
 * Cancel pending capability-gated starts after successful options/owner reinitialization on all four platforms. Preserve the pending request and status listener if native reinitialization fails. Keep Disconnect available in the example while permission or startup is pending; prevent older completions from clearing newer Start/Stop actions.

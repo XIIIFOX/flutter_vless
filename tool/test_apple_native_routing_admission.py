@@ -86,7 +86,7 @@ def main():
     fixture = fixture_path.read_text()
     privacy = ROOT / 'ios/flutter_vless/Sources/flutter_vless_privacy'
     support = ROOT / 'ios/flutter_vless/Sources/flutter_vless_tunnel_support'
-    inputs = [privacy / name for name in ['LocalProxyAccessPolicy.swift', 'XrayServiceTags.swift', 'NativeRoutingSpec.swift', 'CorePreflightPolicy.swift']]
+    inputs = [privacy / name for name in ['LocalProxyAccessPolicy.swift', 'XrayServiceTags.swift', 'NativeRoutingSpec.swift', 'CorePreflightPolicy.swift', 'XdriveServicePolicy.swift', 'GeoDatAssetPolicy.swift']]
     inputs += [support / 'TunnelSessionAdmission.swift', support / 'TunnelEndpointPlanAdmission.swift']
     hashes = {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs + [fixture_path, Path(__file__)]}
     mutations = {}

@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Prepare XDRIVE S3 and Google Drive API endpoints and admit scheduled GeoDAT updates only with the matching native lifetime capabilities. Validate writable App Group targets and retain caller datasets. Add NAT64 provenance and expiry regressions; live IPv6-only/NAT64 acceptance remains separate.
+
 * Retain control action, options and profile ownership across authentication and preference awaits. Revoke older controls on newer app/control commands, stage On Demand disabled, and report uncertain startup without compensating preference writes. Add 36 whole-method transaction regressions shared with iOS.
 
 * Prepare Apple transport endpoints from bounded IPv4/IPv6 candidate sets, preserving DNS TTLs and using documented OS synthesis for IPv4 literals on IPv6-only paths. Reprepare from the original configuration after path, wake, expiry or transport failures; serialize settings changes and scope native cleanup to the committed plan. Native NAT64/handover acceptance remains pending.

@@ -49,8 +49,10 @@ def main():
         helper = "\n".join(line for line in helper.splitlines() if not line.startswith("import NetworkExtension") and not line.startswith("import flutter_vless"))
         helper = helper.replace("public ", "")  # fake OS types are intentionally internal
         generated = output / (platform + ".swift")
-        generated.write_text((ROOT / "tool/fixtures/apple_cold_start_policy.swift").read_text().replace("// ACTUAL_POLICY", helper).replace("// ACTUAL_START", entry).replace("// ACTUAL_PREPARATION_HELPERS", extras).replace("// ACTUAL_STOP", stop))
-        inputs = [privacy / "VlessNativeOptions.swift", privacy / "CorePreflightPolicy.swift", support / "TunnelSessionAdmission.swift", support / "TunnelEndpointPlanAdmission.swift", generated]
+        field_source = (privacy / "LocalProxyAccessPolicy.swift").read_text()
+        field_source = field_source[field_source.index("public enum XrayJSONField {"):]
+        generated.write_text((ROOT / "tool/fixtures/apple_cold_start_policy.swift").read_text().replace("// ACTUAL_POLICY", helper).replace("// ACTUAL_START", entry).replace("// ACTUAL_PREPARATION_HELPERS", extras).replace("// ACTUAL_STOP", stop) + "\n" + field_source)
+        inputs = [privacy / "VlessNativeOptions.swift", privacy / "CorePreflightPolicy.swift", privacy / "XdriveServicePolicy.swift", privacy / "GeoDatAssetPolicy.swift", support / "TunnelSessionAdmission.swift", support / "TunnelEndpointPlanAdmission.swift", generated]
         binary = output / platform
         command = ["xcrun", "swiftc", "-O", "-parse-as-library"]
         if args.receipts:

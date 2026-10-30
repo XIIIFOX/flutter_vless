@@ -31,6 +31,8 @@ enum Kernel {
     static var stopBarrier: Barrier?
     static func reset() { events = []; onCheck = nil; checkCode = 0; stopBarrier = nil }
 }
+func FLVlessCoreGeodataLifetimeCapability() -> Int64 { 1 }
+func FLVlessCoreXdriveLifetimeCapability() -> Int64 { 1 }
 func FLVlessHasCorePreflight() -> Bool { true }
 func FLVlessCheckCorePrivate(_ bytes: Data) -> Int64 {
     Kernel.events.append("check"); Kernel.onCheck?(); return Kernel.checkCode
@@ -100,7 +102,7 @@ final class Subject {
     }
     func start(proxyOnly: Bool, result: @escaping FlutterResult) {
         let changes = Set<NativePreparationReport.Change>()
-        let effectiveConfigData = Data("private-config-canary".utf8)
+        let effectiveConfigData = Data(#"{"fixture":"private-config-canary"}"#.utf8)
         let preparedProxyConfig: Proxy.Prepared? = proxyOnly ? Proxy.Prepared(data: effectiveConfigData) : nil
         let geoAssetsDirectory: String? = nil, certificateAssetsDirectory: String? = nil
         let vpnRouting: NativeRoutingIntent? = nil

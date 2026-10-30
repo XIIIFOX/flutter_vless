@@ -1,0 +1,64 @@
+{
+  "remarks": "XDRIVE Google Drive template",
+  "dns": {
+    "queryStrategy": "UseIPv4"
+  },
+  "inbounds": [
+    {
+      "tag": "socks-in",
+      "listen": "127.0.0.1",
+      "port": 10808,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": true
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "proxy",
+      "protocol": "vless",
+      "settings": {
+        "address": "unused-by-xdrive.invalid",
+        "port": 443,
+        "id": "${XDRIVE_VLESS_UUID}",
+        "encryption": "none"
+      },
+      "streamSettings": {
+        "network": "xdrive",
+        "security": "tls",
+        "xdriveSettings": {
+          "service": "google-drive",
+          "remoteFolder": "${XDRIVE_GOOGLE_FOLDER_ID}",
+          "secrets": [
+            "${XDRIVE_GOOGLE_CLIENT_ID}",
+            "${XDRIVE_GOOGLE_CLIENT_SECRET}",
+            "${XDRIVE_GOOGLE_REFRESH_TOKEN}"
+          ]
+        }
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": []
+  }
+}

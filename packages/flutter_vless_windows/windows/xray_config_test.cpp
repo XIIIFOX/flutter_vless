@@ -1,5 +1,6 @@
 #include "xray_config.h"
 #include "asset_location.h"
+#include "managed_service_capabilities.h"
 #include <iostream>
 #include <stdexcept>
 #include <fstream>
@@ -464,7 +465,59 @@ void AssetLocationCases() {
   Check(selected.size() == legacy.size() + 2 && inherited == before, "explicit assets leaked CERT/debug/proxy values or mutated the parent environment");
   Check(entries(assets::ChildEnvironment({}, L"", std::nullopt)).empty(), "empty environment block is not valid");
 }
+void XdriveServiceCases() {
+  using namespace flutter_vless::managed_services;
+  Check(ParseCapabilities(R"({"stage":"capabilities","code":0,"managed_service_lifetimes":3})") == 3, "new managed runtime capability missing");
+  for (const auto* reply : {"", "{}", "1", R"({"stage":"capabilities","code":0,"capability":1})",
+      R"({"stage":"capabilities","code":0,"managed_service_lifetimes":4})",
+      R"({"stage":"capabilities","code":0,"managed_service_lifetimes":"3"})",
+      R"({"stage":"capabilities","code":0,"managed_service_lifetimes":0,"managed_service_lifetimes":3})"})
+    Check(ParseCapabilities(reply) == 0, "legacy/malformed managed capability accepted");
+  std::ifstream input("tool/fixtures/compatibility/xdrive-services.json");
+  Check(input.good(), "shared XDRIVE service corpus required");
+  Json cases; input >> cases;
+  Check(cases.size() == 13, "XDRIVE service case count changed");
+  for (const auto& item : cases) {
+    const auto source = item["config"]; const auto before = source.dump();
+    std::set<std::string> looked_up;
+    const auto result = PrepareProtectedVpn(before, "xdrive-user", "synthetic-private-token", "inert-interface",
+        [&](const std::string& host) { looked_up.insert(host); return std::string("192.0.2.17"); }, nullptr, [](uint16_t) { return true; });
+    Check(result.has_value() == item["accepted"].get<bool>(), item["name"].get<std::string>().c_str());
+    Check(source.dump() == before, "XDRIVE preparation mutated source");
+    if (!result) { Check(looked_up.empty(), "unqualified XDRIVE service reached bootstrap"); continue; }
+    Check(looked_up == item["bootstrapHosts"].get<std::set<std::string>>(), "wrong XDRIVE physical bootstrap destinations");
+    const auto final = Parse(*result); const auto& proxy = final["outbounds"][0]; const auto& original = source["outbounds"][0];
+    Check(proxy["settings"] == original["settings"], "unused logical protocol identity changed");
+    Check(proxy["streamSettings"]["xdriveSettings"] == original["streamSettings"]["xdriveSettings"], "cloud identity/signing URL/prefix changed");
+    Check(RequiresXdriveLifetime(final), "prepared cloud transport lost mandatory capability");
+    Check(!Allows(final, 0) && !Allows(final, kGeodata) && Allows(final, kXdrive), "old/custom SDK admitted XDRIVE without owner capability");
+  }
+  for (const size_t index : {size_t{0}, size_t{2}}) {
+    const auto& item = cases[index]; auto source = item["config"];
+    const auto stream = source["outbounds"][0]["streamSettings"];
+    source["inbounds"] = Json::array({{{"tag", "cloud-in"}, {"listen", "127.0.0.1"}, {"port", 8443}, {"protocol", "vless"},
+        {"settings", {{"decryption", "none"}, {"clients", Json::array({{{"id", "11111111-1111-4111-8111-111111111111"}}})}}}, {"streamSettings", stream}}});
+    source["outbounds"] = Parse(R"([{"protocol":"socks","tag":"proxy","settings":{"servers":[{"address":"192.0.2.99","port":443}]}},{"protocol":"freedom","tag":"direct"}])");
+    const auto before = source.dump(); std::set<std::string> looked_up;
+    const auto result = PrepareProtectedVpn(before, "xdrive-user", "synthetic-private-token", "inert-interface",
+        [&](const std::string& host) { looked_up.insert(host); return std::string("192.0.2.17"); }, nullptr, [](uint16_t) { return true; });
+    Check(result.has_value(), "cloud inbound rejected despite qualified service");
+    Check(looked_up == item["bootstrapHosts"].get<std::set<std::string>>(), "inbound service target was not bootstrapped");
+    const auto final = Parse(*result); bool preserved = false;
+    for (const auto& inbound : final["inbounds"]) if (inbound.value("tag", "") == "cloud-in")
+      preserved = inbound["streamSettings"]["xdriveSettings"] == stream["xdriveSettings"];
+    Check(preserved && source.dump() == before, "cloud inbound identity changed or disappeared");
+    Check(RequiresXdriveLifetime(final) && !Allows(final, 0) && Allows(final, kXdrive), "inbound bypassed managed capability");
+  }
+  std::cout << "WINDOWS_XDRIVE_INBOUND_PREPARATION_PASS=2\n";
+  std::cout << "WINDOWS_XDRIVE_SERVICE_PREPARATION_PASS=13\n";
+}
+
 int main(int argc, char** argv) {
+  if (argc == 2 && std::string(argv[1]) == "--xdrive-services") {
+    try { XdriveServiceCases(); return 0; }
+    catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+  }
   if (argc == 2 && std::string(argv[1]) == "--static-dns-aliases") {
     try { StaticDnsAliasCases(); return 0; }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
@@ -496,6 +549,7 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::string(argv[1]) == "--unix-inputs") { UnixInputProxyPreparationCases(); return 0; }
   if (argc == 2 && std::string(argv[1]) == "--listen-addresses") { ListenAddressCases(); return 0; }
   if (argc == 2 && std::string(argv[1]) == "--asset-location") { AssetLocationCases(); return 0; }
+  XdriveServiceCases();
   StaticDnsAliasCases();
   CallerServicePreservationCases();
   OwnedApiPortCases();

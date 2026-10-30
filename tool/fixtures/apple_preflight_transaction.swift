@@ -11,9 +11,11 @@ private var startedData: [Data] = []
 private var proxyStartedData: [Data] = []
 private var prepareCount = 0
 private func FLVlessHasCorePreflight() -> Bool { available }
+private func FLVlessCoreGeodataLifetimeCapability() -> Int64 { 1 }
+private func FLVlessCoreXdriveLifetimeCapability() -> Int64 { 1 }
 private func FLVlessCheckCorePrivate(_ data: Data) -> Int64 {
     events.append("check"); checkedData.append(data)
-    return rejectPreparedCheck && data == Data("prepared-new".utf8) ? 3 : coreCode
+    return rejectPreparedCheck && data == Data(#"{"fixture":"prepared-new"}"#.utf8) ? 3 : coreCode
 }
 private func configureXrayAssetLocation(_ directory: String?) throws {
     events.append("assets")
@@ -67,7 +69,7 @@ private final class Proxy {
     func stop() { events.append("proxy-stop") }
     func clearDiagnostics() { events.append("clear-diagnostics") }
     func start(configData: Data, geoAssetsDirectory: String?) throws {
-        try start(prepared: Prepared(data: Data("prepared-new".utf8)), geoAssetsDirectory: geoAssetsDirectory)
+        try start(prepared: Prepared(data: Data(#"{"fixture":"prepared-new"}"#.utf8)), geoAssetsDirectory: geoAssetsDirectory)
     }
     func start(prepared: Prepared, geoAssetsDirectory: String?) throws {
         events.append("proxy-start"); proxyStartedData.append(prepared.data)
@@ -105,11 +107,11 @@ private final class Manager {
         }
         available = true; coreCode = 0; events = []; checkedData = []
         let concurrent = StartProbe()
-        let first = concurrent.start(proxyOnly: false, data: Data("first-secret-canary".utf8), changes: [.addressEnvironmentBound])
-        let second = concurrent.start(proxyOnly: false, data: Data("second-secret-canary".utf8), changes: [.portEnvironmentBound])
+        let first = concurrent.start(proxyOnly: false, data: Data(#"{"fixture":"first-secret-canary"}"#.utf8), changes: [.addressEnvironmentBound])
+        let second = concurrent.start(proxyOnly: false, data: Data(#"{"fixture":"second-secret-canary"}"#.utf8), changes: [.portEnvironmentBound])
         let firstReport = try await first.value, secondReport = try await second.value
         precondition(firstReport.changes == [.addressEnvironmentBound] && secondReport.changes == [.portEnvironmentBound])
-        precondition(checkedData == [Data("first-secret-canary".utf8), Data("second-secret-canary".utf8)])
+        precondition(checkedData == [Data(#"{"fixture":"first-secret-canary"}"#.utf8), Data(#"{"fixture":"second-secret-canary"}"#.utf8)])
         let serialized = try JSONSerialization.data(withJSONObject: [firstReport.flutterResult, secondReport.flutterResult])
         precondition(!String(decoding: serialized, as: UTF8.self).contains("secret-canary"))
         print("PASS: actual Apple success reply, legacy unavailable, exact proxy bytes and queued invocation reports")
@@ -143,7 +145,7 @@ private final class Manager {
         let subject = StartProbe()
         try await subject.start(proxyOnly: false).value
         precondition(events == ["assets", "check", "proxy-stop", "clear-diagnostics", "vpn-start"])
-        precondition(subject.packetTunnelManager!.xrayConfig == Data("new".utf8))
+        precondition(subject.packetTunnelManager!.xrayConfig == Data(#"{"fixture":"new"}"#.utf8))
         precondition(subject.packetTunnelManager!.certificateAssetsDirectory == "/fixture/new-certificate-assets")
         events = []; available = false
         try await StartProbe().start(proxyOnly: true).value
@@ -161,12 +163,12 @@ private final class Manager {
             precondition(!error.localizedDescription.contains("prepared-new"))
         }
         precondition(events == ["assets", "check"])
-        precondition(checkedData == [Data("prepared-new".utf8)] && proxyStartedData.isEmpty)
+        precondition(checkedData == [Data(#"{"fixture":"prepared-new"}"#.utf8)] && proxyStartedData.isEmpty)
         precondition(rejected.packetTunnelManager!.xrayConfig == Data("old".utf8))
 
         events = []; checkedData = []; proxyStartedData = []; rejectPreparedCheck = false
         try await StartProbe().start(proxyOnly: true).value
-        precondition(checkedData == [Data("prepared-new".utf8)])
+        precondition(checkedData == [Data(#"{"fixture":"prepared-new"}"#.utf8)])
         precondition(proxyStartedData == checkedData)
 
         // Exercise the actual extracted runner, including its direct-call
@@ -176,7 +178,7 @@ private final class Manager {
         let running = ActualProxyRunner()
         running.fixtureSetRunning()
         do {
-            try running.start(configData: Data("new".utf8), geoAssetsDirectory: nil)
+            try running.start(configData: Data(#"{"fixture":"new"}"#.utf8), geoAssetsDirectory: nil)
             preconditionFailure("Rejected proxy candidate replaced a running proxy")
         } catch let error as CorePreflightError {
             precondition(error.stage == "active-session")
@@ -186,23 +188,23 @@ private final class Manager {
 
         events = []; checkedData = []; startedData = []; prepareCount = 0
         do {
-            try ActualProxyRunner().start(configData: Data("new".utf8), geoAssetsDirectory: nil)
+            try ActualProxyRunner().start(configData: Data(#"{"fixture":"new"}"#.utf8), geoAssetsDirectory: nil)
             preconditionFailure("Final proxy candidate bypassed the runner's check")
         } catch {
             precondition(!error.localizedDescription.contains("prepared-new"))
         }
         precondition(events == ["assets", "check"])
-        precondition(prepareCount == 1 && checkedData == [Data("prepared-new".utf8)] && startedData.isEmpty)
+        precondition(prepareCount == 1 && checkedData == [Data(#"{"fixture":"prepared-new"}"#.utf8)] && startedData.isEmpty)
 
         events = []; checkedData = []; startedData = []; prepareCount = 0
         rejectPreparedCheck = false
-        try ActualProxyRunner().start(configData: Data("new".utf8), geoAssetsDirectory: nil)
-        precondition(prepareCount == 1 && checkedData == [Data("prepared-new".utf8)] && startedData == checkedData)
+        try ActualProxyRunner().start(configData: Data(#"{"fixture":"new"}"#.utf8), geoAssetsDirectory: nil)
+        precondition(prepareCount == 1 && checkedData == [Data(#"{"fixture":"prepared-new"}"#.utf8)] && startedData == checkedData)
 
         events = []; checkedData = []; startedData = []; prepareCount = 0
         available = false
-        try ActualProxyRunner().start(configData: Data("new".utf8), geoAssetsDirectory: nil)
-        precondition(prepareCount == 1 && checkedData.isEmpty && startedData == [Data("prepared-new".utf8)])
+        try ActualProxyRunner().start(configData: Data(#"{"fixture":"new"}"#.utf8), geoAssetsDirectory: nil)
+        precondition(prepareCount == 1 && checkedData.isEmpty && startedData == [Data(#"{"fixture":"prepared-new"}"#.utf8)])
         print("PASS: production Apple start transaction checks before stop/profile replacement; active sessions and asset failures preserved")
         print("PASS: exact prepared proxy bytes admitted before stop and reused by actual runner; legacy admission preserved")
 #if APPLE_PROXY_COUNTER_TEST

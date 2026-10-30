@@ -332,3 +332,6 @@ final class Provider {
         print("APPLE_COLD_START_CASES=" + String(cases)); print("APPLE_COLD_START_FAILURES=" + String(failures)); exit(failures == 0 ? 0 : 7)
     }
 }
+
+func FLVlessCoreGeodataLifetimeCapability() -> Int64 { 1 }
+func FLVlessCoreXdriveLifetimeCapability() -> Int64 { 1 }

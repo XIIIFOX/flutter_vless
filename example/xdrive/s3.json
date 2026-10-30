@@ -1,0 +1,69 @@
+{
+  "remarks": "XDRIVE S3 template",
+  "dns": {
+    "queryStrategy": "UseIPv4"
+  },
+  "inbounds": [
+    {
+      "tag": "socks-in",
+      "listen": "127.0.0.1",
+      "port": 10808,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": true
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "proxy",
+      "protocol": "vless",
+      "settings": {
+        "address": "unused-by-xdrive.invalid",
+        "port": 443,
+        "id": "${XDRIVE_VLESS_UUID}",
+        "encryption": "none"
+      },
+      "streamSettings": {
+        "network": "xdrive",
+        "security": "tls",
+        "xdriveSettings": {
+          "service": "s3",
+          "remoteFolder": "${XDRIVE_S3_PREFIX}",
+          "secrets": [
+            "${XDRIVE_S3_ACCESS_KEY_ID}",
+            "${XDRIVE_S3_SECRET_ACCESS_KEY}"
+          ],
+          "s3": {
+            "endpoint": "https://${XDRIVE_S3_HOST}",
+            "region": "${XDRIVE_S3_REGION}",
+            "bucket": "${XDRIVE_S3_BUCKET}",
+            "pathStyle": true
+          }
+        }
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": []
+  }
+}

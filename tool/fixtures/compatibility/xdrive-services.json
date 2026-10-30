@@ -1,0 +1,773 @@
+[
+  {
+    "name": "s3_default_path_style",
+    "accepted": true,
+    "bootstrapHosts": [
+      "storage.fixture.invalid"
+    ],
+    "config": {
+      "inbounds": [
+        {
+          "tag": "caller",
+          "protocol": "socks",
+          "listen": "127.0.0.1",
+          "port": 10808
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "unused-protocol.fixture.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xdrive",
+            "security": "tls",
+            "xdriveSettings": {
+              "service": "s3",
+              "remoteFolder": "fixture-prefix",
+              "secrets": [
+                "synthetic-access",
+                "synthetic-secret"
+              ],
+              "s3": {
+                "endpoint": "https://storage.fixture.invalid:9443/base",
+                "bucket": "fixture-bucket"
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "domain": [
+              "full:caller-rule.invalid"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "s3_virtual_bucket_host",
+    "accepted": true,
+    "bootstrapHosts": [
+      "ring.storage.fixture.invalid"
+    ],
+    "config": {
+      "inbounds": [
+        {
+          "tag": "caller",
+          "protocol": "socks",
+          "listen": "127.0.0.1",
+          "port": 10808
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "unused-protocol.fixture.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xdrive",
+            "security": "tls",
+            "xdriveSettings": {
+              "service": "s3",
+              "remoteFolder": "fixture-prefix",
+              "secrets": [
+                "synthetic-access",
+                "synthetic-secret"
+              ],
+              "s3": {
+                "endpoint": "https://storage.fixture.invalid:9443/base",
+                "bucket": "ring",
+                "pathStyle": false
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "domain": [
+              "full:caller-rule.invalid"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "google_drive",
+    "accepted": true,
+    "bootstrapHosts": [
+      "oauth2.googleapis.com",
+      "www.googleapis.com"
+    ],
+    "config": {
+      "inbounds": [
+        {
+          "tag": "caller",
+          "protocol": "socks",
+          "listen": "127.0.0.1",
+          "port": 10808
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "unused-protocol.fixture.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xdrive",
+            "security": "tls",
+            "xdriveSettings": {
+              "service": "google-drive",
+              "remoteFolder": "synthetic-folder-id",
+              "secrets": [
+                "synthetic-client",
+                "synthetic-secret",
+                "synthetic-refresh"
+              ]
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "domain": [
+              "full:caller-rule.invalid"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "legacy_google_drive_alias",
+    "accepted": true,
+    "bootstrapHosts": [
+      "oauth2.googleapis.com",
+      "www.googleapis.com"
+    ],
+    "config": {
+      "inbounds": [
+        {
+          "tag": "caller",
+          "protocol": "socks",
+          "listen": "127.0.0.1",
+          "port": 10808
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "unused-protocol.fixture.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xdrive",
+            "security": "tls",
+            "xdriveSettings": {
+              "service": "Google Drive",
+              "remoteFolder": "synthetic-folder-id",
+              "secrets": [
+                "synthetic-client",
+                "synthetic-secret",
+                "synthetic-refresh"
+              ]
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "domain": [
+              "full:caller-rule.invalid"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "s3_fronting_keeps_service_url",
+    "accepted": true,
+    "bootstrapHosts": [
+      "front.fixture.invalid"
+    ],
+    "config": {
+      "inbounds": [
+        {
+          "tag": "caller",
+          "protocol": "socks",
+          "listen": "127.0.0.1",
+          "port": 10808
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "unused-protocol.fixture.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xdrive",
+            "security": "tls",
+            "xdriveSettings": {
+              "service": "s3",
+              "remoteFolder": "fixture-prefix",
+              "secrets": [
+                "synthetic-access",
+                "synthetic-secret"
+              ],
+              "s3": {
+                "endpoint": "https://storage.fixture.invalid:9443/base",
+                "bucket": "fixture-bucket"
+              }
+            },
+            "address": "front.fixture.invalid",
+            "port": 8443
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "domain": [
+              "full:caller-rule.invalid"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "google_fronting_keeps_tls_hosts",
+    "accepted": true,
+    "bootstrapHosts": [
+      "front.fixture.invalid"
+    ],
+    "config": {
+      "inbounds": [
+        {
+          "tag": "caller",
+          "protocol": "socks",
+          "listen": "127.0.0.1",
+          "port": 10808
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "unused-protocol.fixture.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xdrive",
+            "security": "tls",
+            "xdriveSettings": {
+              "service": "google-drive",
+              "remoteFolder": "synthetic-folder-id",
+              "secrets": [
+                "synthetic-client",
+                "synthetic-secret",
+                "synthetic-refresh"
+              ]
+            },
+            "address": "front.fixture.invalid",
+            "port": 443
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "domain": [
+              "full:caller-rule.invalid"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "s3_endpoint_credentials_rejected",
+    "accepted": false,
+    "bootstrapHosts": [],
+    "config": {
+      "inbounds": [
+        {
+          "tag": "caller",
+          "protocol": "socks",
+          "listen": "127.0.0.1",
+          "port": 10808
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "unused-protocol.fixture.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xdrive",
+            "security": "tls",
+            "xdriveSettings": {
+              "service": "s3",
+              "remoteFolder": "fixture-prefix",
+              "secrets": [
+                "synthetic-access",
+                "synthetic-secret"
+              ],
+              "s3": {
+                "endpoint": "https://user:pass@storage.fixture.invalid",
+                "bucket": "ring"
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "domain": [
+              "full:caller-rule.invalid"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "s3_endpoint_query_rejected",
+    "accepted": false,
+    "bootstrapHosts": [],
+    "config": {
+      "inbounds": [
+        {
+          "tag": "caller",
+          "protocol": "socks",
+          "listen": "127.0.0.1",
+          "port": 10808
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "unused-protocol.fixture.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xdrive",
+            "security": "tls",
+            "xdriveSettings": {
+              "service": "s3",
+              "remoteFolder": "fixture-prefix",
+              "secrets": [
+                "synthetic-access",
+                "synthetic-secret"
+              ],
+              "s3": {
+                "endpoint": "https://storage.fixture.invalid?token=synthetic",
+                "bucket": "ring"
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "domain": [
+              "full:caller-rule.invalid"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "s3_non_http_endpoint_rejected",
+    "accepted": false,
+    "bootstrapHosts": [],
+    "config": {
+      "inbounds": [
+        {
+          "tag": "caller",
+          "protocol": "socks",
+          "listen": "127.0.0.1",
+          "port": 10808
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "unused-protocol.fixture.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xdrive",
+            "security": "tls",
+            "xdriveSettings": {
+              "service": "s3",
+              "remoteFolder": "fixture-prefix",
+              "secrets": [
+                "synthetic-access",
+                "synthetic-secret"
+              ],
+              "s3": {
+                "endpoint": "file:///tmp/not-a-cloud-service",
+                "bucket": "ring"
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "domain": [
+              "full:caller-rule.invalid"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "s3_virtual_numeric_endpoint_rejected",
+    "accepted": false,
+    "bootstrapHosts": [],
+    "config": {
+      "inbounds": [
+        {
+          "tag": "caller",
+          "protocol": "socks",
+          "listen": "127.0.0.1",
+          "port": 10808
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "unused-protocol.fixture.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xdrive",
+            "security": "tls",
+            "xdriveSettings": {
+              "service": "s3",
+              "remoteFolder": "fixture-prefix",
+              "secrets": [
+                "synthetic-access",
+                "synthetic-secret"
+              ],
+              "s3": {
+                "endpoint": "https://192.0.2.8",
+                "bucket": "ring",
+                "pathStyle": false
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "domain": [
+              "full:caller-rule.invalid"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "google_missing_secret_rejected",
+    "accepted": false,
+    "bootstrapHosts": [],
+    "config": {
+      "inbounds": [
+        {
+          "tag": "caller",
+          "protocol": "socks",
+          "listen": "127.0.0.1",
+          "port": 10808
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "unused-protocol.fixture.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xdrive",
+            "security": "tls",
+            "xdriveSettings": {
+              "service": "google-drive",
+              "remoteFolder": "synthetic-folder-id",
+              "secrets": [
+                "synthetic-client",
+                "synthetic-secret"
+              ]
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "domain": [
+              "full:caller-rule.invalid"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "local_filesystem_service_remains_explicitly_unsupported",
+    "accepted": false,
+    "bootstrapHosts": [],
+    "config": {
+      "inbounds": [
+        {
+          "tag": "caller",
+          "protocol": "socks",
+          "listen": "127.0.0.1",
+          "port": 10808
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "unused-protocol.fixture.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xdrive",
+            "security": "tls",
+            "xdriveSettings": {
+              "service": "local",
+              "remoteFolder": "/private/never-opened",
+              "secrets": [
+                "synthetic-client",
+                "synthetic-secret",
+                "synthetic-refresh"
+              ]
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "domain": [
+              "full:caller-rule.invalid"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "template_service_remains_explicitly_unsupported",
+    "accepted": false,
+    "bootstrapHosts": [],
+    "config": {
+      "inbounds": [
+        {
+          "tag": "caller",
+          "protocol": "socks",
+          "listen": "127.0.0.1",
+          "port": 10808
+        }
+      ],
+      "outbounds": [
+        {
+          "tag": "proxy",
+          "protocol": "vless",
+          "settings": {
+            "address": "unused-protocol.fixture.invalid",
+            "port": 443,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "encryption": "none"
+          },
+          "streamSettings": {
+            "network": "xdrive",
+            "security": "tls",
+            "xdriveSettings": {
+              "service": "template",
+              "remoteFolder": "synthetic-folder-id",
+              "secrets": [
+                "synthetic-client",
+                "synthetic-secret",
+                "synthetic-refresh"
+              ],
+              "template": {
+                "file": "/private/never-read"
+              }
+            }
+          }
+        },
+        {
+          "tag": "direct",
+          "protocol": "freedom"
+        }
+      ],
+      "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+          {
+            "type": "field",
+            "domain": [
+              "full:caller-rule.invalid"
+            ],
+            "outboundTag": "direct"
+          }
+        ]
+      }
+    }
+  }
+]

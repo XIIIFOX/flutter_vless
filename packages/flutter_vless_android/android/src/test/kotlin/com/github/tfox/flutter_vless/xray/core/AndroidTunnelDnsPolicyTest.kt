@@ -444,7 +444,9 @@ class AndroidTunnelDnsPolicyTest {
             .put("xhttpSettings", JSONObject().put("downloadSettings", download))
         assertEquals(setOf("proxy.test", "download.test"), prepare(config(outbound().put("streamSettings", xhttp))).bootstrapHostnames)
         val xdrive = JSONObject().put("network", "tcp").put("method", "xdrive").put("address", "xdrive.test")
-        assertEquals(setOf("proxy.test", "xdrive.test"), prepare(config(outbound("vless").put("streamSettings", xdrive))).bootstrapHostnames)
+            .put("xdriveSettings", JSONObject().put("service", "google-drive").put("remoteFolder", "synthetic-folder")
+                .put("secrets", JSONArray().put("synthetic-client").put("synthetic-secret").put("synthetic-refresh")))
+        assertEquals(setOf("xdrive.test"), prepare(config(outbound("vless").put("streamSettings", xdrive))).bootstrapHostnames)
     }
 
     @Test fun downloadSocketNullMatchesAbsenceWithoutEagerParentInheritance() {

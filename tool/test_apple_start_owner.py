@@ -34,7 +34,7 @@ def main() -> None:
         support = source_path.parent.parent / ("flutter_vless_privacy" if platform == "ios" else "flutter_vless_macos_privacy")
         generated = OUT / (platform + ".swift")
         generated.write_text(fixture(source_path.read_text()))
-        inputs = [source_path.parent / "NativeOperationQueue.swift", support / "VlessNativeOptions.swift", support / "CorePreflightPolicy.swift", generated]
+        inputs = [source_path.parent / "NativeOperationQueue.swift", support / "VlessNativeOptions.swift", support / "CorePreflightPolicy.swift", support / "LocalProxyAccessPolicy.swift", support / "XrayServiceTags.swift", support / "XdriveServicePolicy.swift", support / "GeoDatAssetPolicy.swift", generated]
         binary = OUT / platform
         with (OUT / (platform + "-compile.log")).open("wb") as log:
             compilation = subprocess.run(["xcrun", "swiftc", "-O", "-parse-as-library", *map(str, inputs), "-o", str(binary)], stdout=log, stderr=subprocess.STDOUT, timeout=100)

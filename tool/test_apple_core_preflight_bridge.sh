@@ -30,6 +30,16 @@ int main(void) { @autoreleasepool {
 #else
     assert(FLVlessCoreDarwinInterfaceBindingCapability() == 0);
 #endif
+#ifdef GEODATA_LIFETIME_CAP
+    assert(FLVlessCoreGeodataLifetimeCapability() == (GEODATA_LIFETIME_CAP == 1 ? 1 : 0));
+#else
+    assert(FLVlessCoreGeodataLifetimeCapability() == 0);
+#endif
+#ifdef XDRIVE_LIFETIME_CAP
+    assert(FLVlessCoreXdriveLifetimeCapability() == (XDRIVE_LIFETIME_CAP == 1 ? 1 : 0));
+#else
+    assert(FLVlessCoreXdriveLifetimeCapability() == 0);
+#endif
 #ifdef WITH_RUNTIME
     assert(FLVlessHasCorePreflight());
     assert(FLVlessCheckCorePrivate(data) == 0);
@@ -94,6 +104,12 @@ int MockRoutingStartCalls(void) { return startCalls; }
 #ifdef BINDING_CAP
 int64_t XRayDarwinInterfaceBindingCapability(void) { return BINDING_CAP; }
 #endif
+#ifdef GEODATA_LIFETIME_CAP
+int64_t XRayGeodataLifetimeCapability(void) { return GEODATA_LIFETIME_CAP; }
+#endif
+#ifdef XDRIVE_LIFETIME_CAP
+int64_t XRayXdriveLifetimeCapability(void) { return XDRIVE_LIFETIME_CAP; }
+#endif
 #ifdef ROUTING_CAP
 int64_t XRayRoutingCapability(void) { return ROUTING_CAP; }
 #endif
@@ -155,10 +171,16 @@ for suffix in ("Check", "Start"):
     assert entry == anchor + offset, (suffix, anchor, entry, offset)
 PY
     printf 'BRIDGE_ANCHOR_SHAPE arch=%s offset=%s\n' "$ARCH" "$ENTRY_OFFSET"
-for variant in legacy current routing cap0 unknown missing-cap missing-check missing-start binding binding0 binding-unknown; do
+for variant in legacy current routing cap0 unknown missing-cap missing-check missing-start binding binding0 binding-unknown managed-both managed0 managed-unknown geodata-only xdrive-only; do
     FLAGS=(-DLEGACY_RUNTIME)
     case "$variant" in
         current) FLAGS=(-DWITH_RUNTIME) ;;
+        managed-both) FLAGS=(-DWITH_RUNTIME -DGEODATA_LIFETIME_CAP=1 -DXDRIVE_LIFETIME_CAP=1) ;;
+        managed0) FLAGS=(-DWITH_RUNTIME -DGEODATA_LIFETIME_CAP=0 -DXDRIVE_LIFETIME_CAP=0) ;;
+        managed-unknown) FLAGS=(-DWITH_RUNTIME -DGEODATA_LIFETIME_CAP=2 -DXDRIVE_LIFETIME_CAP=2) ;;
+        geodata-only) FLAGS=(-DWITH_RUNTIME -DGEODATA_LIFETIME_CAP=1) ;;
+        xdrive-only) FLAGS=(-DWITH_RUNTIME -DXDRIVE_LIFETIME_CAP=1) ;;
+
         binding) FLAGS=(-DWITH_RUNTIME -DBINDING_CAP=1) ;;
         binding0) FLAGS=(-DWITH_RUNTIME -DBINDING_CAP=0) ;;
         binding-unknown) FLAGS=(-DWITH_RUNTIME -DBINDING_CAP=2) ;;
@@ -210,11 +232,11 @@ probe='''private final class StartProbe {
  let proxyOnlyRunner = Proxy()
  let packetTunnelManager: Manager? = Manager()
  let controlGroup: String? = nil
- func start(proxyOnly: Bool, data: Data = Data("new".utf8), changes: [NativePreparationReport.Change] = []) -> Task<NativePreparationReport, Error> {
+ func start(proxyOnly: Bool, data: Data = Data(#"{"fixture":"new"}"#.utf8), changes: [NativePreparationReport.Change] = []) -> Task<NativePreparationReport, Error> {
  let effectiveConfigData = data
  let preparationChanges = changes
  let vpnRouting: NativeRoutingIntent? = nil
- let preparedProxyConfig: Proxy.Prepared? = proxyOnly ? Proxy.Prepared(data: Data("prepared-new".utf8)) : nil
+ let preparedProxyConfig: Proxy.Prepared? = proxyOnly ? Proxy.Prepared(data: Data(#"{"fixture":"prepared-new"}"#.utf8)) : nil
  let geoAssetsDirectory: String? = nil
  let certificateAssetsDirectory: String? = "/fixture/new-certificate-assets"
  let bypassSubnets: [String]? = []
@@ -266,11 +288,11 @@ for index, path in enumerate(sources):
     fileprivate static func buildProxyOnlyConfigData(configData: Data, onChange: ((NativePreparationReport.Change) -> Void)? = nil) throws -> Data {
         prepareCount += 1
         // Preserve admission sentinels; JSON counter cases use real preparation.
-        if configData == Data("new".utf8) { return Data("prepared-new".utf8) }
+        if configData == Data(#"{"fixture":"new"}"#.utf8) { return Data(#"{"fixture":"prepared-new"}"#.utf8) }
         return try fixtureRealProxyPreparation(configData: configData, onChange: onChange)
     }
     private static func findDelayEndpoint(_ data: Data) throws -> (protocolName: String, port: Int, credentials: LocalProxyCredentials?)? {
-        if data == Data("prepared-new".utf8) { return nil }
+        if data == Data(#"{"fixture":"prepared-new"}"#.utf8) { return nil }
         return try fixtureRealDelayEndpoint(data)
     }
 }
@@ -285,6 +307,7 @@ for PLATFORM in 0 1; do
     fi
     xcrun swiftc -O -parse-as-library "${COUNTER_FLAGS[@]}" "$IOS" \
         "$PRIVACY/LocalProxyAccessPolicy.swift" "$PRIVACY/XrayPrivacyConfig.swift" "$PRIVACY/XrayServiceTags.swift" \
+        "$PRIVACY/GeoDatAssetPolicy.swift" "$PRIVACY/XdriveServicePolicy.swift" \
         "$ROOT/ios/flutter_vless/Sources/flutter_vless/NativeOperationQueue.swift" "$OUT/transaction-$PLATFORM.swift" -o "$OUT/transaction-$PLATFORM"
     APPLE_TRAFFIC_COUNTER_FIXTURE="$ROOT/tool/fixtures/compatibility/traffic-counters.json" "$OUT/transaction-$PLATFORM"
 done

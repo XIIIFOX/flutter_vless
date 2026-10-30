@@ -159,3 +159,6 @@ final class Provider: @unchecked Sendable {
         print("PASS provider exact routing pair, capability admission and no fallback")
     }
 }
+
+func FLVlessCoreGeodataLifetimeCapability() -> Int64 { 1 }
+func FLVlessCoreXdriveLifetimeCapability() -> Int64 { 1 }

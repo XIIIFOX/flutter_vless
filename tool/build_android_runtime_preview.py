@@ -31,7 +31,7 @@ ORDINARY_FILES = ('packages/flutter_vless_android/android/build_xray.sh',
                   *(('third_party/xray-native-dns/' + name) for name in
                     ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py',
                      'xdrive_lifetime_patch.py', 'geodata_lifetime_patch.py', 'pin-manifest.json',
-                     'overlay/main/native_services_cli.go', 'overlay/transport/internet/xdrive/native_lifetime.go',
+                     'overlay/main/native_services_cli.go', 'overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go',
                      'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go')))
 
 

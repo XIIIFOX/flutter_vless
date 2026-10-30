@@ -62,7 +62,8 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
                        'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime_test.go'}
     expected_inputs.update({XDRIVE_PATCH, GEODATA_PATCH,
                            'third_party/xray-native-dns/overlay/main/native_services_cli.go',
-                           'third_party/xray-native-dns/overlay/transport/internet/xdrive/native_lifetime.go'})
+                           'third_party/xray-native-dns/overlay/transport/internet/xdrive/native_lifetime.go',
+                           'third_party/xray-native-dns/overlay/transport/internet/native_service_lifetime.go'})
     expected_inputs.update(p.relative_to(repository).as_posix()
                            for p in (repository/'third_party/xray-vpn-routing/overlay').rglob('*.go'))
     native_overlay = repository/'third_party/xray-native-dns/overlay'

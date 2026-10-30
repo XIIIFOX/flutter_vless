@@ -27,6 +27,7 @@ PRODUCER_INPUTS = ('tool/build_apple_core_preview.sh', 'third_party/xray-mobile/
                    'third_party/xray-native-dns/pin-manifest.json',
                    'third_party/xray-native-dns/overlay/main/native_services_cli.go',
                    'third_party/xray-native-dns/overlay/transport/internet/xdrive/native_lifetime.go',
+                           'third_party/xray-native-dns/overlay/transport/internet/native_service_lifetime.go',
                    'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime.go',
                    'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime_test.go')
 

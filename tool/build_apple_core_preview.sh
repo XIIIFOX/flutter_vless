@@ -60,7 +60,7 @@ def inputs():
     paths = [root/'tool/build_apple_core_preview.sh', mobile/'go.mod', mobile/'go.sum', capability/'apply.py', capability/'pin-manifest.json']
     paths += sorted(mobile.glob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
     classic = root/'third_party/xray-native-dns'
-    paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+    paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
     paths += sorted((classic/'overlay/transport/internet/xdrive').glob('*_test.go')) + sorted((classic/'overlay/app/geodata').glob('native_*.go'))
     managed_core_test = classic/'overlay/core/native_managed_lifetime_test.go'
     if managed_core_test.exists(): paths.append(managed_core_test)
@@ -147,7 +147,7 @@ if True:
     paths = [root/'tool/build_apple_core_preview.sh', mobile/'go.mod', mobile/'go.sum', capability/'apply.py', capability/'pin-manifest.json']
     paths += sorted(mobile.glob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
     classic = root/'third_party/xray-native-dns'
-    paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+    paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
     paths += sorted((classic/'overlay/transport/internet/xdrive').glob('*_test.go')) + sorted((classic/'overlay/app/geodata').glob('native_*.go'))
     managed_core_test = classic/'overlay/core/native_managed_lifetime_test.go'
     if managed_core_test.exists(): paths.append(managed_core_test)

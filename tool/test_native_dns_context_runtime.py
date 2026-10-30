@@ -262,7 +262,7 @@ def run_managed_service_runtime(source, core, go, environment, results, report):
             if target.read_bytes() != (CAPABILITY / 'overlay' / name).read_bytes(): raise RuntimeError('Managed fixture copy mismatch')
         else:
             target.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(CAPABILITY / 'overlay' / name, target)
-    tracked = [*MANIFEST['upstream_sha256'], 'transport/internet/xdrive/native_lifetime.go', 'main/native_services_cli.go', 'transport/internet/xdrive/native_lifetime_test.go', 'transport/internet/xdrive/native_cloud_runtime_test.go', 'core/native_managed_lifetime_test.go']
+    tracked = [*MANIFEST['upstream_sha256'], 'transport/internet/native_service_lifetime.go', 'transport/internet/xdrive/native_lifetime.go', 'main/native_services_cli.go', 'transport/internet/xdrive/native_lifetime_test.go', 'transport/internet/xdrive/native_cloud_runtime_test.go', 'core/native_managed_lifetime_test.go']
     report['managed_ordinary_source_sha256'] = {name: hashlib.sha256((ordinary / name).read_bytes()).hexdigest() for name in tracked}
     for label, package, selection, names in [
         ('xdrive-cloud', 'transport/internet/xdrive', '^TestAcceptanceXdrive', ['TestAcceptanceXdriveS3RequestsSigningFrontingAndClose', 'TestAcceptanceXdriveGoogleDriveRequestsAndFreshOwner']),
@@ -284,7 +284,7 @@ def run_managed_service_runtime(source, core, go, environment, results, report):
     # this missing cancellation and force its own parent cleanup after failure.
     negative = EVIDENCE / 'XdriveNoCancellation'
     shutil.copytree(ordinary, negative)
-    path = negative / 'transport/internet/xdrive/native_lifetime.go'
+    path = negative / 'transport/internet/native_service_lifetime.go'
     text = path.read_text(); before = '\tn.cancel()\n'
     if text.count(before) != 1: raise RuntimeError('XDRIVE cancellation negative-control boundary changed')
     path.write_text(text.replace(before, '\t// Negative control: owner cancellation deliberately omitted.\n'))

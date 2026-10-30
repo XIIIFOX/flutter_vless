@@ -83,7 +83,7 @@ class ApplePreviewBuilderTest(unittest.TestCase):
             out.write('def copy_and_apply_lifetimes(source,destination,**kwargs):\n assert kwargs.get("routing",False) is False\n result=copy_and_apply(source,destination,**kwargs)\n (result/"h3-applied").write_text("h3")\n return result\n')
         classic = self.root / 'third_party/xray-native-dns'
         (classic / 'overlay/app/dns').mkdir(parents=True)
-        for name in ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py', 'xdrive_lifetime_patch.py', 'geodata_lifetime_patch.py', 'pin-manifest.json', 'overlay/main/native_services_cli.go', 'overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go'):
+        for name in ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py', 'xdrive_lifetime_patch.py', 'geodata_lifetime_patch.py', 'pin-manifest.json', 'overlay/main/native_services_cli.go', 'overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go', 'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go'):
             (classic / name).parent.mkdir(parents=True,exist_ok=True)
             (classic / name).write_text('shared-classic-fixture')
         self.core = self.root / 'module-cache/core'

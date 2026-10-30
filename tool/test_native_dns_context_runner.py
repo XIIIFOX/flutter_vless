@@ -313,5 +313,47 @@ class RunnerGuards(unittest.TestCase):
             sentinel.wait(timeout=5)
 
 
+class ManagedNegativeControlTests(unittest.TestCase):
+    def invoke(self, changes=None, output='--- FAIL: TestExpected (1.00s)\nexpected ownership failure\n', green=False):
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary)
+            results = []
+            row = dict(name='negative', exit_code=1, process_exit_code=1, timed_out=False,
+                       output_closed=True, output_eof=True, output_errors=[])
+            row.update(changes or {})
+            def controlled(*args, **kwargs):
+                (evidence / 'negative.log').write_text(output)
+                results.append(row)
+                if not green: raise RuntimeError('retained child failure')
+            with mock.patch.object(runner, 'EVIDENCE', evidence), mock.patch.object(runner, 'checked', controlled):
+                runner.checked_negative_control('negative', ['inert'], cwd=evidence,
+                    environment={}, seconds=1, results=results, test='TestExpected', message='expected ownership failure')
+            return results
+
+    def test_expected_assertion_retains_real_nonzero_status(self):
+        row = self.invoke()[0]
+        self.assertEqual(row['exit_code'], 1)
+        self.assertEqual(row['process_exit_code'], 1)
+        self.assertTrue(row['expected_negative_control'])
+
+    def test_timeout_incomplete_output_and_wrong_exit_never_qualify(self):
+        for fields in ({'exit_code': 124}, {'process_exit_code': 2}, {'timed_out': True},
+                       {'output_closed': False}, {'output_eof': False}, {'output_errors': ['synthetic']}):
+            with self.subTest(fields=fields), self.assertRaisesRegex(RuntimeError, 'did not fail cleanly'):
+                self.invoke(fields)
+
+    def test_unrelated_skip_duplicate_or_failure_never_qualifies(self):
+        for text in ('--- SKIP: TestExpected (1.00s)\nexpected ownership failure',
+                     '--- FAIL: TestOther (1.00s)\nexpected ownership failure',
+                     '--- FAIL: TestExpected (1.00s)\ncompiler failure',
+                     '--- FAIL: TestExpected (1.00s)\n--- FAIL: TestExpected (1.00s)\nexpected ownership failure'):
+            with self.subTest(text=text), self.assertRaisesRegex(RuntimeError, 'unrelated reason'):
+                self.invoke(output=text)
+
+    def test_broken_control_passing_is_a_hard_failure(self):
+        with self.assertRaisesRegex(RuntimeError, 'unexpectedly passed'):
+            self.invoke(green=True)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -18,12 +18,10 @@ UPSTREAM_SHA256 = {'core/xray.go': '66edf1a9ed6b9683b4f668612e6c6e876830cffb0752
 def replacements():
     base = 'transport/internet/xdrive/'
     return [
-        ('core/xray.go', '"github.com/xtls/xray-core/transport/internet"',
-         '"github.com/xtls/xray-core/transport/internet"\n\t"github.com/xtls/xray-core/transport/internet/xdrive"'),
-        ('core/xray.go', '\tctx context.Context\n', '\tnativeXdriveLifetime *xdrive.NativeLifetime\n\tctx context.Context\n'),
+        ('core/xray.go', '\tctx context.Context\n', '\tnativeXdriveLifetime *internet.NativeServiceLifetime\n\tctx context.Context\n'),
         ('core/xray.go', 'func initInstanceWithConfig(config *Config, server *Instance) (bool, error) {',
          '''func initInstanceWithConfig(config *Config, server *Instance) (done bool, initErr error) {
-	server.ctx, server.nativeXdriveLifetime = xdrive.ContextWithNativeLifetime(server.ctx)
+	server.ctx, server.nativeXdriveLifetime = internet.ContextWithNativeServiceLifetime(server.ctx)
 	defer func() { if done { server.nativeXdriveLifetime.Close() } }()'''),
         ('core/xray.go', '\ts.running = false\n', '\ts.running = false\n\ts.nativeXdriveLifetime.Close()\n'),
         (base+'xdrive.go', 'func init() {', 'func NativeLifetimeCapability() int64 { return 1 }\n\nfunc init() {'),

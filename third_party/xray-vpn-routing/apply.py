@@ -40,6 +40,7 @@ def managed_service_modules():
 def managed_service_helpers():
     overlay = CLASSIC / 'overlay'
     paths = [overlay / 'main/native_services_cli.go',
+             overlay / 'transport/internet/native_service_lifetime.go',
              overlay / 'transport/internet/xdrive/native_lifetime.go',
              *sorted((overlay / 'transport/internet/xdrive').glob('*_test.go')),
              *sorted((overlay / 'app/geodata').glob('native_*.go'))]

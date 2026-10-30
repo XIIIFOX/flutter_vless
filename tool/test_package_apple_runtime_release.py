@@ -44,7 +44,8 @@ class CanonicalPackageTests(unittest.TestCase):
         names += ['third_party/xray-native-dns/xdrive_lifetime_patch.py',
                   'third_party/xray-native-dns/geodata_lifetime_patch.py',
                   'third_party/xray-native-dns/overlay/main/native_services_cli.go',
-                  'third_party/xray-native-dns/overlay/transport/internet/xdrive/native_lifetime.go']
+                  'third_party/xray-native-dns/overlay/transport/internet/xdrive/native_lifetime.go',
+                           'third_party/xray-native-dns/overlay/transport/internet/native_service_lifetime.go']
         extra = ['ios/build_xray_ios.sh', 'packages/flutter_vless_macos/macos/build_xray_macos.sh',
                  '.github/workflows/apple-runtime-build.yml', 'tool/package_apple_runtime_release.py',
                  'tool/package_apple_core_preview.py', 'third_party/xray-mobile/go.mod',

@@ -5,15 +5,15 @@ import (
 	"testing"
 
 	"github.com/xtls/xray-core/common/serial"
-	"github.com/xtls/xray-core/transport/internet/xdrive"
+	"github.com/xtls/xray-core/transport/internet"
 )
 
 // CI runtime fixture, deliberately outside the pure TestNative selection.
 func TestAcceptanceManagedCoreCloseAndFailedConstruction(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	firstContext, firstOwner := xdrive.ContextWithNativeLifetime(parent)
-	secondContext, secondOwner := xdrive.ContextWithNativeLifetime(parent)
+	firstContext, firstOwner := internet.ContextWithNativeServiceLifetime(parent)
+	secondContext, secondOwner := internet.ContextWithNativeServiceLifetime(parent)
 	first := &Instance{ctx: firstContext, nativeXdriveLifetime: firstOwner}
 	second := &Instance{ctx: secondContext, nativeXdriveLifetime: secondOwner}
 	defer first.Close()

@@ -31,8 +31,8 @@ func TestAcceptanceManagedCoreCloseAndFailedConstruction(t *testing.T) {
 		t.Fatal("another Core was cancelled")
 	default:
 	}
-	if parent.Err() != nil {
-		t.Fatal("caller context was cancelled")
+	if parent.Err() != nil || first.ctx.Err() != nil || second.ctx.Err() != nil {
+		t.Fatal("Core.Close cancelled a caller or feature context")
 	}
 	failed := &Instance{ctx: parent}
 	done, err := initInstanceWithConfig(&Config{App: []*serial.TypedMessage{{Type: "unregistered.synthetic.app"}}}, failed)
@@ -43,5 +43,8 @@ func TestAcceptanceManagedCoreCloseAndFailedConstruction(t *testing.T) {
 	case <-failed.nativeXdriveLifetime.Done():
 	default:
 		t.Fatal("failed construction retained its service lifetime")
+	}
+	if failed.ctx.Err() != nil || parent.Err() != nil {
+		t.Fatal("failed construction cancelled a caller or feature context")
 	}
 }

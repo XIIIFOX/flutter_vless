@@ -15,6 +15,36 @@ func nativeS3Stream() *internet.MemoryStreamConfig {
 		Secrets: []string{"synthetic-access", "synthetic-secret"}, S3: &S3Config{Endpoint: "http://127.0.0.1:18095", Bucket: "synthetic-bucket", PathStyle: true}}}
 }
 
+func TestNativeServiceOwnerClosePreservesCoreContextAndMetadata(t *testing.T) {
+	type markerKey struct{}
+	parent, cancel := context.WithCancel(context.WithValue(context.Background(), markerKey{}, "core-metadata"))
+	defer cancel()
+	coreContext, owner := internet.ContextWithNativeServiceLifetime(parent)
+	defer owner.Close()
+	serviceContext := owner.ServiceContext()
+	if serviceContext == coreContext || coreContext.Value(markerKey{}) != "core-metadata" || serviceContext.Value(markerKey{}) != "core-metadata" {
+		t.Fatal("Core/service contexts lost their separate lifetime or caller metadata")
+	}
+	for _, ctx := range []context.Context{coreContext, serviceContext} {
+		if found, ok := internet.NativeServiceLifetimeFromContext(ctx); !ok || found != owner {
+			t.Fatal("owner metadata was not inherited")
+		}
+	}
+	owner.Close()
+	if parent.Err() != nil || coreContext.Err() != nil {
+		t.Fatal("service Close cancelled the caller or Core feature context")
+	}
+	select {
+	case <-serviceContext.Done():
+	default:
+		t.Fatal("service Close did not cancel its owned child")
+	}
+	cancel()
+	if coreContext.Err() != context.Canceled {
+		t.Fatal("Core feature context stopped inheriting caller cancellation")
+	}
+}
+
 func TestNativeXdriveStorageCannotEscapeItsCoreOrCompiledSocketPolicy(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	defer cancel()

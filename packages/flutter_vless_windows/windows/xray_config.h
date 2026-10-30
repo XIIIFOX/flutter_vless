@@ -1183,7 +1183,8 @@ inline std::optional<std::vector<BootstrapEndpoint>> XdriveServiceTargets(Json s
       size_t offset = 0;
       do { const auto slash = value.find('/', offset); const auto part = value.substr(offset, slash - offset);
         if (part.empty() || part == "." || part == "..") return false;
-        if (slash == std::string::npos) return true; offset = slash + 1;
+        if (slash == std::string::npos) return true;
+        offset = slash + 1;
       } while (offset <= value.size());
       return false;
     };

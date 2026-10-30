@@ -18,7 +18,8 @@ type nativeStorageKey struct {
 }
 
 func ContextWithNativeLifetime(parent context.Context) (context.Context, *NativeLifetime) {
-	return internet.ContextWithNativeServiceLifetime(parent)
+	_, owner := internet.ContextWithNativeServiceLifetime(parent)
+	return owner.ServiceContext(), owner
 }
 
 func nativeLifetimeContext(contexts []context.Context) context.Context {

@@ -31,7 +31,7 @@ def extract(sources):
     submission = plugin[first:last]
     if submission.count("CompleteStartup(*shared_result, ready, protecting, outcome);") != 1:
         raise ValueError("Windows startup callback no longer owns its outcome")
-    runtime = part("native_runtime.cpp", "bool CheckConfig(", "\nbool RoutingCapability(")
+    runtime = part("native_runtime.cpp", "static bool ManagedServicesAllowed(", "\nbool RoutingCapability(")
     return manager, codec, submission, runtime
 
 
@@ -39,6 +39,7 @@ HEADER = r'''
 #include "preparation_report.h"
 #include "asset_location.h"
 #include "xray_config.h"
+#include "managed_service_capabilities.h"
 #include "native_options.h"
 #include "native_routing_spec.h"
 #include <atomic>
@@ -63,8 +64,14 @@ using DWORD = unsigned long;
 using HANDLE = void*;
 constexpr DWORD WAIT_OBJECT_0 = 0;
 #endif
-struct NativeState { bool write = true, launch = true, wait = true; DWORD exit = 0; std::string written; fs::path launched; } native_state;
+struct NativeState { bool write = true, launch = true, wait = true, capability_command = false; DWORD exit = 0;
+  int capability_calls = 0; std::string written, capabilities; fs::path launched; } native_state;
 namespace flutter_vless::native {
+bool Command(const fs::path&, const std::vector<std::wstring>& args, std::string& output, unsigned timeout, const Root&) {
+  if (args != std::vector<std::wstring>{L"native-services", L"capabilities"} || timeout != 3000)
+    throw std::runtime_error("Unexpected managed capability command");
+  ++native_state.capability_calls; output = native_state.capabilities; return native_state.capability_command;
+}
 DWORD WaitForSingleObject(HANDLE, unsigned) { return native_state.wait ? WAIT_OBJECT_0 : 258; }
 bool GetExitCodeProcess(HANDLE, DWORD* code) { *code = native_state.exit; return true; }
 enum class ConfigCheckStorage { currentUser, administrators };
@@ -217,6 +224,15 @@ int main() try {
   const std::string exact = "{ \"outbounds\": [] }\n";
   Require(CheckPreparedConfig(exact, runtime, checked, {}, &failure)
       && native_state.written == exact && native_state.launched == checked, "actual final check changed bytes or file");
+  checked.clear();
+  const std::string cloud = R"({"outbounds":[{"protocol":"vless","streamSettings":{"network":"xdrive","xdriveSettings":{"service":"s3","remoteFolder":"fixture","secrets":["fixture-access","fixture-secret"],"s3":{"endpoint":"https://storage.fixture.invalid","bucket":"fixture-bucket"}}}}]})";
+  Require(!CheckPreparedConfig(cloud, runtime, checked, {}, &failure)
+      && failure == Stage::prepare && checked.empty() && native_state.written == exact
+      && native_state.capability_calls == 1, "unsupported managed runtime persisted private input");
+  native_state.capability_command = true;
+  native_state.capabilities = R"({"stage":"capabilities","code":0,"managed_service_lifetimes":3})";
+  Require(CheckPreparedConfig(cloud, runtime, checked, {}, &failure)
+      && native_state.written == cloud, "actual managed preflight gate refused the matching runtime");
   std::cout << "WINDOWS_PREPARATION_REPORT_CONSUMER_PASS=12\n";
 } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 '''
@@ -260,7 +276,8 @@ if __name__ == "__main__":
         args.generate.parent.mkdir(parents=True, exist_ok=True)
         args.generate.write_text(generated(sources))
         hashes = {str((WINDOWS / name).relative_to(ROOT)): hashlib.sha256((WINDOWS / name).read_bytes()).hexdigest()
-                  for name in (*sources, "preparation_report.h", "vpn_worker_candidate.h", "xray_config.h")}
+                  for name in (*sources, "preparation_report.h", "vpn_worker_candidate.h", "xray_config.h",
+                               "managed_service_capabilities.h", "geodata_assets.h")}
         args.generate.with_suffix(".sources.json").write_text(json.dumps(hashes, indent=2) + "\n")
     else:
         unittest.main(argv=[__file__])

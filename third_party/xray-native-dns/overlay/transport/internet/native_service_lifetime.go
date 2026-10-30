@@ -20,10 +20,12 @@ type NativeServiceLifetime struct {
 type nativeServiceLifetimeKey struct{}
 
 func ContextWithNativeServiceLifetime(parent context.Context) (context.Context, *NativeServiceLifetime) {
-	ctx, cancel := context.WithCancel(parent)
-	owner := &NativeServiceLifetime{cancel: cancel, resources: make(map[any]io.Closer)}
-	owner.ctx = context.WithValue(ctx, nativeServiceLifetimeKey{}, owner)
-	return owner.ctx, owner
+	owner := &NativeServiceLifetime{resources: make(map[any]io.Closer)}
+	// Core/feature contexts retain the caller's cancellation semantics. Only
+	// cloud resources receive the separately cancellable service child.
+	coreContext := context.WithValue(parent, nativeServiceLifetimeKey{}, owner)
+	owner.ctx, owner.cancel = context.WithCancel(coreContext)
+	return coreContext, owner
 }
 
 func NativeServiceLifetimeFromContext(ctx context.Context) (*NativeServiceLifetime, bool) {
@@ -33,6 +35,9 @@ func NativeServiceLifetimeFromContext(ctx context.Context) (*NativeServiceLifeti
 	owner, ok := ctx.Value(nativeServiceLifetimeKey{}).(*NativeServiceLifetime)
 	return owner, ok && owner != nil
 }
+
+// ServiceContext belongs to the registry; Core must retain its metadata context.
+func (n *NativeServiceLifetime) ServiceContext() context.Context { return n.ctx }
 
 func (n *NativeServiceLifetime) Done() <-chan struct{} { return n.ctx.Done() }
 func (n *NativeServiceLifetime) ResourceCount() int {

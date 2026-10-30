@@ -12,7 +12,7 @@ import (
 // Fixed status only: no config, network, cloud credential or Core construction.
 func init() {
 	base.RootCommand.Commands = append(base.RootCommand.Commands, &base.Command{
-		UsageLine:   "{{.Exec}} native-services capabilities",
+		UsageLine:   "{{.Exec}} native-services [capabilities]",
 		Short:       "Report managed native service ownership capabilities",
 		Long:        "Private versioned capabilities for GeoDAT and XDRIVE native launchers.",
 		CustomFlags: true,

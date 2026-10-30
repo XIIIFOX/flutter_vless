@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,6 +16,8 @@ void main() {
 
   tearDown(() {
     messenger.setMockMethodCallHandler(acceptanceWebChannel, null);
+    messenger.setMockMethodCallHandler(SystemChannels.platform_views, null);
+    debugDefaultTargetPlatformOverride = null;
     calls.clear();
   });
 
@@ -69,6 +72,10 @@ void main() {
       await handleLiveAcceptanceRequest('navigate:2ip'),
       'acceptance-unsupported',
     );
+    expect(
+      await handleLiveAcceptanceRequest('openSafari:2ip'),
+      'acceptance-unsupported',
+    );
     expect(calls, isEmpty);
   });
 
@@ -80,5 +87,33 @@ void main() {
       );
     });
     expect(await captureAcceptanceOwnView(), 'acceptance-error');
+  });
+
+  testWidgets('Browser buttons pass only the two fixed target enums', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    messenger.setMockMethodCallHandler(
+      SystemChannels.platform_views,
+      (_) async => null,
+    );
+    messenger.setMockMethodCallHandler(acceptanceWebChannel, (call) async {
+      calls.add(call);
+      return true;
+    });
+    await tester.pumpWidget(const MaterialApp(home: AcceptanceWebProbePage()));
+    await tester.pump();
+    await tester.tap(find.text('Open 2ip in browser'));
+    await tester.pump();
+    await tester.tap(find.text('Open tfox in browser'));
+    await tester.pump();
+    final browserCalls = calls
+        .where((call) => call.method == 'openSafari')
+        .toList();
+    expect(browserCalls.map((call) => call.arguments), ['2ip', 'tfox']);
+    expect(calls.any((call) => call.method == 'navigate'), isFalse);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    debugDefaultTargetPlatformOverride = null;
   });
 }

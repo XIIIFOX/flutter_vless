@@ -29,6 +29,9 @@ final class AcceptanceWebDiagnosticsFactory: NSObject, FlutterPlatformViewFactor
               current.view().window != nil else { result(Self.unavailable()); return }
         current.navigate(target: target)
         result(true)
+      case "openSafari":
+        guard let target = call.arguments as? String else { result(Self.unavailable()); return }
+        self.openSafari(target: target, result: result)
       case "stop" where call.arguments == nil || call.arguments is NSNull:
         self.current?.stop()
         result(true)
@@ -91,6 +94,24 @@ final class AcceptanceWebDiagnosticsFactory: NSObject, FlutterPlatformViewFactor
       let image = renderer.image { _ in root.drawHierarchy(in: root.bounds, afterScreenUpdates: true) }
       save(image: image, backend: "UIView.drawHierarchy-own-application", pid: pid,
            timestamp: timestamp, observation: [:], result: result)
+    }
+  }
+
+  private func safariURL(_ target: String) -> URL? {
+    guard let base = ["2ip": "https://2ip.ru/", "tfox": "https://tfox.dev/ip/"][target] else { return nil }
+    return URL(string: base + "?test=ios-safari-qa-" + UUID().uuidString)
+  }
+
+  private func openSafari(target: String, result: @escaping FlutterResult) {
+    guard admitted, let url = safariURL(target), let current,
+          current.view().window != nil else { result(Self.unavailable()); return }
+    // Acknowledge the fixed request before iOS backgrounds the driver app.
+    // Only a later native phone-frame observation can qualify visible Safari.
+    result(true)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self, weak current] in
+      guard let self, self.admitted, let current,
+            current.view().window != nil else { return }
+      UIApplication.shared.open(url, options: [:], completionHandler: nil)
     }
   }
 

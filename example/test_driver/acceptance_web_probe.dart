@@ -92,13 +92,17 @@ class AcceptanceWebProbePage extends StatefulWidget {
 class _AcceptanceWebProbePageState extends State<AcceptanceWebProbePage> {
   String status = 'Choose a public test site';
 
-  Future<void> _open(String target) async {
+  Future<void> _open(String target, {bool inSafari = false}) async {
     try {
       final ok = await acceptanceWebChannel
-          .invokeMethod<bool>('navigate', target)
+          .invokeMethod<bool>(inSafari ? 'openSafari' : 'navigate', target)
           .timeout(const Duration(seconds: 3));
       if (mounted) {
-        setState(() => status = ok == true ? 'Opened $target' : 'Unavailable');
+        setState(
+          () => status = ok == true
+              ? (inSafari ? 'Requested browser for $target' : 'Opened $target')
+              : 'Unavailable',
+        );
       }
     } catch (_) {
       if (mounted) setState(() => status = 'Unavailable');
@@ -126,6 +130,19 @@ class _AcceptanceWebProbePageState extends State<AcceptanceWebProbePage> {
             TextButton(
               onPressed: () => _open('tfox'),
               child: const Text('Open tfox'),
+            ),
+          ],
+        ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            TextButton(
+              onPressed: () => _open('2ip', inSafari: true),
+              child: const Text('Open 2ip in browser'),
+            ),
+            TextButton(
+              onPressed: () => _open('tfox', inSafari: true),
+              child: const Text('Open tfox in browser'),
             ),
           ],
         ),

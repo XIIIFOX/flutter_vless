@@ -549,6 +549,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func checkEndpointPreflight(_ spec: RuntimeSpec, prepared: TunnelPreparedConfig, source: RuntimeSource) throws {
         guard sessionAdmission.isCurrent(spec.epoch), endpointAdmission.isCurrent(spec.token), spec.isFresh() else { throw CancellationError() }
+        try ManagedServiceAssetPolicy.validate(prepared.data, directory: source.geoAssetsDirectory, geodataCapability: FLVlessCoreGeodataLifetimeCapability(), xdriveCapability: FLVlessCoreXdriveLifetimeCapability())
         if spec.selections.contains(where: { !$0.selected.address.isLoopback }),
            FLVlessCoreDarwinInterfaceBindingCapability() != 1 {
             throw tunnelError("Xray runtime lacks physical interface binding; update the runtime")
@@ -981,6 +982,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data? = nil) throws {
+        try ManagedServiceAssetPolicy.validate(xrayConfig, directory: geoAssetsDirectory, geodataCapability: FLVlessCoreGeodataLifetimeCapability(), xdriveCapability: FLVlessCoreXdriveLifetimeCapability())
         if routingMetadata != nil { try NativeRoutingSpec.requireRuntime(FLVlessCoreRoutingCapability()) }
         // This limits the Go runtime only. HEV session caps and bounded Swift/C
         // diagnostics below protect the rest of the extension memory budget.

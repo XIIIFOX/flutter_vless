@@ -33,6 +33,7 @@ harness=harness.replace('    let markers = [', '    do { try await runAppleProxy
 if os.environ.get('APPLE_RUNTIME_PROBE_MODE') == 'fakedns-only':
     begin, end = harness.index('func runModes() async {'), harness.index('class ModeDelegate:')
     harness = harness[:begin] + r'''func runModes() async {
+    requireManagedServiceLifetimeCapabilities()
     setbuf(stdout, nil)
     print("RUNTIME=\(XRayGetVersion())")
     do { try runAppleFakeDNSRuntimeChecks() } catch { print("APPLE_FAKEDNS_SDK_FAILED"); exit(1) }
@@ -67,6 +68,10 @@ from pathlib import Path
 import os, sys
 text=Path(sys.argv[1]).read_text()
 assert text.splitlines().count("RUNTIME=26.10.29") == 1, "Unexpected embedded Xray version"
+if os.environ.get('REQUIRE_MANAGED_SERVICE_LIFETIMES') == '1':
+    for marker in ['APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1', 'APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=1']:
+        assert text.splitlines().count(marker) == 1, 'Missing or duplicate managed lifetime capability value'
+
 if os.environ.get('REQUIRE_DARWIN_INTERFACE_BINDING') == '1':
     assert text.splitlines().count('APPLE_DARWIN_INTERFACE_BIND_CAPABILITY_PASS=1') == 1
 assert text.splitlines().count('APPLE_FAKEDNS_SDK_PASS=2') == 1

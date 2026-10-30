@@ -75,7 +75,19 @@ func runRawRuntimeProbe() {
 }
 extension ProxyOnlyRunner { static func prepared(_ data: Data) throws -> Data { try buildProxyOnlyConfigData(configData: data) } }
 extension ServerDelayRunner { static func prepared(_ data: Data) throws -> Data { try buildDelayConfigData(config: String(decoding: data, as: UTF8.self), proxyPort: 18095, credentials: LocalProxyCredentials.generate()) } }
+func requireManagedServiceLifetimeCapabilities() {
+    guard ProcessInfo.processInfo.environment["REQUIRE_MANAGED_SERVICE_LIFETIMES"] == "1" else { return }
+    guard FLVlessCoreGeodataLifetimeCapability() == 1 else {
+        print("APPLE_GEODATA_LIFETIME_CAPABILITY_FAILED"); exit(1)
+    }
+    guard FLVlessCoreXdriveLifetimeCapability() == 1 else {
+        print("APPLE_XDRIVE_LIFETIME_CAPABILITY_FAILED"); exit(1)
+    }
+    print("APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1")
+    print("APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=1")
+}
 func runModes() async {
+    requireManagedServiceLifetimeCapabilities()
     setbuf(stdout, nil)
     ProbePhaseReceipt.start()
     print("MODES_BEGIN")

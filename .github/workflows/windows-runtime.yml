@@ -32,7 +32,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check routing fixture isolation
-        run: python tool/windows/test_runtime_fixtures.py
+        run: |
+          python tool/windows/test_runtime_fixtures.py
+          python tool/windows/test_package_managed_runtime.py
       - name: Record toolchain and operating system
         shell: pwsh
         run: |
@@ -131,6 +133,19 @@ jobs:
           $log = Get-Content build/windows-runtime/portable-traffic-runtime.log -Raw
           if ([regex]::Matches($log, '(?m)^WINDOWS_TRAFFIC_COUNTER_RUNTIME_PASS=2\r?$').Count -ne 1) { throw 'Portable owned-counter acceptance is incomplete' }
           Copy-Item "$portable/proxy-results.json" build/windows-runtime/portable-results.json
+      - name: Package the exact managed Core after reverse routing and cleanup checks
+        shell: pwsh
+        run: |
+          python tool/windows/package_managed_runtime.py --directory build/windows-runtime `
+            --producer build/windows-routing-preview/result.json --output build/windows-managed-runtime --head "$env:GITHUB_SHA"
+          if ($LASTEXITCODE) { throw 'Managed runtime packaging failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-managed-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}
+          path: build/windows-managed-runtime/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         if: always()
         with:

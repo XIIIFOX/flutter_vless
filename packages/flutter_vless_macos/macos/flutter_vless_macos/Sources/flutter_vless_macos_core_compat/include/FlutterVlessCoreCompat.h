@@ -11,6 +11,8 @@ FOUNDATION_EXPORT int64_t FLVlessCheckCorePrivate(NSData *configuration);
 FOUNDATION_EXPORT int64_t FLVlessCoreRoutingCapability(void);
 // Stock SDKs safely report zero for the separately patched Darwin binding path.
 FOUNDATION_EXPORT int64_t FLVlessCoreDarwinInterfaceBindingCapability(void);
+FOUNDATION_EXPORT int64_t FLVlessCoreGeodataLifetimeCapability(void);
+FOUNDATION_EXPORT int64_t FLVlessCoreXdriveLifetimeCapability(void);
 FOUNDATION_EXPORT int64_t FLVlessCheckCoreRoutingPrivate(NSData * _Nullable configuration, NSData * _Nullable specification);
 FOUNDATION_EXPORT BOOL FLVlessStartCoreRoutingPrivate(NSData * _Nullable configuration, NSData * _Nullable specification,
                                                     id<XRayLogger> _Nullable logger, NSError * _Nullable * _Nullable error);

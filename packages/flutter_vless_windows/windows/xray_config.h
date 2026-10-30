@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <map>
 #include <vector>
+#include <stdexcept>
 #include "third_party/nlohmann/json.hpp"
 #include "asset_location.h"
 #include "preparation_report.h"
@@ -1129,6 +1130,112 @@ inline std::optional<std::array<uint8_t,16>> PhysicalIpv6(const std::string& tex
   return ValidOuterIpv6(bytes) ? std::optional<std::array<uint8_t,16>>(bytes) : std::nullopt;
 }
 struct BootstrapEndpoint { std::string host; uint16_t port; };
+inline std::string EffectiveStreamNetwork(const Json& stream);
+
+inline std::optional<BootstrapEndpoint> XdriveUrlTarget(const std::string& raw) {
+  const auto marker = raw.find("://");
+  if (marker == std::string::npos || raw.find_first_of("?#\r\n\t ") != std::string::npos) return std::nullopt;
+  const auto scheme = Fold(raw.substr(0, marker));
+  if (scheme != "http" && scheme != "https") return std::nullopt;
+  const auto authority = raw.substr(marker + 3, raw.find('/', marker + 3) - (marker + 3));
+  if (authority.empty() || authority.find('@') != std::string::npos) return std::nullopt;
+  std::string host, digits;
+  if (authority.front() == '[') {
+    const auto end = authority.find(']');
+    if (end == std::string::npos) return std::nullopt;
+    host = authority.substr(1, end - 1);
+    if (end + 1 < authority.size()) {
+      if (authority[end + 1] != ':') return std::nullopt;
+      digits = authority.substr(end + 2);
+    }
+  } else {
+    const auto colon = authority.rfind(':');
+    if (colon != std::string::npos) { host = authority.substr(0, colon); digits = authority.substr(colon + 1); }
+    else host = authority;
+    if (host.find(':') != std::string::npos) return std::nullopt;
+  }
+  if (host.empty() || host.find_first_of("%\\") != std::string::npos) return std::nullopt;
+  unsigned port = scheme == "https" ? 443 : 80;
+  if (!digits.empty()) {
+    port = 0;
+    for (const char c : digits) { if (c < '0' || c > '9') return std::nullopt; port = port * 10 + static_cast<unsigned>(c - '0'); if (port > 65535) return std::nullopt; }
+    if (!port) return std::nullopt;
+  }
+  return BootstrapEndpoint{host, static_cast<uint16_t>(port)};
+}
+
+inline std::optional<std::vector<BootstrapEndpoint>> XdriveServiceTargets(Json stream) {
+  if (!Fields(stream, {"xdriveSettings", "address", "port"}) || !stream.contains("xdriveSettings")) return std::nullopt;
+  auto settings = stream["xdriveSettings"];
+  if (!Fields(settings, {"service", "remoteFolder", "secrets", "s3"}) || !settings.contains("service") || !settings["service"].is_string()
+      || !settings.contains("remoteFolder") || !settings["remoteFolder"].is_string() || settings["remoteFolder"].get<std::string>().empty()
+      || !settings.contains("secrets") || !settings["secrets"].is_array()) return std::nullopt;
+  for (const auto& secret : settings["secrets"]) if (!secret.is_string() || secret.get<std::string>().empty()) return std::nullopt;
+  const auto service = settings["service"].get<std::string>();
+  std::vector<BootstrapEndpoint> targets;
+  if (service == "google-drive" || service == "Google Drive") {
+    if (settings["secrets"].size() != 3) return std::nullopt;
+    targets = {{"oauth2.googleapis.com", 443}, {"www.googleapis.com", 443}};
+  } else if (service == "s3") {
+    const auto valid_name = [](const std::string& value) {
+      if (value.empty()) return false;
+      for (const unsigned char c : value) if (c < 32 || c == 127 || c == '\\') return false;
+      size_t offset = 0;
+      do { const auto slash = value.find('/', offset); const auto part = value.substr(offset, slash - offset);
+        if (part.empty() || part == "." || part == "..") return false;
+        if (slash == std::string::npos) return true; offset = slash + 1;
+      } while (offset <= value.size());
+      return false;
+    };
+    auto folder = settings["remoteFolder"].get<std::string>(); if (!folder.empty() && folder.back() == '/') folder.pop_back();
+    if (!valid_name(folder) || settings["secrets"].size() < 2 || settings["secrets"].size() > 3 || !settings.contains("s3")) return std::nullopt;
+    auto s3 = settings["s3"];
+    if (!Fields(s3, {"endpoint", "bucket", "pathStyle"}) || !s3.contains("endpoint") || !s3["endpoint"].is_string()
+        || !s3.contains("bucket") || !s3["bucket"].is_string()) return std::nullopt;
+    const auto bucket = s3["bucket"].get<std::string>();
+    if (!valid_name(bucket) || bucket.find('/') != std::string::npos) return std::nullopt;
+    auto endpoint = XdriveUrlTarget(s3["endpoint"].get<std::string>()); if (!endpoint) return std::nullopt;
+    if (s3.contains("pathStyle") && !s3["pathStyle"].is_null()) {
+      if (!s3["pathStyle"].is_boolean()) return std::nullopt;
+      if (!s3["pathStyle"].get<bool>()) {
+        if (Literal4(endpoint->host) || endpoint->host.find(':') != std::string::npos || bucket.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-.") != std::string::npos
+            || bucket.front() == '.' || bucket.back() == '.' || bucket.find("..") != std::string::npos) return std::nullopt;
+        endpoint->host = bucket + "." + endpoint->host;
+      }
+    }
+    targets.push_back(*endpoint);
+  } else return std::nullopt; // Local/template have separate, unqualified file contracts.
+  if (stream.contains("port") && !stream["port"].is_null() && (!stream["port"].is_number_unsigned() && !stream["port"].is_number_integer())) return std::nullopt;
+  const auto port = stream.value("port", Json()).is_null() ? int64_t{0} : stream["port"].get<int64_t>();
+  if (port < 0 || port > 65535) return std::nullopt;
+  if (stream.contains("address") && !stream["address"].is_null()) {
+    if (!stream["address"].is_string() || stream["address"].get<std::string>().empty()) return std::nullopt;
+    for (auto& target : targets) { target.host = stream["address"].get<std::string>(); if (port) target.port = static_cast<uint16_t>(port); }
+  }
+  return targets;
+}
+
+inline bool RequiresXdriveLifetime(const Json& source) {
+  auto config = source;
+  if (!Fields(config, {"inbounds", "outbounds"})) throw std::invalid_argument("Invalid managed service configuration");
+  bool required = false;
+  for (const auto* direction : {"inbounds", "outbounds"}) {
+    if (!config.contains(direction) || !config[direction].is_array()) continue;
+    for (auto entry : config[direction]) {
+      if (!Fields(entry, {"protocol", "streamSettings"})) throw std::invalid_argument("Invalid managed service entry");
+      const auto protocol = Fold(entry.value("protocol", ""));
+      if (std::string(direction) == "outbounds" && (protocol == "loopback" || protocol == "freedom" || protocol == "direct" || protocol == "blackhole" || protocol == "block" || protocol == "dns" || protocol == "wireguard")) continue;
+      if (!entry.contains("streamSettings") || entry["streamSettings"].is_null()) continue;
+      auto stream = entry["streamSettings"];
+      if (!Fields(stream, {"method", "network"})) throw std::invalid_argument("Invalid managed service stream");
+      if (Fold(EffectiveStreamNetwork(stream)) == "xdrive") {
+        if (!XdriveServiceTargets(stream)) throw std::invalid_argument("Unqualified XDRIVE service");
+        required = true;
+      }
+    }
+  }
+  return required;
+}
 struct BootstrapGraph {
   bool physical_ipv4 = false;
   std::vector<Ipv6TcpEndpoint> ipv6_tcp_endpoints;
@@ -1301,7 +1408,11 @@ inline bool BootstrapStream(Json& stream, const std::vector<BootstrapEndpoint>& 
   options["interface"] = interface_name;
   std::vector<BootstrapEndpoint> physical = endpoints;
   const auto network = EffectiveStreamNetwork(stream);
-  if (Fold(network) == "xdrive") return false; // Independent fronting/storage paths need their own qualification.
+  if (Fold(network) == "xdrive" && !endpoints.empty()) {
+    const auto targets = XdriveServiceTargets(stream);
+    if (!targets) return false;
+    physical = *targets; // Service authority/TLS/SigV4 remain in caller JSON.
+  }
   if (independent_destination) {
     const auto port = Port(stream);
     if (!stream.contains("address") || !stream["address"].is_string() || !port) return false;
@@ -1726,6 +1837,8 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
     const std::function<bool(uint16_t)>& tcp_available = {}, preparation::Report* report = nullptr) try {
   preparation::Report changes;
   auto config = Parse(text);
+  // Validate all active service schemas before any physical bootstrap lookup.
+  (void)RequiresXdriveLifetime(config);
   if (username.empty() || password.empty() || username.size() > 255 || password.size() > 255 || interface_name.empty()
       || !Normalize(config, PortEnvironment, &changes)) return std::nullopt;
   if (!BindEndpointAddresses(config, &changes)) return std::nullopt;
@@ -1796,6 +1909,14 @@ inline std::optional<std::string> PrepareProtectedVpn(const std::string& text,
       physical.push_back({(*entry)[key].get<std::string>(), *remote_port});
     }
     if (!BootstrapStream(outbound["streamSettings"], physical, interface_name, resolve, service_tags, ipv6_tag, bootstrap, send_through)) return std::nullopt;
+  }
+  for (auto& input : inbounds) {
+    if (!Fields(input, {"streamSettings"}) || !input.contains("streamSettings") || input["streamSettings"].is_null()) continue;
+    auto& stream = input["streamSettings"];
+    if (!Fields(stream, {"method", "network"})) return std::nullopt;
+    if (Fold(EffectiveStreamNetwork(stream)) != "xdrive") continue;
+    const auto services = XdriveServiceTargets(stream);
+    if (!services || !BootstrapStream(stream, *services, interface_name, resolve, service_tags, ipv6_tag, bootstrap)) return std::nullopt;
   }
   Json dns_rules = Json::array();
   if (!ProtectedDns(config, service_tags, proxy, dns_rules)) return std::nullopt;

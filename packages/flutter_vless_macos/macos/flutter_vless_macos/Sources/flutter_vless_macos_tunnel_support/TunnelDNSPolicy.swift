@@ -47,6 +47,7 @@ public enum TunnelDNSPolicy {
         // Admission is transactional: a failed bootstrap must not partially
         // rewrite a caller dictionary which might be retried.
         guard var output = TunnelConfigKeys.normalize(config) else { return nil }
+        do { try XdriveServicePolicy.validate(output) } catch { return nil }
         do { try XrayAddressEnvironment.bind(to: &output, environmentSnapshot: environmentSnapshot) }
         catch { return nil }
         guard TunnelFakeDNSPolicy.active(in: output) != nil else { return nil }
@@ -139,6 +140,17 @@ public enum TunnelDNSPolicy {
                                 generated: &generated, rules: &privateRules, resolved: &resolved,
                                 addresses: &addresses, endpointPath: endpointPath, resolver: resolveIPv4) else { return nil }
             outbounds[index]["streamSettings"] = stream
+        }
+        if var inputs = output["inbounds"] as? [[String: Any]] {
+            for index in inputs.indices {
+                guard var stream = inputs[index]["streamSettings"] as? [String: Any],
+                      effectiveTransport(in: stream) == "xdrive" else { continue }
+                guard prepareStream(&stream, endpoints: [], sendThrough: nil, allocator: &allocator, denied: denied,
+                    generated: &generated, rules: &privateRules, resolved: &resolved, addresses: &addresses,
+                    endpointPath: endpointPath, resolver: resolveIPv4) else { return nil }
+                inputs[index]["streamSettings"] = stream
+            }
+            output["inbounds"] = inputs
         }
         outbounds.append(contentsOf: generated)
         if !generated.isEmpty { outbounds.append(["tag": denied, "protocol": "blackhole"]) }
@@ -278,7 +290,14 @@ public enum TunnelDNSPolicy {
            tls.keys.contains(where: { XrayJSONField.matches($0, "echConfigList") && (tls[$0] as? String ?? "").contains("://") }) { return false }
         let network = effectiveTransport(in: stream)
         // XDRIVE has a separate fronting destination, not the protocol endpoint.
-        guard network != "xdrive" else { return false }
+        if network == "xdrive" {
+            guard let services = try? XdriveServicePolicy.targets(stream) else { return false }
+            // Keep service URLs, signing authority, OAuth identity and TLS/SNI.
+            // Only the private socket graph is replaced below.
+            return prepareXdriveStream(&stream, services: services, sendThrough: sendThrough,
+                allocator: &allocator, denied: denied, generated: &generated, rules: &rules,
+                resolved: &resolved, addresses: &addresses, endpointPath: endpointPath, resolver: resolver)
+        }
         let penetrating = sockopt["penetrate"] as? Bool == true
         var physicalTargets = endpoints
         // The immediate client uses getHTTPClient, not another XHTTP Dial;
@@ -361,6 +380,21 @@ public enum TunnelDNSPolicy {
             }
             stream[key] = settings
         }
+        return true
+    }
+
+    private static func prepareXdriveStream(_ stream: inout [String: Any], services: [XdriveServicePolicy.Target], sendThrough: Any?,
+        allocator: inout XrayServiceTags, denied: String, generated: inout [[String: Any]], rules: inout [[String: Any]],
+        resolved: inout [String: String], addresses: inout Set<String>, endpointPath: TunnelEndpointPath?, resolver: (String) -> String?) -> Bool {
+        // Reuse the proven fixed-endpoint socket adapter without re-entering
+        // XDRIVE or rewriting the caller's active transport/security settings.
+        var socketOnly = stream
+        socketOnly["network"] = "tcp"
+        socketOnly.removeValue(forKey: "method")
+        guard prepareStream(&socketOnly, endpoints: services.map { Endpoint(host: $0.host, port: $0.port) }, sendThrough: sendThrough,
+            allocator: &allocator, denied: denied, generated: &generated, rules: &rules, resolved: &resolved,
+            addresses: &addresses, endpointPath: endpointPath, resolver: resolver, followDownload: false) else { return false }
+        stream["sockopt"] = socketOnly["sockopt"]
         return true
     }
 

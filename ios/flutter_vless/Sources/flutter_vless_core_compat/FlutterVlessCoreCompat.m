@@ -23,6 +23,20 @@ int64_t FLVlessCheckCorePrivate(NSData *configuration) {
 __attribute__((weak)) int64_t XRayRoutingCapability(void) { return 0; }
 __attribute__((weak)) int64_t XRayDarwinInterfaceBindingCapability(void) { return 0; }
 
+// Distinct negative sentinels prevent identical weak fallback bodies from
+// sharing an address and being rebound by another capability's strong entry.
+__attribute__((weak)) int64_t XRayGeodataLifetimeCapability(void) { return -41; }
+__attribute__((weak)) int64_t XRayXdriveLifetimeCapability(void) { return -42; }
+int64_t FLVlessCoreGeodataLifetimeCapability(void) {
+    int64_t (*volatile capability)(void) = XRayGeodataLifetimeCapability;
+    return capability() == 1 ? 1 : 0;
+}
+int64_t FLVlessCoreXdriveLifetimeCapability(void) {
+    int64_t (*volatile capability)(void) = XRayXdriveLifetimeCapability;
+    return capability() == 1 ? 1 : 0;
+}
+
+
 int64_t FLVlessCoreDarwinInterfaceBindingCapability(void) {
     int64_t (*volatile capability)(void) = XRayDarwinInterfaceBindingCapability;
     return capability() == 1 ? 1 : 0;

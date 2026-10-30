@@ -2,6 +2,7 @@
 #include "protected_runtime.h"
 #include "xray_config.h"
 #include "native_routing_protocol.h"
+#include "managed_service_capabilities.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -234,6 +235,14 @@ void RemovePrivateConfig(fs::path& path) {
   if (path.empty()) return;
   if (DeleteFileW(path.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND) path.clear();
 }
+static bool ManagedServicesAllowed(const xray_config::Json& config, const fs::path& executable, const asset_location::Root& assets) {
+  const auto required = managed_services::Required(config);
+  if (!required) return true;
+  std::string output;
+  if (!Command(executable, {L"native-services", L"capabilities"}, output, 3000, assets)
+      || !managed_services::Allows(config, managed_services::ParseCapabilities(output))) return false;
+  return !(required & managed_services::kGeodata) || geodata_assets::ValidateWritable(config, assets.value_or(executable.parent_path()));
+}
 bool CheckConfig(const std::string& config, const fs::path& executable, ConfigCheckStorage storage,
     const asset_location::Root& assets, preparation::Stage* failure) try {
   if (failure) *failure = preparation::Stage::prepare;
@@ -248,9 +257,12 @@ bool CheckConfig(const std::string& config, const fs::path& executable, ConfigCh
   fs::path image = executable;
   if (failure) *failure = preparation::Stage::persist;
   if (storage == ConfigCheckStorage::administrators) {
-    if (!protected_runtime.Create(executable, !assets.has_value()) || !protected_runtime.WriteConfig(document.dump(), candidate.path)) return false;
+    if (!protected_runtime.Create(executable, !assets.has_value())) return false;
     image = protected_runtime.Executable();
-  } else if (!WritePrivateConfig(document.dump(), candidate.path)) return false;
+    if (!ManagedServicesAllowed(document, image, assets) || !protected_runtime.WriteConfig(document.dump(), candidate.path)) return false;
+  } else {
+    if (!ManagedServicesAllowed(document, image, assets) || !WritePrivateConfig(document.dump(), candidate.path)) return false;
+  }
   if (failure) *failure = preparation::Stage::core_check;
   auto process = Launch(image, {L"run", L"-test", L"-config", candidate.path.wstring()}, false, assets);
   if (!process) return false;
@@ -263,6 +275,7 @@ bool CheckPreparedConfig(const std::string& config, ProtectedRuntime& runtime,
     fs::path& path, const asset_location::Root& assets, preparation::Stage* failure) try {
   if (failure) *failure = preparation::Stage::prepare;
   if (!path.empty() || !asset_location::Valid(assets) || !xray_config::Parse(config).is_object()) return false;
+  if (!ManagedServicesAllowed(xray_config::Parse(config), runtime.Executable(), assets)) return false;
   if (failure) *failure = preparation::Stage::persist;
   if (!runtime.WriteConfig(config, path)) return false;
   if (failure) *failure = preparation::Stage::core_check;
@@ -284,6 +297,7 @@ bool CheckRoutingPreparedConfig(const std::string& config, const std::string& me
   if (failure) *failure = preparation::Stage::prepare;
   if (!config_path.empty() || !metadata_path.empty() || !asset_location::Valid(assets)
       || !xray_config::Parse(config).is_object() || !xray_config::Parse(metadata).is_object()) return false;
+  if (!ManagedServicesAllowed(xray_config::Parse(config), runtime.Executable(), assets)) return false;
   if (failure) *failure = preparation::Stage::persist;
   if (!runtime.WriteConfig(config, config_path) || !runtime.WriteConfig(metadata, metadata_path)) return false;
   if (failure) *failure = preparation::Stage::core_check;

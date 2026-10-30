@@ -4,8 +4,6 @@ import android.content.Context
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.io.InputStream
-import java.io.OutputStream
 
 object Utilities {
 
@@ -40,46 +38,40 @@ object Utilities {
         return dir.absolutePath
     }
 
+    /** Seed missing bundled data once. Scheduled/caller updates always win. */
+    @Throws(IOException::class)
     fun copyAssets(context: Context) {
         val assets = context.assets
         val files = assets.list("") ?: return
         for (filename in files) {
-            if (filename == "geoip.dat" || filename == "geosite.dat") {
-                var `in`: InputStream? = null
-                var out: OutputStream? = null
-                try {
-                    `in` = assets.open(filename)
-                    val outFile = File(getUserAssetsPath(context), filename)
-                    out = FileOutputStream(outFile)
-                    copyFile(`in`, out)
-                } catch (e: IOException) {
-                    e.printStackTrace()
-                } finally {
-                    if (`in` != null) {
-                        try {
-                            `in`.close()
-                        } catch (e: IOException) {
-                            e.printStackTrace()
-                        }
-                    }
-                    if (out != null) {
-                        try {
-                            out.close()
-                        } catch (e: IOException) {
-                            e.printStackTrace()
-                        }
+            if (filename != "geoip.dat" && filename != "geosite.dat") continue
+            val target = File(getUserAssetsPath(context), filename)
+            if (target.exists()) continue
+            val staged = File.createTempFile(".flutter-vless-geodat-seed-", ".tmp", target.parentFile)
+            try {
+                assets.open(filename).use { input ->
+                    FileOutputStream(staged).use { output ->
+                        input.copyTo(output)
+                        output.fd.sync()
                     }
                 }
+                try {
+                    // link() publishes a complete file only if the target is
+                    // still absent. Unlike rename(), it cannot overwrite a DAT
+                    // committed concurrently by Core's scheduler. API21+.
+                    android.system.Os.link(staged.absolutePath, target.absolutePath)
+                } catch (error: android.system.ErrnoException) {
+                    if (error.errno != android.system.OsConstants.EEXIST) {
+                        throw IOException("Cannot publish bundled GeoDAT asset")
+                    }
+                }
+            } catch (_: IOException) {
+                throw IOException("Cannot prepare bundled GeoDAT asset")
+            } finally {
+                if (staged.exists() && !staged.delete()) {
+                    throw IOException("Cannot clean bundled GeoDAT staging file")
+                }
             }
-        }
-    }
-
-    @Throws(IOException::class)
-    private fun copyFile(`in`: InputStream, out: OutputStream) {
-        val buffer = ByteArray(1024)
-        var read: Int
-        while (`in`.read(buffer).also { read = it } != -1) {
-            out.write(buffer, 0, read)
         }
     }
 }

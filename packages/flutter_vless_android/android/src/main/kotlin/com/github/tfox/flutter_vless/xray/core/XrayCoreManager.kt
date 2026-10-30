@@ -378,19 +378,42 @@ object XrayCoreManager {
         NativeRoutingCommand.capabilities(BoundedCoreCommand.capture(builder.start(), maxBytes=4096))
     } catch (_: Exception) { false }
 
+    /** Query the actual immutable executable, including every recovery admission. */
+    internal fun managedServiceCapabilities(context: Context, routing: Boolean = false): Int = try {
+        val builder = ProcessBuilder(runtimeExecutable(context, routing).absolutePath,
+            "native-services", "capabilities").redirectErrorStream(true)
+        builder.environment().remove("FLUTTER_VLESS_PROTECT_SOCKET")
+        ManagedServiceCapabilities.parse(BoundedCoreCommand.capture(builder.start(), maxBytes = 4096))
+    } catch (_: Exception) { 0 }
+
+    private fun managedServicesAllowed(context: Context, json: String, routing: Boolean, geoAssetsDirectory: String?): Boolean = try {
+        val required = ManagedServiceCapabilities.required(json)
+        if (required == 0) true else {
+            val capabilities = managedServiceCapabilities(context, routing)
+            if ((required and capabilities) != required) false else {
+                if ((required and ManagedServiceCapabilities.GEODATA) != 0)
+                    XrayGeodataAssets.validateWritableRoot(json, File(geoAssetsDirectory ?: context.filesDir.absolutePath))
+                true
+            }
+        }
+    } catch (_: Exception) { false }
+
     /** Validate the actual native parser before replacing a working session. No raw output escapes. */
-    internal fun validateNative(context: Context, configuration: NativeRuntimeConfig, geoAssetsDirectory: String? = null): Boolean =
-        configuration.preflightInputs(context.noBackupFilesDir, launch = { inputs ->
+    internal fun validateNative(context: Context, configuration: NativeRuntimeConfig, geoAssetsDirectory: String? = null): Boolean {
+        if (!managedServicesAllowed(context, configuration.bytes.toString(Charsets.UTF_8), configuration.hasRouting, geoAssetsDirectory)) return false
+        return configuration.preflightInputs(context.noBackupFilesDir, launch = { inputs ->
             val executable=runtimeExecutable(context,configuration.hasRouting).absolutePath
             val builder = ProcessBuilder(*inputs.command(executable, check=true).toTypedArray()).redirectErrorStream(true)
             Utilities.configureXrayAssets(context, builder.environment(), geoAssetsDirectory)
             if (configuration.hasRouting) builder.environment().remove("FLUTTER_VLESS_PROTECT_SOCKET")
             builder.start()
         })
+    }
 
     internal fun startCore(context: Service, config: XrayConfig, configuration: NativeRuntimeConfig,
         protector: XraySocketProtector?, ownerGeneration: Long,
         admitStart: ((() -> Process) -> Process)? = null, onExit: (Long, Int) -> Unit): Boolean {
+        if (!managedServicesAllowed(context, configuration.bytes.toString(Charsets.UTF_8), configuration.hasRouting, config.GEO_ASSETS_DIRECTORY)) return false
         if (!stopWorkers()) return false
         return try {
             val inputs = configuration.createInputs(context.noBackupFilesDir, "xray")
@@ -514,6 +537,7 @@ object XrayCoreManager {
                 event(XrayDiagnosticsStore.Event.DELAY_PORTS_RESERVED)
                 val (json, selectedPort) = buildDelayConfigJson(configJson, ports.socksPort, context.noBackupFilesDir, credentials,
                     certificateAssetsDirectory)
+                check(managedServicesAllowed(context, json.toString(), false, geoAssetsDirectory)) { "Managed service runtime capability is unavailable" }
                 socksPort = selectedPort
                 file.writeText(json.toString())
                 ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,

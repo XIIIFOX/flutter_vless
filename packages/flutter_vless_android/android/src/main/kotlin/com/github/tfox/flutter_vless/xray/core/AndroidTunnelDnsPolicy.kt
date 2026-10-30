@@ -63,6 +63,7 @@ internal object AndroidTunnelDnsPolicy {
 
         val config = JSONObject(configJson)
         bindLogicalAddresses(config, environment, changes)
+        XdriveServicePolicy.validate(config)
         // The explicit policy replaces caller DNS, but a separately configured
         // FakeDNS engine must still leave the adapter's reserved addresses free.
         fakeDnsActive(config, inspectServers = false)
@@ -145,11 +146,16 @@ internal object AndroidTunnelDnsPolicy {
                         .also { entry.put("address", it) }
                 } ?: endpointHost(optionalString(entry, "endpoint"))
                 require(address != null) { "Proxy outbound has no endpoint address" }
-                if (!chained) pinEndpoint(address, typedAddress = proto != "wireguard")
+                if (!chained && !XdriveServicePolicy.active(stream)) pinEndpoint(address, typedAddress = proto != "wireguard")
             }
             prepareStream(stream, { pinEndpoint(it, typedAddress = true) }, effectiveChain = chained,
                 environment = environment, changes = changes)
             outbound.put("streamSettings", stream)
+        }
+        // A cloud-backed inbound also opens outbound service sockets.
+        for (stream in XdriveServicePolicy.streams(config)) {
+            if (outbounds.none { it.optJSONObject("streamSettings") === stream })
+                prepareStream(stream, { pinEndpoint(it, typedAddress = true) }, environment = environment, changes = changes)
         }
         val routing = objectValue(config, "routing") ?: JSONObject()
         canonicalize(routing, "rules", "domainStrategy", "balancers")
@@ -199,6 +205,7 @@ internal object AndroidTunnelDnsPolicy {
         require(allowsRouteExclusions(excludedRoutes)) { "Excluded route conflicts with virtual system DNS" }
         val config = JSONObject(configJson)
         bindLogicalAddresses(config, environment, changes)
+        XdriveServicePolicy.validate(config)
         bindRootDnsAddresses(config, environment, changes)
         fakeDnsActive(config)
         canonicalize(config, "outbounds", "inbounds", "routing")
@@ -406,13 +413,21 @@ internal object AndroidTunnelDnsPolicy {
         val method = if (stream.isNull("method")) null else optionalString(stream, "method")
         val network = method ?: if (stream.isNull("network")) "tcp" else optionalString(stream, "network")
         val xhttp = network?.lowercase(Locale.ROOT) in setOf("xhttp", "splithttp")
+        if (network.equals("xdrive", ignoreCase = true)) {
+            optionalString(stream, "address")?.let { raw ->
+                stream.put("address", XrayPortSpec.bindAddressEnvironment(raw, environment) { changes?.record(PreparationChange.ADDRESS_ENVIRONMENT_BOUND) })
+            }
+            val targets = XdriveServicePolicy.targets(stream)
+            if (!chained) targets.forEach { pinEndpoint(it.host) }
+            return
+        }
         // Core consumes the immediate download as an XHTTP Config, regardless
         // of whether its socket policy is independent or inherited.
         require(!independentDownload || xhttp) { "XHTTP download transport must be xhttp or splithttp" }
         // Primary TCP/WS/gRPC/XHTTP use the protocol's server address. Only
         // XDRIVE uses the primary MemoryStreamConfig destination; an independent
         // XHTTP download always has its own destination, regardless of method.
-        if (independentDownload || network.equals("xdrive", ignoreCase = true))
+        if (independentDownload)
             optionalString(stream, "address")?.let { raw ->
                 val address = XrayPortSpec.bindAddressEnvironment(raw, environment) { changes?.record(PreparationChange.ADDRESS_ENVIRONMENT_BOUND) }
                 stream.put("address", address)

@@ -146,6 +146,11 @@ class FlutterVless {
   /// custom `ext:` rules; standard geodata files are optional when unused.
   /// Apple VPN extensions need a readable App Group directory. Keep the files
   /// available until Stop completes. Omit it for bundled/default lookup.
+  /// Scheduled GeoDAT downloads additionally require existing `.dat` targets
+  /// and writable parent directories for atomic replacement. Apple downloads
+  /// require an explicit writable App Group directory. Use a runtime with
+  /// GeoDAT lifetime capability 1; the Core version alone is insufficient.
+  /// Core owns HTTPS downloads, cron validation and the 256 MiB response limit.
   ///
   /// [certificateAssetsDirectory] resolves relative TLS `certificateFile` and
   /// `keyFile` paths against an existing absolute directory, independently of

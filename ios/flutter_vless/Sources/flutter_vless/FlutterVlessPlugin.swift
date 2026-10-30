@@ -58,6 +58,7 @@ private actor ServerDelayRunner {
             let credentials = try LocalProxyCredentials.generate()
             let delayConfig = try Self.buildDelayConfigData(config: config, proxyPort: proxyPort, credentials: credentials)
 
+            try ManagedServiceAssetPolicy.validate(delayConfig, directory: geoAssetsDirectory, geodataCapability: FLVlessCoreGeodataLifetimeCapability(), xdriveCapability: FLVlessCoreXdriveLifetimeCapability())
             XRaySetMemoryLimit()
             try configureXrayAssetLocation(geoAssetsDirectory)
             var startError: NSError?
@@ -185,6 +186,7 @@ private final class ProxyOnlyRunner {
 
     func start(prepared: Prepared, geoAssetsDirectory: String?) throws {
         let preparedConfig = prepared.data
+        try ManagedServiceAssetPolicy.validate(prepared.data, directory: geoAssetsDirectory, geodataCapability: FLVlessCoreGeodataLifetimeCapability(), xdriveCapability: FLVlessCoreXdriveLifetimeCapability())
         let endpoint = prepared.endpoint
         if isRunning {
             stop()
@@ -781,6 +783,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             guard !self.proxyOnlyRunner.isRunning else {
                 throw CorePreflightError.activeProxySession
             }
+            try ManagedServiceAssetPolicy.validate(preparedProxyConfig?.data ?? effectiveConfigData, directory: geoAssetsDirectory, geodataCapability: FLVlessCoreGeodataLifetimeCapability(), xdriveCapability: FLVlessCoreXdriveLifetimeCapability())
             var coreCheckPassed = false
             if FLVlessHasCorePreflight() {
                 do { try configureXrayAssetLocation(geoAssetsDirectory) }

@@ -1,4 +1,5 @@
 import 'package:flutter_vless/url/xray_json.dart';
+import 'package:flutter_vless/url/xray_geodata_update.dart';
 
 class XrayConfigValidator {
   const XrayConfigValidator();
@@ -17,6 +18,7 @@ class XrayConfigValidator {
     _validateObjectSection(config, 'routing', required: false);
     _validateInbounds(readXraySchemaField(config, 'inbounds'));
     _validateOutbounds(readXraySchemaField(config, 'outbounds'));
+    XrayGeodataUpdate.validate(config);
   }
 
   Object? _decodeJson(String config) {

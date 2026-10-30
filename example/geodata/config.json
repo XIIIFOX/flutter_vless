@@ -1,0 +1,27 @@
+{
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": 10808,
+      "protocol": "socks",
+      "settings": { "auth": "noauth", "udp": true }
+    }
+  ],
+  "outbounds": [
+    { "tag": "direct", "protocol": "freedom" }
+  ],
+  "geodata": {
+    "cron": "0 4 * * *",
+    "outbound": "direct",
+    "assets": [
+      {
+        "url": "https://assets.example.test/geoip.dat",
+        "file": "geoip.dat"
+      },
+      {
+        "url": "https://assets.example.test/geosite.dat",
+        "file": "geosite.dat"
+      }
+    ]
+  }
+}

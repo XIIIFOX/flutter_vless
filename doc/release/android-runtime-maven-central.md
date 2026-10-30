@@ -148,7 +148,7 @@ Before publishing the Android wrapper to Pub.dev, keep these checks green:
 - The emulator smoke test prints an Xray version matching the runtime release.
 ## Consumer verification (1.1.7)
 
-The official runtime is `dev.tfox.fluttervless:xray-android:26.10.29-protect1`.
+The official runtime is `dev.tfox.fluttervless:xray-android:26.10.29-protect3`.
 Copy [verification-metadata.xml](../../example/android/gradle/verification-metadata.xml)
 into **your application's root** `android/gradle/` directory, and run Gradle with
 `--dependency-verification=strict`. Merge the component pins into any broader
@@ -159,7 +159,7 @@ consumer's root Gradle verification.
 
 The AAR's pinned SHA-256 is
 `ac498513218e640c6524e59eb5bba5431ff51c396f114931ada1837f79561ecb`,
-from [the release asset](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.10.29-protect1)
+from [the release asset](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.10.29-protect3)
 and Maven Central. The GitHub AAR is the same published file; every AAR entry
 and all native binaries/geodata were independently matched to
 the repository inputs. The POM was reviewed against the committed publication

@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-XRAY_RUNTIME_VERSION="${XRAY_RUNTIME_VERSION:-26.10.29-protect1}"
-if [ "$XRAY_RUNTIME_VERSION" != "26.10.29-protect1" ] || [ -n "${FLUTTER_VLESS_ANDROID_RUNTIME_REPO:-}" ] || [ -n "${ORG_GRADLE_PROJECT_flutterVlessAndroidRuntimeRepo:-}" ] ||
-   { [ -n "${ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion:-}" ] && [ "$ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion" != "26.10.29-protect1" ]; }; then
+XRAY_RUNTIME_VERSION="${XRAY_RUNTIME_VERSION:-26.10.29-protect3}"
+if [ "$XRAY_RUNTIME_VERSION" != "26.10.29-protect3" ] || [ -n "${FLUTTER_VLESS_ANDROID_RUNTIME_REPO:-}" ] || [ -n "${ORG_GRADLE_PROJECT_flutterVlessAndroidRuntimeRepo:-}" ] ||
+   { [ -n "${ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion:-}" ] && [ "$ORG_GRADLE_PROJECT_flutterVlessXrayRuntimeVersion" != "26.10.29-protect3" ]; }; then
   echo "Official runtime verification rejects repository/version overrides" >&2
   exit 1
 fi

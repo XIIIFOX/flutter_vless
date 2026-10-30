@@ -21,9 +21,10 @@ package or create a `v1.1.7` plugin release.
 
 Runtime release notes for this train:
 
-* [Android v26.10.29-protect1](xray-android-v26.10.29-protect1.md)
-* [iOS v26.10.29](xray-ios-v26.10.29.md)
-* [macOS v26.10.29](xray-macos-v26.10.29.md)
+* [Android v26.10.29-protect3](xray-android-v26.10.29-protect3.md)
+* [iOS v26.10.29-r3](xray-ios-v26.10.29-r3.md)
+* [macOS v26.10.29-r3](xray-macos-v26.10.29-r3.md)
+* [Windows v26.10.29-r3](xray-windows-v26.10.29-r3.md)
 * [Validation and remaining work](xray-v26.10.29-validation.md)
 
 ### Registry blockers before publishing the plugin

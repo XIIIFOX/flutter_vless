@@ -105,7 +105,8 @@ class DarwinBindingCompositionTests(unittest.TestCase):
         applier=importlib.util.module_from_spec(spec);spec.loader.exec_module(applier)
         controls=mock.patch.multiple(applier,CLASSIC=native,MANIFEST={**pins,'upstream_sha256':{}},
             patches=lambda:[],apply_classic_lifetime=lambda root:None,validate_h3_lifetime_source=lambda root:None,
-            apply_h3_lifetime=lambda root:None)
+            apply_h3_lifetime=lambda root:None,validate_managed_service_source=lambda root:None,
+            apply_managed_service_lifetimes=lambda root:None)
         controls.start();self.addCleanup(controls.stop)
         return root,source,native,manifest,applier
 

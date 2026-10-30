@@ -79,7 +79,8 @@ class SnapshotCapabilitiesTests(unittest.TestCase):
         swift.append('private func runtimeCapabilities() -> [String: Int] {' + getter + '}')
         swift.append('for mask in 0..<16 {\n  calls = [:]\n  values = [:]')
         for index, key in enumerate(CAPABILITIES):
-            swift.append(f'  values["{key}"] = Int64((mask >> {index}) & 1)')
+            accepted = 2 if key == 'xdrive_lifetime' else 1
+            swift.append(f'  values["{key}"] = Int64(((mask >> {index}) & 1) * {accepted})')
         swift.append('  let actual = runtimeCapabilities()')
         swift.append('  precondition(actual.count == 4)')
         for key in CAPABILITIES:

@@ -72,13 +72,23 @@ for scheduled work; Android creates bundled defaults only when missing and
 never overwrites a downloaded dataset during recovery.
 
 Both features require explicit lifetime capabilities. Apple SDK bridges must
-return `1` for the required feature. Android/Windows query the selected image's
-`native-services capabilities` command: bit 0 is GeoDAT, bit 1 is XDRIVE, and
-`3` enables both. An older SDK or a stock external Core with the same version
-is insufficient. Ordinary configurations remain usable with those runtimes.
+return `1` for GeoDAT and `2` for XDRIVE. Android/Windows query the selected
+image's `native-services capabilities` command: bit 0 is GeoDAT, bit 1 is
+XDRIVE storage ownership, and bit 2 is XDRIVE idle worker ownership. XDRIVE
+requires both of its bits (`6`); `7` enables both managed features. An older
+SDK or a stock external Core with the same version is insufficient. Ordinary
+configurations remain usable with those runtimes.
+
+The extra worker requirement follows an actual Core shutdown regression:
+an idle WAL reader remained asleep after its storage owner closed. The
+[original test failed](https://github.com/XIIIFOX/flutter_vless/actions/runs/41047188984)
+and the [same test passes after the worker fix](https://github.com/XIIIFOX/flutter_vless/actions/runs/41049190758).
+Worker contexts now retain the caller's metadata/cancellation while also
+following the separate service owner; releasing a connection or listener
+does not cancel sibling services or the Core context.
 
 Native revisions are built and qualified separately from Flutter packages:
-Android `26.10.29-protect2`, Apple `26.10.29-r2`, and the managed Windows
+Android `26.10.29-protect3`, Apple `26.10.29-r3`, and the managed Windows
 companion. Earlier public runtime assets must not be relabelled. Final native
 publication and device evidence remain pending until their exact artifacts
 pass the current acceptance runs.

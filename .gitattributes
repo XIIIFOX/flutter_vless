@@ -2,6 +2,7 @@
 tool/** text=auto eol=lf
 third_party/** text=auto eol=lf
 .github/workflows/** text eol=lf
+packages/flutter_vless_windows/** text=auto eol=lf
 
 *.a binary
 *.dat binary

@@ -204,6 +204,101 @@ def require_classic_lifetime_pass(output):
     return names
 
 
+def checked_negative_control(name, command, *, cwd, environment, seconds, results, test, message):
+    """Preserve the real nonzero result; accept only the expected joined FAIL."""
+    count = len(results)
+    try:
+        checked(name, command, cwd=cwd, environment=environment, seconds=seconds, results=results)
+    except RuntimeError:
+        if len(results) != count + 1:
+            raise
+        result = results[-1]
+        output = (EVIDENCE / (name + '.log')).read_text(encoding='utf-8')
+        if result['exit_code'] != 1 or result['process_exit_code'] != 1 or result['timed_out'] or not result['output_closed'] or not result['output_eof'] or result['output_errors']:
+            raise RuntimeError('Negative control did not fail cleanly with its expected test assertion')
+        if len(re.findall(r'^--- FAIL: ' + re.escape(test) + r' \(', output, re.MULTILINE)) != 1 or message not in output:
+            raise RuntimeError('Negative control failed for an unrelated reason')
+        result['expected_negative_control'] = True
+        result['expected_failure_test'] = test
+        return
+    raise RuntimeError('Broken ownership negative control unexpectedly passed')
+
+
+def run_managed_service_runtime(source, core, go, environment, results, report):
+    """Only called behind the existing CI-only runtime admission boundary."""
+    # Actual old GeoDAT source, same reviewed fixture. Preserve its bounded
+    # failed Close and forced cleanup as evidence, not as a successful test.
+    red = EVIDENCE / 'GeoDataOriginal'
+    shutil.copytree(core, red)
+    restored = {}
+    for name in ('app/geodata/geodata.go', 'app/geodata/download.go'):
+        shutil.copyfile(source / name, red / name)
+        restored[name] = hashlib.sha256((red / name).read_bytes()).hexdigest()
+    report['geodata_red_original_source_sha256'] = restored
+    suffix = '.test.exe' if os.name == 'nt' else '.test'
+    red_binary = EVIDENCE / ('geodata-original' + suffix)
+    checked('geodata-original-compile', [go, 'test', '-c', '-o', str(red_binary), './app/geodata'], cwd=red, environment=environment, seconds=300, results=results)
+    checked_negative_control('geodata-original-close', [str(red_binary), '-test.run', '^TestNativeGeoDataCloseCancelsNonIdleScheduledDownload$', '-test.v', '-test.timeout=15s'],
+        cwd=red, environment=environment, seconds=25, results=results,
+        test='TestNativeGeoDataCloseCancelsNonIdleScheduledDownload', message='GeoDAT Close waited on a non-idle download')
+    geodata_binary = EVIDENCE / ('geodata' + suffix)
+    names = ['TestNativeGeoDataCloseCancelsNonIdleScheduledDownload', 'TestNativeGeoDataSwapFailureRestoresEveryOriginalAndCleansBackups', 'TestNativeGeoDataAssetCountAndOversizeMetadataRejectBeforeReplacement']
+    checked('geodata-owned-runtime', [str(geodata_binary), '-test.run', '^TestNativeGeoData', '-test.v', '-test.timeout=20s'], cwd=core, environment=environment, seconds=30, results=results)
+    for name in names: require_selected_test_pass((EVIDENCE / 'geodata-owned-runtime.log').read_text(encoding='utf-8'), name)
+    results[-1]['selected_tests'] = names
+
+    # XDRIVE's shipped path uses ordinary protected Core, not the stricter
+    # separately unpublished native-DNS transport admission prototype.
+    routing = ROOT / 'third_party/xray-vpn-routing'
+    dependencies = [routing / 'apply.py', routing / 'pin-manifest.json']
+    report['managed_ordinary_copier_sha256'] = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in dependencies}
+    spec = importlib.util.spec_from_file_location('managed_ordinary_apply', routing / 'apply.py')
+    copier = importlib.util.module_from_spec(spec); spec.loader.exec_module(copier)
+    ordinary = EVIDENCE / 'ManagedOrdinary'
+    copier.copy_and_apply_lifetimes(source, ordinary, go=go, routing=False)
+    for name in ('transport/internet/xdrive/native_lifetime_test.go', 'transport/internet/xdrive/native_cloud_runtime_test.go', 'core/native_managed_lifetime_test.go'):
+        target = ordinary / name
+        if target.exists():
+            if target.read_bytes() != (CAPABILITY / 'overlay' / name).read_bytes(): raise RuntimeError('Managed fixture copy mismatch')
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(CAPABILITY / 'overlay' / name, target)
+    tracked = [*MANIFEST['upstream_sha256'], 'transport/internet/xdrive/native_lifetime.go', 'main/native_services_cli.go', 'transport/internet/xdrive/native_lifetime_test.go', 'transport/internet/xdrive/native_cloud_runtime_test.go', 'core/native_managed_lifetime_test.go']
+    report['managed_ordinary_source_sha256'] = {name: hashlib.sha256((ordinary / name).read_bytes()).hexdigest() for name in tracked}
+    for label, package, selection, names in [
+        ('xdrive-cloud', 'transport/internet/xdrive', '^TestAcceptanceXdrive', ['TestAcceptanceXdriveS3RequestsSigningFrontingAndClose', 'TestAcceptanceXdriveGoogleDriveRequestsAndFreshOwner']),
+        ('managed-core', 'core', '^TestAcceptanceManagedCoreCloseAndFailedConstruction$', ['TestAcceptanceManagedCoreCloseAndFailedConstruction']),
+    ]:
+        binary = EVIDENCE / (label + suffix)
+        checked(label + '-compile', [go, 'test', '-c', '-o', str(binary), './' + package], cwd=ordinary, environment=environment, seconds=300, results=results)
+        checked(label + '-runtime', [str(binary), '-test.run', selection, '-test.v', '-test.timeout=25s'], cwd=ordinary, environment=environment, seconds=35, results=results)
+        for name in names: require_selected_test_pass((EVIDENCE / (label + '-runtime.log')).read_text(encoding='utf-8'), name)
+        results[-1]['selected_tests'] = names
+    launcher = EVIDENCE / ('managed-core.exe' if os.name == 'nt' else 'managed-core')
+    checked('managed-cli-build', [go, 'build', '-trimpath', '-buildvcs=false', '-o', str(launcher), './main'], cwd=ordinary, environment=environment, seconds=300, results=results)
+    checked('managed-cli-capabilities', [str(launcher), 'native-services', 'capabilities'], cwd=ordinary, environment=environment, seconds=10, results=results)
+    reply = json.loads((EVIDENCE / 'managed-cli-capabilities.log').read_text(encoding='utf-8'))
+    if reply != {'stage': 'capabilities', 'code': 0, 'managed_service_lifetimes': 3}: raise RuntimeError('Actual managed CLI capabilities differ')
+    report['managed_cli_sha256'] = hashlib.sha256(launcher.read_bytes()).hexdigest()
+
+    # A deliberately broken Close remains compilable. The test must detect
+    # this missing cancellation and force its own parent cleanup after failure.
+    negative = EVIDENCE / 'XdriveNoCancellation'
+    shutil.copytree(ordinary, negative)
+    path = negative / 'transport/internet/xdrive/native_lifetime.go'
+    text = path.read_text(); before = '\tn.cancel()\n'
+    if text.count(before) != 1: raise RuntimeError('XDRIVE cancellation negative-control boundary changed')
+    path.write_text(text.replace(before, '\t// Negative control: owner cancellation deliberately omitted.\n'))
+    report['xdrive_negative_control_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    binary = EVIDENCE / ('xdrive-no-cancellation' + suffix)
+    checked('xdrive-negative-compile', [go, 'test', '-c', '-o', str(binary), './transport/internet/xdrive'], cwd=negative, environment=environment, seconds=300, results=results)
+    checked_negative_control('xdrive-negative-close', [str(binary), '-test.run', '^TestNativeXdriveCoreCloseCancelsTokenOrServiceRequestWithoutStallWait$', '-test.v', '-test.timeout=10s'],
+        cwd=negative, environment=environment, seconds=20, results=results,
+        test='TestNativeXdriveCoreCloseCancelsTokenOrServiceRequestWithoutStallWait', message='request survived Core.Close')
+    if any(hashlib.sha256((ordinary / name).read_bytes()).hexdigest() != expected for name, expected in report['managed_ordinary_source_sha256'].items()): raise RuntimeError('Managed positive source changed during verification')
+    if any(hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected for name, expected in report['managed_ordinary_copier_sha256'].items()): raise RuntimeError('Managed copier changed during verification')
+    report['managed_positive_source_unchanged'] = True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-runtime', action='store_true')
@@ -274,6 +369,8 @@ def main():
                               ('routingfeature', 'features/routing'),
                               ('localdns', 'features/dns/localdns'),
                               ('appdns', 'app/dns'),
+                              ('xdrive', 'transport/internet/xdrive'),
+                              ('geodata', 'app/geodata'),
                               ('core', 'core'),
                               ('nativednsruntime', 'common/nativednsruntime'),
                               ('nativeinstance', 'common/nativeinstance'),
@@ -281,6 +378,8 @@ def main():
             binary = EVIDENCE / (name + ('.test.exe' if os.name == 'nt' else '.test'))
             checked(name + '-compile', [arguments.go, 'test', '-c', '-o', str(binary), './' + package],
                     cwd=core, environment=environment, seconds=300, results=results)
+            if name == 'geodata':
+                continue  # Its real TLS/scheduler fixtures require --run-runtime.
             # nativeconfig contains only decode/plan/static-host value tests;
             # its package has no Core execution, resolver or socket operations.
             selection = '^TestNative'
@@ -305,6 +404,7 @@ def main():
                 require_selected_test_pass((EVIDENCE / 'runtime-loopback.log').read_text(encoding='utf-8'), name)
             results[-1]['selected_test_pass'] = True
             results[-1]['selected_tests'] = selected_tests
+            run_managed_service_runtime(source, core, arguments.go, environment, results, report)
         report['module_cache_targeted_sources_unchanged'] = all(
             hashlib.sha256((source / path).read_bytes()).hexdigest() == expected
             for path, expected in MANIFEST['upstream_sha256'].items())

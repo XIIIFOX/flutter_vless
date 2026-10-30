@@ -15,7 +15,7 @@ VERSION = 'v1.260327.1-0.20261029083850-0afec66085a8'
 CORE = 'github.com/xtls/xray-core'
 MOBILE = 'github.com/EbrahimTahernejad/xray-mobile'
 SUM = 'h1:fixture-core='
-TAGS = 'flutter_vless_vpn_routing_cli,flutter_vless_vpn_routing'
+TAGS = 'flutter_vless_vpn_routing_cli,flutter_vless_vpn_routing,flutter_vless_managed_service_lifetimes'
 
 GO = r'''
 import json,os,pathlib,sys
@@ -111,7 +111,8 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
         (capability/'pin-manifest.json').write_text(json.dumps({'module':CORE,'module_version':VERSION,'module_sum':SUM,'core_commit':'0afec66085a8','capability':'native-vpn-routing-source-preview-v1'}))
         (capability/'apply.py').write_text(ROUTING)
         classic=self.root/'third_party/xray-native-dns';(classic/'overlay/app/dns').mkdir(parents=True)
-        for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go'):
+        for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go'):
+            (classic/name).parent.mkdir(parents=True,exist_ok=True)
             (classic/name).write_text('shared classic fixture')
         self.cache = self.root/'module-cache/Core';self.cache.mkdir(parents=True)
         (self.cache/'go.mod').write_text('module '+CORE+'\n')
@@ -187,7 +188,7 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
     def assert_lifetime_receipt(self, receipt):
         key = 'third_party/xray-native-dns/h3_lifetime_patch.py'
         self.assertIs(receipt['h3_lifetime_applied'], True)
-        self.assertEqual(receipt['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial'])
+        self.assertEqual(receipt['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'])
         self.assertEqual(receipt['h3_lifetime_patch_sha256'], hashlib.sha256((self.root/key).read_bytes()).hexdigest())
         self.assertEqual(receipt['source_sha256'][key], receipt['h3_lifetime_patch_sha256'])
 

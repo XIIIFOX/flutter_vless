@@ -60,7 +60,8 @@ def copy_and_apply(source, destination, *, go='go', caches=None):
     (destination / '.flutter-vless-unpublished-capability.json').write_text(json.dumps({
         'capability': MANIFEST['capability'], 'core_commit': MANIFEST['core_commit'],
         'published': False,
-        'lifetime_patches': ['classic-udp-lifetime', 'xhttp-h3-owned-transport'],
+        'lifetime_patches': ['classic-udp-lifetime', 'xhttp-h3-owned-transport',
+                             'xdrive-owned-services', 'geodata-owned-downloads'],
         'darwin_interface_binding_applied': True,
     }, indent=2)+'\n')
     return destination
@@ -290,6 +291,12 @@ func LookupForIP(domain string, strategy DomainStrategy, localAddr net.Address) 
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.apply(root, replace)
+
+    for patch_name in ('xdrive_lifetime_patch', 'geodata_lifetime_patch'):
+        spec = importlib.util.spec_from_file_location('native_dns_' + patch_name, here / (patch_name + '.py'))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.apply(root, replace)
 
     binding_patch = here / 'darwin_interface_bind_patch.py'
     spec = importlib.util.spec_from_file_location('native_dns_darwin_interface', binding_patch)

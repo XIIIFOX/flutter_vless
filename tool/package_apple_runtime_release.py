@@ -9,7 +9,8 @@ import re
 import subprocess
 import zipfile
 
-from package_apple_core_preview import EXPORTS, digest, git_bindings, safe_name, tree
+from package_apple_core_preview import (EXPORTS, XDRIVE_PATCH, GEODATA_PATCH, digest, git_bindings,
+                                       require_managed_lifetimes, safe_name, tree)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,11 +32,11 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
     for field, key in [('module', 'module'), ('version', 'module_version'), ('sum', 'module_sum'), ('core_commit', 'core_commit')]:
         if report.get(field) != pin[key]:
             raise ValueError('Canonical Core pin differs')
-    for field in ('success', 'h3_lifetime_applied', 'darwin_interface_binding_source_applied',
+    for field in ('success', 'h3_lifetime_applied', 'xdrive_lifetime_applied', 'geodata_lifetime_applied', 'darwin_interface_binding_source_applied',
                   'module_cache_source_unchanged', 'core_copy_unchanged'):
         if report.get(field) is not True:
             raise ValueError('Incomplete canonical producer: '+field)
-    if report.get('stage') != 'post-build-verified' or report.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial'] \
+    if report.get('stage') != 'post-build-verified' or report.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'] \
             or type(report.get('routing_capability_expected')) is not int or report['routing_capability_expected'] != 1 \
             or type(report.get('darwin_interface_binding_capability_expected')) is not int \
             or report['darwin_interface_binding_capability_expected'] != 1 \
@@ -59,10 +60,18 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
                        'third_party/xray-native-dns/pin-manifest.json',
                        'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime.go',
                        'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime_test.go'}
+    expected_inputs.update({XDRIVE_PATCH, GEODATA_PATCH,
+                           'third_party/xray-native-dns/overlay/main/native_services_cli.go',
+                           'third_party/xray-native-dns/overlay/transport/internet/xdrive/native_lifetime.go'})
     expected_inputs.update(p.relative_to(repository).as_posix()
                            for p in (repository/'third_party/xray-vpn-routing/overlay').rglob('*.go'))
+    native_overlay = repository/'third_party/xray-native-dns/overlay'
+    for folder, pattern in [('transport/internet/xdrive', '*_test.go'), ('app/geodata', 'native_*.go'),
+                            ('core', 'native_managed_lifetime_test.go')]:
+        expected_inputs.update(p.relative_to(repository).as_posix() for p in (native_overlay/folder).glob(pattern))
     if set(sources) != expected_inputs:
         raise ValueError('Canonical producer source set differs')
+    require_managed_lifetimes(report, sources)
     producer = 'ios/build_xray_ios.sh' if platform == 'ios' else 'packages/flutter_vless_macos/macos/build_xray_macos.sh'
     names = [producer, '.github/workflows/apple-runtime-build.yml', 'tool/package_apple_runtime_release.py',
              'tool/package_apple_core_preview.py', 'third_party/xray-mobile/go.mod', 'third_party/xray-mobile/go.sum']
@@ -134,7 +143,7 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
                    [('core_source', 'module_cache_before_sha256'), ('replacement', 'core_copy_sha256')]):
         raise ValueError('Framework changed during packaging')
     git_bindings(repository, head, sources)
-    manifest = {'success': True, 'platform': platform, 'head': head, 'release_version': '26.10.29',
+    manifest = {'success': True, 'platform': platform, 'head': head, 'release_version': '26.10.29', 'runtime_revision': 'r2',
                 'core_commit': pin['core_commit'], 'core_version': pin['module_version'], 'core_sum': pin['module_sum'],
                 'archive': archive.name, 'archive_sha256': digest(archive), 'framework_sha256': files,
                 'architectures': architectures, 'strong_exports': symbols, 'source_sha256': sources,

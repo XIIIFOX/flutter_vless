@@ -52,7 +52,7 @@ if [ "$XRAY_NATIVE_ROUTING" = 1 ]; then
     ROUTING_WORK="$(mktemp -d "$SCRIPT_DIR/../../../build/security-android-routing.XXXXXXXX")"
     ROUTING_WORK="$(cd "$ROUTING_WORK" && pwd)"
     SOURCE_DIR="$ROUTING_WORK/Core"
-    ROUTING_TAGS='flutter_vless_vpn_routing_cli,flutter_vless_vpn_routing'
+    ROUTING_TAGS='flutter_vless_vpn_routing_cli,flutter_vless_vpn_routing,flutter_vless_managed_service_lifetimes'
     BUILD_FLAGS=(-mod=readonly "-tags=$ROUTING_TAGS")
     python3 - "$SCRIPT_DIR/../../.." "$ROUTING_WORK" "$ROUTING_TAGS" "$TARGET_DIR" <<'PY'
 from pathlib import Path
@@ -92,7 +92,8 @@ paths = [root/'packages/flutter_vless_android/android/build_xray.sh', mobile/'go
 paths += sorted(mobile.glob('*.go')) + sorted((mobile/'nativecli').rglob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
 paths += sorted(protect.glob('*.py')) + sorted(protect.glob('*.go'))
 classic = root/'third_party/xray-native-dns'
-paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+paths += sorted((classic/'overlay/transport/internet/xdrive').glob('*_test.go')) + sorted((classic/'overlay/app/geodata').glob('native_*.go')) + sorted((classic/'overlay/core').glob('native_managed_lifetime_test.go'))
 if mobile.is_symlink() or any(p.is_symlink() for p in paths): raise ValueError('Build input symlinks are unsupported')
 tree(mobile/'nativecli')
 before, cache_before = {str(p.relative_to(root)):digest(p) for p in paths}, tree(source)
@@ -130,8 +131,10 @@ state = {'success':False, 'core_module':module, 'core':version, 'core_sum':check
          'source_sha256':before, 'module_cache_before_sha256':cache_before, 'core_copy_sha256':tree(core), 'mobile_copy_sha256':tree(copied),
          'routing_tags':tags.split(','), 'selected_abis':selected_abis, 'protection_overlay':'ordinary H/P/D',
          'routing_capability_expected':1, 'classic_dns_lifetime_applied':True,
-         'h3_lifetime_applied':True, 'lifetime_patch_scope':['classic_dns','xhttp_h3_dial'],
+         'h3_lifetime_applied':True, 'xdrive_lifetime_applied':True, 'geodata_lifetime_applied':True, 'lifetime_patch_scope':['classic_dns','xhttp_h3_dial','xdrive_services','geodata_updater'],
          'h3_lifetime_patch_sha256':before['third_party/xray-native-dns/h3_lifetime_patch.py'],
+         'xdrive_lifetime_patch_sha256':before['third_party/xray-native-dns/xdrive_lifetime_patch.py'],
+         'geodata_lifetime_patch_sha256':before['third_party/xray-native-dns/geodata_lifetime_patch.py'],
          'darwin_interface_binding_source_applied':True,
          'darwin_interface_binding_patch_sha256':before['third_party/xray-native-dns/darwin_interface_bind_patch.py'],
          'runtime_executed':False, 'published':False}
@@ -166,7 +169,8 @@ paths=[root/'packages/flutter_vless_android/android/build_xray.sh',mobile/'go.mo
 paths += sorted(mobile.glob('*.go')) + sorted((mobile/'nativecli').rglob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
 paths += sorted(protect.glob('*.py')) + sorted(protect.glob('*.go'))
 classic=root/'third_party/xray-native-dns'
-paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+paths += sorted((classic/'overlay/transport/internet/xdrive').glob('*_test.go')) + sorted((classic/'overlay/app/geodata').glob('native_*.go')) + sorted((classic/'overlay/core').glob('native_managed_lifetime_test.go'))
 if any(p.is_symlink() for p in paths): raise ValueError('Classic input symlink')
 before,cache_before={str(p.relative_to(root)):digest(p) for p in paths},tree(source)
 spec=importlib.util.spec_from_file_location('ordinary_classic_applier',capability/'apply.py')
@@ -183,8 +187,10 @@ state={'success':False,'core_module':module,'core':version,'core_sum':checksum,'
        'core_source':str(source),'source_sha256':before,'module_cache_before_sha256':cache_before,
        'core_copy_sha256':tree(core),'mobile_copy_sha256':None,'selected_abis':abis,
        'classic_dns_lifetime_applied':True,'routing_capability_expected':0,
-       'h3_lifetime_applied':True,'lifetime_patch_scope':['classic_dns','xhttp_h3_dial'],
+       'h3_lifetime_applied':True, 'xdrive_lifetime_applied':True, 'geodata_lifetime_applied':True,'lifetime_patch_scope':['classic_dns','xhttp_h3_dial','xdrive_services','geodata_updater'],
        'h3_lifetime_patch_sha256':before['third_party/xray-native-dns/h3_lifetime_patch.py'],
+         'xdrive_lifetime_patch_sha256':before['third_party/xray-native-dns/xdrive_lifetime_patch.py'],
+         'geodata_lifetime_patch_sha256':before['third_party/xray-native-dns/geodata_lifetime_patch.py'],
          'darwin_interface_binding_source_applied':True,
          'darwin_interface_binding_patch_sha256':before['third_party/xray-native-dns/darwin_interface_bind_patch.py'],
        'runtime_executed':False,'published':False}
@@ -280,7 +286,8 @@ paths = [root/'packages/flutter_vless_android/android/build_xray.sh', mobile/'go
 paths += sorted(mobile.glob('*.go')) + sorted((mobile/'nativecli').rglob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
 paths += sorted(protect.glob('*.py')) + sorted(protect.glob('*.go'))
 classic = root/'third_party/xray-native-dns'
-paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+paths += sorted((classic/'overlay/transport/internet/xdrive').glob('*_test.go')) + sorted((classic/'overlay/app/geodata').glob('native_*.go')) + sorted((classic/'overlay/core').glob('native_managed_lifetime_test.go'))
 if mobile.is_symlink() or any(p.is_symlink() for p in paths) or {str(p.relative_to(root)):digest(p) for p in paths} != state['source_sha256']:
     raise SystemExit('Routing build input changed')
 if tree(Path(state['core_source'])) != state['module_cache_before_sha256']:

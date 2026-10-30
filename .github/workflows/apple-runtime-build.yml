@@ -56,14 +56,14 @@ jobs:
           trap 'xcrun simctl shutdown "$SIMULATOR_UDID" || true; xcrun simctl delete "$SIMULATOR_UDID" || true' EXIT
           xcrun simctl boot "$SIMULATOR_UDID"
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b
-          REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 REQUIRE_DARWIN_INTERFACE_BINDING=1 tool/test_ios_privacy_runtime.sh
+          REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 REQUIRE_DARWIN_INTERFACE_BINDING=1 REQUIRE_MANAGED_SERVICE_LIFETIMES=1 tool/test_ios_privacy_runtime.sh
       - name: Exercise the exact macOS runtime and capabilities
         if: matrix.platform == 'macos'
         run: |
           set -euo pipefail
           rm -rf packages/flutter_vless_macos/macos/XRay.xcframework
           cp -R build/apple-runtime/macos/XRay.xcframework packages/flutter_vless_macos/macos/XRay.xcframework
-          REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 REQUIRE_DARWIN_INTERFACE_BINDING=1 bash tool/test_macos_privacy_runtime.sh
+          REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 REQUIRE_DARWIN_INTERFACE_BINDING=1 REQUIRE_MANAGED_SERVICE_LIFETIMES=1 bash tool/test_macos_privacy_runtime.sh
       - name: Verify static exports and architectures, then create release ZIP
         env:
           PLATFORM: ${{ matrix.platform }}

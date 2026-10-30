@@ -26,6 +26,7 @@ class AppleClassicProducerTests(unittest.TestCase):
         self.assertIn('--destination "$PWD/../Core-classic"', source)
         self.assertIn('--vpn-routing', source)
         self.assertIn('-tags=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding', source)
+        self.assertIn('flutter_vless_managed_service_lifetimes', source)
         self.assertIn('go1.27.3', source)
         self.assertIn('--verify', source)
 
@@ -67,7 +68,12 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.inputs = [ROOT / 'third_party/xray-native-dns/overlay/app/dns' / name for name in helper.HELPERS]
         self.inputs.append(ROOT / 'third_party/xray-native-dns/darwin_interface_bind_patch.py')
         self.inputs.append(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py')
+        self.managed_helpers = helper.applier().managed_service_helpers()
+        self.inputs += [ROOT / 'third_party/xray-native-dns/xdrive_lifetime_patch.py',
+                        ROOT / 'third_party/xray-native-dns/geodata_lifetime_patch.py',
+                        *self.managed_helpers]
         copier = SimpleNamespace(copy_and_apply=self.copy, copy_and_apply_lifetimes=self.copy, lifetime_input_paths=lambda: self.inputs,
+                                 managed_service_helpers=lambda: self.managed_helpers,
                                  copy_and_apply_classic=mock.Mock(side_effect=AssertionError('ordinary producer must include H3')),
                                  classic_input_paths=lambda: self.inputs[:-1])
         patches = mock.patch.multiple(helper, manifest=lambda: self.pin, applier=lambda: copier,
@@ -75,7 +81,7 @@ class AppleClassicPreparationTests(unittest.TestCase):
         patches.start()
         self.addCleanup(patches.stop)
 
-    def reference(self, source, parent):
+    def reference(self, source, parent, routing=False):
         return {relative: hashlib.sha256(('patched ' + relative).encode()).hexdigest()
                 for relative in self.upstream}
 
@@ -86,6 +92,10 @@ class AppleClassicPreparationTests(unittest.TestCase):
         for name in helper.HELPERS:
             shutil.copyfile(ROOT / 'third_party/xray-native-dns/overlay/app/dns' / name,
                             destination / 'app/dns' / name)
+        for source in self.managed_helpers:
+            target = destination / source.relative_to(ROOT / 'third_party/xray-native-dns/overlay')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
 
     def copy(self, source, destination, **kwargs):
         self.copies.append((source, destination, kwargs))
@@ -125,6 +135,26 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.make_copy(self.destination)
         self.selected['Replace'] = {'Dir': str(self.destination)}
 
+    def test_existing_managed_helper_mismatch_refused_without_edit(self):
+        self.existing()
+        relative = 'transport/internet/xdrive/native_lifetime.go'
+        (self.destination / relative).write_text('wrong managed-service owner')
+        before = helper.tree(self.destination)
+        with self.assertRaisesRegex(ValueError, 'managed-service helper'):
+            self.prepare()
+        self.assertEqual(before, helper.tree(self.destination))
+        self.assertEqual(self.edits, [])
+
+    def test_existing_geodata_without_exact_cancellation_patch_refused(self):
+        self.existing()
+        relative = 'app/geodata/geodata.go'
+        (self.destination / relative).write_text('original ' + relative)
+        before = helper.tree(self.destination)
+        with self.assertRaisesRegex(ValueError, 'exact lifetime patch'):
+            self.prepare()
+        self.assertEqual(before, helper.tree(self.destination))
+        self.assertEqual(self.edits, [])
+
     def test_new_copy_uses_checked_classic_and_h3_copier(self):
         before = helper.tree(self.source)
         report = self.prepare()
@@ -137,8 +167,11 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.assertTrue(report['h3_lifetime_applied'])
         self.assertTrue(report['darwin_interface_binding_source_applied'])
         self.assertEqual(report['darwin_interface_binding_capability_expected'],1)
-        self.assertEqual(report['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial'])
-        self.assertEqual(report['h3_lifetime_patch_sha256'], helper.digest(self.inputs[-1]))
+        self.assertEqual(report['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'])
+        self.assertEqual(report['h3_lifetime_patch_sha256'], helper.digest(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py'))
+        self.assertTrue(report['xdrive_lifetime_applied'])
+        self.assertTrue(report['geodata_lifetime_applied'])
+        self.assertEqual(report['managed_service_lifetime_capabilities_expected'], {'xdrive': 1, 'geodata': 1})
         self.assertIn('no full native-DNS context overlay', report['scope'])
         self.assertEqual(report['stage'], 'pre-build-preparation')
         self.assertEqual(report['source_sha256'].get('third_party/xray-vpn-routing/pin-manifest.json'),
@@ -191,7 +224,7 @@ class AppleClassicPreparationTests(unittest.TestCase):
     def test_h3_input_is_attested_in_ordinary_receipt(self):
         report = self.prepare()
         self.assertEqual(report['source_sha256']['third_party/xray-native-dns/h3_lifetime_patch.py'],
-                         helper.digest(self.inputs[-1]))
+                         helper.digest(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py'))
 
     def test_existing_classic_only_replacement_is_refused_before_edit(self):
         self.existing()

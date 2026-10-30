@@ -1,0 +1,13 @@
+{
+  "core_commit": "0afec66085a85191e9dd2a4a6646c7c9a94688d1",
+  "upstream_sha256": {
+    "core/xray.go": "66edf1a9ed6b9683b4f668612e6c6e876830cffb07521517f03a21e630f7ef15",
+    "transport/internet/xdrive/xdrive.go": "5eaaeff1aadf31f7bc391efc078d14d3d87ea284b126a6dfdb5cb4003f58ee3b",
+    "transport/internet/xdrive/client.go": "ef4fddfeb400e80c96c739dbaf74825766d349ffe8581e5bc108a2572db3abb1",
+    "transport/internet/xdrive/drive.go": "6c5ee8bef724e85ee9a022d6d085a2e6ba02d61cba645eeb70a70758196254c1",
+    "transport/internet/xdrive/s3.go": "607e95246f885f784e172551ef70c8645ec775e0d00840f3daac2b852a1f1a18",
+    "transport/internet/xdrive/storage.go": "d412258786f154d3e81fb3f5ca3c913d92011806fc6fbff5b68804865db19c33"
+  },
+  "source_url": "https://github.com/XTLS/Xray-core/tree/0afec66085a85191e9dd2a4a6646c7c9a94688d1",
+  "license": "LICENSE (Mozilla Public License 2.0, unchanged upstream text)"
+}

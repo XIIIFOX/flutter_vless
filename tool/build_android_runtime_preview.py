@@ -13,7 +13,7 @@ import test_native_dns_context_runtime as processes
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE_TAG = 'v26.10.29'
-RELEASE_VERSION = '26.10.29-protect1'
+RELEASE_VERSION = '26.10.29-protect2'
 GO_VERSION = 'go1.27.3'
 ABIS = ('arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64')
 RUNTIME = 'android_runtime/xray_android'
@@ -29,7 +29,9 @@ ORDINARY_FILES = ('packages/flutter_vless_android/android/build_xray.sh',
                   'third_party/xray-mobile/go.mod', 'third_party/xray-mobile/go.sum',
                   'third_party/xray-vpn-routing/apply.py', 'third_party/xray-vpn-routing/pin-manifest.json',
                   *(('third_party/xray-native-dns/' + name) for name in
-                    ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py', 'pin-manifest.json',
+                    ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py',
+                     'xdrive_lifetime_patch.py', 'geodata_lifetime_patch.py', 'pin-manifest.json',
+                     'overlay/main/native_services_cli.go', 'overlay/transport/internet/xdrive/native_lifetime.go',
                      'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go')))
 
 
@@ -41,6 +43,12 @@ def ordinary_inputs(repository):
     paths = [repository / name for name in ORDINARY_FILES]
     paths += sorted(mobile.glob('*.go')) + sorted((mobile / 'nativecli').rglob('*.go'))
     paths += sorted((capability / 'overlay').rglob('*.go'))
+    native_overlay = repository / 'third_party/xray-native-dns/overlay'
+    paths += sorted((native_overlay / 'transport/internet/xdrive').glob('*_test.go'))
+    paths += sorted((native_overlay / 'app/geodata').glob('native_*.go'))
+    managed_core_test = native_overlay / 'core/native_managed_lifetime_test.go'
+    if managed_core_test.exists():
+        paths.append(managed_core_test)
     paths += sorted(protect.glob('*.py')) + sorted(protect.glob('*.go'))
     if any(path.is_symlink() or not path.is_file() for path in paths):
         raise ValueError('Ordinary producer inputs must be real files')
@@ -161,9 +169,9 @@ def build(output, head, repository=ROOT, *, release=False):
             raise ValueError('One fresh ordinary Core receipt required')
         receipt = json.loads(receipts[0].read_text())
         if any(receipt.get(k) is not True for k in ('success', 'source_unchanged', 'module_cache_source_unchanged',
-                                                   'copies_unchanged', 'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'darwin_interface_binding_source_applied')) \
+                                                   'copies_unchanged', 'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'xdrive_lifetime_applied', 'geodata_lifetime_applied', 'darwin_interface_binding_source_applied')) \
                 or type(receipt.get('routing_capability_expected')) is not int or receipt['routing_capability_expected'] != int(release) \
-                or receipt.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial'] \
+                or receipt.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'] \
                 or any(receipt.get(k) is not False for k in ('runtime_executed', 'published')) \
                 or receipt.get('selected_abis') != list(ABIS):
             raise ValueError('Ordinary lifetime build receipt differs')
@@ -180,7 +188,7 @@ def build(output, head, repository=ROOT, *, release=False):
         copied = core_copy(receipts[0].name, repository, routing=release)
         if release:
             mobile_copy = copied.parent / 'mobile'
-            if receipt.get('routing_tags') != ['flutter_vless_vpn_routing_cli', 'flutter_vless_vpn_routing'] \
+            if receipt.get('routing_tags') != ['flutter_vless_vpn_routing_cli', 'flutter_vless_vpn_routing', 'flutter_vless_managed_service_lifetimes'] \
                     or Path(receipt.get('output_directory', '')).resolve() != (output / 'fresh-jni').resolve() \
                     or Path(receipt.get('core_replacement', '')).resolve() != copied.resolve() \
                     or Path(receipt.get('mobile_replacement', '')).resolve() != mobile_copy.resolve() \
@@ -236,7 +244,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--head', required=True)
-    parser.add_argument('--release', action='store_true', help='Signed final26.10.29-protect1 candidate; never publish')
+    parser.add_argument('--release', action='store_true', help='Signed final26.10.29-protect2 candidate; never publish')
     args = parser.parse_args()
     try:
         build(args.output, args.head, release=args.release)

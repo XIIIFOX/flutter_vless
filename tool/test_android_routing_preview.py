@@ -33,7 +33,7 @@ class RoutingPreviewTests(unittest.TestCase):
             'overlay_capability':pin['capability'],'routing_tags':builder.TAGS,'selected_abis':['x86_64'],'protection_overlay':'ordinary H/P/D',
             'routing_capability_expected':1,'runtime_executed':False,'published':False,'success':True,'source_unchanged':True,
             'classic_dns_lifetime_applied':True,
-            'h3_lifetime_applied':True,'lifetime_patch_scope':['classic_dns','xhttp_h3_dial'],'h3_lifetime_patch_sha256':'a'*64,
+            'h3_lifetime_applied':True,'lifetime_patch_scope':['classic_dns','xhttp_h3_dial','xdrive_services','geodata_updater'],'h3_lifetime_patch_sha256':'a'*64,
             'darwin_interface_binding_source_applied':True,'darwin_interface_binding_patch_sha256':self.inputs[self.binding_key],
             'module_cache_source_unchanged':True,'copies_unchanged':True,'source_sha256':self.inputs,
             'output_directory':str(self.output/'raw'),'artifacts_sha256':{'x86_64/libxray.so':hashlib.sha256(self.image).hexdigest()}}

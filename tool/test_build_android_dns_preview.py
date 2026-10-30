@@ -95,7 +95,7 @@ def copy_and_apply(source,destination,**kwargs):
         self.assertIs(result['darwin_interface_binding_source_applied'],True)
         self.assertEqual(result['darwin_interface_binding_patch_sha256'],result['input_sha256']['third_party/xray-native-dns/darwin_interface_bind_patch.py'])
         self.assertIs(result['classic_dns_lifetime_applied'], True)
-        self.assertEqual(result['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial'])
+        self.assertEqual(result['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'])
         self.assertEqual(result['h3_lifetime_patch_sha256'], result['input_sha256'][key])
         self.assertIs(result['runtime_executed'], False)
         self.assertIs(result['published'], False)

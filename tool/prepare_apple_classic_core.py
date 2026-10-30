@@ -14,8 +14,12 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = ('app/dns/dns.go', 'app/dns/nameserver_udp.go', 'transport/internet/udp/dispatcher.go',
-            'transport/internet/splithttp/dialer.go', 'transport/internet/sockopt_darwin.go')
+            'transport/internet/splithttp/dialer.go', 'transport/internet/sockopt_darwin.go',
+            'core/xray.go', 'transport/internet/xdrive/xdrive.go', 'transport/internet/xdrive/client.go',
+            'transport/internet/xdrive/drive.go', 'transport/internet/xdrive/s3.go',
+            'transport/internet/xdrive/storage.go', 'app/geodata/geodata.go', 'app/geodata/download.go')
 HELPERS = ('native_classic_lifetime.go', 'native_classic_lifetime_test.go')
+LIFETIME_SCOPE = ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater']
 
 
 def digest(path):
@@ -58,7 +62,7 @@ def metadata(go, arguments, mobile, timeout=60):
     return value
 
 
-def reference_hashes(source, parent):
+def reference_hashes(source, parent, routing=False):
     # A routing replacement may contain other intentional overlay files. Only
     # compare the three Classic upstream edits, H3 dial edit and two helpers.
     with tempfile.TemporaryDirectory(prefix='classic-reference-', dir=parent) as directory:
@@ -77,12 +81,20 @@ def reference_hashes(source, parent):
                 raise ValueError('Pinned lifetime reference mismatch')
             path.write_text(text.replace(before, after))
 
+        if routing:
+            # The routing composition changes NewWithContext in the same file
+            # as XDRIVE ownership. Accept only that exact known composition.
+            for relative, before, after in applier().patches():
+                if relative == 'core/xray.go':
+                    replace(relative, before, after)
         patch = load(ROOT / 'third_party/xray-native-dns/classic_lifetime_patch.py', 'ordinary_classic_reference')
         patch.apply(reference, replace)
         h3 = load(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py', 'ordinary_h3_reference')
         h3.apply(reference, replace)
         binding = load(ROOT / 'third_party/xray-native-dns/darwin_interface_bind_patch.py', 'ordinary_darwin_binding_reference')
         binding.apply(reference, replace)
+        for name in ('xdrive_lifetime_patch', 'geodata_lifetime_patch'):
+            load(ROOT / 'third_party/xray-native-dns' / (name + '.py'), 'ordinary_' + name).apply(reference, replace)
         return {relative: digest(reference / relative) for relative in UPSTREAM}
 
 
@@ -126,13 +138,18 @@ def prepare(mobile, destination, go, *, routing=False):
             raise ValueError('Replacement must be a copied Core')
         existing = tree(effective)
         expected = reference_hashes(source, mobile.parent)
+        routed_expected = reference_hashes(source, mobile.parent, routing=True)
         for relative, value in expected.items():
-            if existing.get(relative) != value:
+            if existing.get(relative) not in {value, routed_expected[relative]}:
                 raise ValueError('Existing Core lacks exact lifetime patch')
         for name in HELPERS:
             helper = ROOT / 'third_party/xray-native-dns/overlay/app/dns' / name
             if existing.get('app/dns/' + name) != digest(helper):
                 raise ValueError('Existing Core lacks exact Classic helper')
+        for helper in copier.managed_service_helpers():
+            relative = str(helper.relative_to(ROOT / 'third_party/xray-native-dns/overlay'))
+            if existing.get(relative) != digest(helper):
+                raise ValueError('Existing Core lacks exact managed-service helper')
         mode = 'validated-existing-replacement'
     else:
         effective = (copier.copy_and_apply(source, destination, go=go) if routing
@@ -148,15 +165,19 @@ def prepare(mobile, destination, go, *, routing=False):
     if tree(source) != before or tree(effective) != existing or any(digest(ROOT / name) != value for name, value in input_hashes.items()):
         raise ValueError('Core source or patch inputs changed')
     report = {'success': False, 'stage': 'pre-build-preparation', 'mode': mode, 'module': module, 'version': version, 'sum': checksum,
-              'scope': 'Classic DNS/XHTTP H3 lifetime and mandatory Darwin interface binding; no full native-DNS context overlay',
+              'scope': 'Classic DNS/XHTTP H3/XDRIVE/GeoDAT lifetime and mandatory Darwin interface binding; no full native-DNS context overlay',
               'routing_capability_expected': 1 if routing else 0,
               'core_commit': pin.get('core_commit'), 'core_source': str(source),
               'module_cache_before_sha256': before,
-              'h3_lifetime_applied': True, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial'],
+              'h3_lifetime_applied': True, 'lifetime_patch_scope': LIFETIME_SCOPE,
               'h3_lifetime_patch_sha256': digest(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py'),
               'darwin_interface_binding_source_applied': True,
               'darwin_interface_binding_patch_sha256': digest(ROOT / 'third_party/xray-native-dns/darwin_interface_bind_patch.py'),
               'darwin_interface_binding_capability_expected': 1,
+              'xdrive_lifetime_applied': True, 'geodata_lifetime_applied': True,
+              'managed_service_lifetime_capabilities_expected': {'xdrive': 1, 'geodata': 1},
+              'xdrive_lifetime_patch_sha256': digest(ROOT / 'third_party/xray-native-dns/xdrive_lifetime_patch.py'),
+              'geodata_lifetime_patch_sha256': digest(ROOT / 'third_party/xray-native-dns/geodata_lifetime_patch.py'),
               'replacement': str(effective), 'source_sha256': input_hashes,
               'upstream_cache_unchanged': True, 'replacement_unchanged_after_prepare': True,
               'core_copy_sha256': existing, 'runtime_executed': False}

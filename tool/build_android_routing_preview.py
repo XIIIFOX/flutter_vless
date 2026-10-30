@@ -15,7 +15,7 @@ PROTECT = ROOT / 'packages/flutter_vless_android/android/xray-protect'
 BUILD = ROOT / 'packages/flutter_vless_android/android/build_xray.sh'
 NAME = 'libxray_routing_preview.so'
 CAPABILITY_ID = 'native-vpn-routing-cli-preview-1'
-TAGS = ['flutter_vless_vpn_routing_cli', 'flutter_vless_vpn_routing']
+TAGS = ['flutter_vless_vpn_routing_cli', 'flutter_vless_vpn_routing', 'flutter_vless_managed_service_lifetimes']
 FLAGS = {'arm64-v8a': 'XRAY_BUILD_ARM64', 'armeabi-v7a': 'XRAY_BUILD_ARMV7', 'x86': 'XRAY_BUILD_X86', 'x86_64': 'XRAY_BUILD_X86_64'}
 
 
@@ -44,7 +44,7 @@ def validate_receipt(receipt, arch, raw):
                 'core_commit': manifest['core_commit'], 'overlay_capability': manifest['capability'], 'routing_tags': TAGS,
                 'selected_abis': [arch], 'protection_overlay': 'ordinary H/P/D', 'routing_capability_expected': 1,
                 'classic_dns_lifetime_applied': True,
-                'h3_lifetime_applied': True, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial'],
+                'h3_lifetime_applied': True, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'],
                 'h3_lifetime_patch_sha256': source_hashes()['third_party/xray-native-dns/h3_lifetime_patch.py'],
                 'darwin_interface_binding_source_applied': True,
                 'darwin_interface_binding_patch_sha256': source_hashes()['third_party/xray-native-dns/darwin_interface_bind_patch.py'],

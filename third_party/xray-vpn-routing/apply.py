@@ -23,7 +23,74 @@ def classic_input_paths():
 
 
 def lifetime_input_paths():
-    return [*classic_input_paths(), CLASSIC / 'h3_lifetime_patch.py', CLASSIC / 'darwin_interface_bind_patch.py']
+    return [*classic_input_paths(), CLASSIC / 'h3_lifetime_patch.py', CLASSIC / 'darwin_interface_bind_patch.py',
+            *managed_service_input_paths()]
+
+
+def managed_service_modules():
+    result = []
+    for name in ('xdrive_lifetime_patch', 'geodata_lifetime_patch'):
+        spec = importlib.util.spec_from_file_location('routing_' + name, CLASSIC / (name + '.py'))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        result.append(module)
+    return result
+
+
+def managed_service_helpers():
+    overlay = CLASSIC / 'overlay'
+    paths = [overlay / 'main/native_services_cli.go',
+             overlay / 'transport/internet/xdrive/native_lifetime.go',
+             *sorted((overlay / 'transport/internet/xdrive').glob('*_test.go')),
+             *sorted((overlay / 'app/geodata').glob('native_*.go'))]
+    core_test = overlay / 'core/native_managed_lifetime_test.go'
+    if core_test.exists():
+        paths.append(core_test)
+    return paths
+
+
+def managed_service_input_paths():
+    return [CLASSIC / 'xdrive_lifetime_patch.py', CLASSIC / 'geodata_lifetime_patch.py',
+            *managed_service_helpers()]
+
+
+def validate_managed_service_source(root):
+    inputs = managed_service_input_paths()
+    if any(path.is_symlink() or not path.is_file() for path in inputs):
+        raise ValueError('Managed-service lifetime inputs must be real files')
+    manifest = json.loads((CLASSIC / 'pin-manifest.json').read_text())
+    if any(key not in manifest or key not in MANIFEST or manifest[key] != MANIFEST[key]
+           for key in ('module', 'module_version', 'module_sum', 'core_commit')):
+        raise ValueError('Managed-service lifetime and routing pins differ')
+    for module in managed_service_modules():
+        for name, digest in module.UPSTREAM_SHA256.items():
+            path = root / name
+            if manifest['upstream_sha256'].get(name) != digest or path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                raise ValueError('Pinned managed-service source mismatch: ' + name)
+
+
+def apply_managed_service_lifetimes(root):
+    modules = managed_service_modules()
+    allowed = {name for module in modules for name in module.UPSTREAM_SHA256}
+
+    def replace(name, before, after):
+        if name not in allowed:
+            raise ValueError('Managed-service patch attempted an unrelated edit')
+        path = root / name
+        source = path.read_text()
+        if source.count(before) != 1:
+            raise ValueError('Pinned managed-service boundary mismatch: ' + name)
+        path.write_text(source.replace(before, after))
+
+    for module in modules:
+        module.apply(root, replace)
+    for helper in managed_service_helpers():
+        relative = helper.relative_to(CLASSIC / 'overlay')
+        target = root / relative
+        if target.exists() or target.is_symlink():
+            raise ValueError('Managed-service helper collision: ' + str(relative))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(helper, target)
 
 
 def apply_classic_lifetime(root):
@@ -121,14 +188,14 @@ def apply_darwin_interface(root):
 
 
 def copy_and_apply_classic(source, destination, *, go='go', caches=None):
-    return copy_and_apply(source, destination, go=go, caches=caches, routing=False, h3=False, darwin_binding=False)
+    return copy_and_apply(source, destination, go=go, caches=caches, routing=False, h3=False, darwin_binding=False, managed_services=False)
 
 
 def copy_and_apply_lifetimes(source, destination, *, go='go', caches=None, routing=False, h3=True, darwin_binding=True):
     return copy_and_apply(source, destination, go=go, caches=caches, routing=routing, h3=h3, darwin_binding=darwin_binding)
 
 
-def copy_and_apply(source, destination, *, go='go', caches=None, routing=True, h3=True, darwin_binding=True):
+def copy_and_apply(source, destination, *, go='go', caches=None, routing=True, h3=True, darwin_binding=True, managed_services=True):
     source, destination = Path(source).resolve(), Path(destination).absolute()
     if destination.exists() or destination.is_symlink():
         raise ValueError('Destination must be new')
@@ -152,6 +219,8 @@ def copy_and_apply(source, destination, *, go='go', caches=None, routing=True, h
         validate_h3_lifetime_source(source)
     if darwin_binding:
         validate_darwin_interface_source(source)
+    if managed_services:
+        validate_managed_service_source(source)
     # Validate every replacement before copying; no source or cache mutation.
     replacements = patches() if routing else []
     for relative, before, _ in replacements:
@@ -176,6 +245,8 @@ def copy_and_apply(source, destination, *, go='go', caches=None, routing=True, h
         apply_h3_lifetime(destination)
     if darwin_binding:
         apply_darwin_interface(destination)
+    if managed_services:
+        apply_managed_service_lifetimes(destination)
     return destination
 
 

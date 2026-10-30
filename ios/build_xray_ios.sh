@@ -123,7 +123,7 @@ echo "H2BUF: building with $(go version) from patched GOROOT clone"
 
 rm -rf "$OUTPUT_XCFRAMEWORK"
 gomobile bind \
-    -tags=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding \
+    -tags=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding,flutter_vless_managed_service_lifetimes \
     -a \
     -ldflags="-s -w -extldflags -lresolv" \
     -target=ios \

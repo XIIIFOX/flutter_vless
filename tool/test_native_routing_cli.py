@@ -20,6 +20,7 @@ EVIDENCE = ROOT / 'build/native_routing_cli'
 MODULE = 'github.com/EbrahimTahernejad/xray-mobile'
 CLI_TAG = 'flutter_vless_vpn_routing_cli'
 FACTORY_TAG = 'flutter_vless_vpn_routing'
+MANAGED_TAG = 'flutter_vless_managed_service_lifetimes'
 MAIN_TESTS = ['TestNativeRoutingCLIStockLogger', 'TestNativeRoutingCLIRegisteredOnce',
               'TestNativeRoutingCLIParentInputLifecycle', 'TestNativeRoutingCLIParentInputRefusal',
               'TestNativeRoutingCLIParentInputGrammar', 'TestNativeRoutingCLIParentInputOrdinaryForeground']
@@ -38,6 +39,8 @@ def inputs():
     paths = [Path(__file__).resolve(), ROOT / 'tool/test_native_routing_cli_runner.py',
              ROOT / 'tool/test_native_routing_factory.py', MOBILE / 'go.mod', MOBILE / 'go.sum']
     paths += sorted(MOBILE.glob('*.go'))
+    lifetime_copier = core_runner.load_module(ROOT / 'third_party/xray-vpn-routing/apply.py', 'cli_lifetime_inputs')
+    paths += lifetime_copier.lifetime_input_paths()
     if (MOBILE / 'nativecli').is_symlink():
         raise ValueError('Mobile CLI source symlinks are unsupported')
     paths += [path for path in sorted((MOBILE / 'nativecli').rglob('*')) if path.is_file() or path.is_symlink()]
@@ -200,7 +203,7 @@ def main(argv=None):
         run('runner-guards', [sys.executable, str(ROOT / 'tool/test_native_routing_cli_runner.py')], cwd=ROOT, seconds=30)
         run('select-copied-mobile', [go, 'mod', 'edit', '-require=' + MODULE + '@v0.0.0', '-replace=' + MODULE + '=' + str(mobile)], seconds=20)
         run('select-copied-core', [go, 'mod', 'edit', '-replace=' + manifest['module'] + '=' + str(core)], cwd=mobile, seconds=20)
-        tags = CLI_TAG + ',' + FACTORY_TAG
+        tags = CLI_TAG + ',' + FACTORY_TAG + ',' + MANAGED_TAG
 
         def graph(name, directory, target):
             command = [go, 'list', '-mod=readonly', '-tags=' + tags, '-deps', target]
@@ -236,7 +239,7 @@ def main(argv=None):
         suffix = '.exe' if os.name == 'nt' else ''
         for optional in (False, True):
             mode = 'optional' if optional else 'ordinary'
-            selected_tags = tags if optional else CLI_TAG
+            selected_tags = tags if optional else CLI_TAG + ',' + MANAGED_TAG
             binary = EVIDENCE / (mode + '-xray' + suffix)
             tests = EVIDENCE / (mode + '-main.test' + suffix)
             run(mode + '-build', [go, 'build', '-mod=readonly', '-trimpath', '-buildvcs=false', '-tags=' + selected_tags, '-o', str(binary), './main'], seconds=300)

@@ -62,7 +62,7 @@ def verify(directory):
     if metadata.get('input_sha256') != builder.input_hashes():
         raise ValueError('Preview source snapshot differs from this checkout')
     if any(metadata.get(key) is not True for key in ('classic_dns_lifetime_applied', 'h3_lifetime_applied')) \
-            or metadata.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial'] \
+            or metadata.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'] \
             or metadata.get('h3_lifetime_patch_sha256') != metadata['input_sha256'].get('third_party/xray-native-dns/h3_lifetime_patch.py'):
         raise ValueError('Preview lifetime patch evidence differs')
     arch = metadata.get('arch')

@@ -102,6 +102,8 @@ jobs:
       - name: Test guarded Core lifetime source copies
         run: |
           python tool/test_h3_lifetime_patch.py
+          python tool/test_xdrive_lifetime_patch.py
+          python third_party/xray-native-dns/test_geodata_lifetime_patch.py
           python third_party/xray-native-dns/test_apply.py
           python tool/test_native_dns_preservation_runner.py
           python tool/test_native_vpn_routing_runner.py

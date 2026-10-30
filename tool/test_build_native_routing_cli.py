@@ -162,7 +162,7 @@ class RoutingCLIBuilderTest(unittest.TestCase):
         self.assertEqual(Path(report['artifact']).name, 'xray.exe')
         self.assertTrue(report['classic_dns_lifetime_applied'])
         self.assertIs(report['h3_lifetime_applied'], True)
-        self.assertEqual(report['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial'])
+        self.assertEqual(report['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'])
         key = 'third_party/xray-native-dns/h3_lifetime_patch.py'
         self.assertEqual(report['h3_lifetime_patch_sha256'], report['input_sha256'][key])
         self.assertIn('third_party/xray-native-dns/classic_lifetime_patch.py', report['input_sha256'])

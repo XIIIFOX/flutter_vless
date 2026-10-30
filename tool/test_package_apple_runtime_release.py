@@ -28,7 +28,7 @@ class CanonicalPackageTests(unittest.TestCase):
                        'darwin_interface_binding_source_applied': True, 'module_cache_source_unchanged': True,
                        'core_copy_unchanged': True, 'routing_capability_expected': 1,
                        'darwin_interface_binding_capability_expected': 1, 'runtime_executed': False,
-                       'published': False, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial'],
+                       'published': False, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'],
                        'go_version': 'go1.27.3', 'root_ca_filter_toolchain_minimum': 'go1.27.3',
                        'h2buf_cap_kib': 128, 'core_source': str(self.core), 'replacement': str(self.copied),
                        'module_cache_before_sha256': builder.tree(self.core),
@@ -41,6 +41,10 @@ class CanonicalPackageTests(unittest.TestCase):
                  'third_party/xray-native-dns/pin-manifest.json',
                  'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime.go',
                  'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime_test.go']
+        names += ['third_party/xray-native-dns/xdrive_lifetime_patch.py',
+                  'third_party/xray-native-dns/geodata_lifetime_patch.py',
+                  'third_party/xray-native-dns/overlay/main/native_services_cli.go',
+                  'third_party/xray-native-dns/overlay/transport/internet/xdrive/native_lifetime.go']
         extra = ['ios/build_xray_ios.sh', 'packages/flutter_vless_macos/macos/build_xray_macos.sh',
                  '.github/workflows/apple-runtime-build.yml', 'tool/package_apple_runtime_release.py',
                  'tool/package_apple_core_preview.py', 'third_party/xray-mobile/go.mod',
@@ -49,6 +53,10 @@ class CanonicalPackageTests(unittest.TestCase):
             p=self.root/name; p.parent.mkdir(parents=True, exist_ok=True);p.write_text('source '+name)
         (self.root/'third_party/xray-vpn-routing/pin-manifest.json').write_text(json.dumps(self.pin))
         self.report['source_sha256'] = {name: builder.digest(self.root/name) for name in names}
+        self.report.update(xdrive_lifetime_applied=True, geodata_lifetime_applied=True,
+                           managed_service_lifetime_capabilities_expected={'xdrive':1,'geodata':1},
+                           xdrive_lifetime_patch_sha256=builder.digest(self.root/'third_party/xray-native-dns/xdrive_lifetime_patch.py'),
+                           geodata_lifetime_patch_sha256=builder.digest(self.root/'third_party/xray-native-dns/geodata_lifetime_patch.py'))
         self.receipt = self.root/'producer.json'
         self.bad_symbol = None
 

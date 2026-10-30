@@ -12,16 +12,21 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPORTS = ('XRayStartPrivate', 'XRayCheckPrivate', 'XRayRoutingCapability',
-           'XRayCheckRoutingPrivate', 'XRayStartRoutingPrivate', 'XRayDarwinInterfaceBindingCapability')
+           'XRayCheckRoutingPrivate', 'XRayStartRoutingPrivate', 'XRayDarwinInterfaceBindingCapability',
+           'XRayXdriveLifetimeCapability', 'XRayGeodataLifetimeCapability')
 PACKAGING_INPUTS = ('.github/workflows/apple-sdk-preview.yml', '.github/workflows/ci.yml',
                     'tool/package_apple_core_preview.py', 'tool/test_package_apple_core_preview.py')
 H3_PATCH = 'third_party/xray-native-dns/h3_lifetime_patch.py'
 BINDING_PATCH = 'third_party/xray-native-dns/darwin_interface_bind_patch.py'
+XDRIVE_PATCH = 'third_party/xray-native-dns/xdrive_lifetime_patch.py'
+GEODATA_PATCH = 'third_party/xray-native-dns/geodata_lifetime_patch.py'
 PRODUCER_INPUTS = ('tool/build_apple_core_preview.sh', 'third_party/xray-mobile/go.mod',
                    'third_party/xray-mobile/go.sum', 'third_party/xray-vpn-routing/apply.py',
                    'third_party/xray-vpn-routing/pin-manifest.json',
-                   'third_party/xray-native-dns/classic_lifetime_patch.py', H3_PATCH, BINDING_PATCH,
+                   'third_party/xray-native-dns/classic_lifetime_patch.py', H3_PATCH, BINDING_PATCH, XDRIVE_PATCH, GEODATA_PATCH,
                    'third_party/xray-native-dns/pin-manifest.json',
+                   'third_party/xray-native-dns/overlay/main/native_services_cli.go',
+                   'third_party/xray-native-dns/overlay/transport/internet/xdrive/native_lifetime.go',
                    'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime.go',
                    'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime_test.go')
 
@@ -32,6 +37,17 @@ def digest(path):
         for chunk in iter(lambda: source.read(1024 * 1024), b''):
             value.update(chunk)
     return value.hexdigest()
+
+
+def require_managed_lifetimes(report, sources):
+    capabilities = report.get('managed_service_lifetime_capabilities_expected')
+    if not isinstance(capabilities, dict) or set(capabilities) != {'xdrive', 'geodata'} \
+            or any(type(value) is not int or value != 1 for value in capabilities.values()):
+        raise ValueError('Managed-service capability contract differs')
+    for label, path in [('xdrive', XDRIVE_PATCH), ('geodata', GEODATA_PATCH)]:
+        if report.get(label+'_lifetime_applied') is not True or path not in sources \
+                or report.get(label+'_lifetime_patch_sha256') != sources[path]:
+            raise ValueError('Managed-service patch input is not bound: '+label)
 
 
 def safe_name(name):
@@ -107,7 +123,8 @@ def package(preview, destination, head, repository=ROOT):
     producer, summary = receipts['routing-preview.json'], receipts['preview.json']
     pin = json.loads((repository/'third_party/xray-vpn-routing/pin-manifest.json').read_text())
     for key in ('success', 'source_unchanged', 'module_cache_source_unchanged', 'copies_unchanged',
-                'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'darwin_interface_binding_source_applied'):
+                'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'xdrive_lifetime_applied',
+                'geodata_lifetime_applied', 'darwin_interface_binding_source_applied'):
         if producer.get(key) is not True:
             raise ValueError('Incomplete producer evidence: ' + key)
     if any(producer.get(key) is not False for key in ('published', 'runtime_executed')) \
@@ -116,7 +133,7 @@ def package(preview, destination, head, repository=ROOT):
             or type(producer.get('darwin_interface_binding_capability_expected')) is not int \
             or producer.get('darwin_interface_binding_capability_expected') != 1 \
             or producer.get('darwin_interface_binding_tag') != 'flutter_vless_darwin_interface_binding' \
-            or producer.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial']:
+            or producer.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater']:
         raise ValueError('Producer scope differs')
     for field, key in (('core', 'module_version'), ('core_module', 'module'),
                        ('core_sum', 'module_sum'), ('core_commit', 'core_commit')):
@@ -129,9 +146,14 @@ def package(preview, destination, head, repository=ROOT):
     expected_sources = set(PRODUCER_INPUTS)
     expected_sources.update(path.relative_to(repository).as_posix() for path in (repository/'third_party/xray-mobile').glob('*.go'))
     expected_sources.update(path.relative_to(repository).as_posix() for path in (repository/'third_party/xray-vpn-routing/overlay').rglob('*.go'))
+    native_overlay = repository/'third_party/xray-native-dns/overlay'
+    for folder, pattern in [('transport/internet/xdrive', '*_test.go'), ('app/geodata', 'native_*.go'),
+                            ('core', 'native_managed_lifetime_test.go')]:
+        expected_sources.update(path.relative_to(repository).as_posix() for path in (native_overlay/folder).glob(pattern))
     if not isinstance(sources, dict) or set(sources) != expected_sources:
         raise ValueError('Producer source input set differs')
     git_bindings(repository, head, sources)
+    require_managed_lifetimes(producer, sources)
     if producer.get('h3_lifetime_patch_sha256') != sources.get(H3_PATCH) or H3_PATCH not in sources:
         raise ValueError('H3 patch input is not bound')
     if producer.get('darwin_interface_binding_patch_sha256') != sources.get(BINDING_PATCH) or BINDING_PATCH not in sources:

@@ -39,6 +39,8 @@ class ApplyGuards(unittest.TestCase):
                   mock.patch.object(applier, 'validate_h3_lifetime_source', create=True),
                   mock.patch.object(applier, 'validate_darwin_interface_source', create=True),
                   mock.patch.object(applier, 'apply_darwin_interface', create=True),
+                  mock.patch.object(applier, 'validate_managed_service_source'),
+                  mock.patch.object(applier, 'apply_managed_service_lifetimes'),
                   mock.patch.object(applier.subprocess, 'run', side_effect=AssertionError('No Go allowed in fake-copy guards'))):
                 yield source, target, root, original
 
@@ -141,6 +143,8 @@ class LifetimeApplyGuards(unittest.TestCase):
                   mock.patch.object(applier, 'apply_classic_lifetime') as classic,
                   mock.patch.object(applier, 'validate_darwin_interface_source'),
                   mock.patch.object(applier, 'apply_darwin_interface'),
+                  mock.patch.object(applier, 'validate_managed_service_source'),
+                  mock.patch.object(applier, 'apply_managed_service_lifetimes'),
                   mock.patch.object(applier.subprocess, 'run', side_effect=AssertionError('No Go allowed'))):
                 yield root, source, native, manifest, classic
 
@@ -148,7 +152,10 @@ class LifetimeApplyGuards(unittest.TestCase):
         classic = applier.classic_input_paths()
         self.assertEqual(len(classic), 4)
         self.assertNotIn(applier.CLASSIC / 'h3_lifetime_patch.py', classic)
-        self.assertEqual(applier.lifetime_input_paths(), [*classic, applier.CLASSIC / 'h3_lifetime_patch.py', applier.CLASSIC / 'darwin_interface_bind_patch.py'])
+        self.assertEqual(applier.lifetime_input_paths(), [*classic, applier.CLASSIC / 'h3_lifetime_patch.py',
+                         applier.CLASSIC / 'darwin_interface_bind_patch.py', *applier.managed_service_input_paths()])
+        self.assertIn(applier.CLASSIC/'xdrive_lifetime_patch.py', applier.lifetime_input_paths())
+        self.assertIn(applier.CLASSIC/'geodata_lifetime_patch.py', applier.lifetime_input_paths())
 
     def test_default_and_plain_lifetime_copies_apply_h3_but_classic_only_does_not(self):
         with self.fixture() as (root, source, native, manifest, classic):
@@ -160,6 +167,7 @@ class LifetimeApplyGuards(unittest.TestCase):
                 expected = 'H3 original block\n' if name == 'classic' else 'H3 owned close block\n'
                 self.assertEqual((target / self.H3).read_text(), expected)
             self.assertEqual(classic.call_count, 3)
+            self.assertEqual(applier.apply_managed_service_lifetimes.call_count, 2)
             self.assertEqual(runner.tree_snapshot(source), before)
 
     def test_h3_requires_every_shared_module_pin(self):
@@ -257,6 +265,8 @@ class RunnerGuards(unittest.TestCase):
                     mock.patch.object(applier, 'validate_h3_lifetime_source', create=True), \
                     mock.patch.object(applier, 'validate_darwin_interface_source', create=True), \
                     mock.patch.object(applier, 'apply_darwin_interface', create=True), \
+                    mock.patch.object(applier, 'validate_managed_service_source'), \
+                    mock.patch.object(applier, 'apply_managed_service_lifetimes'), \
                     mock.patch.object(applier, 'apply_classic_lifetime', side_effect=classic, create=True):
                 routed = applier.copy_and_apply(source, root / 'routed', caches=[])
                 self.assertEqual(calls, [routed])

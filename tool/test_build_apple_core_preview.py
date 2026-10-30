@@ -46,7 +46,7 @@ a=sys.argv[1:];p=pathlib.Path
 with open(os.environ['CALLS'],'a') as f:f.write(json.dumps({'tool':'gomobile','args':a,'cwd':os.getcwd()})+'\n')
 output=p(a[a.index('-o')+1]);fw=output/('macos-arm64_x86_64' if '-target=macos' in a else 'ios-arm64')/'XRay.framework'
 (fw/'Headers').mkdir(parents=True);(fw/'XRay').write_text('inert archive')
-names=['XRayCheckPrivate','XRayDarwinInterfaceBindingCapability']
+names=['XRayCheckPrivate','XRayDarwinInterfaceBindingCapability','XRayXdriveLifetimeCapability','XRayGeodataLifetimeCapability']
 if any(x.startswith('-tags=') and 'flutter_vless_vpn_routing' in x.split('=',1)[1].split(',') for x in a):names+=['XRayRoutingCapability','XRayCheckRoutingPrivate','XRayStartRoutingPrivate']
 if os.environ.get('MISSING_SYMBOL'):names.remove('XRayStartRoutingPrivate')
 (fw/'Headers'/'XRay.objc.h').write_text('\n'.join(names))
@@ -83,7 +83,8 @@ class ApplePreviewBuilderTest(unittest.TestCase):
             out.write('def copy_and_apply_lifetimes(source,destination,**kwargs):\n assert kwargs.get("routing",False) is False\n result=copy_and_apply(source,destination,**kwargs)\n (result/"h3-applied").write_text("h3")\n return result\n')
         classic = self.root / 'third_party/xray-native-dns'
         (classic / 'overlay/app/dns').mkdir(parents=True)
-        for name in ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py', 'pin-manifest.json', 'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go'):
+        for name in ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py', 'xdrive_lifetime_patch.py', 'geodata_lifetime_patch.py', 'pin-manifest.json', 'overlay/main/native_services_cli.go', 'overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go'):
+            (classic / name).parent.mkdir(parents=True,exist_ok=True)
             (classic / name).write_text('shared-classic-fixture')
         self.core = self.root / 'module-cache/core'
         self.core.mkdir(parents=True)
@@ -118,7 +119,7 @@ class ApplePreviewBuilderTest(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr)
         calls=self.recorded(); bind=next(c for c in calls if c['tool']=='gomobile')
         self.assertEqual(bind['cwd'],str(self.output/'classic/mobile'))
-        self.assertIn('-tags=flutter_vless_darwin_interface_binding',bind['args'])
+        self.assertIn('-tags=flutter_vless_darwin_interface_binding,flutter_vless_managed_service_lifetimes',bind['args'])
         self.assertEqual(json.loads((self.output/'preview.json').read_text()),{'platform':'ios','core':VERSION,'preflightABI':1,'published':False})
         self.assertFalse((self.output/'routing').exists())
         receipt=json.loads((self.output/'classic-preview.json').read_text())
@@ -135,7 +136,7 @@ class ApplePreviewBuilderTest(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr)
         bind=next(c for c in self.recorded() if c['tool']=='gomobile')
         self.assertEqual(bind['cwd'],str(self.output/'routing/mobile'))
-        self.assertIn('-tags=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding',bind['args'])
+        self.assertIn('-tags=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding,flutter_vless_managed_service_lifetimes',bind['args'])
         receipt=json.loads((self.output/'routing-preview.json').read_text())
         self.assertTrue(receipt['success']);self.assertEqual(receipt['routing_capability_expected'],1)
         self.assertFalse(receipt['runtime_executed'])
@@ -153,7 +154,7 @@ class ApplePreviewBuilderTest(unittest.TestCase):
         self.assertIs(receipt['darwin_interface_binding_source_applied'],True)
         self.assertEqual(receipt['darwin_interface_binding_capability_expected'],1)
         self.assertEqual(receipt['darwin_interface_binding_patch_sha256'],hashlib.sha256((self.root/'third_party/xray-native-dns/darwin_interface_bind_patch.py').read_bytes()).hexdigest())
-        self.assertEqual(receipt['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial'])
+        self.assertEqual(receipt['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'])
         self.assertEqual(receipt['h3_lifetime_patch_sha256'], hashlib.sha256((self.root/key).read_bytes()).hexdigest())
         self.assertEqual(receipt['source_sha256'][key], receipt['h3_lifetime_patch_sha256'])
 

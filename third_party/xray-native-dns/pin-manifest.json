@@ -32,7 +32,14 @@
     "app/dns/nameserver_udp.go": "d5f53d45c9170c6b6c6a91af6f078b6c2f453b22a7679df818c643a23cf59a7f",
     "transport/internet/sockopt_darwin.go": "719aedf968421a717cde17aeafb2fdaafdb0d10b022f0b323269213d97a065af",
     "transport/internet/sockopt.go": "1a5afaf4997d1c4b58b50e247df649f9761efef394c66bdc48d9609e5dce8445",
-    "transport/internet/system_dialer.go": "27567d9b47b77bc3ed26bca2809898ac5b80a98ddfffc0f2aaffc6a65a54e44e"
+    "transport/internet/system_dialer.go": "27567d9b47b77bc3ed26bca2809898ac5b80a98ddfffc0f2aaffc6a65a54e44e",
+    "transport/internet/xdrive/xdrive.go": "5eaaeff1aadf31f7bc391efc078d14d3d87ea284b126a6dfdb5cb4003f58ee3b",
+    "transport/internet/xdrive/client.go": "ef4fddfeb400e80c96c739dbaf74825766d349ffe8581e5bc108a2572db3abb1",
+    "transport/internet/xdrive/drive.go": "6c5ee8bef724e85ee9a022d6d085a2e6ba02d61cba645eeb70a70758196254c1",
+    "transport/internet/xdrive/s3.go": "607e95246f885f784e172551ef70c8645ec775e0d00840f3daac2b852a1f1a18",
+    "transport/internet/xdrive/storage.go": "d412258786f154d3e81fb3f5ca3c913d92011806fc6fbff5b68804865db19c33",
+    "app/geodata/geodata.go": "61b6b4eb9382294ea944393dc7e58a9220c0dc2c3565d6a993ac80aef896125b",
+    "app/geodata/download.go": "38f04dc2d612bc332db5e8068b12fe685f90edcbdaa60ece58417691dbbd76aa"
   },
   "module": "github.com/xtls/xray-core",
   "module_version": "v1.260327.1-0.20261029083850-0afec66085a8",

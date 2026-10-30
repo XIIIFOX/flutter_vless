@@ -19,7 +19,7 @@ spec = importlib.util.spec_from_file_location('desktop_routing_cli_helpers', ROO
 cli = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cli)
 core_runner = cli.core_runner
-TAGS = cli.CLI_TAG + ',' + cli.FACTORY_TAG
+TAGS = cli.CLI_TAG + ',' + cli.FACTORY_TAG + ',' + cli.MANAGED_TAG
 
 
 def inputs():
@@ -136,8 +136,12 @@ def main(argv=None):
         core = applier.copy_and_apply(source, output / 'Core', go=go, caches=[cache])
         report['classic_dns_lifetime_applied'] = True
         report['h3_lifetime_applied'] = True
-        report['lifetime_patch_scope'] = ['classic_dns', 'xhttp_h3_dial']
+        report['lifetime_patch_scope'] = ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater']
         report['h3_lifetime_patch_sha256'] = before['third_party/xray-native-dns/h3_lifetime_patch.py']
+        report['xdrive_lifetime_applied'] = True
+        report['geodata_lifetime_applied'] = True
+        report['xdrive_lifetime_patch_sha256'] = before['third_party/xray-native-dns/xdrive_lifetime_patch.py']
+        report['geodata_lifetime_patch_sha256'] = before['third_party/xray-native-dns/geodata_lifetime_patch.py']
         mobile = output / 'Mobile'
         copy_mobile(mobile)
         core_initial, mobile_initial = core_runner.tree_snapshot(core), core_runner.tree_snapshot(mobile)

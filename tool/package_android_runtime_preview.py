@@ -86,16 +86,18 @@ def validate(preview, head, repository=ROOT, *, release=False):
         raise ValueError('Ordinary Core receipt changed')
     receipt = json.loads(receipt_path.read_text())
     if any(receipt.get(k) is not True for k in ('success', 'source_unchanged', 'module_cache_source_unchanged',
-                                               'copies_unchanged', 'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'darwin_interface_binding_source_applied')) \
+                                               'copies_unchanged', 'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'xdrive_lifetime_applied', 'geodata_lifetime_applied', 'darwin_interface_binding_source_applied')) \
             or type(receipt.get('routing_capability_expected')) is not int or receipt['routing_capability_expected'] != int(release) \
-            or receipt.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial'] \
+            or receipt.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'] \
             or receipt.get('selected_abis') != list(builder.ABIS) \
             or any(receipt.get(k) is not False for k in ('runtime_executed', 'published')):
         raise ValueError('Ordinary lifetime proof differs')
     if set(receipt['source_sha256']) != ordinary_names \
             or any(sources.get(name) != value for name, value in receipt['source_sha256'].items()) \
             or receipt['h3_lifetime_patch_sha256'] != sources[builder.H3] \
-            or receipt.get('darwin_interface_binding_patch_sha256') != sources['third_party/xray-native-dns/darwin_interface_bind_patch.py']:
+            or receipt.get('darwin_interface_binding_patch_sha256') != sources['third_party/xray-native-dns/darwin_interface_bind_patch.py'] \
+            or receipt.get('xdrive_lifetime_patch_sha256') != sources['third_party/xray-native-dns/xdrive_lifetime_patch.py'] \
+            or receipt.get('geodata_lifetime_patch_sha256') != sources['third_party/xray-native-dns/geodata_lifetime_patch.py']:
         raise ValueError('Ordinary lifetime source provenance differs')
     pin = json.loads((repository / 'third_party/xray-vpn-routing/pin-manifest.json').read_text())
     if any(receipt.get(key) != pin[field] for key, field in [('core_module', 'module'), ('core', 'module_version'),
@@ -107,7 +109,7 @@ def validate(preview, head, repository=ROOT, *, release=False):
     if release:
         mobile = copied.parent / 'mobile'
         if result.get('copied_mobile_source_unchanged') is not True \
-                or receipt.get('routing_tags') != ['flutter_vless_vpn_routing_cli', 'flutter_vless_vpn_routing'] \
+                or receipt.get('routing_tags') != ['flutter_vless_vpn_routing_cli', 'flutter_vless_vpn_routing', 'flutter_vless_managed_service_lifetimes'] \
                 or Path(receipt.get('output_directory', '')).resolve() != (preview / 'fresh-jni').resolve() \
                 or Path(receipt.get('core_replacement', '')).resolve() != copied.resolve() \
                 or Path(receipt.get('mobile_replacement', '')).resolve() != mobile.resolve() \
@@ -299,7 +301,7 @@ def package(preview, output, head, repository=ROOT, *, release=False):
                    'central_bundle_members_sha256': expected}
     manifest = dict(checked, schema=1, success=True, head=head, platform='android',
                     archive=archive.name, archive_sha256=digest(archive), members_sha256=members,
-                    lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial'],
+                    lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'],
                     runtime_executed=False, installed=False, published=False, **central)
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     return manifest

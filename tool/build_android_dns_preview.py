@@ -113,7 +113,7 @@ def main():
         copied_h3_before = copied_h3_hash(work)
         report['copied_h3_sha256'] = copied_h3_before
         report.update(classic_dns_lifetime_applied=True, h3_lifetime_applied=True,
-                      lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial'],
+                      lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'],
                       h3_lifetime_patch_sha256=initial_hashes['third_party/xray-native-dns/h3_lifetime_patch.py'],
                       darwin_interface_binding_source_applied=True,
                       darwin_interface_binding_patch_sha256=initial_hashes['third_party/xray-native-dns/darwin_interface_bind_patch.py'])

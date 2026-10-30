@@ -29,7 +29,7 @@ class PreviewVerificationTests(unittest.TestCase):
         self.metadata = {'success': True, 'source_snapshot_unchanged': True, 'module_cache_targeted_sources_unchanged': True,
                          'published': False, 'production_enabled': False, 'host_qualified': False,
                          'runtime_executed': False, 'classic_dns_lifetime_applied': True, 'h3_lifetime_applied': True,
-                         'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial'], 'h3_lifetime_patch_sha256': 'a'*64,
+                         'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'], 'h3_lifetime_patch_sha256': 'a'*64,
                          'core_commit': pin['core_commit'], 'capability': 'native-instance-preview-1',
                          'arch': 'x86_64', 'artifact': str(self.binary), 'artifact_sha256': hashlib.sha256(image).hexdigest(),
                          'input_sha256': {'source': 'verified', 'third_party/xray-native-dns/h3_lifetime_patch.py': 'a'*64}}

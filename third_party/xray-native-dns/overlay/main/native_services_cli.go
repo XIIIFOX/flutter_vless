@@ -25,8 +25,11 @@ func init() {
 			if geodata.NativeLifetimeCapability() == 1 {
 				bits |= 1
 			}
-			if xdrive.NativeLifetimeCapability() == 1 {
-				bits |= 2
+			if xdrive.NativeLifetimeCapability() >= 1 {
+				bits |= 2 // Storage/HTTP ownership, also present in the earlier revision.
+			}
+			if xdrive.NativeLifetimeCapability() == 2 {
+				bits |= 4 // Idle connection/listener worker ownership.
 			}
 			if err := json.NewEncoder(os.Stdout).Encode(struct {
 				Stage        string `json:"stage"`

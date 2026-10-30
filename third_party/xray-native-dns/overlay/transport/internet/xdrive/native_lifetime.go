@@ -22,6 +22,36 @@ func ContextWithNativeLifetime(parent context.Context) (context.Context, *Native
 	return owner.ServiceContext(), owner
 }
 
+// A Core's feature context is deliberately not cancelled by service Close.
+// Every cloud worker therefore links the request's values/cancellation to the
+// separate owned service context. Close releases its registration as well.
+func nativeWorkerContext(ctx context.Context) (context.Context, func()) {
+	owner, ok := internet.NativeServiceLifetimeFromContext(ctx)
+	if !ok {
+		return context.WithCancel(ctx)
+	}
+	return nativeOperationContext(ctx, owner.ServiceContext())
+}
+
+func nativeWorkerClosed(release, onClose func()) func() {
+	return func() {
+		release()
+		if onClose != nil {
+			onClose()
+		}
+	}
+}
+
+func newNativeConn(ctx context.Context, storage Storage, writePrefix, readPrefix string, p params, onClose func()) *Conn {
+	worker, release := nativeWorkerContext(ctx)
+	return newConn(worker, storage, writePrefix, readPrefix, p, nativeWorkerClosed(release, onClose))
+}
+
+func newNativeSlotConn(ctx context.Context, storage slotStore, write, read slotTable, p params, onClose func()) *Conn {
+	worker, release := nativeWorkerContext(ctx)
+	return newSlotConn(worker, storage, write, read, p, nativeWorkerClosed(release, onClose))
+}
+
 func nativeLifetimeContext(contexts []context.Context) context.Context {
 	if len(contexts) != 0 && contexts[0] != nil {
 		return contexts[0]

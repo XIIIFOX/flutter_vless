@@ -277,7 +277,7 @@ def run_managed_service_runtime(source, core, go, environment, results, report):
     checked('managed-cli-build', [go, 'build', '-trimpath', '-buildvcs=false', '-o', str(launcher), './main'], cwd=ordinary, environment=environment, seconds=300, results=results)
     checked('managed-cli-capabilities', [str(launcher), 'native-services', 'capabilities'], cwd=ordinary, environment=environment, seconds=10, results=results)
     reply = json.loads((EVIDENCE / 'managed-cli-capabilities.log').read_text(encoding='utf-8'))
-    if reply != {'stage': 'capabilities', 'code': 0, 'managed_service_lifetimes': 3}: raise RuntimeError('Actual managed CLI capabilities differ')
+    if reply != {'stage': 'capabilities', 'code': 0, 'managed_service_lifetimes': 7}: raise RuntimeError('Actual managed CLI capabilities differ')
     report['managed_cli_sha256'] = hashlib.sha256(launcher.read_bytes()).hexdigest()
 
     # A deliberately broken Close remains compilable. The test must detect

@@ -45,6 +45,54 @@ func TestNativeServiceOwnerClosePreservesCoreContextAndMetadata(t *testing.T) {
 	}
 }
 
+func TestNativeXdriveSlotAndListenerWorkersFollowOwnedLifetime(t *testing.T) {
+	type markerKey struct{}
+	parent, forceCancel := context.WithCancel(context.WithValue(context.Background(), markerKey{}, "worker-metadata"))
+	defer forceCancel()
+	coreContext, owner := internet.ContextWithNativeServiceLifetime(parent)
+	defer owner.Close()
+	listener, releaseListener := nativeWorkerContext(coreContext)
+	if listener.Value(markerKey{}) != "worker-metadata" {
+		t.Fatal("listener lost caller metadata")
+	}
+	releaseListener()
+	if coreContext.Err() != nil || owner.ServiceContext().Err() != nil {
+		t.Fatal("closing one listener revoked Core or sibling service ownership")
+	}
+	listener, releaseListener = nativeWorkerContext(coreContext)
+	defer releaseListener()
+	p := paramsFromConfig(&Config{PollIntervalMs: 3_600_000, MaxPollIntervalMs: 3_600_000})
+	store := newMemSlots() // pinned upstream's in-memory slot service.
+	ring, err := makeRing(coreContext, store, "owned-idle-worker", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan struct{})
+	connection := newNativeSlotConn(coreContext, store, ring.Up, ring.Down, p, func() { close(closed) })
+	defer connection.Close()
+	owner.Close()
+	if parent.Err() != nil || coreContext.Err() != nil {
+		t.Fatal("cloud worker cancellation escaped to Core/caller")
+	}
+	if listener.Err() != context.Canceled {
+		t.Fatal("idle listener survived service owner Close")
+	}
+	select {
+	case _, open := <-connection.reader.chunks():
+		if open {
+			t.Fatal("unexpected payload from empty slot fixture")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("idle slot reader survived service owner Close")
+	}
+	_ = connection.Close()
+	select {
+	case <-closed:
+	default:
+		t.Fatal("real Conn.Close did not release worker callback")
+	}
+}
+
 func TestNativeXdriveStorageCannotEscapeItsCoreOrCompiledSocketPolicy(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	defer cancel()

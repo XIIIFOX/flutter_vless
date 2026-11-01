@@ -91,6 +91,12 @@ func dnsIPCarrierHeader(address netip.Addr) []byte {
 // caller IPv6 DNS address. No physical IPv6 listener or resolver is involved.
 func ipv6DNSCarrier(t *testing.T, observed *fixture, associations, callbacks *atomic.Int64, transport, nonce string, resolver netip.Addr) int {
 	t.Helper()
+	control, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = control.Close() })
+	controlPort := control.Addr().(*net.TCPAddr).Port
 	answer := func(packet []byte) ([]byte, error) {
 		var request dns.Msg
 		if len(packet) > 4096 || request.Unpack(packet) != nil || request.Response || len(request.Question) != 1 {
@@ -115,7 +121,8 @@ func ipv6DNSCarrier(t *testing.T, observed *fixture, associations, callbacks *at
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := udp.LocalAddr().(*net.UDPAddr).Port
+	udpPort := udp.LocalAddr().(*net.UDPAddr).Port
+	t.Logf("DNS_CARRIER_PORTS tcp_control=%d udp_relay=%d", controlPort, udpPort)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -150,7 +157,7 @@ func ipv6DNSCarrier(t *testing.T, observed *fixture, associations, callbacks *at
 			t.Error("IPv6 DNS UDP carrier did not drain")
 		}
 	})
-	networkListener(t, "tcp4", fmt.Sprintf("127.0.0.1:%d", port), func(connection net.Conn) {
+	networkListenerFrom(t, control, func(connection net.Conn) {
 		callbacks.Add(1)
 		defer callbacks.Add(-1)
 		var greeting [3]byte
@@ -175,7 +182,7 @@ func ipv6DNSCarrier(t *testing.T, observed *fixture, associations, callbacks *at
 			}
 			associations.Add(1)
 			defer associations.Add(-1)
-			response := binary.BigEndian.AppendUint16([]byte{5, 0, 0, 1, 127, 0, 0, 1}, uint16(port))
+			response := binary.BigEndian.AppendUint16([]byte{5, 0, 0, 1, 127, 0, 0, 1}, uint16(udpPort))
 			if _, err := connection.Write(response); err != nil {
 				observed.fail(err)
 				return
@@ -234,7 +241,7 @@ func ipv6DNSCarrier(t *testing.T, observed *fixture, associations, callbacks *at
 			}
 		}
 	})
-	return port
+	return controlPort
 }
 
 func testNativeIPv6DNS(t *testing.T) {

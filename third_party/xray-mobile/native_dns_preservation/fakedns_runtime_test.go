@@ -192,15 +192,22 @@ func TestNativeFakeDNSControlClosure(t *testing.T) {
 	}
 }
 
-// One SOCKS carrier owns both transports on the same numeric IPv4 port. The
-// UDP relay cannot introduce a separate unqualified physical endpoint.
+// One SOCKS carrier owns independently held IPv4 TCP and UDP listeners. The
+// association advertises its actual UDP port; TCP availability is unrelated.
 func fakeDNSSOCKSUpstream(t *testing.T, observed *fixture, associations *atomic.Int64) int {
 	t.Helper()
+	control, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = control.Close() })
+	controlPort := control.Addr().(*net.TCPAddr).Port
 	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := udp.LocalAddr().(*net.UDPAddr).Port
+	udpPort := udp.LocalAddr().(*net.UDPAddr).Port
+	t.Logf("FAKEDNS_CARRIER_PORTS tcp_control=%d udp_relay=%d", controlPort, udpPort)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -237,7 +244,7 @@ func fakeDNSSOCKSUpstream(t *testing.T, observed *fixture, associations *atomic.
 			t.Error("FakeDNS UDP carrier did not drain")
 		}
 	})
-	networkListener(t, "tcp4", fmt.Sprintf("127.0.0.1:%d", port), func(connection net.Conn) {
+	networkListenerFrom(t, control, func(connection net.Conn) {
 		var greeting [3]byte
 		if _, err := io.ReadFull(connection, greeting[:]); err != nil || greeting != [3]byte{5, 1, 0} {
 			observed.fail(errors.New("unexpected FakeDNS carrier greeting"))
@@ -260,7 +267,7 @@ func fakeDNSSOCKSUpstream(t *testing.T, observed *fixture, associations *atomic.
 			}
 			associations.Add(1)
 			defer associations.Add(-1)
-			response := binary.BigEndian.AppendUint16([]byte{5, 0, 0, 1, 127, 0, 0, 1}, uint16(port))
+			response := binary.BigEndian.AppendUint16([]byte{5, 0, 0, 1, 127, 0, 0, 1}, uint16(udpPort))
 			if _, err := connection.Write(response); err != nil {
 				observed.fail(err)
 				return
@@ -302,7 +309,7 @@ func fakeDNSSOCKSUpstream(t *testing.T, observed *fixture, associations *atomic.
 		_, err := connection.Write(payload)
 		observed.fail(err)
 	})
-	return port
+	return controlPort
 }
 
 func testNativeFakeDNS(t *testing.T) {

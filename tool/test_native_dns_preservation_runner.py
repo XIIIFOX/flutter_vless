@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Pure runner guard/command tests; never invokes Core or network."""
+"""Runner guards and owned loopback port controls; never invokes Core or VPN."""
+import errno
 import importlib.util
 import io
 import json
 import os
+import socket
 from pathlib import Path, PureWindowsPath
 import tempfile
 from types import SimpleNamespace
@@ -16,6 +18,51 @@ spec.loader.exec_module(runner)
 
 
 class PreservationRunnerGuards(unittest.TestCase):
+    def test_dns_carriers_hold_independent_control_and_advertised_udp_ports(self):
+        fixtures = [('dns_ipv6_servers_test.go', 'ipv6DNSCarrier'),
+                    ('fakedns_runtime_test.go', 'fakeDNSSOCKSUpstream')]
+        for filename, name in fixtures:
+            with self.subTest(fixture=filename):
+                text = (runner.ROOT / 'third_party/xray-mobile/native_dns_preservation' / filename).read_text()
+                body = text.split('func ' + name + '(', 1)[1].split('\nfunc ', 1)[0]
+                self.assertIn('control, err := net.Listen("tcp4", "127.0.0.1:0")', body)
+                self.assertIn('controlPort := control.Addr().(*net.TCPAddr).Port', body)
+                self.assertIn('udpPort := udp.LocalAddr().(*net.UDPAddr).Port', body)
+                self.assertLess(body.index('control, err := net.Listen('), body.index('go func()'))
+                self.assertIn('networkListenerFrom(t, control, func(connection net.Conn)', body)
+                self.assertIn('uint16(udpPort)', body)
+                self.assertIn('return controlPort', body)
+                self.assertNotIn('networkListener(t, "tcp4", fmt.Sprintf(', body)
+
+    def test_udp_bound_port_can_already_be_occupied_in_tcp(self):
+        # Independent real OS control for the old setup assumption. Binding UDP
+        # says nothing about TCP availability; no Core, resolver or route API.
+        # Reserve both sockets ourselves before asserting the collision. Only
+        # candidate allocation can repeat; no traffic or Core/client is retried.
+        for _ in range(8):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as blocker, \
+                    socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+                blocker.bind(('127.0.0.1', 0))
+                blocker.listen(1)
+                address = blocker.getsockname()
+                try:
+                    udp.bind(address)
+                except OSError as error:
+                    if error.errno == errno.EADDRINUSE:
+                        continue
+                    raise
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as old_selection:
+                    with self.assertRaises(OSError) as rejected:
+                        old_selection.bind(address)
+                    self.assertEqual(rejected.exception.errno, errno.EADDRINUSE)
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as control:
+                    control.bind(('127.0.0.1', 0))
+                    control.listen(1)
+                    self.assertNotEqual(control.getsockname()[1], address[1])
+                    self.assertEqual(udp.getsockname(), address)
+                return
+        self.fail('Could not reserve an owned cross-protocol negative control in eight candidates')
+
     def test_h3_read_failure_is_observed_before_input_close_and_fatal(self):
         source = (runner.ROOT / 'third_party/xray-mobile/native_dns_preservation/xhttp_h3_lifetime_test.go').read_text()
         observer = source[source.index('\tlogSetupDiagnostic := func('):source.index('\tfor attempt := 1; attempt <= 3; attempt++')]

@@ -87,8 +87,50 @@ Worker contexts now retain the caller's metadata/cancellation while also
 following the separate service owner; releasing a connection or listener
 does not cancel sibling services or the Core context.
 
-Native revisions are built and qualified separately from Flutter packages:
-Android `26.10.29-protect3`, Apple `26.10.29-r3`, and the managed Windows
-companion. Earlier public runtime assets must not be relabelled. Final native
-publication and device evidence remain pending until their exact artifacts
-pass the current acceptance runs.
+Native revisions are published separately from Flutter packages:
+Android `26.10.29-protect3`, Apple `26.10.29-r3`, and the Windows
+`26.10.29-r3` companion. The [release notes](release/README.md) link their
+exact producers and archive checksums. Public CDN/Maven bytes match the
+qualified artifacts; earlier assets are unchanged. The
+[full Core regression](https://github.com/XIIIFOX/flutter_vless/actions/runs/41050075901)
+passes on all three runners, and the
+[Windows native/example/VPN acceptance](https://github.com/XIIIFOX/flutter_vless/actions/runs/41050075535)
+passes on Windows 2022 and 2025. Physical-device evidence is recorded separately.
+
+## IP-check browser diagnostics
+
+The example's opted-in browser diagnostics now open the exact public URLs
+`https://2ip.ru/` and `https://tfox.dev/ip/`. Navigation/session identifiers
+remain local metadata; the diagnostic no longer adds query parameters to the
+website URL. The embedded view retains its explicit cache-reload policy.
+
+The Android control kept the profile, SDK, options and routing JSON identical:
+with a diagnostic query, the 2ip page remained in Loading; removing only that
+query allowed the redirect to `2ip.io` and displayed the expected proxy address.
+The other site displayed the ordinary address. Reverse routing also passed,
+and stopping restored the ordinary address on both sites. Expanding an exact
+domain rule to include subdomains alone had not fixed the observed Loading.
+On iPhone, the query/plain contrast was reproduced twice in Safari while the
+test VPN was off. This evidence calls for correcting the browser observer's
+URL, without changing the meaning of routing rules.
+
+Android's four supplied profile checks produced two traffic passes and two
+timeouts. Those timeouts remain unresolved: successful import or `CONNECTED`
+alone does not prove a remote handshake, and a timeout alone does not identify
+an expired server or a plugin defect. All eight Android connection cases ended
+with a native Stop acknowledgement, an inactive service/VPN and ordinary
+browser connectivity; the emulator and its owned helpers were then stopped.
+
+## Remaining acceptance outside this change
+
+* Live S3 and Google Drive accounts with a complete relay deployment, including
+  HTTP/3/ECH where configured. Controlled endpoint fixtures establish the
+  ownership and cancellation contract, not account availability.
+* A physical IPv6-only/DNS64/NAT64 network and Wi-Fi/mobile handover. Address
+  classification and resolver tests do not establish that network's reachability.
+* A broader server-backed protocol/transport matrix and additional external
+  configuration/file/import combinations as suitable fixtures become available.
+* A live macOS VPN session, only when the owner can interrupt the existing VPN.
+* Free implementation package versions and matching root constraints before
+  pub.dev publication; the current Android/macOS/Windows `1.1.7` versions are
+  already occupied. No package version is changed by this work.

@@ -36,6 +36,14 @@ Android, macOS and Windows implementation packages **already occupy version
 versions cannot be overwritten. The published interface is still `1.1.2` and
 does not contain the new Options, routing or preparation-report API.
 
+The official registry was checked again on **2026-11-01**: these blockers
+remain unchanged. Version `1.1.7` is occupied and unretracted for
+[Android](https://pub.dev/api/packages/flutter_vless_android),
+[macOS](https://pub.dev/api/packages/flutter_vless_macos) and
+[Windows](https://pub.dev/api/packages/flutter_vless_windows); it is free for
+[the root package](https://pub.dev/api/packages/flutter_vless) and
+[the interface](https://pub.dev/api/packages/flutter_vless_platform_interface).
+
 Before any future package publication, choose free implementation versions
 (for example `1.1.8`), update the root minimum implementation constraints to
 exclude the old `1.1.7` packages, and publish in this order: interface `1.1.7`,

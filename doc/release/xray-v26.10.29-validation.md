@@ -6,6 +6,11 @@ published. The producer and consumer CI checks below pass against this runtime;
 live mobile acceptance is recorded separately. Earlier-version results are not
 carried forward as proof for this runtime.
 
+The initial-runtime evidence below is retained as history. The current
+`r3`/`protect3` compatibility follow-up, native release links, capability
+requirements and remaining acceptance are recorded in
+[26.10.29 compatibility work](../xray-26.10.29-compatibility.md).
+
 ## Published artifacts
 
 All three native assets use producer revision

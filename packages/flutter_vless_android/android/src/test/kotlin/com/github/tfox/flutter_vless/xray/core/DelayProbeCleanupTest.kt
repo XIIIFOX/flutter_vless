@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CountDownLatch
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -113,5 +114,39 @@ class DelayProbeCleanupTest {
         }
         assertFalse(DelayProbeCleanup.cleanup(null, file))
         assertEquals(1, deletes)
+    }
+
+    @Test fun cancellationDrainsTheOwnedOutputReaderBeforeReturningAndRestoresInterrupt() = withFile { file ->
+        val entered = CountDownLatch(1)
+        val reader = Thread({
+            entered.countDown()
+            try { CountDownLatch(1).await() } catch (_: InterruptedException) { }
+        }, "test-owned-delay-reader").apply { start() }
+        try {
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            Thread.currentThread().interrupt()
+            assertTrue(DelayProbeCleanup.cleanup(Child().apply { gracefulExit = true }, file, outputReader = reader))
+            assertFalse(reader.isAlive)
+            assertFalse(file.exists())
+            assertTrue(Thread.currentThread().isInterrupted)
+        } finally { Thread.interrupted(); reader.interrupt(); reader.join(2000); assertFalse(reader.isAlive) }
+    }
+
+    @Test fun aReaderIgnoringCancellationCannotExtendCleanupForeverOrKeepThePrivateFile() = withFile { file ->
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val reader = Thread({
+            entered.countDown()
+            while (release.count != 0L) {
+                try { release.await() } catch (_: InterruptedException) { }
+            }
+        }, "test-owned-stalled-reader").apply { start() }
+        try {
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            val started = System.nanoTime()
+            assertFalse(DelayProbeCleanup.cleanup(null, file, outputReader = reader))
+            assertTrue(System.nanoTime() - started < TimeUnit.SECONDS.toNanos(2))
+            assertFalse(file.exists())
+        } finally { release.countDown(); reader.join(2000); assertFalse(reader.isAlive) }
     }
 }

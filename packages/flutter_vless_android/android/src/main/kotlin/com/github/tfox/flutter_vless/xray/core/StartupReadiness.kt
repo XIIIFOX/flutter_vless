@@ -9,7 +9,8 @@ import java.util.concurrent.TimeUnit
 
 internal enum class ReadinessStage(val code: Int) {
     LOCAL_CONNECT(1), SOCKS_METHOD(2), SOCKS_AUTH(3), SOCKS_REPLY(4),
-    PRIVATE_CHALLENGE(5), PACKET_CHALLENGE(6), DEADLINE(7), OWNER(8), CLEANUP(9), INTERRUPTED(10)
+    PRIVATE_CHALLENGE(5), PACKET_CHALLENGE(6), DEADLINE(7), OWNER(8), CLEANUP(9), INTERRUPTED(10),
+    HTTP_RESPONSE(11)
 }
 
 /** Only fixed stage/errno metadata is safe for the diagnostics event store. */

@@ -5,7 +5,8 @@ import java.util.concurrent.TimeUnit
 
 /** Cancellation must not skip termination of this probe's child or its private file. */
 internal object DelayProbeCleanup {
-    internal fun cleanup(process: Process?, file: File, graceMillis: Long = 1000, reapMillis: Long = 1000): Boolean {
+    internal fun cleanup(process: Process?, file: File, graceMillis: Long = 1000, reapMillis: Long = 1000,
+        outputReader: Thread? = null): Boolean {
         require(graceMillis in 0..1000 && reapMillis in 0..1000)
         var interrupted = Thread.interrupted()
         var successful = true
@@ -41,6 +42,17 @@ internal object DelayProbeCleanup {
                 try { if (process.isAlive) successful = false } catch (_: Exception) { successful = false }
             }
         } finally {
+            if (outputReader != null) {
+                // This reader only polls available bytes, never an unbounded pipe read.
+                outputReader.interrupt()
+                val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500)
+                while (outputReader.isAlive) {
+                    val remaining = deadline - System.nanoTime()
+                    if (remaining <= 0) { successful = false; break }
+                    try { TimeUnit.NANOSECONDS.timedJoin(outputReader, remaining) }
+                    catch (_: InterruptedException) { interrupted = true }
+                }
+            }
             try { if (!file.delete() && file.exists()) successful = false } catch (_: Exception) { successful = false }
             if (interrupted) Thread.currentThread().interrupt()
         }

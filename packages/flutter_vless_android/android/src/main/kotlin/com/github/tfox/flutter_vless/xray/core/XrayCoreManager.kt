@@ -526,18 +526,23 @@ object XrayCoreManager {
     fun getServerDelay(context: Context, configJson: String, url: String, geoAssetsDirectory: String? = null,
         certificateAssetsDirectory: String? = null): Long {
         var process: Process? = null
+        var outputReader: Thread? = null
         val file = File(context.noBackupFilesDir, "delay-${UUID.randomUUID()}.json")
+        val readiness = StartupReadiness(isCurrent = { process?.isAlive != false })
         fun event(event: XrayDiagnosticsStore.Event, value: Long? = null) =
             XrayDiagnosticsStore.event(context.filesDir, event, value = value)
         return try {
+            readiness.check()
             event(XrayDiagnosticsStore.Event.DELAY_ALLOCATING_PORTS)
             val credentials = LocalProxyCredentials.generate()
             var socksPort = 0
             val builder = DelayProbePortAllocator.reserve().use { ports ->
+                readiness.check()
                 event(XrayDiagnosticsStore.Event.DELAY_PORTS_RESERVED)
                 val (json, selectedPort) = buildDelayConfigJson(configJson, ports.socksPort, context.noBackupFilesDir, credentials,
                     certificateAssetsDirectory)
                 check(managedServicesAllowed(context, json.toString(), false, geoAssetsDirectory)) { "Managed service runtime capability is unavailable" }
+                readiness.check()
                 socksPort = selectedPort
                 file.writeText(json.toString())
                 ProcessBuilder(File(context.applicationInfo.nativeLibraryDir, "libxray.so").absolutePath,
@@ -548,33 +553,39 @@ object XrayCoreManager {
             }
             // Core cannot inherit these listeners. Release both immediately before
             // launch; another process can still win the unavoidable bind handoff race.
+            readiness.check()
             val child = builder.start()
             process = child
             event(XrayDiagnosticsStore.Event.DELAY_CORE_STARTED)
-            drain(child)
+            outputReader = drain(child)
             event(XrayDiagnosticsStore.Event.DELAY_MEASURING)
-            repeat(20) { attempt ->
-                if (!child.isAlive) {
-                    event(XrayDiagnosticsStore.Event.DELAY_CORE_EXIT, child.exitValue().toLong())
-                    return -1
-                }
-                try {
-                    val delay = AuthenticatedSocksClient.measure(socksPort, credentials, url)
-                    event(XrayDiagnosticsStore.Event.DELAY_COMPLETE)
-                    return delay
-                } catch (_: Exception) {
-                    event(XrayDiagnosticsStore.Event.DELAY_PROBE_FAILED, (attempt + 1).toLong())
-                    Thread.sleep(100)
-                }
+            var delay = -1L
+            // Only a refused local listener can be retried while Core binds.
+            // Remote TLS/HTTP failures do not allocate twenty new timeout budgets.
+            readiness.authenticated {
+                delay = AuthenticatedSocksClient.measure(socksPort, credentials, url, readiness)
             }
-            event(XrayDiagnosticsStore.Event.DELAY_FAILED)
-            -1
+            event(XrayDiagnosticsStore.Event.DELAY_COMPLETE)
+            delay
         } catch (_: Exception) { event(XrayDiagnosticsStore.Event.DELAY_FAILED); -1 } finally {
-            if (!DelayProbeCleanup.cleanup(process, file)) event(XrayDiagnosticsStore.Event.DELAY_CLEANUP_FAILED)
+            val deadlineClosed = runCatching { readiness.close() }.isSuccess
+            val childClosed = DelayProbeCleanup.cleanup(process, file, outputReader = outputReader)
+            if (!deadlineClosed || !childClosed) event(XrayDiagnosticsStore.Event.DELAY_CLEANUP_FAILED)
         }
     }
 
     private fun drain(process: Process): Thread = Thread({
-        runCatching { process.inputStream.use { val bytes = ByteArray(4096); while (it.read(bytes) >= 0) { } } }
+        runCatching {
+            process.inputStream.use { stream ->
+                val bytes = ByteArray(4096)
+                while (!Thread.currentThread().isInterrupted) {
+                    val available = stream.available()
+                    if (available > 0) {
+                        if (stream.read(bytes, 0, minOf(bytes.size, available)) < 0) break
+                    } else if (!process.isAlive) break
+                    else Thread.sleep(10)
+                }
+            }
+        }
     }, "xray-output-discard").apply { isDaemon = true; start() }
 }

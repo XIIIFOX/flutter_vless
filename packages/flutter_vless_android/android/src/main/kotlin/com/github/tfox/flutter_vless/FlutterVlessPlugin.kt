@@ -402,7 +402,9 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         vpnControlMethod.setMethodCallHandler(null)
         vpnStatusEvent.setStreamHandler(null)
-        executor.shutdown()
+        // A detached engine has no consumer for queued probes. Interrupt active
+        // delay work so its owned sockets, Core and private file are reaped.
+        executor.shutdownNow()
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {

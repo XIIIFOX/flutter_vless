@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 
 import 'acceptance_web_probe.dart';
 
@@ -32,7 +33,15 @@ Future<List<AcceptanceInterfaceAddresses>> _readInterfaceAddresses() async {
 
 const _targets = {'2ip': 'https://2ip.io/ru/', 'tfox': 'https://tfox.dev/ip/'};
 
-Future<bool> acceptanceConnectionProbeAdmitted() async {
+Future<bool> acceptanceConnectionProbeAdmitted({
+  bool Function()? isAndroidDebugRuntime,
+}) async {
+  // This file is reachable only from the development driver entrypoint.
+  // Android has no Apple web diagnostics channel; its own debug runner can
+  // observe these fixed probes. Apple keeps its native opt-in/visibility gate.
+  if ((isAndroidDebugRuntime ?? () => kDebugMode && Platform.isAndroid)()) {
+    return true;
+  }
   try {
     return await acceptanceWebChannel
             .invokeMethod<bool>('available')

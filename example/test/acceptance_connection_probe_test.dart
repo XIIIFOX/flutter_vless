@@ -33,6 +33,34 @@ void main() {
     calls.clear();
   });
 
+  test('Android debug driver admission needs no Apple channel', () async {
+    messenger.setMockMethodCallHandler(acceptanceWebChannel, (call) async {
+      calls.add(call);
+      throw MissingPluginException();
+    });
+    expect(
+      await acceptanceConnectionProbeAdmitted(
+        isAndroidDebugRuntime: () => true,
+      ),
+      isTrue,
+    );
+    expect(calls, isEmpty);
+  });
+
+  test('other runtimes retain native opt-in rejection', () async {
+    messenger.setMockMethodCallHandler(acceptanceWebChannel, (call) async {
+      calls.add(call);
+      return false;
+    });
+    expect(
+      await acceptanceConnectionProbeAdmitted(
+        isAndroidDebugRuntime: () => false,
+      ),
+      isFalse,
+    );
+    expect(calls.map((c) => c.method), ['available']);
+  });
+
   for (final site in ['2ip', 'tfox']) {
     test('fixed $site delay uses the active native SOCKS path', () async {
       final result = await handleLiveAcceptanceRequest(

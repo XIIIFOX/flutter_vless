@@ -79,32 +79,59 @@ internal object AuthenticatedSocksClient {
     }
 
     /** An HTTP response proves authenticated, bidirectional application bytes, not only CONNECT. */
-    fun measure(port: Int, credentials: LocalProxyCredentials?, url: String): Long {
+    fun measure(port: Int, credentials: LocalProxyCredentials?, url: String): Long =
+        StartupReadiness(isCurrent = { true }).use { measure(port, credentials, url, it) }
+
+    /** Standalone Core launch, listener readiness, SOCKS, TLS and HTTP share one budget. */
+    internal fun measure(port: Int, credentials: LocalProxyCredentials?, url: String,
+        readiness: StartupReadiness): Long {
+        readiness.check()
         val uri = URI(url)
         require(uri.scheme in setOf("http", "https") && uri.host != null && uri.rawUserInfo == null) { "Invalid probe URL" }
         require(!url.contains('\r') && !url.contains('\n')) { "Invalid probe URL" }
         val secure = uri.scheme == "https"
         val targetPort = if (uri.port >= 0) uri.port else if (secure) 443 else 80
         val started = System.nanoTime()
-        connect(port, credentials, uri.host, targetPort).use { raw ->
-            val transport = if (secure) {
-                (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(raw, uri.host, targetPort, true).let {
-                    it as SSLSocket
-                    it.sslParameters = it.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
-                    it.startHandshake()
-                    it
-                }
-            } else raw
-            transport.use { socket ->
-                val path = (uri.rawPath.takeUnless { it.isNullOrEmpty() } ?: "/") + (uri.rawQuery?.let { "?$it" } ?: "")
-                val host = if (targetPort == if (secure) 443 else 80) uri.host else "${uri.host}:$targetPort"
-                socket.getOutputStream().write("HEAD $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
-                val input = socket.getInputStream()
-                val line = StringBuilder()
-                while (line.length < 1024) { val value = input.read(); if (value < 0) throw IOException("Empty probe response"); if (value == 10) break; line.append(value.toChar()) }
-                require(line.toString().trimEnd('\r').matches(Regex("HTTP/1\\.[01] [1-5][0-9]{2}.*"))) { "Invalid probe response" }
+        val raw = connect(port, credentials, uri.host, targetPort, readiness)
+        try {
+            raw.use {
+                val transport = if (secure) {
+                    (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(raw, uri.host, targetPort, true).let {
+                        it as SSLSocket
+                        readiness.adopt(it)
+                        it.sslParameters = it.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
+                        it.soTimeout = readiness.remainingMillis()
+                        try { it.startHandshake() } catch (error: Exception) { readiness.check(); throw error }
+                        readiness.check()
+                        it
+                    }
+                } else raw
+                try {
+                    transport.use { socket ->
+                        val path = (uri.rawPath.takeUnless { it.isNullOrEmpty() } ?: "/") + (uri.rawQuery?.let { "?$it" } ?: "")
+                        val host = if (targetPort == if (secure) 443 else 80) uri.host else "${uri.host}:$targetPort"
+                        readiness.check()
+                        try {
+                            socket.getOutputStream().write("HEAD $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
+                        } catch (error: Exception) { readiness.check(); throw error }
+                        readiness.check()
+                        val input = socket.getInputStream()
+                        val line = StringBuilder()
+                        val byte = ByteArray(1)
+                        var complete = false
+                        while (line.length < 1024) {
+                            readiness.readFully(socket, input, byte, ReadinessStage.HTTP_RESPONSE)
+                            val value = byte[0].toInt() and 255
+                            if (value == 10) { complete = true; break }
+                            line.append(value.toChar())
+                        }
+                        require(complete && line.toString().trimEnd('\r').matches(Regex("HTTP/1\\.[01] [1-5][0-9]{2}.*"))) { "Invalid probe response" }
+                        readiness.check()
+                    }
+                } finally { if (transport !== raw) readiness.release(transport) }
             }
-        }
+        } finally { readiness.release(raw) }
+        readiness.check()
         return (System.nanoTime() - started) / 1_000_000
     }
 }

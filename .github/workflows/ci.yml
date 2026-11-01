@@ -29,6 +29,11 @@ on:
         options:
           - macos-latest
           - macos-15-intel
+      apple_runtime_source:
+        description: Build a candidate SDK or test the fixed public Apple SDKs
+        type: choice
+        default: build
+        options: [build, published]
   pull_request:
   push:
     branches:
@@ -500,6 +505,8 @@ jobs:
     name: iOS Swift and Xcode build
     runs-on: ${{ inputs.apple_runner || 'macos-latest' }}
     timeout-minutes: 45
+    env:
+      REQUIRE_MANAGED_SERVICE_LIFETIMES: ${{ inputs.apple_runtime_source == 'published' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
@@ -524,6 +531,11 @@ jobs:
           YAML
       - name: Install root dependencies
         run: flutter pub get
+      - name: Check published Apple SDK selection guards
+        run: python3 tool/test_install_published_apple_runtime.py
+      - name: Install the checksum-pinned published Apple SDKs
+        if: ${{ inputs.apple_runtime_source == 'published' }}
+        run: python3 tool/install_published_apple_runtime.py
       - name: Test PacketTunnel Swift helper
         run: |
           python3 tool/test_apple_virtual_interface_api.py
@@ -558,9 +570,11 @@ jobs:
           copier.copy_and_apply_lifetimes(source,root/'build/darwin-interface-binding/Core')
           PY
           python3 tool/test_darwin_interface_bind_semantics.py --core-copy build/darwin-interface-binding/Core --output build/darwin-interface-binding/semantic
-      - name: Check optional bridge and build unpublished iOS Core preview
+      - name: Check optional bridge
+        run: tool/test_apple_core_preflight_bridge.sh
+      - name: Build unpublished iOS Core preview
+        if: ${{ inputs.apple_runtime_source != 'published' }}
         run: |
-          tool/test_apple_core_preflight_bridge.sh
           tool/build_apple_core_preview.sh ios build/apple-core-preview/ios --vpn-routing
           rm -rf ios/XRay.xcframework
           cp -R build/apple-core-preview/ios/XRay.xcframework ios/XRay.xcframework
@@ -608,6 +622,7 @@ jobs:
             -configuration Debug -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO \
             "FRAMEWORK_SEARCH_PATHS=\$(inherited) $FLUTTER_SDK/bin/cache/artifacts/engine/ios/Flutter.xcframework/ios-arm64" build
       - name: Build unpublished macOS Core preview
+        if: ${{ inputs.apple_runtime_source != 'published' }}
         run: |
           tool/build_apple_core_preview.sh macos build/apple-core-preview/macos --vpn-routing
           rm -rf packages/flutter_vless_macos/macos/XRay.xcframework
@@ -627,11 +642,17 @@ jobs:
           REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 REQUIRE_DARWIN_INTERFACE_BINDING=1 bash tool/test_macos_privacy_runtime.sh
           HEV=ios/flutter_vless/.build/artifacts/tun2sockskit/HevSocks5Tunnel/HevSocks5Tunnel.xcframework
           bash tool/test_macos_packet_bridge.sh "$HEV/macos-arm64_x86_64"
+      - name: Verify published SDK trees and runtime proofs after tests
+        if: ${{ always() && inputs.apple_runtime_source == 'published' }}
+        run: python3 tool/install_published_apple_runtime.py --verify-installed
       - name: Package the checked unpublished iOS SDK
+        if: ${{ inputs.apple_runtime_source != 'published' }}
         run: |
           python3 tool/test_package_apple_core_preview.py
           python3 tool/package_apple_core_preview.py --preview build/apple-core-preview/ios --output build/apple-checked-sdk-artifact --head "$GITHUB_SHA"
-      - uses: actions/upload-artifact@v4
+      - name: Upload the checked unpublished iOS SDK
+        if: ${{ inputs.apple_runtime_source != 'published' }}
+        uses: actions/upload-artifact@v4
         with:
           name: ios-checked-sdk-${{ github.sha }}-${{ github.run_id }}
           path: |
@@ -658,6 +679,7 @@ jobs:
             build/macos_privacy_runtime_probe/runtime.log
             build/ios_packet_bridge_probe/runtime.log
             build/macos_packet_bridge_probe/runtime.log
+            build/published_apple_runtime/**/*.json
 
   windows:
     if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'native-listeners' || inputs.validation == 'preparation-report' || inputs.validation == 'apple-windows' || inputs.validation == 'platform-unit'

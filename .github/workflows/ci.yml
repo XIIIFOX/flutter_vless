@@ -127,6 +127,8 @@ jobs:
           python3 tool/test_apple_delay_deadline.py
           bash tool/test_ios_local_proxy_transport.sh
           python3 tool/test_acceptance_safari_action.py
+          python3 tool/test_acceptance_owned_manager_safety.py
+          python3 tool/test_acceptance_web_runtime_capabilities.py
       - name: Test unpublished DNS context with actual isolated Core instances
         run: python tool/test_native_dns_context_runtime.py --run-runtime
       - name: Test production preparation with Classic and H3 lifetime cleanup
@@ -535,9 +537,14 @@ jobs:
         run: python3 tool/test_install_published_apple_runtime.py
       - name: Install the checksum-pinned published Apple SDKs
         if: ${{ inputs.apple_runtime_source == 'published' }}
-        run: python3 tool/install_published_apple_runtime.py
+        run: |
+          git fetch --no-tags --depth=1 origin 13c47ed2caabd70b082449ed4917ce65574df91e
+          python3 tool/install_published_apple_runtime.py
       - name: Test PacketTunnel Swift helper
         run: |
+          python3 tool/test_acceptance_safari_action.py
+          python3 tool/test_acceptance_owned_manager_safety.py
+          python3 tool/test_acceptance_web_runtime_capabilities.py
           python3 tool/test_apple_virtual_interface_api.py
           python3 tool/test_apple_cold_start_policy.py --receipts
           python3 tool/test_build_apple_core_preview.py

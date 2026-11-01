@@ -2,6 +2,7 @@
 import hashlib
 import json
 import shutil
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -119,6 +120,33 @@ class Workflow(unittest.TestCase):
         self.assertIn('REQUIRE_MANAGED_SERVICE_LIFETIMES:', ios)
         self.assertIn('tool/install_published_apple_runtime.py --verify-installed', ios)
         self.assertIn('build/published_apple_runtime/**/*.json', ios)
+        install = next(step for step in steps if step.startswith('name: Install the checksum-pinned published Apple SDKs'))
+        fetch = f'git fetch --no-tags --depth=1 origin {subject.HEAD}'
+        self.assertIn(fetch, install)
+        self.assertLess(install.index(fetch), install.index('python3 tool/install_published_apple_runtime.py'))
+
+    def test_exact_producer_fetch_restores_source_validation_in_a_shallow_checkout(self):
+        def git(directory, *arguments):
+            return subprocess.run(['git', '-C', str(directory), *arguments], capture_output=True,
+                                  text=True, check=True, timeout=10).stdout.strip()
+        with tempfile.TemporaryDirectory(prefix='apple-published-shallow-') as temporary:
+            root = Path(temporary); origin = root/'origin'; origin.mkdir()
+            git(origin, 'init')
+            (origin/'source.py').write_text('immutable producer source\n')
+            git(origin, 'add', '.')
+            git(origin, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'producer')
+            producer = git(origin, 'rev-parse', 'HEAD')
+            (origin/'unrelated-verifier.py').write_text('later verifier only\n')
+            git(origin, 'add', '.')
+            git(origin, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'consumer')
+            checkout = root/'checkout'
+            subprocess.run(['git', 'clone', '--depth=1', origin.as_uri(), str(checkout)],
+                           capture_output=True, check=True, timeout=10)
+            absent = subprocess.run(['git', '-C', str(checkout), 'show', producer+':source.py'],
+                                    capture_output=True, check=False, timeout=10)
+            self.assertNotEqual(absent.returncode, 0, 'Control must reproduce unavailable producer history')
+            git(checkout, 'fetch', '--no-tags', '--depth=1', 'origin', producer)
+            subject.git_bindings(checkout, producer, {'source.py': subject.digest(checkout/'source.py')})
 
 
 if __name__ == '__main__': unittest.main()

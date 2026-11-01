@@ -121,8 +121,35 @@ an expired server or a plugin defect. All eight Android connection cases ended
 with a native Stop acknowledgement, an inactive service/VPN and ordinary
 browser connectivity; the emulator and its owned helpers were then stopped.
 
+On the physical iPhone, the final signed example uses the exact public iOS r3
+SDK and reports GeoDAT/XDRIVE/routing/Darwin capabilities `1/2/1/1`. All-proxy
+Safari traffic and the split with 2ip direct and tfox proxied displayed the
+expected primary addresses. The inverse split remains **unqualified**: tfox
+displayed its ordinary address, but 2ip remained on its own Loading page,
+including a direct canonical `https://2ip.io/ru/` observation after 20 seconds.
+Every connection attempt received a Stop acknowledgement and ordinary tfox
+connectivity recovered. Owned example, forwarding, compiler and guard processes
+were closed; Safari was left with working ordinary connectivity.
+
+A separate cold Safari control reproduced canonical 2ip Loading while the VPN
+was off, before any new example session or connection. An independent public
+HTTP request from the unchanged Mac network also received HTTP 503 with title
+`2ip loading...`; that document contains an inline cookie challenge and no
+external dependencies. This does not establish the iPhone's exact response or
+identify a routing defect. The passing Android and current iPhone inverse-split
+input JSONs are equivalent apart from a diagnostic rule tag; both adapters
+enable `routeOnly` on the managed SOCKS input. No routing/DNS behaviour is changed
+on the basis of these incomplete browser observations.
+
 ## Remaining acceptance outside this change
 
+* Finish the iPhone inverse split with a healthy browser/site baseline; if it
+  repeats, capture the failing request/status/protocol and the final prepared
+  extension configuration. Resolve the two unsuccessful supplied Android
+  profiles with a known working reference or peer-side evidence.
+* Add a controlled literal-IP SOCKS destination plus TLS ClientHello/SNI routing
+  case before extending coverage to QUIC/ECH; existing domain-SOCKS tests do not
+  establish those paths.
 * Live S3 and Google Drive accounts with a complete relay deployment, including
   HTTP/3/ECH where configured. Controlled endpoint fixtures establish the
   ownership and cancellation contract, not account availability.

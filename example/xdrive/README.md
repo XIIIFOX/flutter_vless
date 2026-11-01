@@ -1,5 +1,33 @@
 # XDRIVE S3 and Google Drive
 
+## Account-free local acceptance
+
+The repository includes a temporary S3 API simulator. From the repository root:
+
+```sh
+python3 tool/xdrive_s3_fixture.py --case-dir build/xdrive-local-01 --seconds 180
+```
+
+It binds only `127.0.0.1`, stores at most 32 MiB in memory, checks SigV4 and
+automatically closes after three minutes. The new private `ready.json` contains
+its port and synthetic test settings. Choose a fresh case directory for each
+run. Objects disappear when the server stops.
+
+An Android emulator can use a task-owned `adb reverse` mapping to this port.
+Both Xray peers then run inside Android; the Mac only serves the HTTP fixture.
+No host VPN, DNS or routing setting needs to change. Use path-style S3 and a
+`remoteFolder` under `acceptance/` on both peers. This service implements the
+bounded subset needed by the tests, including object CRUD and paged prefix
+listing; it is a development fixture.
+
+Actions also runs two real Core instances through this independent service and
+checks application bytes in both directions. Google Drive tests simulate OAuth
+and the files API, checking token fields, bearer authentication, data transfer
+and cancellation. These tests need no registrations or cloud accounts; actual
+cloud service availability, quotas and negotiated cloud TLS remain separate.
+
+## Cloud configuration
+
 [s3.json](s3.json) and [google-drive.json](google-drive.json) are complete client
 configuration templates for Xray Core 26.10.29. They contain placeholders, not
 working accounts. Both peers need compatible application protocol settings and

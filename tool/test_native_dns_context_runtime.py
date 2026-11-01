@@ -248,6 +248,48 @@ def copy_managed_runtime_fixtures(ordinary):
     return bindings
 
 
+def run_xdrive_full_relay(ordinary, go, environment, results, report):
+    """Two actual Core peers use an independently implemented Python S3 API."""
+    inputs = ['tool/xdrive_s3_fixture.py', 'tool/test_xdrive_s3_fixture.py',
+              'tool/fixtures/xdrive_relay_runtime_test.go']
+    before = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in inputs}
+    report['xdrive_relay_source_sha256'] = before
+    checked('xdrive-s3-fixture-guards', [sys.executable, str(ROOT / 'tool/test_xdrive_s3_fixture.py')],
+            cwd=ROOT, environment=environment, seconds=30, results=results)
+    package = ordinary / 'native_xdrive_relay_runtime'
+    package.mkdir()
+    target = package / 'relay_test.go'
+    shutil.copyfile(ROOT / 'tool/fixtures/xdrive_relay_runtime_test.go', target)
+    if hashlib.sha256(target.read_bytes()).hexdigest() != before['tool/fixtures/xdrive_relay_runtime_test.go']:
+        raise RuntimeError('Full relay fixture copy mismatch')
+    suffix = '.test.exe' if os.name == 'nt' else '.test'
+    binary = EVIDENCE / ('xdrive-full-relay' + suffix)
+    checked('xdrive-full-relay-compile', [go, 'test', '-c', '-o', str(binary), './native_xdrive_relay_runtime'],
+            cwd=ordinary, environment=environment, seconds=300, results=results)
+    spec = importlib.util.spec_from_file_location('xdrive_s3_loopback_fixture', ROOT / 'tool/xdrive_s3_fixture.py')
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    with fixture.running_server() as server:
+        child_environment = dict(environment, FLUTTER_VLESS_XDRIVE_FIXTURE_URL=server.endpoint)
+        selected = 'TestAcceptanceXdriveS3FullCoreRelay'
+        checked('xdrive-full-relay-runtime', [str(binary), '-test.run', '^' + selected + '$', '-test.v', '-test.timeout=35s'],
+                cwd=ordinary, environment=child_environment, seconds=45, results=results)
+        output = (EVIDENCE / 'xdrive-full-relay-runtime.log').read_text(encoding='utf-8')
+        require_selected_test_pass(output, selected)
+        for generation in (0, 1):
+            if len(re.findall(r'^\s*--- PASS: ' + selected + '/fresh-owner-' + str(generation) + r' \(', output, re.M)) != 1:
+                raise RuntimeError('Full cloud relay owner generation missing')
+        results[-1]['selected_tests'] = [selected]
+    counts = server.snapshot()
+    report['xdrive_full_relay_s3_counts'] = counts
+    report['xdrive_full_relay_server_closed'] = True
+    if counts['active_connections'] or counts['handler_failures'] or counts['signature_failures'] or counts['request_failures'] or min(counts['PUT'], counts['GET'], counts['LIST']) <= 0 or min(counts['put_bytes'], counts['get_bytes']) < 128 * 1024:
+        raise RuntimeError('Full relay did not produce clean authenticated object-store traffic')
+    if any(hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected for name, expected in before.items()) or hashlib.sha256(target.read_bytes()).hexdigest() != before['tool/fixtures/xdrive_relay_runtime_test.go']:
+        raise RuntimeError('Full relay sources changed during execution')
+    report['xdrive_relay_sources_unchanged'] = True
+
+
 def run_managed_service_runtime(source, core, go, environment, results, report):
     """Only called behind the existing CI-only runtime admission boundary."""
     # Actual old GeoDAT source, same reviewed fixture. Preserve its bounded
@@ -298,6 +340,8 @@ def run_managed_service_runtime(source, core, go, environment, results, report):
     reply = json.loads((EVIDENCE / 'managed-cli-capabilities.log').read_text(encoding='utf-8'))
     if reply != {'stage': 'capabilities', 'code': 0, 'managed_service_lifetimes': 7}: raise RuntimeError('Actual managed CLI capabilities differ')
     report['managed_cli_sha256'] = hashlib.sha256(launcher.read_bytes()).hexdigest()
+
+    run_xdrive_full_relay(ordinary, go, environment, results, report)
 
     # A deliberately broken Close remains compilable. The test must detect
     # this missing cancellation and force its own parent cleanup after failure.

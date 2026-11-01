@@ -1,5 +1,11 @@
 ## 1.1.7
 
+* Preserve explicit VMess TLS SNI independently of the transport Host, retain the Host fallback for absent/empty SNI, and accept a missing display name. Decode Trojan/VLESS URI credentials once and normalize only the share-link scheme's case.
+
+* Bound Apple delay measurements across proxy negotiation, TLS and HTTP with one monotonic deadline. Keep authentication and certificate validation strict; reject slow partial replies and retire the owned socket.
+
+* Bound Android standalone and connected delay probes across SOCKS, TLS and HTTP. Retry only listener startup refusals, cancel detached-engine work and reap the probe's sockets, child, output reader and private config file.
+
 * Prepare XDRIVE S3 and Google Drive API endpoints on Android, iOS, macOS and Windows while preserving cloud credentials, signing identities and optional fronting settings. Bind cloud client caches and requests to their owning Core instance, and require the matching managed-service runtime capability before startup.
 
 * Support scheduled GeoDAT updates with Core-compatible HTTPS, asset-count and interval checks, writable target validation and bounded cancellation on Stop. Preserve downloaded Android datasets when seeding bundled assets; add update examples and cross-platform filesystem regressions.

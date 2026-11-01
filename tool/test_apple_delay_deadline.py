@@ -131,6 +131,9 @@ def run_case(binary, case):
     (binary.parent / (case + '.json')).write_text(json.dumps(result, indent=2) + '\n')
     assert observed.is_set() and not failures, result
     assert not timed_out and child.returncode == 0 and elapsed < 11.5, result
+    # Reaching a peer then failing immediately is not a deadline pass. Connect
+    # owns an eight-second phase; response/TLS consumes the shared ten seconds.
+    assert elapsed >= (7 if case.endswith('connect') else 9), result
     assert result['worker_drained'] and stdout.strip() == b'DELAY_RESULT=-1', result
     print('PASS', binary.parent.name, json.dumps(result), flush=True)
     return result

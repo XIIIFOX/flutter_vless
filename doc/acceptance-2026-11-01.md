@@ -21,3 +21,35 @@ external acceptance limits; they are never marked as successful live tests.
 The earlier baseline is recorded in
 [Xray 26.10.29 compatibility](xray-26.10.29-compatibility.md). Results below are
 updated as each boundary is reached.
+
+## Results recorded so far
+
+* `23c6cdf` fixes VMess SNI loss, optional VMess display names, encoded
+  Trojan/VLESS credentials and scheme-only case normalization. Seven original
+  failures were reproduced first; review caught an empty-SNI regression and
+  added separate absent/empty controls before the fix was committed. File/BOM
+  subscription tests exercise all four public start/delay adapters. These are
+  import/adapter checks, not remote protocol traffic claims.
+* [Compatibility CI 41330608547](https://github.com/XIIIFOX/flutter_vless/actions/runs/41330608547)
+  at `f79c6ff` passes on Windows, macOS and Linux: actual numeric SOCKS + TLS 1.3
+  SNI routing in both directions, wrong/missing SNI and sniff-disabled controls,
+  real IPv6 loopback traffic, NAT64 address carriage, scoped AAAA/TTL and resolver
+  owner generations. NAT64 translation and physical handover are separate.
+* The same run verifies S3 CRUD against full independently checked SigV4,
+  including the published AWS vector and request-tampering controls. Google
+  fixtures validate OAuth form/Bearer values, a data round trip and cancellation
+  of actual blocked OAuth/API sockets. Existing HTTP/3, IPv6 TCP/UDP, config,
+  file, native-routing and shutdown regressions also pass. Dart/Flutter totals
+  507 passing tests across the packages and example. Apple preparation suites
+  pass with one existing opt-in public-bootstrap skip per platform.
+* `9b92af4` bounds iOS/macOS delay sockets across negotiation and application
+  I/O. The original HTTP CONNECT trickle exceeded a 12.5-second parent limit;
+  after the fix all eight slow-peer cases retire normally, with peer workers
+  drained. Existing real HTTP, authentication rejection and untrusted-TLS
+  controls still pass. These localhost tests do not install or operate a VPN
+  on the owner's Mac; Actions qualification and final device checks follow.
+
+The VMess field mapping follows the
+[v2rayN share-link specification](https://github.com/2dust/v2rayN/wiki/Description-of-VMess-share-link).
+S3's independent signature verifier uses the public
+[AWS SigV4 reference](https://docs.aws.amazon.com/AmazonS3/latest/developerguide/sig-v4-header-based-auth.html).

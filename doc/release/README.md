@@ -10,22 +10,23 @@ the public `flutter_vless` package. Each publishable federated package keeps a
 separate `CHANGELOG.md` beside its `pubspec.yaml`; add a versioned entry there
 only when that package itself is being released.
 
-For the 1.1.7 worktree, Android, iOS and macOS target Xray-core `v26.10.29`,
-pinned to commit `0afec66085a85191e9dd2a4a6646c7c9a94688d1`. Native runtimes are
-rebuilt with Go 1.27.3 and the updated fallback RootCAs for the upstream
-certificate-trust security update. Windows uses the checksum-pinned official
-release and its separately tested routing-enabled runtime. Existing full
-project GeoDAT files remain selected; the upstream ZIP now contains lite GeoIP.
-This update publishes native runtime assets only. It does not publish a Flutter
-package or create a `v1.1.7` plugin release.
+For the 1.1.7 worktree, Android, iOS, macOS and Windows target Xray-core
+`v26.10.31`, pinned to `a4a3dff5b20c2faae567b742c172c7b95e75c083`.
+Native artifacts use Go 1.27.3, retain managed-service ownership and native
+routing, and preserve the shared MPTCP default-off change. Public Maven/GitHub
+bytes are verified before consumer defaults and vendored SDKs are updated.
+The project's full GeoDAT remains selected. This publishes native runtimes;
+it does not publish a Flutter package or create a `v1.1.7` plugin release.
 
-Runtime release notes for this train:
+Current native release notes:
 
-* [Android v26.10.29-protect3](xray-android-v26.10.29-protect3.md)
-* [iOS v26.10.29-r3](xray-ios-v26.10.29-r3.md)
-* [macOS v26.10.29-r3](xray-macos-v26.10.29-r3.md)
-* [Windows v26.10.29-r3](xray-windows-v26.10.29-r3.md)
-* [Validation and remaining work](xray-v26.10.29-validation.md)
+* [Android v26.10.31-protect1](xray-android-v26.10.31-protect1.md)
+* [iOS v26.10.31-r1](xray-ios-v26.10.31-r1.md)
+* [macOS v26.10.31-r1](xray-macos-v26.10.31-r1.md)
+* [Windows v26.10.31-r1](xray-windows-v26.10.31-r1.md)
+* [Validation and remaining work](xray-v26.10.31-validation.md)
+
+Earlier native releases and their dated qualification records remain unchanged.
 
 ### Registry blockers before publishing the plugin
 

@@ -12,18 +12,18 @@
     </trusted-artifacts>
   </configuration>
   <components>
-    <component group="dev.tfox.fluttervless" name="xray-android" version="26.10.29-protect3">
-      <artifact name="xray-android-26.10.29-protect3.aar">
-        <sha256 value="45254b316f761cfd390843dc267c404d4c7f6d1dae2f686e3ef38d23d88580d0" origin="Maven Central 26.10.29-protect3; exact public bytes matched source-bound CI producer 3fffc1d1700889f216f8f02d51a809ec670b21ba"/>
+    <component group="dev.tfox.fluttervless" name="xray-android" version="26.10.31-protect1">
+      <artifact name="xray-android-26.10.31-protect1.aar">
+        <sha256 value="4c7080a48106e1b0369d7aba68a4969382de22a21ecf7c89f3e86685adb8d704" origin="Maven Central 26.10.31-protect1; exact public bytes matched source-bound CI producer 13c47ed2caabd70b082449ed4917ce65574df91e"/>
       </artifact>
-      <artifact name="xray-android-26.10.29-protect3.pom">
-        <sha256 value="69ccc5e112251f7900548a235058ead5aad7dda371e7080dfdf101a67a707dd3" origin="Maven Central 26.10.29-protect3; exact public bytes matched source-bound CI producer 3fffc1d1700889f216f8f02d51a809ec670b21ba"/>
+      <artifact name="xray-android-26.10.31-protect1.pom">
+        <sha256 value="91d57ce60ab0afa4cfc6291e142a8a4254d663cc40a9c41146f82817110ac652" origin="Maven Central 26.10.31-protect1; exact public bytes matched source-bound CI producer 13c47ed2caabd70b082449ed4917ce65574df91e"/>
       </artifact>
-      <artifact name="xray-android-26.10.29-protect3-sources.jar">
-        <sha256 value="c6deada2fac53b8ea6523dbda77597b128006674616f140f04df23264c6d1aa3" origin="Maven Central 26.10.29-protect3; exact public bytes matched source-bound CI producer 3fffc1d1700889f216f8f02d51a809ec670b21ba"/>
+      <artifact name="xray-android-26.10.31-protect1-sources.jar">
+        <sha256 value="c6deada2fac53b8ea6523dbda77597b128006674616f140f04df23264c6d1aa3" origin="Maven Central 26.10.31-protect1; exact public bytes matched source-bound CI producer 13c47ed2caabd70b082449ed4917ce65574df91e"/>
       </artifact>
-      <artifact name="xray-android-26.10.29-protect3-javadoc.jar">
-        <sha256 value="c6deada2fac53b8ea6523dbda77597b128006674616f140f04df23264c6d1aa3" origin="Maven Central 26.10.29-protect3; exact public bytes matched source-bound CI producer 3fffc1d1700889f216f8f02d51a809ec670b21ba"/>
+      <artifact name="xray-android-26.10.31-protect1-javadoc.jar">
+        <sha256 value="c6deada2fac53b8ea6523dbda77597b128006674616f140f04df23264c6d1aa3" origin="Maven Central 26.10.31-protect1; exact public bytes matched source-bound CI producer 13c47ed2caabd70b082449ed4917ce65574df91e"/>
       </artifact>
     </component>
   </components>

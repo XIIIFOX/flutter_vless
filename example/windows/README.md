@@ -4,12 +4,21 @@ This directory contains the Windows-specific files for the flutter_vless example
 
 ## Xray Setup
 
-Before running the example on Windows, you need to provide the Xray executable:
+Before running the example on Windows, provide the x64 Xray executable.
+The recommended [managed Core 26.10.31-r1](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-windows-v26.10.31-r1)
+includes native routing and the owned XDRIVE/GeoDAT services (capability `7`).
+Its `Xray-windows-managed-64.zip` SHA-256 is
+`19268b7f9f5ddedbcf9c3cb294175f28f1c6a4d495327e790f8e519e8073aa48`.
+Extract its Core and full datasets into `example/windows/xray/`, retaining the
+compatible `tun2socks.exe` and `wintun.dll` already supplied there.
 
-1. **Download the official Xray-core v26.10.29 release**:
-   - Visit: https://github.com/XTLS/Xray-core/releases/tag/v26.10.29
-   - Download `Xray-windows-64.zip` (or `Xray-windows-32.zip` for 32-bit systems)
-   - Verify the x64 archive SHA-256: `fce33e81cccf50e7aab572b175519a50b5e0f9d2f5c8d1ed73012ea5c9ad4d58`
+For ordinary profiles without these managed services, the official runtime is
+also supported:
+
+1. **Download the official Xray-core v26.10.31 release**:
+   - Visit: https://github.com/XTLS/Xray-core/releases/tag/v26.10.31
+   - Download `Xray-windows-64.zip`
+   - Verify the x64 archive SHA-256: `2e04a9995a6f2ad1b28c0bb25c708ecb2695e43a1c9c7889c4b6ac2b48cf7a6a`
 
 2. **Extract and place xray.exe**:
    - Extract the downloaded archive

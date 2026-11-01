@@ -21,7 +21,7 @@ The published 26.6.1 device-only artifact and 26.6.1.1 all-ABI artifact are
 immutable. The current runtime revision that includes all Android ABIs is:
 
 ```text
-dev.tfox.fluttervless:xray-android:26.10.29-protect1
+dev.tfox.fluttervless:xray-android:26.10.31-protect1
 ```
 
 This revision requires the matching Android socket broker;
@@ -92,17 +92,19 @@ When Xray is updated:
 
 1. Review the exact upstream Core/module/checksum pins and required overlays.
 2. Run the workflow once at the reviewed commit, using its fixed final version.
-3. Independently verify the downloaded signed repository, provenance, four-ABI
-   AAR/ELF bytes and public Maven AAR/POM. Retain existing HEV/geodata pins.
-4. Update consumer version defaults and strict checksums from those actual bytes.
-5. Create the native-only GitHub runtime release from the same payloads.
-6. Verify Maven Central public availability:
+3. Independently verify the downloaded signed repository, provenance and four-ABI
+   AAR/ELF bytes. Retain existing HEV/geodata pins.
+4. Publish that same Central deployment and create the native-only GitHub runtime
+   release from the same signed payloads, without rebuilding or reuploading.
+5. Verify public Maven and GitHub payloads against the qualified bytes. Check
+   Maven Central availability:
 
    ```bash
    curl -I https://repo1.maven.org/maven2/dev/tfox/fluttervless/xray-android/<version>/xray-android-<version>.pom
    curl -I https://repo1.maven.org/maven2/dev/tfox/fluttervless/xray-android/<version>/xray-android-<version>.aar
    ```
 
+6. Update consumer version defaults and strict checksums from those public bytes.
 7. Run app-only and device checks against the published, checksum-pinned runtime.
 
 Runtime publication does not publish any Pub.dev package or the plugin's GitHub

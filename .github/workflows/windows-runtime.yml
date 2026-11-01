@@ -8,6 +8,11 @@ on:
         type: choice
         options: [all, numeric-ipv6]
         default: all
+      runtime_source:
+        description: Build a candidate or test the fixed public native release
+        type: choice
+        options: [build, published]
+        default: build
   push:
     branches: [fr/windows-runtime-validation, fr/windows-security-1.1.6]
 
@@ -36,6 +41,7 @@ jobs:
         run: |
           python tool/windows/test_runtime_fixtures.py
           python tool/windows/test_package_managed_runtime.py
+          python tool/windows/test_install_published_runtime.py
       - name: Record toolchain and operating system
         shell: pwsh
         run: |
@@ -59,11 +65,20 @@ jobs:
           if ($LASTEXITCODE) { throw 'Xray version failed' }
           $version | Tee-Object -FilePath build/windows-runtime/official-version.log
           if ($version.Count -lt 1 -or $version[0] -notmatch '^Xray 26\.10\.31(?:\s|$)') { throw 'Unexpected pinned Xray version' }
+      - name: Install the checksum-pinned published managed runtime
+        if: ${{ inputs.runtime_source == 'published' }}
+        shell: pwsh
+        run: |
+          python tool/windows/install_published_runtime.py --directory build/windows-runtime 2>&1 | Tee-Object -FilePath build/windows-runtime/published-runtime.log
+          if ($LASTEXITCODE) { throw 'Published runtime verification failed' }
+          Get-FileHash build/windows-runtime/xray.exe | Format-Table | Out-File -Append build/windows-runtime/binary-checksums.log
       - uses: actions/setup-go@v6
+        if: ${{ inputs.runtime_source != 'published' }}
         with:
           go-version-file: third_party/xray-mobile/go.mod
           cache-dependency-path: third_party/xray-mobile/go.sum
       - name: Build unpublished routing runtime for this validation
+        if: ${{ inputs.runtime_source != 'published' }}
         shell: pwsh
         run: |
           python tool/build_native_routing_cli.py --output build/windows-routing-preview
@@ -135,12 +150,15 @@ jobs:
           if ([regex]::Matches($log, '(?m)^WINDOWS_TRAFFIC_COUNTER_RUNTIME_PASS=2\r?$').Count -ne 1) { throw 'Portable owned-counter acceptance is incomplete' }
           Copy-Item "$portable/proxy-results.json" build/windows-runtime/portable-results.json
       - name: Package the exact managed Core after reverse routing and cleanup checks
+        if: ${{ inputs.runtime_source != 'published' }}
         shell: pwsh
         run: |
           python tool/windows/package_managed_runtime.py --directory build/windows-runtime `
             --producer build/windows-routing-preview/result.json --output build/windows-managed-runtime --head "$env:GITHUB_SHA"
           if ($LASTEXITCODE) { throw 'Managed runtime packaging failed' }
-      - uses: actions/upload-artifact@v4
+      - name: Upload the newly built managed runtime
+        uses: actions/upload-artifact@v4
+        if: ${{ inputs.runtime_source != 'published' }}
         with:
           name: windows-managed-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}
           path: build/windows-managed-runtime/*

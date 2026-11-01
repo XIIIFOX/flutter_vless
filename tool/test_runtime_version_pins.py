@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """File-only checks for the active runtime producer and example consumers."""
 import ast
+import json
 import re
 from pathlib import Path
 import unittest
@@ -20,6 +21,18 @@ class RuntimeVersionPinsTest(unittest.TestCase):
         self.assertRegex(literals['CORE_TAG'], r'^v[0-9]+\.[0-9]+\.[0-9]+$')
         self.core = literals['CORE_TAG'][1:]
         self.runtime = literals['RELEASE_VERSION']
+        apple = ast.parse(self.read('tool/package_apple_runtime_release.py'))
+        manifests = [node.value for node in ast.walk(apple)
+                     if isinstance(node, ast.Assign) and any(
+                         isinstance(target, ast.Name) and target.id == 'manifest'
+                         for target in node.targets) and isinstance(node.value, ast.Dict)]
+        self.assertEqual(len(manifests), 1)
+        apple_literals = {key.value: value.value
+                          for key, value in zip(manifests[0].keys, manifests[0].values)
+                          if isinstance(key, ast.Constant) and isinstance(value, ast.Constant)}
+        self.apple_core = apple_literals['release_version']
+        self.apple_revision = apple_literals['runtime_revision']
+        self.assertRegex(self.apple_revision, r'^r[1-9][0-9]*$')
 
     @staticmethod
     def read(name):
@@ -82,6 +95,98 @@ class RuntimeVersionPinsTest(unittest.TestCase):
         official_sha = re.findall(r"-ne '([0-9a-f]{64})'", workflow)
         self.assertEqual(len(official_sha), 1)
         self.assertEqual(re.findall(r'archive SHA-256: `([0-9a-f]{64})`', guide), official_sha)
+
+    def test_apple_producer_release_matches_shared_core(self):
+        self.assertEqual(self.apple_core, self.core)
+
+    def assert_apple_pins(self, platform, package, podspec):
+        """Check declared default consumers; public archive bytes are a separate gate."""
+        tag = f'xray-{platform}-v{self.core}-{self.apple_revision}'
+        url = f'https://github.com/XIIIFOX/flutter_vless/releases/download/{tag}/XRay.xcframework.zip'
+        self.assertEqual(re.findall(r'let xrayReleaseTag = "([^"]+)"', package), [tag])
+        checksums = re.findall(r'let xrayChecksum = "([0-9a-f]{64})"', package)
+        self.assertEqual(len(checksums), 1)
+        self.assertNotEqual(checksums[0], '0' * 64)
+        self.assertEqual(re.findall(r'let xrayBinaryURL = [^\n]+\?\? "([^"]+)"', package),
+                         [r'https://github.com/XIIIFOX/flutter_vless/releases/download/\(xrayReleaseTag)/XRay.xcframework.zip'])
+        self.assertRegex(package, r'xrayBinaryChecksum = [^\n]+\?\? xrayChecksum')
+        self.assertRegex(package, r'\.binaryTarget\(name: "XRay", url: xrayBinaryURL, checksum: xrayBinaryChecksum\)')
+        if platform == 'ios':
+            self.assertEqual(re.findall(r"xray_version = ENV\['FLUTTER_VLESS_XRAY_VERSION'\] \|\| '([^']+)'", podspec), ['v' + self.core])
+            self.assertEqual(re.findall(r"xray_release_tag = ENV\['FLUTTER_VLESS_XRAY_RELEASE_TAG'\] \|\| '([^']+)'", podspec), [tag])
+            self.assertEqual(re.findall(r'xray_url = [^\n]+\|\| "([^"]+)"', podspec),
+                             ['https://github.com/XIIIFOX/flutter_vless/releases/download/#{xray_release_tag}/XRay.xcframework.zip'])
+            pod_checksums = re.findall(r"xray_checksum = ENV\['FLUTTER_VLESS_XRAY_CHECKSUM'\] \|\| '([0-9a-f]{64})'", podspec)
+        else:
+            self.assertEqual(re.findall(r'DEFAULT_FRAMEWORK_URL="([^"]+)"', podspec), [url])
+            pod_checksums = re.findall(r'FRAMEWORK_SHA256="\$\{FLUTTER_VLESS_MACOS_FRAMEWORK_SHA256:-([0-9a-f]{64})\}"', podspec)
+        self.assertEqual(pod_checksums, checksums, 'SwiftPM and CocoaPods default archive checksums differ')
+
+    def test_apple_default_consumers_match_producer_and_each_other(self):
+        for platform, package, podspec in [
+            ('ios', 'ios/flutter_vless/Package.swift', 'ios/flutter_vless.podspec'),
+            ('macos', 'packages/flutter_vless_macos/macos/flutter_vless_macos/Package.swift',
+             'packages/flutter_vless_macos/macos/flutter_vless_macos.podspec'),
+        ]:
+            with self.subTest(platform=platform):
+                self.assert_apple_pins(platform, self.read(package), self.read(podspec))
+
+    def test_apple_pin_contract_rejects_stale_version_checksum_and_unused_url(self):
+        checksum = 'a' * 64
+        for platform in ['ios', 'macos']:
+            tag = f'xray-{platform}-v{self.core}-{self.apple_revision}'
+            package = (f'let xrayReleaseTag = "{tag}"\nlet xrayChecksum = "{checksum}"\n'
+                       r'let xrayBinaryURL = env["URL"] ?? "https://github.com/XIIIFOX/flutter_vless/releases/download/\(xrayReleaseTag)/XRay.xcframework.zip"' + '\n' +
+                       'let xrayBinaryChecksum = env["CHECKSUM"] ?? xrayChecksum\n'
+                       '.binaryTarget(name: "XRay", url: xrayBinaryURL, checksum: xrayBinaryChecksum)\n')
+            if platform == 'ios':
+                podspec = (f"xray_version = ENV['FLUTTER_VLESS_XRAY_VERSION'] || 'v{self.core}'\n"
+                           f"xray_release_tag = ENV['FLUTTER_VLESS_XRAY_RELEASE_TAG'] || '{tag}'\n" +
+                           'xray_url = ENV["URL"] || "https://github.com/XIIIFOX/flutter_vless/releases/download/#{xray_release_tag}/XRay.xcframework.zip"\n' +
+                           f"xray_checksum = ENV['FLUTTER_VLESS_XRAY_CHECKSUM'] || '{checksum}'\n")
+            else:
+                podspec = (f'DEFAULT_FRAMEWORK_URL="https://github.com/XIIIFOX/flutter_vless/releases/download/{tag}/XRay.xcframework.zip"\n'
+                           'FRAMEWORK_SHA256="${FLUTTER_VLESS_MACOS_FRAMEWORK_SHA256:-' + checksum + '}"\n')
+            self.assert_apple_pins(platform, package, podspec)
+            for stale in [package.replace(self.core, '26.10.29'), package.replace(self.core, self.core + '0'),
+                          package.replace(checksum, 'b' * 64), package.replace(checksum, '0' * 64),
+                          package.replace(r'\(xrayReleaseTag)', 'unused-release'),
+                          package + f'let xrayReleaseTag = "{tag}"\n']:
+                with self.subTest(platform=platform), self.assertRaises(AssertionError):
+                    self.assert_apple_pins(platform, stale, podspec)
+            for stale in [podspec.replace(self.core, '26.10.29'), podspec.replace(checksum, 'b' * 64)]:
+                with self.subTest(platform=platform, consumer='podspec'), self.assertRaises(AssertionError):
+                    self.assert_apple_pins(platform, package, stale)
+
+    def assert_preview_commit(self, source, expected):
+        self.assertRegex(expected, r'^[0-9a-f]{40}$')
+        self.assertEqual(re.findall(r'\bconst val CORE_COMMIT = "([0-9a-f]{40})"', source), [expected],
+                         'Android preview admission commit differs from its actual Core producer')
+
+    def test_android_debug_preview_admission_matches_current_core(self):
+        manifest = json.loads(self.read('third_party/xray-native-dns/pin-manifest.json'))
+        for relative in [
+            'nativeDnsPreview/kotlin/com/github/tfox/flutter_vless/xray/service/NativePreviewVpnSpec.kt',
+            'nativeDnsPreviewTest/kotlin/com/github/tfox/flutter_vless/xray/service/NativePreviewRuntimeDeviceTest.kt',
+        ]:
+            with self.subTest(source=relative):
+                self.assert_preview_commit(self.read('packages/flutter_vless_android/android/src/' + relative), manifest['core_commit'])
+
+    def test_preview_commit_contract_rejects_stale_and_duplicate_admission(self):
+        current = 'a' * 40
+        source = f'const val CORE_COMMIT = "{current}"'
+        self.assert_preview_commit(source, current)
+        for stale in [source.replace(current, 'b' * 40), source + '\n' + source, source.replace('CORE_COMMIT', 'UNUSED_COMMIT')]:
+            with self.subTest(source=stale), self.assertRaises(AssertionError):
+                self.assert_preview_commit(stale, current)
+
+    def test_package_versions_remain_1_1_7(self):
+        for path in ['pubspec.yaml', 'packages/flutter_vless_android/pubspec.yaml',
+                     'packages/flutter_vless_macos/pubspec.yaml', 'packages/flutter_vless_windows/pubspec.yaml',
+                     'packages/flutter_vless_platform_interface/pubspec.yaml', 'example/pubspec.yaml']:
+            with self.subTest(package=path):
+                self.assertEqual(re.findall(r'^version:\s*([^\s]+)\s*$', self.read(path), re.M),
+                                 ['1.1.7+117' if path == 'example/pubspec.yaml' else '1.1.7'])
 
 
 if __name__ == '__main__':

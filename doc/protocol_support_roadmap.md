@@ -1,10 +1,10 @@
 # Protocol Support Roadmap
 
 This document tracks the protocol and transport scope for `flutter_vless`
-1.1.7. Capability follows pinned Xray Core 26.10.17, commit
-`92ccc939aaf4f8965f369cf0b142e005aeaa11d5`, including its
-[protocol inventory](https://github.com/XTLS/Xray-core/blob/92ccc939aaf4f8965f369cf0b142e005aeaa11d5/infra/conf/xray.go)
-and [transport builder](https://github.com/XTLS/Xray-core/blob/92ccc939aaf4f8965f369cf0b142e005aeaa11d5/infra/conf/transport_internet.go).
+1.1.7. Capability follows pinned Xray Core 26.10.31, commit
+`a4a3dff5b20c2faae567b742c172c7b95e75c083`, including its
+[protocol inventory](https://github.com/XTLS/Xray-core/blob/a4a3dff5b20c2faae567b742c172c7b95e75c083/infra/conf/xray.go)
+and [transport builder](https://github.com/XTLS/Xray-core/blob/a4a3dff5b20c2faae567b742c172c7b95e75c083/infra/conf/transport_internet.go).
 Concrete implementation and acceptance limits are tracked in
 [compatibility.md](compatibility.md). General configuration references:
 

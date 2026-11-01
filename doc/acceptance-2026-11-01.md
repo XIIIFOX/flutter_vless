@@ -175,15 +175,16 @@ The iPhone's passive network inventory had no global IPv6 prefix. The emulator
 provides ordinary IPv4 connectivity behind the unchanged Mac VPN. Neither was
 presented as a physical IPv6-only, DNS64/NAT64 or Wi-Fi/mobile handover test.
 
-## Release boundary and remaining external acceptance
+## Historical 26.10.29 boundary and remaining external acceptance
 
 This bounded stage does not establish universal compatibility or publication
 readiness. The remaining work is explicit:
 
-* Upgrade native artifacts from the withdrawn 26.10.29 to the official
-  [26.10.31 security release](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31),
-  then requalify consumers. Upstream disables MPTCP by default. No silent
-  repin or new native publication is included in these current-version results.
+* The later scope amendment upgrades native artifacts from withdrawn 26.10.29
+  to the official [26.10.31 security release](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31).
+  Publication, exact consumer migration and fresh acceptance are tracked in
+  [the Core31 qualification](release/xray-v26.10.31-validation.md). The earlier
+  version-specific device results above remain historical.
 * Repeat fresh public Android split routing with an independently healthy
   peer/reference; retest the original implicit-DNS iPhone case if its policy
   is required. A passing explicit-DNS recipe does not erase that limitation.

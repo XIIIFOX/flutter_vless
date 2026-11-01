@@ -16,7 +16,7 @@
 
 * Add legacy Freedom fragment/noises to finalmask migration examples, pinned-Core transport-security checks, and Apple NAT64 endpoint provenance and expiry regressions.
 
-* Update Xray-core on Android, iOS, macOS and the Windows runtime workflow to `v26.10.29`, pinned to commit `0afec66085a85191e9dd2a4a6646c7c9a94688d1`. Rebuild native runtimes with Go 1.27.3, preserve the updated fallback CA bundle and native routing, and rebase Darwin interface binding onto the upstream TCP keepalive correction. Keep the plugin release train at 1.1.7; native runtime publication is separate from package publication.
+* Update Android, iOS, macOS and Windows native runtimes to `v26.10.31`, pinned to commit `a4a3dff5b20c2faae567b742c172c7b95e75c083`. Preserve upstream MPTCP default-off, Go 1.27.3, Root CA filtering, native routing and managed-service cleanup. Pin consumers to verified public Maven/GitHub artifacts and qualify the published Windows runtime directly in Actions. Keep the Flutter release train at 1.1.7; native publication does not publish the plugin.
 
 * Cancel pending capability-gated starts after successful options/owner reinitialization on all four platforms. Preserve the pending request and status listener if native reinitialization fails. Keep Disconnect available in the example while permission or startup is pending; prevent older completions from clearing newer Start/Stop actions.
 

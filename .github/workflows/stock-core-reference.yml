@@ -44,12 +44,15 @@ jobs:
           compiler=max(compilers,key=lambda p:tuple(int(n) for n in p.parents[5].name.split('.')))
           env=dict(os.environ,GOOS='android',GOARCH='arm64',CGO_ENABLED='1',CC=str(compiler))
           binary=out/'xray-stock-26.10.29-android-arm64'
-          subprocess.run(['go','build','-mod=readonly','-trimpath','-buildvcs=false','-buildmode=pie','-o',str(binary),'./main'],cwd=owned,env=env,check=True,timeout=600)
+          # Match the existing Android producer's anet/Go linkname compatibility
+          # flag. This changes no upstream source or runtime protection policy.
+          command=['go','build','-mod=readonly','-trimpath','-buildvcs=false','-buildmode=pie','-ldflags=-checklinkname=0','-o',str(binary),'./main']
+          subprocess.run(command,cwd=owned,env=env,check=True,timeout=600)
           assert snapshot(owned)==before and snapshot(source)==before
           info=subprocess.check_output(['go','version','-m',str(binary)],text=True)
           assert 'GOOS=android' in info and 'GOARCH=arm64' in info
           (out/'build-info.txt').write_text(info)
-          (out/'qualification.json').write_text(json.dumps({'head':os.environ['GITHUB_SHA'],'scope':'unmodified pinned Core control; no plugin patches, VPN or owner profiles','module':pin,'module_sum':expected,'source_sha256':before,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'build_info_sha256':hashlib.sha256(info.encode()).hexdigest(),'source_unchanged':True},indent=2)+'\n')
+          (out/'qualification.json').write_text(json.dumps({'head':os.environ['GITHUB_SHA'],'scope':'unmodified pinned Core control; no plugin patches, VPN or owner profiles','module':pin,'module_sum':expected,'source_sha256':before,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'build_info_sha256':hashlib.sha256(info.encode()).hexdigest(),'compile_command':command,'source_unchanged':True},indent=2)+'\n')
           PY
       - uses: actions/upload-artifact@v4
         with:

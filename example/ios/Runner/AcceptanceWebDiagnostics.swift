@@ -29,7 +29,7 @@ final class AcceptanceWebDiagnosticsFactory: NSObject, FlutterPlatformViewFactor
         result(true)
       case "navigate":
         guard let target = call.arguments as? String,
-              ["2ip", "tfox"].contains(target), let current = self.current,
+              ["2ip", "tfox", "ipify"].contains(target), let current = self.current,
               current.view().window != nil else { result(Self.unavailable()); return }
         current.navigate(target: target)
         result(true)
@@ -208,7 +208,7 @@ private final class AcceptanceWebDiagnosticsView: NSObject, FlutterPlatformView,
     stop(clearDocument: false)
     paused = false
     navigationID = UUID().uuidString
-    let path = target == "2ip" ? "https://2ip.ru/" : "https://tfox.dev/ip/"
+    let path = ["2ip": "https://2ip.ru/", "tfox": "https://tfox.dev/ip/", "ipify": "https://api.ipify.org/"][target]!
     let url = URL(string: path)!
     record("requested", ["target": target, "navigation": navigationID, "url": safeURL(url)])
     let token = navigationID
@@ -230,6 +230,9 @@ private final class AcceptanceWebDiagnosticsView: NSObject, FlutterPlatformView,
   private func allowed(_ url: URL?) -> Bool {
     guard let url, url.scheme == "https", url.user == nil, url.password == nil,
           url.port == nil || url.port == 443, let host = url.host?.lowercased() else { return false }
+    if host == "api.ipify.org" {
+      return ["", "/"].contains(url.path) && url.query == nil && url.fragment == nil
+    }
     return ["2ip.ru", "2ip.io"].contains(host) || (host == "tfox.dev" && ["/ip", "/ip/"].contains(url.path))
   }
 

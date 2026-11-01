@@ -131,6 +131,10 @@ class _AcceptanceWebProbePageState extends State<AcceptanceWebProbePage> {
               onPressed: () => _open('tfox'),
               child: const Text('Open tfox'),
             ),
+            TextButton(
+              onPressed: () => _open('ipify'),
+              child: const Text('Open ipify'),
+            ),
           ],
         ),
         Row(

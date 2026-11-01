@@ -116,4 +116,30 @@ void main() {
     await tester.pump();
     debugDefaultTargetPlatformOverride = null;
   });
+
+  testWidgets('plain IPv4 fallback is a fixed embedded-view action only', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    messenger.setMockMethodCallHandler(
+      SystemChannels.platform_views,
+      (_) async => null,
+    );
+    messenger.setMockMethodCallHandler(acceptanceWebChannel, (call) async {
+      calls.add(call);
+      return true;
+    });
+    await tester.pumpWidget(const MaterialApp(home: AcceptanceWebProbePage()));
+    await tester.pump();
+    await tester.tap(find.text('Open ipify'));
+    await tester.pump();
+    final navigation = calls.where((call) => call.method == 'navigate').single;
+    expect(navigation.arguments, 'ipify');
+    expect(calls.any((call) => call.method == 'openSafari'), isFalse);
+    expect(find.text('Open ipify in browser'), findsNothing);
+    expect(find.text('Opened ipify'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    debugDefaultTargetPlatformOverride = null;
+  });
 }

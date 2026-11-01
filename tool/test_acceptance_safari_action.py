@@ -77,6 +77,31 @@ print("PASS: both navigators use exact plain HTTPS targets; eight arbitrary inpu
   self.assertIn('cachePolicy: .reloadIgnoringLocalCacheData',navigation)
   self.assertNotIn('?test=',SOURCE)
   handler=SOURCE[SOURCE.index('case "navigate":'):SOURCE.index('case "openSafari":')]
-  self.assertIn('["2ip", "tfox"].contains(target)',handler)
+  self.assertIn('["2ip", "tfox", "ipify"].contains(target)',handler)
+
+ def test_plain_ipv4_fallback_is_fixed_embedded_only_and_has_no_query(self):
+  navigation=body('func navigate(target: String)')
+  path=re.search(r'    let path = [^\n]+',navigation).group(0)
+  url=re.search(r'    let url = URL\(string: [^\n]+',navigation).group(0)
+  source='import Foundation\nfunc embeddedURL(_ target:String)->URL {\n'+path+'\n'+url+'\nreturn url\n}\n'
+  source+='func safariURL(_ target:String)->URL? {'+body('private func safariURL(_ target: String) -> URL?')+'}\n'
+  source+='func allowed(_ url:URL?)->Bool {'+body('private func allowed(_ url: URL?) -> Bool')+'}\n'
+  source+='''
+precondition(embeddedURL("ipify").absoluteString=="https://api.ipify.org/")
+precondition(safariURL("ipify")==nil)
+precondition(allowed(URL(string:"https://api.ipify.org/")))
+for invalid in ["http://api.ipify.org/", "https://api.ipify.org:8443/", "https://user:pass@api.ipify.org/", "https://api.ipify.org/?format=json", "https://api.ipify.org/#fragment", "https://api.ipify.org/private", "https://api64.ipify.org/", "https://other.api.ipify.org/", "https://api.ipify.org.evil.invalid/"] {
+ precondition(!allowed(URL(string:invalid)))
+}
+print("PASS: embedded plain IPv4 fallback; Safari unchanged; nine widened requests rejected")
+'''
+  with tempfile.TemporaryDirectory(prefix='flvless-ipify-allowlist-') as temporary:
+   folder=Path(temporary);p=folder/'main.swift';p.write_text(source);binary=folder/'probe'
+   compiler=shutil.which('swiftc');self.assertIsNotNone(compiler)
+   r=subprocess.run([compiler,'-swift-version','5','-module-cache-path',str(folder/'modules'),str(p),'-o',str(binary)],capture_output=True,text=True,timeout=45)
+   self.assertEqual(r.returncode,0,r.stderr[-4000:])
+   r=subprocess.run([str(binary)],capture_output=True,text=True,timeout=5)
+   self.assertEqual(r.returncode,0,r.stderr[-4000:])
+   self.assertIn('nine widened requests rejected',r.stdout)
 
 if __name__=='__main__':unittest.main(argv=[sys.argv[0],*remaining])

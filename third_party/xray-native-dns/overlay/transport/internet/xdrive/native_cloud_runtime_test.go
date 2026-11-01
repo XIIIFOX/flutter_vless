@@ -24,7 +24,8 @@ func TestAcceptanceXdriveS3RequestsSigningFrontingAndClose(t *testing.T) {
 	started, drained, forced := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var startOnce, drainOnce sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Host != "storage-origin.invalid:8989" || !strings.HasPrefix(r.Header.Get("Authorization"), "AWS4-HMAC-SHA256 Credential=synthetic-access/") {
+		body, readError := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if readError != nil || r.Host != "storage-origin.invalid:8989" || verifyNativeFixtureS3Signature(r, body, "synthetic-access", "synthetic-secret") != nil {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
@@ -65,8 +66,7 @@ func TestAcceptanceXdriveS3RequestsSigningFrontingAndClose(t *testing.T) {
 		}
 		switch r.Method {
 		case "PUT":
-			data, _ := io.ReadAll(r.Body)
-			objects[key] = data
+			objects[key] = body
 			w.WriteHeader(http.StatusOK)
 		case "GET":
 			if data, ok := objects[key]; ok {

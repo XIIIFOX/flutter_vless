@@ -46,6 +46,30 @@ class ErroringSink:
 
 
 class RunnerGuards(unittest.TestCase):
+    def test_cloud_auth_fixture_is_copied_bound_and_tampering_refused(self):
+        name = 'transport/internet/xdrive/native_cloud_auth_runtime_test.go'
+        self.assertIn(name, runner.MANAGED_RUNTIME_FIXTURES)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capability, ordinary = root / 'capability', root / 'ordinary'
+            for fixture in runner.MANAGED_RUNTIME_FIXTURES:
+                source = capability / 'overlay' / fixture
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text('synthetic fixture: ' + fixture)
+            with mock.patch.object(runner, 'CAPABILITY', capability):
+                bindings = runner.copy_managed_runtime_fixtures(ordinary)
+                self.assertEqual(set(bindings), set(runner.MANAGED_RUNTIME_FIXTURES))
+                self.assertEqual((ordinary / name).read_bytes(), (capability / 'overlay' / name).read_bytes())
+                self.assertEqual(bindings[name], runner.hashlib.sha256((ordinary / name).read_bytes()).hexdigest())
+                self.assertEqual(runner.copy_managed_runtime_fixtures(ordinary), bindings)
+                (ordinary / name).write_text('tampered destination')
+                with self.assertRaisesRegex(RuntimeError, 'copy mismatch'):
+                    runner.copy_managed_runtime_fixtures(ordinary)
+                (ordinary / name).unlink()
+                (capability / 'overlay' / name).unlink()
+                with self.assertRaisesRegex(RuntimeError, 'real file'):
+                    runner.copy_managed_runtime_fixtures(ordinary)
+
     def test_classic_lifetime_requires_every_actual_control_once(self):
         names = [
             'TestNativeClassicLifetimeClosesBothFamilies',

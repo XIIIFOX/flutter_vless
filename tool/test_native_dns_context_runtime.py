@@ -22,6 +22,12 @@ CAPABILITY = ROOT / 'third_party/xray-native-dns'
 EVIDENCE = ROOT / 'build/native_dns_context_runtime'
 MANIFEST = json.loads((CAPABILITY / 'pin-manifest.json').read_text())
 OUTPUT_JOIN_SECONDS = 10
+MANAGED_RUNTIME_FIXTURES = (
+    'transport/internet/xdrive/native_lifetime_test.go',
+    'transport/internet/xdrive/native_cloud_runtime_test.go',
+    'transport/internet/xdrive/native_cloud_auth_runtime_test.go',
+    'core/native_managed_lifetime_test.go',
+)
 
 
 def runtime_authorized(environment=None, system=None):
@@ -224,6 +230,24 @@ def checked_negative_control(name, command, *, cwd, environment, seconds, result
     raise RuntimeError('Broken ownership negative control unexpectedly passed')
 
 
+def copy_managed_runtime_fixtures(ordinary):
+    """Copy and bind every fixture before any ordinary-Core compilation."""
+    bindings = {}
+    for name in MANAGED_RUNTIME_FIXTURES:
+        source = CAPABILITY / 'overlay' / name
+        target = ordinary / name
+        if source.is_symlink() or not source.is_file() or target.is_symlink():
+            raise RuntimeError('Managed fixture must be a real file: ' + name)
+        if target.exists():
+            if target.read_bytes() != source.read_bytes():
+                raise RuntimeError('Managed fixture copy mismatch: ' + name)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+        bindings[name] = hashlib.sha256(target.read_bytes()).hexdigest()
+    return bindings
+
+
 def run_managed_service_runtime(source, core, go, environment, results, report):
     """Only called behind the existing CI-only runtime admission boundary."""
     # Actual old GeoDAT source, same reviewed fixture. Preserve its bounded
@@ -256,16 +280,11 @@ def run_managed_service_runtime(source, core, go, environment, results, report):
     copier = importlib.util.module_from_spec(spec); spec.loader.exec_module(copier)
     ordinary = EVIDENCE / 'ManagedOrdinary'
     copier.copy_and_apply_lifetimes(source, ordinary, go=go, routing=False)
-    for name in ('transport/internet/xdrive/native_lifetime_test.go', 'transport/internet/xdrive/native_cloud_runtime_test.go', 'core/native_managed_lifetime_test.go'):
-        target = ordinary / name
-        if target.exists():
-            if target.read_bytes() != (CAPABILITY / 'overlay' / name).read_bytes(): raise RuntimeError('Managed fixture copy mismatch')
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(CAPABILITY / 'overlay' / name, target)
-    tracked = [*MANIFEST['upstream_sha256'], 'transport/internet/native_service_lifetime.go', 'transport/internet/xdrive/native_lifetime.go', 'main/native_services_cli.go', 'transport/internet/xdrive/native_lifetime_test.go', 'transport/internet/xdrive/native_cloud_runtime_test.go', 'core/native_managed_lifetime_test.go']
+    report['managed_runtime_fixture_sha256'] = copy_managed_runtime_fixtures(ordinary)
+    tracked = [*MANIFEST['upstream_sha256'], 'transport/internet/native_service_lifetime.go', 'transport/internet/xdrive/native_lifetime.go', 'main/native_services_cli.go', *MANAGED_RUNTIME_FIXTURES]
     report['managed_ordinary_source_sha256'] = {name: hashlib.sha256((ordinary / name).read_bytes()).hexdigest() for name in tracked}
     for label, package, selection, names in [
-        ('xdrive-cloud', 'transport/internet/xdrive', '^TestAcceptanceXdrive', ['TestAcceptanceXdriveS3RequestsSigningFrontingAndClose', 'TestAcceptanceXdriveGoogleDriveRequestsAndFreshOwner']),
+        ('xdrive-cloud', 'transport/internet/xdrive', '^TestAcceptanceXdrive', ['TestAcceptanceXdriveS3RequestsSigningFrontingAndClose', 'TestAcceptanceXdriveS3SignatureVerifierVector', 'TestAcceptanceXdriveGoogleDriveRequestsAndFreshOwner', 'TestAcceptanceXdriveGoogleOAuthAndAPIHTTPAuthenticationAndCancellation']),
         ('managed-core', 'core', '^TestAcceptanceManagedCoreCloseAndFailedConstruction$', ['TestAcceptanceManagedCoreCloseAndFailedConstruction']),
     ]:
         binary = EVIDENCE / (label + suffix)

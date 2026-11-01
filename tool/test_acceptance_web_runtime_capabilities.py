@@ -55,7 +55,8 @@ class SnapshotCapabilitiesTests(unittest.TestCase):
                                 r'\|\| call.arguments is NSNull:\s*'
                                 r'self.snapshot\(result: result\)')
         self.assertEqual(re.findall(r'case "([^"]+)"', SOURCE),
-                         ['available', 'navigate', 'openSafari', 'stop', 'snapshot'])
+                         ['available', 'navigate', 'openSafari', 'stop', 'snapshot',
+                          'ownedManagerSafety'])
 
     def test_metadata_is_read_only_and_only_created_after_admission(self):
         snapshot = body_after('private func snapshot(result:')

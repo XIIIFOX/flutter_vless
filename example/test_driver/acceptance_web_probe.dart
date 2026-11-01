@@ -19,6 +19,17 @@ Future<String> captureAcceptanceOwnView() async {
   }
 }
 
+Future<String> captureAcceptanceOwnedManagerSafety() async {
+  try {
+    final result = await acceptanceWebChannel
+        .invokeMethod<Object?>('ownedManagerSafety')
+        .timeout(const Duration(seconds: 3));
+    return jsonEncode(result);
+  } catch (_) {
+    return 'acceptance-error';
+  }
+}
+
 class AcceptanceWebOverlay extends StatefulWidget {
   const AcceptanceWebOverlay({super.key, required this.child});
   final Widget child;

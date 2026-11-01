@@ -5,11 +5,73 @@ import Flutter
 import UIKit
 import WebKit
 import CryptoKit
+import NetworkExtension
 #if canImport(flutter_vless_core_compat)
 import flutter_vless_core_compat
 #else
 import flutter_vless
 #endif
+
+// BEGIN OWNED_MANAGER_SAFETY_PURE
+private struct AcceptanceOwnedManagerSafetyRecord {
+  let reference: Data?
+  let enabled: Bool
+  let onDemand: Bool
+  let includeAllNetworks: Bool
+  let status: Int
+}
+
+private enum AcceptanceOwnedManagerSafetyDisposition {
+  case deliver, unavailable, ignore
+}
+
+// Used only on the main queue. A timeout, lost foreground owner or late callback
+// can complete a request once; it cannot revive an earlier observation.
+private final class AcceptanceOwnedManagerSafetyLease {
+  private(set) var completed = false
+  private let deadline: TimeInterval
+  private let clock: () -> TimeInterval
+  init(deadline: TimeInterval, clock: @escaping () -> TimeInterval) {
+    self.deadline = deadline
+    self.clock = clock
+  }
+  func finish(admitted: Bool, ownerMatches: Bool) -> AcceptanceOwnedManagerSafetyDisposition {
+    guard !completed else { return .ignore }
+    completed = true
+    return admitted && ownerMatches && clock() < deadline ? .deliver : .unavailable
+  }
+}
+
+private func acceptanceOwnedManagerSafetyProjection(
+  before: [AcceptanceOwnedManagerSafetyRecord], after: [AcceptanceOwnedManagerSafetyRecord],
+  fingerprint: (Data) -> String
+) -> [String: Any] {
+  let unique = before.count == 1 && after.count == 1
+  var value: [String: Any] = [
+    "schema": 1, "owned_manager_count": after.count,
+    "owned_manager_count_before": before.count, "ambiguous": !unique,
+    "reference_present": false, "reference_consistent": false,
+    "safe_off_snapshot": false
+  ]
+  guard unique else { return value }
+  let first = before[0], current = after[0]
+  value["manager_enabled"] = current.enabled
+  value["on_demand_enabled"] = current.onDemand
+  value["include_all_networks"] = current.includeAllNetworks
+  value["connection_status"] = current.status
+  guard let initialReference = first.reference, !initialReference.isEmpty,
+        initialReference.count <= 4096, let reference = current.reference,
+        !reference.isEmpty, reference.count <= 4096 else { return value }
+  let consistent = initialReference == reference
+  value["reference_present"] = true
+  value["reference_consistent"] = consistent
+  value["reference_sha256"] = fingerprint(reference)
+  // NEVPNStatus.invalid=0 and .disconnected=1 are the two inactive states.
+  value["safe_off_snapshot"] = consistent && !current.enabled && !current.onDemand &&
+    current.includeAllNetworks && [0, 1].contains(current.status)
+  return value
+}
+// END OWNED_MANAGER_SAFETY_PURE
 
 final class AcceptanceWebDiagnosticsFactory: NSObject, FlutterPlatformViewFactory {
   static let channelName = "dev.tfox.flutterXrayExample/acceptanceWeb"
@@ -17,6 +79,7 @@ final class AcceptanceWebDiagnosticsFactory: NSObject, FlutterPlatformViewFactor
   private weak var current: AcceptanceWebDiagnosticsView?
   private let channel: FlutterMethodChannel
   private let session = UUID().uuidString
+  private var managerSafetyToken: UUID?
 
   init(registrar: FlutterPluginRegistrar) {
     self.registrar = registrar
@@ -41,6 +104,8 @@ final class AcceptanceWebDiagnosticsFactory: NSObject, FlutterPlatformViewFactor
         result(true)
       case "snapshot" where call.arguments == nil || call.arguments is NSNull:
         self.snapshot(result: result)
+      case "ownedManagerSafety" where call.arguments == nil || call.arguments is NSNull:
+        self.ownedManagerSafety(result: result)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -56,6 +121,58 @@ final class AcceptanceWebDiagnosticsFactory: NSObject, FlutterPlatformViewFactor
 
   private static func unavailable() -> FlutterError {
     FlutterError(code: "ACCEPTANCE_UNAVAILABLE", message: "Web acceptance unavailable.", details: nil)
+  }
+
+  private func ownedManagerSafety(result: @escaping FlutterResult) {
+    guard admitted else { result(Self.unavailable()); return }
+    let token = UUID()
+    let lease = AcceptanceOwnedManagerSafetyLease(
+      deadline: ProcessInfo.processInfo.systemUptime + 2,
+      clock: { ProcessInfo.processInfo.systemUptime })
+    managerSafetyToken = token
+    var timeout: DispatchWorkItem?
+    let finish: ([String: Any]?) -> Void = { [weak self] value in
+      let disposition = lease.finish(admitted: self?.admitted == true,
+                                     ownerMatches: self?.managerSafetyToken == token)
+      guard disposition != .ignore else { return }
+      timeout?.cancel()
+      timeout = nil
+      if self?.managerSafetyToken == token { self?.managerSafetyToken = nil }
+      guard disposition == .deliver, let value else { result(Self.unavailable()); return }
+      result(value)
+    }
+    // Both reads and their callbacks share this single deadline. No preference
+    // writes, secret reads, provider messages or network operations are used.
+    let deadlineWork = DispatchWorkItem { finish(nil) }
+    timeout = deadlineWork
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: deadlineWork)
+    let records: ([NETunnelProviderManager]) -> [AcceptanceOwnedManagerSafetyRecord] = { managers in
+      managers.compactMap { manager in
+        guard let configuration = manager.protocolConfiguration as? NETunnelProviderProtocol,
+              configuration.providerBundleIdentifier == "dev.tfox.flutterXrayExample.XrayTunnel" else { return nil }
+        return AcceptanceOwnedManagerSafetyRecord(
+          reference: configuration.providerConfiguration?["xrayConfigReference"] as? Data,
+          enabled: manager.isEnabled, onDemand: manager.isOnDemandEnabled,
+          includeAllNetworks: configuration.includeAllNetworks,
+          status: manager.connection.status.rawValue)
+      }
+    }
+    NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
+      DispatchQueue.main.async {
+        guard !lease.completed else { return }
+        guard let self, self.admitted, self.managerSafetyToken == token,
+              error == nil, let managers else { finish(nil); return }
+        let before = records(managers)
+        NETunnelProviderManager.loadAllFromPreferences { managers, error in
+          DispatchQueue.main.async {
+            guard !lease.completed else { return }
+            guard error == nil, let managers else { finish(nil); return }
+            finish(acceptanceOwnedManagerSafetyProjection(before: before, after: records(managers),
+              fingerprint: { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() }))
+          }
+        }
+      }
+    }
   }
 
   func create(withFrame frame: CGRect, viewIdentifier viewId: Int64,

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -87,6 +88,59 @@ void main() {
       );
     });
     expect(await captureAcceptanceOwnView(), 'acceptance-error');
+  });
+
+  test(
+    'owned-manager observer has no caller-selected provider or data',
+    () async {
+      messenger.setMockMethodCallHandler(acceptanceWebChannel, (call) async {
+        calls.add(call);
+        return {'schema': 1, 'owned_manager_count': 1};
+      });
+      final value =
+          jsonDecode(
+                await handleLiveAcceptanceRequest(
+                  'acceptance-owned-manager-safety',
+                ),
+              )
+              as Map;
+      expect(value['owned_manager_count'], 1);
+      expect(calls.single.method, 'ownedManagerSafety');
+      expect(calls.single.arguments, isNull);
+    },
+  );
+
+  test(
+    'owned-manager observer rejects failed admission and arbitrary suffixes',
+    () async {
+      messenger.setMockMethodCallHandler(acceptanceWebChannel, (call) async {
+        calls.add(call);
+        throw PlatformException(
+          code: 'ACCEPTANCE_UNAVAILABLE',
+          message: 'private canary',
+        );
+      });
+      expect(await captureAcceptanceOwnedManagerSafety(), 'acceptance-error');
+      expect(
+        await handleLiveAcceptanceRequest(
+          'acceptance-owned-manager-safety:foreign-provider',
+        ),
+        'acceptance-unsupported',
+      );
+      expect(calls.length, 1);
+    },
+  );
+
+  testWidgets('owned-manager observer stops awaiting a missing native answer', (
+    tester,
+  ) async {
+    messenger.setMockMethodCallHandler(
+      acceptanceWebChannel,
+      (_) => Completer<Object?>().future,
+    );
+    final pending = captureAcceptanceOwnedManagerSafety();
+    await tester.pump(const Duration(seconds: 4));
+    expect(await pending, 'acceptance-error');
   });
 
   testWidgets('Browser buttons pass only the two fixed target enums', (

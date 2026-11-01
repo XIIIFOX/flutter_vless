@@ -73,6 +73,10 @@ Future<String> handleLiveAcceptanceRequest(
     if (kReleaseMode) return 'acceptance-unsupported';
     return captureAcceptanceOwnView();
   }
+  if (request == 'acceptance-owned-manager-safety') {
+    if (kReleaseMode) return 'acceptance-unsupported';
+    return captureAcceptanceOwnedManagerSafety();
+  }
   if (request == 'acceptance-dns-probe') {
     if (kReleaseMode) return 'acceptance-unsupported';
     try {

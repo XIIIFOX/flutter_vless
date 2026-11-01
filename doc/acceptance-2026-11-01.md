@@ -206,6 +206,28 @@ Mac network snapshots unchanged. Unrelated project/MCP processes and the two
 pre-existing YAML edits are preserved. Final repository/process audit follows
 the final test and documentation commit.
 
+## Core31 bounded result — 2026-11-02
+
+The owner-approved amendment is implemented: native Core **26.10.31** is public
+for Android (Maven and GitHub), iOS, macOS and Windows. All active consumers in
+`main` use those releases. Package sources stay at **1.1.7**, example **1.1.7+117**;
+this stage publishes no Flutter package or plugin tag.
+
+| Boundary | Final result and explicit limits |
+| --- | --- |
+| Timeouts / import / 2ip / routing | Regression corrections and bounded failure checks pass. Physical iPhone public31 passes P1, P3 with nonempty SID and both ipify/tfox routing directions with fresh OFF/proxy controls. DIRECT-API uses explicit caller DNS. Current 2ip OFF shows its ordinary IP and no Loading text after 503→200, but remains an interactive partial page; canonical 2ip ON and current Safari are unqualified. All four Android official stock31 references reach TLS then time out, so current public Android routing is unqualified; P1/P3 are demonstrably live on iPhone. No expired-profile or plugin-fault cause is inferred. |
+| S3 / Google Drive | Controlled Core31 endpoint/auth/data/cancellation and owner-lifetime checks pass in the three-OS Core corpus. The actual published Android runtime also passes two fresh encrypted S3 sessions with exact payload/origin checks and zero final objects/connections. Real cloud accounts and a complete real Google relay remain outside this boundary. |
+| IPv6 / DNS64 / NAT64 / handover | Controlled runtime/address/resolver tests and actual Windows kernel IPv6/WFP controls pass. Devices' available network families are recorded; physical global IPv6, IPv6-only translation and mobile handover are unqualified. |
+| Config / protocol / transport | The representative shared corpus, actual TLS/SNI numeric routing, typed ECH/H3 controls and opaque JSON/import regression tests pass. This is finite coverage; active QUIC-SNI routing and the broader server-backed matrix remain follow-up work. |
+| Published bytes / platform Actions | Public assets and consumer pins are verified. Windows post-publication run41355175815 passes all six jobs on Windows2022/2025; Apple public-byte run41358204284 passes real iOS SDK runtime, both app builds and macOS protection/runtime/HEV checks. Native SDKs are not rebuilt or relabelled during public-byte acceptance. Live macOS VPN is excluded by the owner. |
+| Review / cleanup | Independent critics and root audits check source pins, 42 iPhone evidence files, both split results, Android public-AAR packaging provenance and exact S3 bytes/origin observations. Owned test VPNs and all local task workers/emulators/ADB/USB forwards/guards/servers/build groups are stopped; ordinary device internet is restored. The Mac VPN/network settings and the two pre-existing YAML edits are preserved. |
+
+The detailed source/run identities, native release links, checksums and harness
+RED→GREEN history are in [Core31 qualification](release/xray-v26.10.31-validation.md).
+[Work after this goal](release/xray-v26.10.31-plugin-followups.md) separates
+publication readiness from new-Core examples/tests and wider real-network
+acceptance. The explicit external limits above are not reported as live passes.
+
 The VMess field mapping follows the
 [v2rayN share-link specification](https://github.com/2dust/v2rayN/wiki/Description-of-VMess-share-link).
 S3's independent signature verifier uses the public

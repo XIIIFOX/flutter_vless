@@ -1,7 +1,9 @@
 # Native Core 26.10.31 qualification
 
-Flutter packages remain **1.1.7**; no plugin package or `v1.1.7` release is
-published. The owner's Mac VPN stays on. Live macOS VPN acceptance is excluded.
+Flutter package sources remain **1.1.7**. This stage publishes only native
+artifacts: no Flutter package or plugin `v1.1.7` release is published by this
+stage. Previously published implementation versions are a separate registry
+constraint. The owner's Mac VPN stays on; live macOS VPN acceptance is excluded.
 
 ## Published native bytes
 
@@ -51,20 +53,121 @@ caller socket policy is retained. Go 1.27.3, Root CA filtering and Apple H2BUF
   unchanged Flutter package versions. The legacy stock17 Android test-input
   fixture remains explicitly historical; its old bodies are not relabelled.
 
-## Post-publication acceptance in progress
+## Post-publication acceptance
 
 The public-byte Windows workflow mode installs the fixed released ZIP and
 manifest, checks hashes and executes version/capabilities before the full
 existing native/example/VPN matrix; it skips rebuilding and packaging Core.
-The corresponding fresh Actions run and public Apple runtime checks are
-pending the consumer commit.
+[Windows post-publication run 41355175815](https://github.com/XIIIFOX/flutter_vless/actions/runs/41355175815)
+at `d0ea97552858ed8234b69d050c142b9ce0283837` passes all six Windows 2022/2025
+jobs using the fixed public PE, with all Core build/package steps skipped.
+Both compiled examples retain the exact public executable. Each OS passes
+189 VPN, 21 proxy and 21 portable checks; numeric IPv6 uses actual kernel
+sockets with wrong-address/image controls and zero final filters/routes/helpers.
+Source bindings and all six downloaded artifact ZIP digests were verified.
 
-Physical iPhone and VPN-compatible local Android emulator checks on the new
-published runtimes are pending. Earlier 26.10.29 device passes are not inherited
-as 26.10.31 passes. Both split directions need current OFF/reference controls;
-external 2ip Loading and unhealthy peer references must remain explicit limits.
+[Apple post-publication run 41358204284](https://github.com/XIIIFOX/flutter_vless/actions/runs/41358204284)
+at `14360cc` installs the checksum-pinned public iOS/macOS SDKs and skips both
+preview rebuilds. The full runtime/bridge/example checks and final exact-tree
+check pass: actual iOS simulator SDK, both example builds, macOS protection and
+runtime/HEV checks all succeed. The earlier cancelled build-mode run is not
+counted as public-byte acceptance.
 
-Final device results, cleanup and the concrete remaining plugin-release work
-will be added after these checks. Full accounts, physical IPv6-only/NAT64 and
-handover conditions are separate from controlled fixtures. No native Core/SDK
-is executed on the owner's Mac for this stage.
+The downloaded final evidence ZIP matches GitHub's artifact digest. Each SDK
+passes 12 runtime modes, two-generation domain routing/owned drain and three
+DNS-over-HTTP/SOCKS owner generations; runtime skips and hidden thread exceptions
+are zero. Both public framework trees remain unchanged (15 iOS, 8 macOS files),
+with 64 producer/current source bindings per platform. The 255 iOS and 269 macOS
+Swift tests pass apart from one pre-existing opt-in encrypted-bootstrap endpoint
+skip per platform. The macOS HEV test exchanges 8 MiB duplex data and IPv6 TCP/UDP
+with clean shutdown. iOS HEV coverage in this workflow is compile/link only;
+physical iPhone VPN acceptance is recorded separately below.
+
+The preceding [setup failure 41356744495](https://github.com/XIIIFOX/flutter_vless/actions/runs/41356744495)
+verified the fixed public ZIP and manifest, then could not read the historical
+producer source from a shallow checkout. No runtime test had run. The fix
+fetches that single immutable producer commit before the existing complete
+source checks. A real shallow local Git fixture reproduces failure before the
+fetch and source-binding success afterwards; nine SDK-selection tests pass.
+The iPhone development-only safety observer also has a monotonic two-second
+bound, single-owner/reference checks and read-only output. Its late-callback
+failure was reproduced before correction and independently reviewed.
+
+The [next setup run 41357218312](https://github.com/XIIIFOX/flutter_vless/actions/runs/41357218312)
+passes public installation and source checks, then rejects synthetic qualifier
+logs because a job-wide runtime capability requirement leaked into those
+fixtures. The corrected workflow scopes that requirement to the two real SDK
+runtime steps. Nine workflow/selection guards and forty original qualifier
+mock tests pass; actual public runtime capability checks remain strict. Neither
+setup failure is claimed as a Core runtime defect or a successful runtime test.
+
+The VPN-compatible local Android emulator runs the fresh example with the
+public `26.10.31-protect1` AAR. Installed native version/capabilities and APK/Core
+hashes match the public consumer, and ordinary Chrome IP APIs have a matching
+healthy baseline. Each of the four owner profiles failed a single independent
+unmodified official Core31 control on the same guest network: TLS timed out
+without origin bytes. Their real-public two-direction routing is therefore
+**unqualified**; no expiry, MPTCP or plugin-defect cause is asserted. Actual
+example URI import succeeds, and its profile-delay failure completes in
+5,167 ms with its child drained. Public peer work stops before the iPhone starts.
+
+Two fresh actual example/Core31 S3 sessions pass: each forces SOCKS through a
+sole encrypted VLESS/XDRIVE outbound, sends 43,008 nonce-bound binary bytes and
+receives the exact 43,021-byte response. The independent origin records both
+requests. Signature, request and handler failures remain zero; objects and
+active connections are zero after server close. Notifications, UI Stop,
+fullStop acknowledgement and ordinary recovery pass. All owned Android
+processes, emulator, ADB, forwards, servers and guards are stopped; the four
+Mac network snapshots remain byte-identical.
+
+An independent audit reproduces the normal NDK r28c packaging transformation:
+the public AAR's ARM64 Core hash `192026d9…` becomes APK/installed/live
+`69024103…` under the pinned `llvm-strip --strip-unneeded` tool. The APK is
+`5c41ae21…`; exact public AAR, transformed member, installed bytes, live
+`/proc/PID/exe`, both payload hashes and origin observations agree. Raw AAR and
+packaged ELF hashes are not falsely required to be identical. No Core code is
+built or executed on the Mac. The first private S3 observer attempt correctly
+rejected its stale 26.10.29 expected hash before payload; its strict predicate
+was retained and the expected identity bound to the qualified current product.
+
+The physical iPhone uses a fresh signed `af9387b` example with the exact public
+iOS SDK31. The UIKit/NetworkExtension observer compiles in the full app. A
+fresh read-only two-read observation confirms exactly one owned disabled
+profile, a consistent nonempty reference, no On Demand and disconnected status.
+The required in-session forwarding protection remains enabled; it is not
+misreported as disabled. The test-only 110-second device backup deadline is
+compiled in with its actual branch prerequisites checked; its expiry is not
+exercised. Every live case explicitly stops before 42 seconds, with a separately
+armed 75-second host guard normally cancelled and reaped. The fresh
+own-WKWebView OFF baseline loads tfox and ipify completely with the same ordinary address. Canonical 2ip
+first reports 503, then 200 and a visible IP with no Loading text; its six-second
+snapshot is still `interactive`, so this is partial page evidence rather than
+a complete load. Canonical 2ip over VPN is not qualified by these observations.
+No fresh Safari result is inferred from an open-URL callback or a stale mirror. The current P1 all-proxy reference loads both services
+completely with the same proxy address, distinct from the fresh ordinary address. Both split directions
+also pass within separate guarded sessions:
+
+* Default PROXY, ipify DIRECT: the explicit caller per-domain DIRECT numeric
+  DoH recipe and retained UDP/443 block produce ordinary ipify and proxy tfox.
+* Default DIRECT, ipify PROXY: caller DNS is absent; ipify uses the qualified
+  proxy address while tfox retains the ordinary address.
+
+Both pages return HTTP 200 with complete DOM in each case. FullStop is
+acknowledged at about 41 seconds, the host guard is reaped, and the profile is
+disabled/disconnected with a consistent reference after each case. A fourth
+all-proxy case on P3 with a nonempty Reality Short ID also passes.
+Every post-Stop recovery pair returns complete HTTP 200 documents with the same
+ordinary address. Final inspection confirms exactly one owned disabled profile,
+consistent reference, On Demand/reconnect/quick access off, no authorized quick
+reference and no owned provider process. App/control extension, USB forward,
+guards and build groups are stopped. An independent root audit checks 42
+referenced files, all eight native PNG bindings, both IP splits, source/product
+identity and final disabled status. These are fresh31 results; earlier
+26.10.29 passes are not inherited.
+
+Device acceptance, teardown and final Apple Actions results are recorded above.
+The bounded goal closes with named external limits, rather than a claim of
+universal configuration or plugin-publication readiness. [Remaining plugin and new-Core work](xray-v26.10.31-plugin-followups.md)
+separates publication review from wider feature coverage. Real cloud accounts,
+physical IPv6-only/NAT64 and handover conditions remain separate from controlled
+fixtures. No native Core/SDK is executed on the owner's Mac for this stage.

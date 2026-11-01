@@ -13,6 +13,7 @@ from package_apple_core_preview import (EXPORTS, XDRIVE_PATCH, GEODATA_PATCH, di
                                        require_managed_lifetimes, safe_name, tree)
 
 ROOT = Path(__file__).resolve().parents[1]
+CORE_COMMIT = 'a4a3dff5b20c2faae567b742c172c7b95e75c083'
 
 
 def output(command, root):
@@ -29,6 +30,8 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
     report = json.loads(preparation.read_text())
     preparation_sha = digest(preparation)
     pin = json.loads((repository/'third_party/xray-vpn-routing/pin-manifest.json').read_text())
+    if pin.get('core_commit') != CORE_COMMIT:
+        raise ValueError('Canonical release Core commit differs')
     for field, key in [('module', 'module'), ('version', 'module_version'), ('sum', 'module_sum'), ('core_commit', 'core_commit')]:
         if report.get(field) != pin[key]:
             raise ValueError('Canonical Core pin differs')
@@ -144,7 +147,7 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
                    [('core_source', 'module_cache_before_sha256'), ('replacement', 'core_copy_sha256')]):
         raise ValueError('Framework changed during packaging')
     git_bindings(repository, head, sources)
-    manifest = {'success': True, 'platform': platform, 'head': head, 'release_version': '26.10.29', 'runtime_revision': 'r3',
+    manifest = {'success': True, 'platform': platform, 'head': head, 'release_version': '26.10.31', 'runtime_revision': 'r1',
                 'core_commit': pin['core_commit'], 'core_version': pin['module_version'], 'core_sum': pin['module_sum'],
                 'archive': archive.name, 'archive_sha256': digest(archive), 'framework_sha256': files,
                 'architectures': architectures, 'strong_exports': symbols, 'source_sha256': sources,

@@ -12,7 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from package_apple_core_preview import digest, git_bindings
 
 ROOT = Path(__file__).resolve().parents[2]
-REVISION = '26.10.29-r3'
+REVISION = '26.10.31-r1'
+CORE_COMMIT = 'a4a3dff5b20c2faae567b742c172c7b95e75c083'
 
 
 def capabilities(executable):
@@ -34,6 +35,8 @@ def package(directory, producer_path, destination, head, repository=ROOT):
     if destination.exists() or destination.is_symlink() or producer_path.is_symlink():
         raise ValueError('A new package output and regular producer receipt are required')
     producer = json.loads(producer_path.read_text())
+    if producer.get('core_commit') != CORE_COMMIT:
+        raise ValueError('Managed release Core commit differs')
     producer_digest = digest(producer_path)
     required = ('success', 'source_snapshot_unchanged', 'module_cache_source_unchanged',
                 'core_copy_unchanged', 'mobile_copy_unchanged', 'xdrive_lifetime_applied', 'geodata_lifetime_applied')
@@ -85,7 +88,7 @@ def package(directory, producer_path, destination, head, repository=ROOT):
         raise ValueError('Windows producer changed during packaging')
     git_bindings(repository, head, sources)
     manifest = dict(success=True, head=head, platform='windows-amd64', runtime_revision=REVISION,
-                    core='26.10.29', producer_sha256=digest(producer_path),
+                    core='26.10.31', core_commit=producer['core_commit'], producer_sha256=digest(producer_path),
                     acceptance_sha256=digest(directory/'proxy-results.json'),
                     capabilities=actual_capabilities, source_sha256=sources,
                     archive=archive.name, archive_sha256=digest(archive), files_sha256=hashes,

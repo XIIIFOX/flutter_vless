@@ -33,6 +33,7 @@ class Packaging(unittest.TestCase):
                            core_copy_unchanged=True, mobile_copy_unchanged=True, xdrive_lifetime_applied=True,
                            geodata_lifetime_applied=True, tags='flutter_vless_vpn_routing_cli,flutter_vless_vpn_routing,flutter_vless_managed_service_lifetimes',
                            goos='windows', goarch='amd64', artifact_sha256=subject.digest(self.runtime/'xray.exe'),
+                           core_commit='a4a3dff5b20c2faae567b742c172c7b95e75c083',
                            input_sha256={'fixture.py':'a'*64})
         self.producer = self.root/'producer.json'
         self.producer.write_text(json.dumps(self.report))
@@ -49,7 +50,9 @@ class Packaging(unittest.TestCase):
     def test_exact_core_and_full_geodata_archive(self):
         value = self.package()
         self.assertTrue(value['success']); self.assertFalse(value['published'])
-        self.assertEqual(value['runtime_revision'], '26.10.29-r3')
+        self.assertEqual(value['runtime_revision'], '26.10.31-r1')
+        self.assertEqual(value['core'], '26.10.31')
+        self.assertEqual(value['core_commit'], self.report['core_commit'])
         with zipfile.ZipFile(self.output/value['archive']) as packed:
             self.assertEqual(set(packed.namelist()), {'xray.exe','geoip.dat','geosite.dat','LICENSE.xray-core'})
             for name in ('xray.exe','geoip.dat','geosite.dat'): self.assertEqual(packed.read(name), (self.runtime/name).read_bytes())
@@ -57,6 +60,12 @@ class Packaging(unittest.TestCase):
     def test_old_body_cannot_be_relabelled(self):
         (self.runtime/'xray.exe').write_bytes(b'old body')
         with self.assertRaisesRegex(ValueError, 'executable differs'): self.package()
+        self.assertFalse(self.output.exists())
+
+    def test_old_core_producer_cannot_be_relabelled(self):
+        self.report['core_commit'] = '0afec66085a85191e9dd2a4a6646c7c9a94688d1'
+        with self.assertRaisesRegex(ValueError, 'release Core commit'):
+            self.package()
         self.assertFalse(self.output.exists())
 
     def test_missing_managed_source_gate_refuses_before_packaging(self):

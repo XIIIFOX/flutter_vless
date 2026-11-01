@@ -22,7 +22,7 @@ import package_android_runtime_preview as package
 HEAD = 'a' * 40
 
 
-def elf(abi, tag=b'fresh H3 v26.10.29'):
+def elf(abi, tag=b'fresh H3 v26.10.31'):
     wide, machine = {'arm64-v8a': (True, 183), 'armeabi-v7a': (False, 40),
                      'x86': (False, 3), 'x86_64': (True, 62)}[abi]
     data = bytearray(160)
@@ -43,11 +43,16 @@ def elf(abi, tag=b'fresh H3 v26.10.29'):
 
 class AndroidPreviewControls(unittest.TestCase):
     def test_active_final_producer_version_and_all_entry_defaults_match(self):
-        self.assertEqual(builder.RELEASE_VERSION, '26.10.29-protect3')
+        self.assertEqual(builder.CORE_TAG, 'v26.10.31')
+        self.assertEqual(builder.RELEASE_VERSION, '26.10.31-protect1')
+        self.assertEqual(builder.preview_version(HEAD), '26.10.31-h3-preview.' + HEAD[:12])
         for name in ('tool/build_android_runtime_maven.sh', 'tool/publish_android_runtime_maven.sh', '.github/workflows/publish-android-runtime.yml'):
             source = (builder.ROOT / name).read_text()
-            self.assertIn('26.10.29-protect3', source, name)
-            self.assertNotIn('26.10.29-protect2', source, name)
+            self.assertIn('26.10.31-protect1', source, name)
+            self.assertNotIn('26.10.29-protect3', source, name)
+        build = (builder.ROOT / 'packages/flutter_vless_android/android/build_xray.sh').read_text()
+        self.assertIn('XRAY_VERSION="${XRAY_VERSION:-v26.10.31}"', build)
+        self.assertIn('if [ "$XRAY_VERSION" != "v26.10.31" ]; then', build)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -70,7 +75,7 @@ class AndroidPreviewControls(unittest.TestCase):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(('synthetic source: ' + name).encode())
-        self.pin = {'module': 'fixture.core', 'module_version': 'v26.10.29', 'module_sum': 'h1:fixture',
+        self.pin = {'module': 'fixture.core', 'module_version': 'v26.10.31', 'module_sum': 'h1:fixture',
                     'core_commit': 'fixture-commit'}
         (self.root / 'third_party/xray-vpn-routing/pin-manifest.json').write_text(json.dumps(self.pin))
         pins = {}
@@ -197,7 +202,7 @@ class AndroidPreviewControls(unittest.TestCase):
 
     def release_fixture(self):
         old_version = self.version
-        self.version = '26.10.29-protect3'
+        self.version = '26.10.31-protect1'
         new_core = self.root / 'build/security-android-routing.fixture/Core'
         shutil.copytree(self.core, new_core)
         self.core = new_core
@@ -238,7 +243,7 @@ class AndroidPreviewControls(unittest.TestCase):
     def test_final_release_requires_routing_and_signing_byte_provenance(self):
         self.release_fixture()
         checked = self.validate_release()
-        self.assertEqual('26.10.29-protect3', checked['version'])
+        self.assertEqual('26.10.31-protect1', checked['version'])
         self.assertEqual(1, checked['routing_capability_expected'])
         self.assertEqual(8, len(checked['signed_artifacts_sha256']))
 
@@ -293,7 +298,7 @@ class AndroidPreviewControls(unittest.TestCase):
         self.assertNotIn('SIGNING_IN_MEMORY_KEY', commands[0][2])
         self.assertEqual('synthetic-private-signing-key', commands[1][2]['SIGNING_IN_MEMORY_KEY'])
         self.assertNotIn('synthetic-private-signing-key', json.dumps(result))
-        self.assertEqual('26.10.29-protect3', result['version'])
+        self.assertEqual('26.10.31-protect1', result['version'])
 
     def test_final_release_central_bundle_roundtrip_and_corruption_rejected(self):
         self.release_fixture()

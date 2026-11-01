@@ -22,6 +22,9 @@ class CanonicalPackageTests(unittest.TestCase):
             p.mkdir(parents=True); (p/'go.mod').write_text('inert pinned source')
         self.pin = {'module': 'fixture.invalid/core', 'module_version': 'v1.0.0',
                     'module_sum': 'h1:fixture', 'core_commit': 'b'*40}
+        expected_commit = patch.object(builder, 'CORE_COMMIT', self.pin['core_commit'], create=True)
+        expected_commit.start()
+        self.addCleanup(expected_commit.stop)
         self.report = {'module': self.pin['module'], 'version': self.pin['module_version'],
                        'sum': self.pin['module_sum'], 'core_commit': self.pin['core_commit'],
                        'success': True, 'stage': 'post-build-verified', 'h3_lifetime_applied': True,
@@ -101,9 +104,19 @@ class CanonicalPackageTests(unittest.TestCase):
             with self.subTest(platform=platform):
                 result=self.run_package(platform,self.framework(platform))
                 self.assertFalse(result['published'])
+                self.assertEqual(result['release_version'], '26.10.31')
+                self.assertEqual(result['runtime_revision'], 'r1')
                 self.assertEqual(result['go_version'],'go1.27.3')
                 self.assertEqual(len(result['strong_exports']),3 if platform=='ios' else 2)
                 self.assertEqual(result['archive_sha256'],builder.digest(self.root/('packed-'+platform)/'XRay.xcframework.zip'))
+
+    def test_matching_old_pin_and_producer_cannot_relabel_the_release(self):
+        self.pin['core_commit'] = 'c'*40
+        self.report['core_commit'] = self.pin['core_commit']
+        (self.root/'third_party/xray-vpn-routing/pin-manifest.json').write_text(json.dumps(self.pin))
+        with self.assertRaisesRegex(ValueError, 'release Core commit'):
+            self.run_package('ios', self.framework('ios'))
+        self.assertFalse((self.root/'packed-ios').exists())
 
     def test_old_CA_toolchain_wrong_capability_or_h2buf_refused(self):
         framework=self.framework('ios');original=copy.deepcopy(self.report)

@@ -14,7 +14,13 @@ def replace(path, old, new, count=1):
         raise SystemExit(f"Unexpected Xray source in {path}; review overlay before building")
     target.write_text(text.replace(old, new))
 
-# v26.10.29 propagates controller failures in both upstream dial paths. UDP
+# v26.10.31 disables MPTCP in the shared listener while preserving explicit
+# caller socket policy. Protection must not remove either library/CLI boundary.
+listener_source = (root / "transport/internet/system_listener.go").read_text()
+if listener_source.count('lc.SetMultipathTCP(false)') != 1 or listener_source.count('lc.SetMultipathTCP(sockopt.TcpMptcp)') != 1:
+    raise SystemExit("Unexpected Xray MPTCP listener policy; review overlay before building")
+
+# v26.10.31 propagates controller failures in both upstream dial paths. UDP
 # passes the resolved destination rather than the local listen address. Our
 # controller protects/binds the actual FD and does not trust either address.
 # Keep a strict source check so an upstream regression cannot bypass protection.

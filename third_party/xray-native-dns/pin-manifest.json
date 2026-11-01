@@ -1,10 +1,10 @@
 {
-  "core_commit": "0afec66085a85191e9dd2a4a6646c7c9a94688d1",
+  "core_commit": "a4a3dff5b20c2faae567b742c172c7b95e75c083",
   "upstream_sha256": {
     "transport/internet/dialer.go": "ed2825ff30a2bfdfacf8681cd1af81d96179103ccff0a0b0b42f4ea64db451d4",
     "app/proxyman/outbound/handler.go": "77d3085a461b30a6a4d25273ba1487c9715655e1a6cfeafe17d6df0605f2c453",
     "proxy/freedom/freedom.go": "9bc955f366bedfceee7d5030d285c417768453b18f54f8286c68fea19a2b7857",
-    "go.mod": "73a9a9f2fa2869497c9b5014625dcf05136d1f21b7dff5256753510bd3f708d2",
+    "go.mod": "ad8701ad59ba44b28c4c8adf924271e0df9c8b0a854662cfda9a61996a42d882",
     "features/dns/localdns/client.go": "61a5b767c70295dafae039c4d38eced4d8dbcb548ddcbde748c19b122b86e7ad",
     "app/dns/nameserver_local.go": "5c7128ace2ee1e1acc5fa7da1d6583ded130749601891052c6928ee2d040bd77",
     "app/dns/nameserver.go": "ed7a8438714e9e3a2f84e164aa5719e6ab948afe01a49ce71e8767b71ed2ee68",
@@ -39,11 +39,12 @@
     "transport/internet/xdrive/s3.go": "607e95246f885f784e172551ef70c8645ec775e0d00840f3daac2b852a1f1a18",
     "transport/internet/xdrive/storage.go": "d412258786f154d3e81fb3f5ca3c913d92011806fc6fbff5b68804865db19c33",
     "app/geodata/geodata.go": "61b6b4eb9382294ea944393dc7e58a9220c0dc2c3565d6a993ac80aef896125b",
-    "app/geodata/download.go": "38f04dc2d612bc332db5e8068b12fe685f90edcbdaa60ece58417691dbbd76aa"
+    "app/geodata/download.go": "dc0d012390d3876298f1647e0f039f43a28ad4242b27dcc4b17136123d0b38ec",
+    "transport/internet/system_listener.go": "b822d00bb6c6538e96c969db05b1e970f40bf7f0908299dbde1b4b6f9b201e4e"
   },
   "module": "github.com/xtls/xray-core",
-  "module_version": "v1.260327.1-0.20261029083850-0afec66085a8",
-  "module_sum": "h1:EZzaOZYkWkLLEdwYKzCOck7s15y1sspw/b98ChzCA0I=",
+  "module_version": "v1.260327.1-0.20261031132019-a4a3dff5b20c",
+  "module_sum": "h1:XijTasBJ2fImHZo1GoAgSfHuDqloQGYHEADLy9CgrJ8=",
   "capability": "native-dns-context-preview-1",
   "published": false
 }

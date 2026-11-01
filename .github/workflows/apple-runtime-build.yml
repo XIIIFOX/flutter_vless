@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   runtime:
-    name: Canonical ${{ matrix.platform }} Xray 26.10.29
+    name: Canonical ${{ matrix.platform }} Xray 26.10.31
     runs-on: macos-latest
     timeout-minutes: 45
     strategy:
@@ -74,7 +74,7 @@ jobs:
             --output "build/apple-runtime-artifact/$PLATFORM" --head "$GITHUB_SHA"
       - uses: actions/upload-artifact@v4
         with:
-          name: xray-${{ matrix.platform }}-v26.10.29-${{ github.sha }}-${{ github.run_id }}
+          name: xray-${{ matrix.platform }}-v26.10.31-${{ github.sha }}-${{ github.run_id }}
           path: |
             build/apple-runtime-artifact/${{ matrix.platform }}/XRay.xcframework.zip
             build/apple-runtime-artifact/${{ matrix.platform }}/manifest.json

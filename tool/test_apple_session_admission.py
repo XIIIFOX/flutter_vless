@@ -140,7 +140,7 @@ def main():
         'platform': args.platform, 'provider_sha256': hashlib.sha256(source.encode()).hexdigest(),
         'gate_sha256': hashlib.sha256(gate).hexdigest(),
         'endpoint_plan_sha256': hashlib.sha256(plan_source).hexdigest(),
-        'clock_boundary': 'Task.sleep replaced by deterministic inert FixtureSleep only',
+        'clock_boundary': 'Production Task.sleep replaced by inert FixtureSleep; fixture callback/wait bounds use monotonic elapsed time',
         'fixture_sha256': hashlib.sha256(fixture_source.encode()).hexdigest(),
         'budget_sha256': hashlib.sha256(budget_source).hexdigest(),
         'native_boundaries': 'in-memory-only', 'passed': True}, indent=2) + '\n')

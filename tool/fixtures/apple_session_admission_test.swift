@@ -224,6 +224,7 @@ final class FixtureProvider: @unchecked Sendable {
         httpHealthChecks += 1; return "ok"
     }
     var originalPreparationInputs: [Data] = []
+    var preparationEntered: DispatchSemaphore?
     var preparationHook: (() async throws -> Void)?
     var preflightHook: (() throws -> Void)?
     var settingsHook: (() async throws -> Void)?
@@ -233,6 +234,7 @@ final class FixtureProvider: @unchecked Sendable {
     var preparationAddresses = ["192.0.2.1"]
     func prepareEndpointConfig(_ source: RuntimeSource, token: TunnelEndpointPlanAdmission.Token, path: TunnelEndpointPath, attempt: UInt64) async throws -> TunnelPreparedConfig {
         originalPreparationInputs.append(source.config)
+        preparationEntered?.signal()
         try await preparationHook?()
         if rejectPreparation { throw SyntheticFailure.core }
         guard sessionAdmission.isCurrent(source.epoch), endpointAdmission.isCurrent(token) else { throw CancellationError() }
@@ -286,13 +288,17 @@ final class FixtureProvider: @unchecked Sendable {
         }
         precondition(predicate(), "bounded fake callback did not arrive")
     }
-    func flushAsync() async {
-        for _ in 0..<1000 {
+    func flushAsync(stage: String = "asynchronous transition") async {
+        let deadline = ProcessInfo.processInfo.systemUptime + 2
+        while ProcessInfo.processInfo.systemUptime < deadline {
             watchdogQueue.sync {}; runtimeQueue.sync {}; watchdogQueue.sync {}
-            await Task.yield()
             if watchdogQueue.sync(execute: { !runtimeRecoveryInFlight }) { return }
+            do { try await Task.sleep(nanoseconds: 2_000_000) }
+            catch { preconditionFailure("fixture callback wait cancelled: \(stage)") }
         }
-        precondition(!runtimeRecoveryInFlight, "bounded asynchronous transition did not settle")
+        let settled = watchdogQueue.sync { !runtimeRecoveryInFlight }
+        if !settled { print("FAIL bounded fixture callback wait: \(stage)") }
+        precondition(settled, "bounded asynchronous transition did not settle: \(stage)")
     }
     func flush() {
         for _ in 0..<200 {
@@ -736,17 +742,32 @@ final class FixtureProvider: @unchecked Sendable {
         await staleDrain.stop()
         print("PASS superseded drain completion installs no obsolete settings or native runtime")
 
+        print("CHECK ordered settings: initial recovery")
         let ordered = FixtureProvider(), orderedSpec = ordered.begin(options: FixtureOptions(retries: 3))
         ordered.recover(orderedSpec.epoch); ordered.flush()
         let settingsGate = FixtureAsyncGate()
-        ordered.settingsHook = { await settingsGate.wait() }
+        let delayedSettingsCompleted = DispatchSemaphore(value: 0)
+        // A valid asynchronous callback can take longer than 1000 Task.yield
+        // iterations. Keep this finite delay to exercise elapsed-time waiting.
+        ordered.settingsHook = {
+            await settingsGate.wait()
+            try await Task.sleep(nanoseconds: 500_000_000)
+            delayedSettingsCompleted.signal()
+        }
         ordered.watchdogQueue.sync { ordered.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: orderedSpec.epoch) }
+        print("CHECK ordered settings: first callback entry")
         precondition(settingsGate.entered.wait(timeout: .now() + 3) == .success)
         ordered.settingsHook = nil
+        let secondPreparationEntered = DispatchSemaphore(value: 0)
+        ordered.preparationEntered = secondPreparationEntered
         ordered.watchdogQueue.sync { ordered.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 3), epoch: orderedSpec.epoch) }
-        ordered.waitUntil { ordered.originalPreparationInputs.count == 2 }
+        print("CHECK ordered settings: second preparation entry")
+        precondition(secondPreparationEntered.wait(timeout: .now() + 3) == .success)
+        precondition(ordered.originalPreparationInputs.count == 2)
         precondition(ordered.settingGenerations.count == 1 && ordered.coreStarts == 1 && !ordered.isForwardingReady(), "new settings overtook pending callback")
-        settingsGate.release(); await ordered.flushAsync()
+        print("CHECK ordered settings: callback release and FIFO completion")
+        settingsGate.release(); await ordered.flushAsync(stage: "ordered settings FIFO")
+        precondition(delayedSettingsCompleted.wait(timeout: .now()) == .success, "bounded delayed callback was cancelled instead of completed")
         precondition(ordered.settingGenerations.count == 2 && ordered.settingGenerations[0] < ordered.settingGenerations[1], "settings FIFO generations")
         precondition(ordered.coreStarts == 2 && ordered.runtimeSpec?.path.interfaceIndex == 3 && ordered.isForwardingReady())
         await ordered.stop()

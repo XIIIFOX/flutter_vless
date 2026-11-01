@@ -4,6 +4,19 @@ Work stays on `main`, with Flutter packages at `1.1.7`. No pub.dev/plugin
 publication or live macOS VPN session is part of this stage. The owner's Mac
 VPN and unrelated working files/processes must remain untouched.
 
+## Scope amendment: native Core 26.10.31
+
+The owner explicitly added the 26.10.31 upgrade to this active goal. Completion
+now also requires new immutable Android Maven/GitHub, iOS, macOS and Windows
+native releases from the official pinned source; exact source/archive/ABI and
+capability checks; public-byte verification before changing default consumers
+in `main`; then current-version routing/compatibility checks in Actions and
+available mobile devices. Old native releases remain unchanged. The Flutter
+packages stay at `1.1.7` and are not published. Live macOS VPN testing remains
+outside this goal; the owner's Mac VPN stays on. Finish with a separate list
+of verified upstream features needing further plugin work, clearly separating
+implemented support from remaining external acceptance and wider coverage.
+
 | Item | Completion boundary | Evidence still required at the start |
 | --- | --- | --- |
 | 2ip Loading and supplied-profile timeouts | Reproduce with independent OFF/reference controls; correct confirmed plugin defects with a failing test first; report external site/peer failures separately | Healthy iPhone OFF baseline, both split directions, independent Core/endpoint comparison for Android profiles 2/3 |
@@ -80,6 +93,37 @@ typed connection-abort handling. A separate no-DNS trap exposed the Python
 HTTP server's unnecessary numeric-loopback reverse lookup, now removed. That
 change is not claimed as the proven cause of the old macOS timeout.
 
+Inline ECH is a separate TLS boundary from QUIC-SNI routing. The new controlled
+fixture uses Core's TLS configuration/client with an owned CA and TLS 1.3 peer;
+it requires ECH acceptance, the exact inner name and nonce echo on both ends.
+Wrong ECH keys and an unrelated CA must fail with their specific typed errors
+and no application bytes. It does not qualify a whole VPN/ECH deployment.
+Source-only preparation controls preserve active inline ECH and dormant remote
+ECH on iOS/Windows. Apple rejects active remote ECH-list fetching; Windows
+primary TLS admits it while its penetrating-download path rejects it. Android
+has no equivalent blanket ECH gate. Admission alone does not prove remote
+fetching works or meets protected-path requirements on any platform.
+
+The later [CI 41343603926](https://github.com/XIIIFOX/flutter_vless/actions/runs/41343603926)
+qualified all three ECH controls on all runners but was not green overall.
+Windows recorded an untyped S3 handler exception after successful relay data;
+its historical type remains unknown. Separate actual-HTTP RED controls exposed
+missing abort classification and an overly broad shutdown `OSError` fallback.
+The fixture now records sanitized type/errno, accepts only defined socket
+disconnect/closed-descriptor cases and keeps permission/I/O faults fatal during
+shutdown. Twelve real HTTP tests include admitted workers and steady trickles.
+macOS hit a five-second SOCKS-read setup deadline before an exact H3 certificate
+rejection was established or `Core.Close` ran. Failure-only diagnostics now
+capture that earlier boundary; no Core patch, deadline or success criterion was
+changed. The [next run, 41345182409](https://github.com/XIIIFOX/flutter_vless/actions/runs/41345182409)
+reports successful Windows/macOS jobs and passes 532 Dart/Flutter tests. Strict
+log review nevertheless catches uncaught Windows selector exceptions in the
+new closing-state test: it closed the server before stopping its accept loop.
+That teardown result is not accepted merely because unittest printed `OK`.
+The test now follows shutdown-before-close and explicitly checks owned-thread
+exceptions. No production Core behavior changes for this harness correction.
+A passing repeat also does not establish the cause of the earlier H3 timeout.
+
 ## Physical iPhone and Android emulator
 
 The physical iPhone uses the public Apple `26.10.29-r3` SDK in a signed
@@ -146,6 +190,9 @@ readiness. The remaining work is explicit:
 * Actual S3/Google accounts, cloud quotas and a complete Google relay; real
   IPv6-only/DNS64/NAT64 and physical handover; active QUIC-SNI routing and a
   broader server-backed protocol matrix. Controlled tests do not replace them.
+* Wider configuration compatibility still includes scoped Apple root `env`
+  support and active remote ECH fetching under a protected, bounded resolver
+  policy. Existing explicit admission limits are not universal config support.
 * Live macOS VPN acceptance only when the owner schedules interruption of the
   existing VPN. Windows/macOS Actions are controlled runner acceptance.
 * Resolve occupied Android/macOS/Windows implementation-package versions and

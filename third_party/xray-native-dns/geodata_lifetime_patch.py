@@ -8,7 +8,7 @@ import hashlib
 
 UPSTREAM_SHA256 = {
     'app/geodata/geodata.go': '61b6b4eb9382294ea944393dc7e58a9220c0dc2c3565d6a993ac80aef896125b',
-    'app/geodata/download.go': '38f04dc2d612bc332db5e8068b12fe685f90edcbdaa60ece58417691dbbd76aa',
+    'app/geodata/download.go': 'dc0d012390d3876298f1647e0f039f43a28ad4242b27dcc4b17136123d0b38ec',
 }
 PATHS = tuple(UPSTREAM_SHA256)
 

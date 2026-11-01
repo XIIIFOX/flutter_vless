@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -19,11 +21,47 @@ spec.loader.exec_module(builder)
 
 
 class ReviewedModuleGraphTest(unittest.TestCase):
+    def test_android_protection_refuses_lost_listener_security_policy_before_writing(self):
+        relative = Path('transport/internet/system_listener.go')
+        original = (ROOT / 'tool/fixtures/xray_core_v26.10.31.system_listener.go').read_text()
+        for before, after in [('lc.SetMultipathTCP(false)', 'lc.SetMultipathTCP(true)'),
+                              ('lc.SetMultipathTCP(sockopt.TcpMptcp)', 'lc.SetMultipathTCP(false)')]:
+            with self.subTest(policy=before), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                listener = root / relative
+                listener.parent.mkdir(parents=True)
+                data = original.replace(before, after)
+                self.assertNotEqual(data, original)
+                listener.write_text(data)
+                result = subprocess.run([sys.executable, str(ROOT / 'packages/flutter_vless_android/android/xray-protect/apply.py'), str(root)],
+                    capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Unexpected Xray MPTCP listener policy', result.stderr)
+                self.assertEqual(listener.read_text(), data)
+                self.assertEqual([path for path in root.rglob('*') if path.is_file()], [listener])
+
+    def test_shared_core_listener_security_default_is_pinned_for_library_and_cli(self):
+        relative = 'transport/internet/system_listener.go'
+        source = (ROOT / 'tool/fixtures/xray_core_v26.10.31.system_listener.go').read_bytes()
+        digest = hashlib.sha256(source).hexdigest()
+        for directory in ['xray-native-dns', 'xray-vpn-routing']:
+            pin = json.loads((ROOT / 'third_party' / directory / 'pin-manifest.json').read_text())
+            self.assertEqual(pin['upstream_sha256'][relative], digest)
+        # This is the shared DefaultListener method. It is neither a main
+        # command initializer nor a wrapper-specific networking workaround.
+        body = source.decode().split('func (dl *DefaultListener) Listen(', 1)[1]
+        tcp = body.split('case *net.TCPAddr:', 1)[1].split('case *net.UnixAddr:', 1)[0]
+        disabled = tcp.index('lc.SetMultipathTCP(false)')
+        explicit = tcp.index('lc.SetMultipathTCP(sockopt.TcpMptcp)')
+        self.assertLess(disabled, tcp.index('if sockopt != nil {'))
+        self.assertGreater(explicit, disabled)
+        self.assertNotIn('lc.SetMultipathTCP(true)', tcp)
+
     def assert_runtime_requirements_match_core(self, mobile_text):
         # Exact reviewed upstream bytes keep this file-only check independent
         # of a local module cache or a build that silently resolves its graph.
         pin = json.loads((ROOT / 'third_party/xray-vpn-routing/pin-manifest.json').read_text())
-        core = (ROOT / 'tool/fixtures/xray_core_v26.10.29.go.mod').read_bytes()
+        core = (ROOT / 'tool/fixtures/xray_core_v26.10.31.go.mod').read_bytes()
         self.assertEqual(hashlib.sha256(core).hexdigest(), pin['upstream_sha256']['go.mod'])
         pattern = r'^[ \t]*(\S+)[ \t]+(v\S+)(?:[ \t]+//.*)?$'
         reviewed = dict(re.findall(pattern, core.decode(), re.M))
@@ -43,7 +81,7 @@ class ReviewedModuleGraphTest(unittest.TestCase):
 
     def test_former_protobuf_constraint_is_rejected_before_build(self):
         mobile = (ROOT / 'third_party/xray-mobile/go.mod').read_text()
-        old = mobile.replace('google.golang.org/protobuf v1.36.11', 'google.golang.org/protobuf v1.36.12')
+        old = mobile.replace('google.golang.org/protobuf v1.36.12', 'google.golang.org/protobuf v1.36.11')
         self.assertNotEqual(old, mobile, 'Fault control must change the reviewed requirement')
         with self.assertRaisesRegex(AssertionError, 'google.golang.org/protobuf'):
             self.assert_runtime_requirements_match_core(old)

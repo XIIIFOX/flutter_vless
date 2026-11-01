@@ -5,7 +5,11 @@ import Flutter
 import UIKit
 import WebKit
 import CryptoKit
+#if canImport(flutter_vless_core_compat)
 import flutter_vless_core_compat
+#else
+import flutter_vless
+#endif
 
 final class AcceptanceWebDiagnosticsFactory: NSObject, FlutterPlatformViewFactory {
   static let channelName = "dev.tfox.flutterXrayExample/acceptanceWeb"

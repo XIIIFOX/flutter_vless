@@ -69,6 +69,95 @@ class SnapshotCapabilitiesTests(unittest.TestCase):
         self.assertEqual(set(calls), {'Int', *CAPABILITIES.values()})
         self.assertEqual(set(re.findall(r'"([^"]+)"\s*:', getter)), set(CAPABILITIES))
 
+    def test_public_import_works_for_spm_and_pod_umbrella_and_fails_closed(self):
+        imported = re.search(
+            r'#if canImport\(flutter_vless_core_compat\)\n'
+            r'import flutter_vless_core_compat\n#else\nimport flutter_vless\n#endif', SOURCE)
+        self.assertIsNotNone(imported, 'QA must support both public module layouts')
+        header = (ROOT / 'ios/flutter_vless/Sources/flutter_vless_core_compat/include/'
+                  'FlutterVlessCoreCompat.h').read_text()
+        declarations = []
+        for symbol in CAPABILITIES.values():
+            declaration = re.search(r'FOUNDATION_EXPORT\s+int64_t\s+' + re.escape(symbol)
+                                    + r'\(void\);', header)
+            self.assertIsNotNone(declaration, 'Public capability declaration required')
+            declarations.append(declaration.group(0).replace('FOUNDATION_EXPORT', 'extern'))
+        # CocoaPods exposes source headers in the named module by default.
+        # Check that tracked contract even on a clean checkout without Pods.
+        podspec = (ROOT / 'ios/flutter_vless.podspec').read_text()
+        self.assertRegex(podspec, r"s\.name\s*=\s*'flutter_vless'")
+        sources = re.search(r'^\s*s\.source_files\s*=([^\n]+)', podspec, re.MULTILINE)
+        self.assertIsNotNone(sources, 'Tracked CocoaPods source declaration required')
+        self.assertIn("'flutter_vless/Sources/flutter_vless_core_compat/**/*.{h,m}'",
+                      sources.group(1))
+        self.assertNotRegex(
+            podspec,
+            re.compile(r'^\s*s\.(?:module_name|private_header_files|exclude_files|public_header_files)\s*=',
+                       re.MULTILINE),
+            'A module or header-visibility override needs an explicit compatibility check')
+        umbrella_path = (ROOT / 'example/ios/Pods/Target Support Files/flutter_vless/'
+                         'flutter_vless-umbrella.h')
+        if umbrella_path.exists():
+            self.assertIn('#import "FlutterVlessCoreCompat.h"', umbrella_path.read_text())
+        getter = body_after('private func runtimeCapabilities() -> [String: Int]')
+        probe = ('#if FLUTTER_VLESS_ACCEPTANCE_TESTING\n' + imported.group(0)
+                 + '\nprivate func runtimeCapabilities() -> [String: Int] {' + getter + '}\n'
+                 + 'let values = runtimeCapabilities()\n'
+                 + 'precondition(values == ["geodata_lifetime":1,"xdrive_lifetime":2,'
+                   '"vpn_routing":1,"darwin_interface_binding":1])\n'
+                 + 'print("QA_PUBLIC_MODULE_CAPS_PASS")\n#else\n'
+                 + 'print("NORMAL_QA_EXCLUDED_PASS")\n#endif\n')
+        with tempfile.TemporaryDirectory(prefix='flvless-public-modules-') as temporary:
+            folder = Path(temporary)
+            spm = folder / 'spm'
+            headers = folder / 'pods/flutter_vless.framework/Headers'
+            modules = headers.parent / 'Modules'
+            for directory in (spm, headers, modules):
+                directory.mkdir(parents=True, exist_ok=True)
+            public_header = '#include <stdint.h>\n' + '\n'.join(declarations) + '\n'
+            (spm / 'FlutterVlessCoreCompat.h').write_text(public_header)
+            (headers / 'FlutterVlessCoreCompat.h').write_text(public_header)
+            (headers / 'flutter_vless-umbrella.h').write_text('#import "FlutterVlessCoreCompat.h"\n')
+            (spm / 'module.modulemap').write_text(
+                'module flutter_vless_core_compat { header "FlutterVlessCoreCompat.h" export * }\n')
+            (modules / 'module.modulemap').write_text(
+                'framework module flutter_vless { umbrella header "flutter_vless-umbrella.h" export * }\n')
+            shim = folder / 'shim.c'
+            shim.write_text('#include <stdint.h>\n' + '\n'.join(
+                f'int64_t {symbol}(void) {{ return {2 if key == "xdrive_lifetime" else 1}; }}'
+                for key, symbol in CAPABILITIES.items()) + '\n')
+            source = folder / 'probe.swift'
+            source.write_text(probe)
+            obj = folder / 'shim.o'
+            built = subprocess.run(['clang', '-c', str(shim), '-o', str(obj)],
+                                   capture_output=True, text=True, timeout=30)
+            self.assertEqual(built.returncode, 0, built.stderr[-4000:])
+            archived = subprocess.run(['ar', 'rcs', str(headers.parent / 'flutter_vless'), str(obj)],
+                                      capture_output=True, text=True, timeout=15)
+            self.assertEqual(archived.returncode, 0, archived.stderr[-4000:])
+            cases = [('spm', ['-I', str(spm), str(obj)], True),
+                     ('pods', ['-F', str(headers.parent.parent), '-framework', 'flutter_vless'], True),
+                     ('missing', [], True), ('normal', [], False)]
+            for name, arguments, enabled in cases:
+                with self.subTest(module_layout=name):
+                    binary = folder / ('probe-' + name)
+                    command = ['swiftc', '-swift-version', '5', '-module-cache-path',
+                               str(folder / ('modules-' + name))]
+                    if enabled:
+                        command += ['-D', 'FLUTTER_VLESS_ACCEPTANCE_TESTING']
+                    result = subprocess.run(command + arguments + [str(source), '-o', str(binary)],
+                                            capture_output=True, text=True, timeout=45)
+                    if name == 'missing':
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn('flutter_vless', result.stderr)
+                        self.assertFalse(binary.exists())
+                        continue
+                    self.assertEqual(result.returncode, 0, result.stderr[-4000:])
+                    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 0, result.stderr[-4000:])
+                    self.assertEqual(result.stdout, 'QA_PUBLIC_MODULE_CAPS_PASS\n' if enabled
+                                     else 'NORMAL_QA_EXCLUDED_PASS\n')
+
     def test_actual_swift_getter_preserves_all_independent_normalized_values(self):
         getter = body_after('private func runtimeCapabilities() -> [String: Int]')
         swift = ['var values: [String: Int64] = [:]',

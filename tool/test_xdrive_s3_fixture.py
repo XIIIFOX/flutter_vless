@@ -4,11 +4,13 @@ import hashlib
 import hmac
 import http.client
 import importlib.util
+import faulthandler
 from pathlib import Path
 import socket
 import threading
 import time
 import unittest
+from unittest import mock
 from urllib.parse import quote, urlsplit
 import xml.etree.ElementTree as ET
 
@@ -34,6 +36,11 @@ def sign(method, path, host, body=b'', secret=fixture.SECRET):
 
 
 class S3FixtureContract(unittest.TestCase):
+    def test_numeric_loopback_fixture_performs_no_hostname_lookup(self):
+        with mock.patch.object(socket, 'getfqdn', side_effect=AssertionError('Numeric loopback fixture attempted system DNS')):
+            with fixture.running_server() as server:
+                self.assertEqual(server.server_name, '127.0.0.1')
+
     def test_aws_reference_vector_and_tampering(self):
         # Official AWS GET Object reference; these are public documentation keys.
         access = 'AKIAIOSFODNN7EXAMPLE'
@@ -169,7 +176,13 @@ class S3FixtureContract(unittest.TestCase):
                 started = time.monotonic()
             elapsed = time.monotonic() - started
             peer.settimeout(1)
-            while peer.recv(1024):
+            try:
+                while peer.recv(1024):
+                    pass
+            except (ConnectionResetError, ConnectionAbortedError):
+                # Winsock can report WSAECONNABORTED (10053) when the owned
+                # server shuts down a partial request. A typed reset/abort is
+                # closure; a timeout or arbitrary message remains a failure.
                 pass
             self.assertLess(elapsed, 2.5, 'Server shutdown renewed its body timeout while the owned peer trickled')
             self.assertEqual(server.snapshot()['active_connections'], 0)
@@ -185,4 +198,8 @@ class S3FixtureContract(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    faulthandler.dump_traceback_later(12)
+    try:
+        unittest.main(verbosity=2)
+    finally:
+        faulthandler.cancel_dump_traceback_later()

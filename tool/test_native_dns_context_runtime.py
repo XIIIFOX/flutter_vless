@@ -251,10 +251,11 @@ def copy_managed_runtime_fixtures(ordinary):
 def run_xdrive_full_relay(ordinary, go, environment, results, report):
     """Two actual Core peers use an independently implemented Python S3 API."""
     inputs = ['tool/xdrive_s3_fixture.py', 'tool/test_xdrive_s3_fixture.py',
-              'tool/fixtures/xdrive_relay_runtime_test.go']
+              'tool/fixtures/xdrive_relay_runtime_test.go',
+              'example/xdrive/s3.json', 'example/xdrive/google-drive.json']
     before = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in inputs}
     report['xdrive_relay_source_sha256'] = before
-    checked('xdrive-s3-fixture-guards', [sys.executable, str(ROOT / 'tool/test_xdrive_s3_fixture.py')],
+    checked('xdrive-s3-fixture-guards', [sys.executable, '-u', str(ROOT / 'tool/test_xdrive_s3_fixture.py')],
             cwd=ROOT, environment=environment, seconds=30, results=results)
     package = ordinary / 'native_xdrive_relay_runtime'
     package.mkdir()
@@ -262,6 +263,10 @@ def run_xdrive_full_relay(ordinary, go, environment, results, report):
     shutil.copyfile(ROOT / 'tool/fixtures/xdrive_relay_runtime_test.go', target)
     if hashlib.sha256(target.read_bytes()).hexdigest() != before['tool/fixtures/xdrive_relay_runtime_test.go']:
         raise RuntimeError('Full relay fixture copy mismatch')
+    examples = package / 'testdata'
+    examples.mkdir()
+    for name in ('s3.json', 'google-drive.json'):
+        shutil.copyfile(ROOT / 'example/xdrive' / name, examples / name)
     suffix = '.test.exe' if os.name == 'nt' else '.test'
     binary = EVIDENCE / ('xdrive-full-relay' + suffix)
     checked('xdrive-full-relay-compile', [go, 'test', '-c', '-o', str(binary), './native_xdrive_relay_runtime'],
@@ -271,15 +276,20 @@ def run_xdrive_full_relay(ordinary, go, environment, results, report):
     spec.loader.exec_module(fixture)
     with fixture.running_server() as server:
         child_environment = dict(environment, FLUTTER_VLESS_XDRIVE_FIXTURE_URL=server.endpoint)
-        selected = 'TestAcceptanceXdriveS3FullCoreRelay'
-        checked('xdrive-full-relay-runtime', [str(binary), '-test.run', '^' + selected + '$', '-test.v', '-test.timeout=35s'],
+        selected = ['TestAcceptanceXdriveS3FullCoreRelay', 'TestAcceptanceXdriveExampleContracts']
+        checked('xdrive-full-relay-runtime', [str(binary), '-test.run', '^(' + '|'.join(selected) + ')$', '-test.v', '-test.timeout=35s'],
                 cwd=ordinary, environment=child_environment, seconds=45, results=results)
         output = (EVIDENCE / 'xdrive-full-relay-runtime.log').read_text(encoding='utf-8')
-        require_selected_test_pass(output, selected)
+        for name in selected:
+            require_selected_test_pass(output, name)
         for generation in (0, 1):
-            if len(re.findall(r'^\s*--- PASS: ' + selected + '/fresh-owner-' + str(generation) + r' \(', output, re.M)) != 1:
+            if len(re.findall(r'^\s*--- PASS: ' + selected[0] + '/fresh-owner-' + str(generation) + r' \(', output, re.M)) != 1:
                 raise RuntimeError('Full cloud relay owner generation missing')
-        results[-1]['selected_tests'] = [selected]
+        for name in ('s3.json', 'google-drive.json'):
+            for suffix in ('', '/missing-encryption', '/missing-mux', '/vision-flow', '/negative-mux'):
+                if len(re.findall(r'^\s*--- PASS: ' + re.escape(selected[1] + '/' + name + suffix) + r' \(', output, re.M)) != 1:
+                    raise RuntimeError('Documented XDRIVE example contract check missing')
+        results[-1]['selected_tests'] = selected
     counts = server.snapshot()
     report['xdrive_full_relay_s3_counts'] = counts
     report['xdrive_full_relay_server_closed'] = True
@@ -287,6 +297,8 @@ def run_xdrive_full_relay(ordinary, go, environment, results, report):
         raise RuntimeError('Full relay did not produce clean authenticated object-store traffic')
     if any(hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected for name, expected in before.items()) or hashlib.sha256(target.read_bytes()).hexdigest() != before['tool/fixtures/xdrive_relay_runtime_test.go']:
         raise RuntimeError('Full relay sources changed during execution')
+    if any(hashlib.sha256((examples / name).read_bytes()).hexdigest() != before['example/xdrive/' + name] for name in ('s3.json', 'google-drive.json')):
+        raise RuntimeError('Copied XDRIVE examples changed during execution')
     report['xdrive_relay_sources_unchanged'] = True
 
 

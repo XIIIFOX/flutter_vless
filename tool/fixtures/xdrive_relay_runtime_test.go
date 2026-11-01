@@ -6,7 +6,9 @@ package xdrive_relay_runtime_test
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,6 +18,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -30,6 +33,71 @@ import (
 )
 
 const relayUser = "00000000-0000-4000-8000-000000000071"
+
+func relayKeyPair(t *testing.T) (decryption, encryption string) {
+	t.Helper()
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "mlkem768x25519plus.native.600s." + base64.RawURLEncoding.EncodeToString(key.Bytes()),
+		"mlkem768x25519plus.native.0rtt." + base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes())
+}
+
+// The published templates themselves must build under Core's complete XDRIVE
+// validation. Their storage preparation tests alone cannot prove that contract.
+func TestAcceptanceXdriveExampleContracts(t *testing.T) {
+	_, encryption := relayKeyPair(t)
+	values := map[string]string{"XDRIVE_VLESS_UUID": relayUser, "XDRIVE_VLESS_ENCRYPTION": encryption,
+		"XDRIVE_S3_HOST": "s3.fixture.invalid", "XDRIVE_S3_REGION": "us-east-1", "XDRIVE_S3_BUCKET": "fixture-bucket", "XDRIVE_S3_PREFIX": "acceptance",
+		"XDRIVE_S3_ACCESS_KEY_ID": "synthetic-access", "XDRIVE_S3_SECRET_ACCESS_KEY": "synthetic-secret",
+		"XDRIVE_GOOGLE_FOLDER_ID": "synthetic-folder", "XDRIVE_GOOGLE_CLIENT_ID": "synthetic-client", "XDRIVE_GOOGLE_CLIENT_SECRET": "synthetic-secret", "XDRIVE_GOOGLE_REFRESH_TOKEN": "synthetic-refresh"}
+	for _, name := range []string{"s3.json", "google-drive.json"} {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("native_xdrive_relay_runtime", "testdata", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			rendered := string(data)
+			for key, value := range values {
+				rendered = strings.ReplaceAll(rendered, "${"+key+"}", value)
+			}
+			if strings.Contains(rendered, "${") {
+				t.Fatal("unrecognized example placeholder")
+			}
+			if _, err := core.LoadConfig("json", strings.NewReader(rendered)); err != nil {
+				t.Fatal("documented XDRIVE template rejected by actual Core", err)
+			}
+			for _, invalid := range []string{"missing-encryption", "missing-mux", "vision-flow", "negative-mux"} {
+				t.Run(invalid, func(t *testing.T) {
+					var document map[string]any
+					if err := json.Unmarshal([]byte(rendered), &document); err != nil {
+						t.Fatal(err)
+					}
+					outbound := document["outbounds"].([]any)[0].(map[string]any)
+					settings := outbound["settings"].(map[string]any)
+					want := "\"mux\""
+					switch invalid {
+					case "missing-encryption":
+						settings["encryption"] = "none"
+						want = "\"encryption\""
+					case "missing-mux":
+						delete(outbound, "mux")
+					case "vision-flow":
+						settings["flow"] = "xtls-rprx-vision"
+						want = "\"flow\""
+					case "negative-mux":
+						outbound["mux"].(map[string]any)["concurrency"] = -1
+					}
+					encoded, _ := json.Marshal(document)
+					if _, err := core.LoadConfig("json", bytes.NewReader(encoded)); err == nil || !strings.Contains(err.Error(), "xdrive transport") || !strings.Contains(err.Error(), want) {
+						t.Fatal("invalid XDRIVE example escaped its specific Core constraint", invalid, err)
+					}
+				})
+			}
+		})
+	}
+}
 
 func TestAcceptanceXdriveS3FullCoreRelay(t *testing.T) {
 	if !strings.EqualFold(os.Getenv("CI"), "true") || runtime.GOOS == "darwin" && !strings.EqualFold(os.Getenv("GITHUB_ACTIONS"), "true") {
@@ -59,6 +127,7 @@ func TestAcceptanceXdriveS3FullCoreRelay(t *testing.T) {
 				t.Fatal(err)
 			}
 			nonce := hex.EncodeToString(random[:])
+			decryption, encryption := relayKeyPair(t)
 			payload := bytes.Repeat([]byte(nonce+"/binary\x00\xff/"), 1024)
 			var originRequests atomic.Int64
 			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -117,12 +186,13 @@ func TestAcceptanceXdriveS3FullCoreRelay(t *testing.T) {
 			}
 			server, closeServer := startCore(map[string]any{"log": map[string]any{"loglevel": "none"},
 				"inbounds": []any{map[string]any{"protocol": "vless", "tag": "cloud-server", "listen": "127.0.0.1", "port": 18771,
-					"settings": map[string]any{"decryption": "none", "clients": []any{map[string]any{"id": relayUser}}}, "streamSettings": stream}},
+					"settings": map[string]any{"decryption": decryption, "clients": []any{map[string]any{"id": relayUser}}}, "streamSettings": stream}},
 				"outbounds": []any{map[string]any{"protocol": "freedom", "settings": map[string]any{"finalRules": []any{map[string]any{"action": "allow", "ip": []string{"127.0.0.1/32"}}, map[string]any{"action": "block"}}}}}})
 			_ = server
 			client, closeClient := startCore(map[string]any{"log": map[string]any{"loglevel": "none"},
 				"outbounds": []any{map[string]any{"protocol": "vless", "tag": "cloud-client", "settings": map[string]any{
-					"vnext": []any{map[string]any{"address": "127.0.0.1", "port": 18771, "users": []any{map[string]any{"id": relayUser, "encryption": "none"}}}}}, "streamSettings": stream}}})
+					"vnext": []any{map[string]any{"address": "127.0.0.1", "port": 18771, "users": []any{map[string]any{"id": relayUser, "encryption": encryption}}}}},
+					"mux": map[string]any{"enabled": true, "concurrency": 1, "xudpConcurrency": 1, "xudpProxyUDP443": "allow"}, "streamSettings": stream}}})
 			transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
 				host, portText, err := net.SplitHostPort(address)
 				if err != nil {

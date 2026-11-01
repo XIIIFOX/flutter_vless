@@ -31,7 +31,16 @@ cloud service availability, quotas and negotiated cloud TLS remain separate.
 [s3.json](s3.json) and [google-drive.json](google-drive.json) are complete client
 configuration templates for Xray Core 26.10.29. They contain placeholders, not
 working accounts. Both peers need compatible application protocol settings and
-matching storage details. These templates use VLESS without Vision.
+matching storage details. XDRIVE requires VLESS Encryption and client Mux, even
+when the cloud endpoint already uses HTTPS. `encryption: "none"` is invalid for
+this transport. These templates use VLESS without Vision.
+
+Generate a matching pair with `xray vlessenc` on the server or test runtime.
+Use the generated client `encryption` value for `XDRIVE_VLESS_ENCRYPTION` and
+the paired server `decryption` value on the other peer. A UUID, a cloud secret
+or a TLS certificate cannot substitute for this pair. Keep Mux enabled with
+nonnegative concurrency values; XDRIVE does not support Vision `flow` or
+`xudpProxyUDP443: "skip"`.
 
 Replace every `${NAME}` string through your application's configuration code
 before importing. Xray does **not** expand these placeholders or read cloud
@@ -42,7 +51,7 @@ include credentials in logs, screenshots or bug reports.
 
 | Template | Values to provide |
 | --- | --- |
-| Both | `XDRIVE_VLESS_UUID`: the peer's VLESS user ID |
+| Both | `XDRIVE_VLESS_UUID`: the peer's VLESS user ID; `XDRIVE_VLESS_ENCRYPTION`: the matching generated client encryption value |
 | S3 | `XDRIVE_S3_HOST`, `XDRIVE_S3_REGION`, `XDRIVE_S3_BUCKET`, `XDRIVE_S3_PREFIX`, `XDRIVE_S3_ACCESS_KEY_ID`, `XDRIVE_S3_SECRET_ACCESS_KEY` |
 | Google Drive | `XDRIVE_GOOGLE_FOLDER_ID`, `XDRIVE_GOOGLE_CLIENT_ID`, `XDRIVE_GOOGLE_CLIENT_SECRET`, `XDRIVE_GOOGLE_REFRESH_TOKEN` |
 
@@ -87,11 +96,14 @@ The shared native preparation corpus covers S3 path-style/virtual-hosted
 addressing, Google Drive, the deprecated alias, fronting, malformed settings and
 old runtime refusal. Controlled Core tests use synthetic credentials and local
 HTTP/OAuth services for storage operations, owner isolation and cancellation.
-Those tests do not establish a working real cloud account, a complete relay
-between peers, or the whole HTTP/3/ECH/redirect matrix. `local` and `template`
-XDRIVE services remain outside the plugin's admitted service set.
+The local S3 relay case additionally connects two Core peers with a generated
+VLESS Encryption pair and validates the complete application byte path. The
+tests do not establish a working real cloud account or the whole
+HTTP/3/ECH/redirect matrix. `local` and `template` XDRIVE services remain outside
+the plugin's admitted service set.
 
 Primary sources at the pinned Core revision:
 [JSON configuration](https://github.com/XTLS/Xray-core/blob/0afec66085a85191e9dd2a4a6646c7c9a94688d1/infra/conf/transport_method.go),
+[VLESS Encryption and Mux requirements](https://github.com/XTLS/Xray-core/blob/0afec66085a85191e9dd2a4a6646c7c9a94688d1/infra/conf/xray.go),
 [S3](https://github.com/XTLS/Xray-core/blob/0afec66085a85191e9dd2a4a6646c7c9a94688d1/transport/internet/xdrive/s3.go),
 [Google Drive](https://github.com/XTLS/Xray-core/blob/0afec66085a85191e9dd2a4a6646c7c9a94688d1/transport/internet/xdrive/drive.go).

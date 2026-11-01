@@ -121,6 +121,7 @@ jobs:
         run: |
           python3 tool/test_apple_delay_deadline.py
           bash tool/test_ios_local_proxy_transport.sh
+          python3 tool/test_acceptance_safari_action.py
       - name: Test unpublished DNS context with actual isolated Core instances
         run: python tool/test_native_dns_context_runtime.py --run-runtime
       - name: Test production preparation with Classic and H3 lifetime cleanup

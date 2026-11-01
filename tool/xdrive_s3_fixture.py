@@ -19,6 +19,7 @@ from pathlib import Path
 import secrets
 import signal
 import socket
+from socketserver import TCPServer
 import sys
 import threading
 import time
@@ -97,6 +98,14 @@ class FixtureServer(ThreadingHTTPServer):
     @property
     def endpoint(self):
         return f'http://127.0.0.1:{self.server_port}'
+
+    def server_bind(self):
+        # HTTPServer normally performs getfqdn() during construction. This
+        # numeric loopback fixture has no hostname to resolve and must not wait
+        # on host DNS before any test request can be admitted.
+        TCPServer.server_bind(self)
+        self.server_name = '127.0.0.1'
+        self.server_port = self.server_address[1]
 
     def snapshot(self):
         with self.lock:

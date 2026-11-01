@@ -1,0 +1,59 @@
+name: Stock Android Core reference
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-arm64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: third_party/xray-mobile/go.mod
+          cache-dependency-path: third_party/xray-mobile/go.sum
+      - name: Compile the exact unmodified pinned Core for an independent control
+        shell: bash
+        env:
+          GOTOOLCHAIN: local
+          GOWORK: 'off'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,os,shutil,subprocess
+          pin='v1.260327.1-0.20261029083850-0afec66085a8'
+          expected='h1:EZzaOZYkWkLLEdwYKzCOck7s15y1sspw/b98ChzCA0I='
+          root=Path.cwd()
+          out=root/'build/stock-core-reference'
+          out.mkdir(parents=True)
+          downloaded=json.loads(subprocess.check_output(['go','mod','download','-json','github.com/xtls/xray-core@'+pin],text=True))
+          assert downloaded['Version']==pin and downloaded['Sum']==expected
+          source=Path(downloaded['Dir'])
+          snapshot=lambda folder:{str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.rglob('*') if p.is_file()}
+          before=snapshot(source)
+          owned=Path(os.environ['RUNNER_TEMP'])/'stock-core-reference-unmodified'
+          shutil.copytree(source,owned)
+          assert snapshot(owned)==before
+          ndk=Path(os.environ['ANDROID_HOME'])/'ndk'
+          compilers=list(ndk.glob('*/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang'))
+          assert compilers,'An existing Android NDK is required'
+          compiler=max(compilers,key=lambda p:tuple(int(n) for n in p.parents[5].name.split('.')))
+          env=dict(os.environ,GOOS='android',GOARCH='arm64',CGO_ENABLED='1',CC=str(compiler))
+          binary=out/'xray-stock-26.10.29-android-arm64'
+          subprocess.run(['go','build','-mod=readonly','-trimpath','-buildvcs=false','-buildmode=pie','-o',str(binary),'./main'],cwd=owned,env=env,check=True,timeout=600)
+          assert snapshot(owned)==before and snapshot(source)==before
+          info=subprocess.check_output(['go','version','-m',str(binary)],text=True)
+          assert 'GOOS=android' in info and 'GOARCH=arm64' in info
+          (out/'build-info.txt').write_text(info)
+          (out/'qualification.json').write_text(json.dumps({'head':os.environ['GITHUB_SHA'],'scope':'unmodified pinned Core control; no plugin patches, VPN or owner profiles','module':pin,'module_sum':expected,'source_sha256':before,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'build_info_sha256':hashlib.sha256(info.encode()).hexdigest(),'source_unchanged':True},indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stock-core-26.10.29-android-arm64
+          if-no-files-found: error
+          retention-days: 7
+          path: build/stock-core-reference/*

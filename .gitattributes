@@ -12,3 +12,6 @@ ios/XRay.xcframework/**/XRay binary
 
 # Exact upstream fixture bytes are hash-bound on every CI operating system.
 tool/fixtures/xdrive-v26.10.29/** text eol=lf
+
+# These examples are also source-bound by the controlled Core relay tests.
+example/xdrive/*.json text eol=lf

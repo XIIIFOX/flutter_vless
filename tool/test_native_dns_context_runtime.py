@@ -194,6 +194,26 @@ def require_selected_test_pass(output, name):
         raise RuntimeError('Selected actual runtime acceptance test did not report PASS')
 
 
+def require_inline_ech_pass(output):
+    modes = ['accepted', 'wrong_key', 'untrusted_root']
+    marker = re.compile(r'^\s+ech_runtime_test\.go:\d+: INLINE_ECH_TLS13_PASS mode=(\w+)\r?$')
+    seen = []
+    for line in output.splitlines():
+        if 'INLINE_ECH_TLS13_PASS' not in line:
+            continue
+        match = marker.fullmatch(line)
+        if not match:
+            raise RuntimeError('Inline ECH marker source or format changed')
+        seen.append(match.group(1))
+    names = ['TestAcceptanceInlineECH', *(f'TestAcceptanceInlineECH/{mode}' for mode in modes)]
+    if sorted(seen) != sorted(modes) or any(
+            len(re.findall(r'^\s*--- PASS: ' + re.escape(name) + r' \(', output, re.MULTILINE)) != 1
+            for name in names) or re.search(r'^\s*--- (?:FAIL|SKIP): TestAcceptanceInlineECH', output, re.MULTILINE) \
+            or not re.search(r'\nPASS\r?\n?\Z', output):
+        raise RuntimeError('Inline ECH controls missing, duplicated, failed, skipped or not drained')
+    return modes
+
+
 def require_classic_lifetime_pass(output):
     names = [
         'TestNativeClassicLifetimeClosesBothFamilies',
@@ -472,13 +492,15 @@ def main():
         report['native_launcher_sha256'] = hashlib.sha256(launcher.read_bytes()).hexdigest()
         if arguments.run_runtime:
             runtime_environment = dict(environment, FLUTTER_VLESS_NATIVE_PREVIEW=str(launcher.resolve()))
-            selected_tests = ['TestAcceptanceNativeDNSRuntime', 'TestAcceptanceNativeDNSLocalDefault', 'TestAcceptanceNativeDNSNAT64', 'TestAcceptanceNativeDNSLauncher', 'TestAcceptanceNativeDNSSystemBridge', 'TestAcceptanceNativeDNSManagedInput', 'TestAcceptanceCoreCompatibility']
-            checked('runtime-loopback', [str(binary), '-test.run', '^TestAcceptance(NativeDNS(Runtime|LocalDefault|NAT64|Launcher|SystemBridge|ManagedInput)|CoreCompatibility)$', '-test.v', '-test.timeout=75s'],
+            selected_tests = ['TestAcceptanceNativeDNSRuntime', 'TestAcceptanceNativeDNSLocalDefault', 'TestAcceptanceNativeDNSNAT64', 'TestAcceptanceNativeDNSLauncher', 'TestAcceptanceNativeDNSSystemBridge', 'TestAcceptanceNativeDNSManagedInput', 'TestAcceptanceCoreCompatibility', 'TestAcceptanceInlineECH']
+            checked('runtime-loopback', [str(binary), '-test.run', '^TestAcceptance(NativeDNS(Runtime|LocalDefault|NAT64|Launcher|SystemBridge|ManagedInput)|CoreCompatibility|InlineECH)$', '-test.v', '-test.timeout=75s'],
                     cwd=core, environment=runtime_environment, seconds=90, results=results)
             for name in selected_tests:
                 require_selected_test_pass((EVIDENCE / 'runtime-loopback.log').read_text(encoding='utf-8'), name)
             results[-1]['selected_test_pass'] = True
             results[-1]['selected_tests'] = selected_tests
+            results[-1]['inline_ech_modes'] = require_inline_ech_pass(
+                (EVIDENCE / 'runtime-loopback.log').read_text(encoding='utf-8'))
             run_managed_service_runtime(source, core, arguments.go, environment, results, report)
         report['module_cache_targeted_sources_unchanged'] = all(
             hashlib.sha256((source / path).read_bytes()).hexdigest() == expected

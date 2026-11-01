@@ -4,6 +4,13 @@ The Flutter packages stay at 1.1.7. This work does not publish the plugin or run
 a VPN on the owner's Mac. Native runtime revisions and live-device evidence
 have separate qualification requirements.
 
+The follow-up [bounded acceptance, 2026-11-01](acceptance-2026-11-01.md)
+records the later deadline fixes, complete controlled S3 relay, literal-IP TLS
+routing and mobile checks. Upstream has since withdrawn 26.10.29 in favor of
+the [26.10.31 security release](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31).
+The results here are version-specific and are not a recommendation to publish
+the withdrawn kernel.
+
 ## Transport security and special-purpose addresses
 
 Core has two different policies. Its generalized private-address matcher is
@@ -61,8 +68,11 @@ Each Core owns its cloud resources and cache. Closing that owner cancels a
 separate service context; it must not cancel the parent or the Core feature
 context. The existing routing construction-failure ordering is retained.
 S3/Google HTTP fixtures exercise signing, fronting, CRUD, fresh owners and
-cancellation without real accounts. They do not qualify a live cloud account,
-a complete relay deployment, HTTP/3 or ECH.
+cancellation without real accounts. The November 1 follow-up additionally
+qualifies a complete encrypted S3 relay on the three CI operating systems and
+the Android example using a local S3 simulator. Both templates now require
+VLESS Encryption and client Mux. Real cloud accounts, a complete Google relay
+and any cloud-specific HTTP/3/ECH deployment remain separate acceptance.
 
 [GeoDAT examples and limits](../example/geodata/README.md) describe writable
 existing targets, HTTPS, at most 100 assets, constant intervals of at least one
@@ -99,10 +109,16 @@ passes on Windows 2022 and 2025. Physical-device evidence is recorded separately
 
 ## IP-check browser diagnostics
 
+The observations in this section are the earlier October baseline. Later
+November controls and the explicit-DNS iPhone split are recorded in the
+[follow-up](acceptance-2026-11-01.md#physical-iphone-and-android-emulator).
+
 The example's opted-in browser diagnostics now open the exact public URLs
 `https://2ip.ru/` and `https://tfox.dev/ip/`. Navigation/session identifiers
 remain local metadata; the diagnostic no longer adds query parameters to the
-website URL. The embedded view retains its explicit cache-reload policy.
+website URL. The embedded view retains its explicit cache-reload policy. The
+later opt-in embedded checker also admits the exact IPv4 text endpoint
+`https://api.ipify.org/`; Safari's two original diagnostic targets are unchanged.
 
 The Android control kept the profile, SDK, options and routing JSON identical:
 with a diagnostic query, the 2ip page remained in Loading; removing only that
@@ -143,16 +159,17 @@ on the basis of these incomplete browser observations.
 
 ## Remaining acceptance outside this change
 
-* Finish the iPhone inverse split with a healthy browser/site baseline; if it
-  repeats, capture the failing request/status/protocol and the final prepared
-  extension configuration. Resolve the two unsuccessful supplied Android
-  profiles with a known working reference or peer-side evidence.
-* Add a controlled literal-IP SOCKS destination plus TLS ClientHello/SNI routing
-  case before extending coverage to QUIC/ECH; existing domain-SOCKS tests do not
-  establish those paths.
-* Live S3 and Google Drive accounts with a complete relay deployment, including
-  HTTP/3/ECH where configured. Controlled endpoint fixtures establish the
-  ownership and cancellation contract, not account availability.
+* Update native consumers to the non-withdrawn kernel, then requalify them.
+* A fresh independently healthy public Android peer/reference. Current paired
+  stock-Core failures do not establish expiration or a plugin defect. The
+  iPhone now passes both split directions with the documented explicit-DNS
+  recipe; its original implicit-DNS DIRECT case remains unqualified.
+* Active QUIC-SNI routing and broader remote ECH deployment. Actual numeric
+  SOCKS plus TLS 1.3 SNI routing in both directions is now covered on all three
+  CI systems, with wrong/missing-SNI and sniff-disabled controls.
+* Live S3/Google accounts and a complete Google relay, including cloud-specific
+  HTTP/3/ECH where configured. The controlled S3 relay is now covered; real
+  account availability is not inferred from it.
 * A physical IPv6-only/DNS64/NAT64 network and Wi-Fi/mobile handover. Address
   classification and resolver tests do not establish that network's reachability.
 * A broader server-backed protocol/transport matrix and additional external

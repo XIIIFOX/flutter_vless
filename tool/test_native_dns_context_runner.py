@@ -46,6 +46,22 @@ class ErroringSink:
 
 
 class RunnerGuards(unittest.TestCase):
+    def test_inline_ech_requires_positive_key_and_trust_controls_and_drain(self):
+        names = ['accepted', 'wrong_key', 'untrusted_root']
+        lines = ['--- PASS: TestAcceptanceInlineECH (0.01s)']
+        lines.extend(f'    --- PASS: TestAcceptanceInlineECH/{mode} (0.01s)' for mode in names)
+        lines.extend(f'    ech_runtime_test.go:123: INLINE_ECH_TLS13_PASS mode={mode}' for mode in names)
+        valid = '\n'.join(lines) + '\nPASS\n'
+        self.assertEqual(runner.require_inline_ech_pass(valid), names)
+        for invalid in ['', valid.replace('/wrong_key', '/unrelated'),
+                        valid.replace('mode=untrusted_root', 'mode=other'),
+                        valid + '    ech_runtime_test.go:123: INLINE_ECH_TLS13_PASS mode=accepted\n',
+                        valid.replace('ech_runtime_test.go:123:', 'unrelated.go:123:', 1),
+                        valid.replace('--- PASS: TestAcceptanceInlineECH/wrong_key', '--- SKIP: TestAcceptanceInlineECH/wrong_key'),
+                        valid.replace('\nPASS\n', '\n')]:
+            with self.subTest(output=invalid), self.assertRaises(RuntimeError):
+                runner.require_inline_ech_pass(invalid)
+
     def test_cloud_auth_fixture_is_copied_bound_and_tampering_refused(self):
         name = 'transport/internet/xdrive/native_cloud_auth_runtime_test.go'
         self.assertIn(name, runner.MANAGED_RUNTIME_FIXTURES)

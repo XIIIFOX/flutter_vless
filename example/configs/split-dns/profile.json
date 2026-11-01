@@ -1,0 +1,77 @@
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "dns": {
+    "servers": [
+      {
+        "address": "https://1.1.1.1/dns-query",
+        "domains": ["full:api.ipify.org"],
+        "tag": "case-api-direct-dns",
+        "skipFallback": true,
+        "finalQuery": true
+      },
+      "localhost"
+    ]
+  },
+  "inbounds": [
+    {
+      "tag": "socks-in",
+      "listen": "127.0.0.1",
+      "port": 10808,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"],
+        "routeOnly": true
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "proxy",
+      "protocol": "socks",
+      "settings": {
+        "servers": [
+          {
+            "address": "proxy.example.invalid",
+            "port": 1080
+          }
+        ]
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "network": "udp",
+        "port": "443",
+        "outboundTag": "block"
+      },
+      {
+        "type": "field",
+        "inboundTag": ["case-api-direct-dns"],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "domain": ["full:api.ipify.org"],
+        "outboundTag": "direct"
+      }
+    ]
+  }
+}

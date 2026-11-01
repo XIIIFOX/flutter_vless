@@ -6,6 +6,10 @@
 
 * Bound Android standalone and connected delay probes across SOCKS, TLS and HTTP. Retry only listener startup refusals, cancel detached-engine work and reap the probe's sockets, child, output reader and private config file.
 
+* Correct the XDRIVE examples to require VLESS Encryption and Mux. Add a registration-free S3 simulator and encrypted relay tests with fresh Core owners; cover Google OAuth/API identity, data and cancellation with controlled endpoints.
+
+* Add an explicit per-domain DNS/data-routing example, preserving caller policy on all four adapters. Qualify both split directions on a physical iPhone using fixed IP endpoints; keep external website Loading and remote-peer timeouts separate from successful traffic checks.
+
 * Prepare XDRIVE S3 and Google Drive API endpoints on Android, iOS, macOS and Windows while preserving cloud credentials, signing identities and optional fronting settings. Bind cloud client caches and requests to their owning Core instance, and require the matching managed-service runtime capability before startup.
 
 * Support scheduled GeoDAT updates with Core-compatible HTTPS, asset-count and interval checks, writable target validation and bounded cancellation on Stop. Preserve downloaded Android datasets when seeding bundled assets; add update examples and cross-platform filesystem regressions.

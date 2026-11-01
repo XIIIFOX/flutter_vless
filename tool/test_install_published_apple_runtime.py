@@ -107,6 +107,8 @@ class Workflow(unittest.TestCase):
         text = (Path(__file__).resolve().parents[1]/'.github/workflows/ci.yml').read_text()
         self.assertIn('apple_runtime_source:', text); self.assertIn('options: [build, published]', text)
         ios = text.split('\n  ios:\n', 1)[1].split('\n  windows:\n', 1)[0]
+        self.assertNotIn('REQUIRE_MANAGED_SERVICE_LIFETIMES:', ios.split('    steps:', 1)[0],
+                         'Runtime-only capability policy must not leak into synthetic qualifier fixtures')
         steps = ios.split('\n      - ')
         for marker in ['name: Build unpublished iOS Core preview', 'name: Build unpublished macOS Core preview',
                        'name: Package the checked unpublished iOS SDK', 'name: Upload the checked unpublished iOS SDK']:
@@ -116,7 +118,10 @@ class Workflow(unittest.TestCase):
         for marker in ['name: Test real iOS Xray in simulator', 'name: Test macOS protection policies',
                        'name: Build example iOS app', 'name: Build example macOS app']:
             step = next(step for step in steps if step.startswith(marker))
-            self.assertNotIn('apple_runtime_source', step)
+            self.assertNotRegex(step, r'(?m)^        if: .*apple_runtime_source')
+        for marker in ['name: Test real iOS Xray in simulator', 'name: Test macOS protection policies']:
+            step = next(step for step in steps if step.startswith(marker))
+            self.assertIn("REQUIRE_MANAGED_SERVICE_LIFETIMES: ${{ inputs.apple_runtime_source == 'published' && '1' || '0' }}", step)
         self.assertIn('REQUIRE_MANAGED_SERVICE_LIFETIMES:', ios)
         self.assertIn('tool/install_published_apple_runtime.py --verify-installed', ios)
         self.assertIn('build/published_apple_runtime/**/*.json', ios)

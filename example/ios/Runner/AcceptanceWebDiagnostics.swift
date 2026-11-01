@@ -103,7 +103,7 @@ final class AcceptanceWebDiagnosticsFactory: NSObject, FlutterPlatformViewFactor
 
   private func safariURL(_ target: String) -> URL? {
     guard let base = ["2ip": "https://2ip.ru/", "tfox": "https://tfox.dev/ip/"][target] else { return nil }
-    return URL(string: base + "?test=ios-safari-qa-" + UUID().uuidString)
+    return URL(string: base)
   }
 
   private func openSafari(target: String, result: @escaping FlutterResult) {
@@ -209,7 +209,7 @@ private final class AcceptanceWebDiagnosticsView: NSObject, FlutterPlatformView,
     paused = false
     navigationID = UUID().uuidString
     let path = target == "2ip" ? "https://2ip.ru/" : "https://tfox.dev/ip/"
-    let url = URL(string: path + "?test=ios-web-qa-" + navigationID)!
+    let url = URL(string: path)!
     record("requested", ["target": target, "navigation": navigationID, "url": safeURL(url)])
     let token = navigationID
     let work = DispatchWorkItem { [weak self] in

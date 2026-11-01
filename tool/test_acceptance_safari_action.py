@@ -45,20 +45,23 @@ class SafariActionTests(unittest.TestCase):
  def test_actual_swift_url_factory_rejects_non_enum_input(self):
   actual=body('private func safariURL(_ target: String) -> URL?')
   source='import Foundation\nfunc safariURL(_ target:String)->URL? {'+actual+'}\n'
-  source+="""let expected=["2ip":("2ip.ru","/"),"tfox":("tfox.dev","/ip/")]
+  navigation=body('func navigate(target: String)')
+  path=re.search(r'    let path = [^\n]+',navigation).group(0)
+  url=re.search(r'    let url = URL\(string: [^\n]+',navigation).group(0)
+  source+='func embeddedURL(_ target:String)->URL {\nlet navigationID="fixture-local-only"\n'+path+'\n'+url+'\nreturn url\n}\n'
+  source+="""let expected=["2ip":("2ip.ru","/","https://2ip.ru/"),"tfox":("tfox.dev","/ip/","https://tfox.dev/ip/")]
 for (target,pair) in expected {
  let first=safariURL(target)!, second=safariURL(target)!
  let parts=URLComponents(url:first,resolvingAgainstBaseURL:false)!
  precondition(parts.scheme=="https" && parts.host==pair.0 && parts.path==pair.1)
  precondition(parts.user==nil && parts.password==nil && parts.port==nil && parts.fragment==nil)
- precondition(parts.queryItems?.count==1 && parts.queryItems?.first?.name=="test")
- precondition(parts.queryItems?.first?.value?.hasPrefix("ios-safari-qa-")==true)
- precondition(first != second)
+ precondition(parts.query==nil && first.absoluteString==pair.2 && first==second)
+ precondition(embeddedURL(target).absoluteString==pair.2)
 }
 for invalid in ["","2IP","https://2ip.ru/","file:///private/","javascript:alert(1)","2ip?url=other","tfox/../","other"] {
  precondition(safariURL(invalid)==nil)
 }
-print("PASS: two fixed HTTPS targets; unique nonces; eight arbitrary inputs rejected")
+print("PASS: both navigators use exact plain HTTPS targets; eight arbitrary inputs rejected")
 """
   with tempfile.TemporaryDirectory(prefix='flvless-safari-allowlist-') as temporary:
    folder=Path(temporary);p=folder/'main.swift';p.write_text(source);binary=folder/'probe'
@@ -68,5 +71,12 @@ print("PASS: two fixed HTTPS targets; unique nonces; eight arbitrary inputs reje
    r=subprocess.run([str(binary)],capture_output=True,text=True,timeout=5)
    self.assertEqual(r.returncode,0,r.stderr[-4000:])
    self.assertIn('eight arbitrary inputs rejected',r.stdout)
+ def test_web_view_keeps_local_navigation_identity_and_reload_policy(self):
+  navigation=body('func navigate(target: String)')
+  self.assertIn('navigationID = UUID().uuidString',navigation)
+  self.assertIn('cachePolicy: .reloadIgnoringLocalCacheData',navigation)
+  self.assertNotIn('?test=',SOURCE)
+  handler=SOURCE[SOURCE.index('case "navigate":'):SOURCE.index('case "openSafari":')]
+  self.assertIn('["2ip", "tfox"].contains(target)',handler)
 
 if __name__=='__main__':unittest.main(argv=[sys.argv[0],*remaining])

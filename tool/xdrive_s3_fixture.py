@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import errno
 import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -93,6 +94,7 @@ class FixtureServer(ThreadingHTTPServer):
                        'signature_failures': 0, 'request_failures': 0,
                        'put_bytes': 0, 'get_bytes': 0, 'handler_failures': 0,
                        'client_disconnects': 0, 'incomplete_requests': 0}
+        self.handler_exception_types = {}
         super().__init__(('127.0.0.1', port), FixtureHandler)
 
     @property
@@ -109,7 +111,8 @@ class FixtureServer(ThreadingHTTPServer):
 
     def snapshot(self):
         with self.lock:
-            result = {**self.counts, 'objects': len(self.objects), 'stored_bytes': self.total_bytes}
+            result = {**self.counts, 'objects': len(self.objects), 'stored_bytes': self.total_bytes,
+                      'handler_exception_types': dict(self.handler_exception_types)}
         with self.connection_lock:
             result['active_connections'] = len(self.connections)
         return result
@@ -153,7 +156,21 @@ class FixtureServer(ThreadingHTTPServer):
             # Keep that observable without classifying peer retirement as an
             # API/protocol failure or printing the request's private contents.
             error = sys.exc_info()[1]
-            key = 'client_disconnects' if isinstance(error, (BrokenPipeError, ConnectionResetError, TimeoutError)) or self.closing and isinstance(error, OSError) else 'handler_failures'
+            # Keep only a bounded type name and an OS error number. Exception
+            # messages may contain a URL, credentials or request contents.
+            name = type(error).__name__
+            if len(name) > 80 or not name.isascii() or not name.replace('_', '').isalnum():
+                name = 'UnknownException'
+            code = error.errno if isinstance(error, OSError) else None
+            if type(code) is int and -65535 <= code <= 65535:
+                name += f'(errno={code})'
+            self.handler_exception_types[name] = self.handler_exception_types.get(name, 0) + 1
+            # Closing an owned socket can invalidate its descriptor. Other OS
+            # faults (for example permissions or I/O failure) remain failures,
+            # including while shutdown is joining an admitted handler.
+            closed_descriptor = self.closing and isinstance(error, OSError) and error.errno in {
+                errno.EBADF, errno.ENOTSOCK, getattr(errno, 'WSAENOTSOCK', errno.ENOTSOCK)}
+            key = 'client_disconnects' if isinstance(error, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError)) or closed_descriptor else 'handler_failures'
             self.counts[key] += 1
 
 

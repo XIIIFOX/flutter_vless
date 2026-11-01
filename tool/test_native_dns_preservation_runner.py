@@ -16,6 +16,26 @@ spec.loader.exec_module(runner)
 
 
 class PreservationRunnerGuards(unittest.TestCase):
+    def test_h3_read_failure_is_observed_before_input_close_and_fatal(self):
+        source = (runner.ROOT / 'third_party/xray-mobile/native_dns_preservation/xhttp_h3_lifetime_test.go').read_text()
+        observer = source[source.index('\tlogSetupDiagnostic := func('):source.index('\tfor attempt := 1; attempt <= 3; attempt++')]
+        for field in ['InputRead    h3LifetimeCause', 'InputBytes   int',
+                      'InputTimeout bool', 'InputEOF     bool',
+                      'h3LifetimeCauseOf(readErr)', 'os.IsTimeout(readErr)',
+                      'errors.Is(readErr, io.EOF)', 'tracker.snapshot()',
+                      'h3LifetimeWorkersNow()', 'diagnostic.snapshot()',
+                      'before_core_close=true']:
+            self.assertIn(field, observer)
+        branch = source[source.index('\t\tif n != 0 || readErr == nil || os.IsTimeout(readErr) {'):
+                        source.index('\t\tif !h3LifetimeWait(time.Second, func() bool { return rejected.Load()')]
+        observed = branch.index('logSetupDiagnostic(attempt, "input_read", n, readErr)')
+        self.assertLess(observed, branch.index('_ = connection.Close()'))
+        self.assertLess(branch.index('_ = connection.Close()'),
+                        branch.index('t.Fatal("H3_SETUP certificate rejection did not close input")'))
+        self.assertNotIn('startClose()', branch)
+        self.assertNotIn('tracker.snapshot()', branch)  # One shared bounded observer.
+        self.assertIn('logSetupDiagnostic(attempt, "certificate_cause", n, readErr)', source)
+
     def h3_log(self, preparers=1):
         modes = ['raw_numeric', 'native_cnc_windows'] + (['native_cnc_apple'] if preparers == 2 else [])
         lines = ''.join(f'    xhttp_h3_lifetime_test.go:400: H3_LIFETIME_PASS mode={mode}\n'

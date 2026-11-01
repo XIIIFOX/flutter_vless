@@ -556,27 +556,38 @@ func TestNativeXHTTPH3LifetimeChild(t *testing.T) {
 	}
 	xlog.RegisterHandler(diagnostic)
 	t.Logf("H3_LIFETIME_SOURCE mode=%s config_sha256=%x baseline_listen=%d baseline_send=%d", mode, sha256.Sum256(prepared), baseline.Listen, baseline.Send)
+	// Capture both failure boundaries before Core.Close or the rescue closes
+	// tracked UDP sockets. An input timeout alone cannot identify its QUIC cause.
+	logSetupDiagnostic := func(attempt int, stage string, n int, readErr error) {
+		connections, trackerError := tracker.snapshot()
+		states := make([]string, 0, len(connections))
+		for _, connection := range connections {
+			states = append(states, h3LifetimeSocketState(connection))
+		}
+		workers, workerError := h3LifetimeWorkersNow()
+		causes, messages := diagnostic.snapshot()
+		evidence, _ := json.Marshal(struct {
+			Causes       []h3LifetimeCause
+			CoreMessages []string
+			InputRead    h3LifetimeCause
+			InputBytes   int
+			InputTimeout bool
+			InputEOF     bool
+		}{causes, messages, h3LifetimeCauseOf(readErr), n, os.IsTimeout(readErr), errors.Is(readErr, io.EOF)})
+		t.Logf("H3_SETUP_DIAGNOSTIC mode=%s attempt=%d stage=%s before_core_close=true contexts=%d rejected=%d bad_cause=%d setup_http=%d bad_http=%d sockets=%d socket_states=%v tracker_error=%v listen=%d send=%d worker_error=%v evidence=%s", mode, attempt, stage, contexts.Load(), rejected.Load(), badCause.Load(), setupHTTP.Load(), badHTTP.Load(), len(connections), states, trackerError, workers.Listen, workers.Send, workerError, evidence)
+	}
 	for attempt := 1; attempt <= 3; attempt++ {
 		connection, _ := connect(t, privatePort, 1, netip.MustParseAddrPort("192.0.2.7:18083"), "")
 		var one [1]byte
 		n, readErr := connection.Read(one[:])
-		_ = connection.Close()
 		if n != 0 || readErr == nil || os.IsTimeout(readErr) {
+			logSetupDiagnostic(attempt, "input_read", n, readErr)
+			_ = connection.Close()
 			t.Fatal("H3_SETUP certificate rejection did not close input")
 		}
+		_ = connection.Close()
 		if !h3LifetimeWait(time.Second, func() bool { return rejected.Load() == int64(attempt) && contexts.Load() == 0 }) {
-			connections, trackerError := tracker.snapshot()
-			states := make([]string, 0, len(connections))
-			for _, connection := range connections {
-				states = append(states, h3LifetimeSocketState(connection))
-			}
-			workers, workerError := h3LifetimeWorkersNow()
-			causes, messages := diagnostic.snapshot()
-			evidence, _ := json.Marshal(struct {
-				Causes       []h3LifetimeCause
-				CoreMessages []string
-			}{causes, messages})
-			t.Logf("H3_SETUP_DIAGNOSTIC mode=%s attempt=%d before_core_close=true contexts=%d rejected=%d bad_cause=%d setup_http=%d bad_http=%d sockets=%d socket_states=%v tracker_error=%v listen=%d send=%d worker_error=%v evidence=%s", mode, attempt, contexts.Load(), rejected.Load(), badCause.Load(), setupHTTP.Load(), badHTTP.Load(), len(connections), states, trackerError, workers.Listen, workers.Send, workerError, evidence)
+			logSetupDiagnostic(attempt, "certificate_cause", n, readErr)
 			t.Fatal("H3_SETUP exact remote certificate rejection missing")
 		}
 		connections, err := tracker.snapshot()

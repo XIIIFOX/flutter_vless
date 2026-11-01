@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import http.client
+import errno
 import importlib.util
 import faulthandler
 from pathlib import Path
@@ -36,6 +37,108 @@ def sign(method, path, host, body=b'', secret=fixture.SECRET):
 
 
 class S3FixtureContract(unittest.TestCase):
+    def test_closing_admitted_http_worker_only_accepts_closed_descriptor_errors(self):
+        cases = [('permission', lambda: PermissionError(errno.EACCES, 'private closing exception canary'), True),
+                 ('unexpected-os', lambda: OSError(errno.EIO, 'private closing exception canary'), True),
+                 ('closed-descriptor', lambda: OSError(errno.EBADF, 'private closing exception canary'), False),
+                 ('not-a-socket', lambda: OSError(errno.ENOTSOCK, 'private closing exception canary'), False)]
+        if hasattr(errno, 'WSAENOTSOCK') and errno.WSAENOTSOCK != errno.ENOTSOCK:
+            cases.append(('winsock-not-a-socket', lambda: OSError(errno.WSAENOTSOCK, 'private closing exception canary'), False))
+        for name, make_error, fatal in cases:
+            with self.subTest(case=name):
+                entered, release = threading.Event(), threading.Event()
+                errors = []
+
+                class ClosingReply(fixture.FixtureHandler):
+                    def send_body(self, status, *args, **kwargs):
+                        if status == 404:
+                            entered.set()
+                            if not release.wait(3):
+                                raise RuntimeError('Owned closing worker was not released')
+                            raise make_error()
+                        return super().send_body(status, *args, **kwargs)
+
+                with fixture.running_server() as server:
+                    server.RequestHandlerClass = ClosingReply
+
+                    def admitted_client():
+                        try:
+                            self.request(server, 'GET', '/' + fixture.BUCKET + '/acceptance/closing')
+                        except (http.client.RemoteDisconnected, ConnectionResetError, ConnectionAbortedError):
+                            return
+                        except Exception as error:
+                            errors.append(type(error).__name__)
+                        else:
+                            errors.append('UnexpectedHTTPResponse')
+
+                    client = threading.Thread(target=admitted_client, name='owned-s3-closing-client')
+                    closer = threading.Thread(target=server.server_close, name='owned-s3-closing-server')
+                    client.start()
+                    try:
+                        self.assertTrue(entered.wait(1), 'Signed request did not reach its real response worker')
+                        closer.start()
+                        until = time.monotonic() + 1
+                        while not server.closing and time.monotonic() < until:
+                            time.sleep(.01)
+                        self.assertTrue(server.closing, 'Real server_close did not close admission')
+                        release.set()
+                    finally:
+                        release.set()
+                        if closer.ident is not None:
+                            closer.join(3)
+                        client.join(3)
+                    self.assertFalse(closer.is_alive(), 'Owned server_close worker survived')
+                    self.assertFalse(client.is_alive(), 'Owned admitted HTTP client survived')
+                    self.assertEqual(errors, [])
+                    counts = server.snapshot()
+                    self.assertEqual((counts['handler_failures'], counts['client_disconnects']), (1, 0) if fatal else (0, 1))
+                    self.assertEqual(counts['active_connections'], 0)
+                    self.assertEqual(sum(counts['handler_exception_types'].values()), 1)
+                    self.assertNotIn('private closing exception canary', str(counts))
+
+    def test_aborted_http_worker_is_peer_retirement_without_hiding_auth_or_protocol_errors(self):
+        class AbortReply(fixture.FixtureHandler):
+            def send_body(self, status, *args, **kwargs):
+                if status == 404 and self.path.endswith('/abort'):
+                    raise ConnectionAbortedError(errno.ECONNABORTED, 'private worker exception canary')
+                return super().send_body(status, *args, **kwargs)
+
+        with fixture.running_server() as server:
+            server.RequestHandlerClass = AbortReply
+            path = '/' + fixture.BUCKET + '/acceptance/abort'
+            with self.assertRaises(http.client.RemoteDisconnected):
+                self.request(server, 'GET', path)
+            counts = server.snapshot()
+            self.assertEqual((counts['handler_failures'], counts['client_disconnects']), (0, 1))
+            self.assertEqual(counts['handler_exception_types'], {f'ConnectionAbortedError(errno={errno.ECONNABORTED})': 1})
+            self.assertEqual(self.request(server, 'PUT', path, b'body',
+                lambda h: h.update(Authorization='AWS4-HMAC-SHA256 forged'))[0], 403)
+            self.assertEqual(self.request(server, 'GET', '/' + fixture.BUCKET + '/foreign/invalid')[0], 400)
+            counts = server.snapshot()
+            self.assertEqual((counts['signature_failures'], counts['request_failures'], counts['handler_failures']), (1, 2, 0))
+            self.assertNotIn('private worker exception canary', str(counts))
+        self.assertEqual(server.snapshot()['active_connections'], 0)
+
+    def test_unexpected_http_worker_errors_remain_fatal_with_sanitized_diagnostics(self):
+        class FailingReply(fixture.FixtureHandler):
+            def send_body(self, status, *args, **kwargs):
+                if status == 404:
+                    if self.path.endswith('/permission'):
+                        raise PermissionError(errno.EACCES, 'private worker exception canary')
+                    raise RuntimeError('private worker exception canary')
+                return super().send_body(status, *args, **kwargs)
+
+        with fixture.running_server() as server:
+            server.RequestHandlerClass = FailingReply
+            for suffix in ('unexpected', 'permission'):
+                with self.assertRaises(http.client.RemoteDisconnected):
+                    self.request(server, 'GET', '/' + fixture.BUCKET + '/acceptance/' + suffix)
+            counts = server.snapshot()
+            self.assertEqual((counts['handler_failures'], counts['client_disconnects']), (2, 0))
+            self.assertEqual(counts['handler_exception_types'], {'RuntimeError': 1, f'PermissionError(errno={errno.EACCES})': 1})
+            self.assertNotIn('private worker exception canary', str(counts))
+        self.assertEqual(server.snapshot()['active_connections'], 0)
+
     def test_numeric_loopback_fixture_performs_no_hostname_lookup(self):
         with mock.patch.object(socket, 'getfqdn', side_effect=AssertionError('Numeric loopback fixture attempted system DNS')):
             with fixture.running_server() as server:

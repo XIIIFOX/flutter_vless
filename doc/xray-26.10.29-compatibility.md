@@ -162,8 +162,9 @@ on the basis of these incomplete browser observations.
 * Update native consumers to the non-withdrawn kernel, then requalify them.
 * A fresh independently healthy public Android peer/reference. Current paired
   stock-Core failures do not establish expiration or a plugin defect. The
-  iPhone now passes both split directions with the documented explicit-DNS
-  recipe; its original implicit-DNS DIRECT case remains unqualified.
+  iPhone now has passes in both split directions; the default-PROXY/API-DIRECT
+  direction requires the documented explicit-DNS recipe in current evidence.
+  Its original implicit-DNS DIRECT case remains unqualified.
 * Active QUIC-SNI routing and broader remote ECH deployment. Actual numeric
   SOCKS plus TLS 1.3 SNI routing in both directions is now covered on all three
   CI systems, with wrong/missing-SNI and sniff-disabled controls.

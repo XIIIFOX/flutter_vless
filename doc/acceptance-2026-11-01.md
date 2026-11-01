@@ -57,7 +57,7 @@ Windows. Its 340 supervised runtime phases cover:
   address-carriage cases, IPv6 TCP/UDP and existing HTTP/3 traffic/lifetime
   regressions. Address carriage is not a DNS64 translator or physical handover.
 * An encrypted S3 relay with two actual Core peers and two fresh owner
-  generations, random 42 KiB application payloads in both directions, and an
+  generations, nonce-bound 42 KiB binary application payloads in both directions, and an
   independent Python SigV4/API service. The service's object-traffic totals
   include protocol overhead and are not application payload sizes.
 * Google OAuth form/Bearer identity, data round trips and cancellation of real
@@ -121,7 +121,7 @@ two-direction public Android routing pass is inferred from the older pass.
 Registration-free local Android S3 acceptance **passes** with the published
 `26.10.29-protect3` binary, an unmodified stock 26.10.31 peer in the guest and a
 Mac Python-only S3 API. Two actual example proxy-only sessions each forced a
-SOCKS request of 43,008 random bytes and received the exact 43,021-byte response;
+SOCKS request of 43,008 nonce-bound binary bytes and received the exact 43,021-byte response;
 the origin independently observed both requests. Fresh native client/server
 owners, authenticated S3 reads/writes and zero signature failures were checked.
 Both sessions stopped normally; final S3 objects, active sockets and server

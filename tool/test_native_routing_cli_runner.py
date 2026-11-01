@@ -81,6 +81,24 @@ class RoutingCLIRunnerTest(unittest.TestCase):
         for text in ['import cycle not allowed', 'missing go.sum entry', refusal + 'import cycle not allowed\n', 'unrelated error\n' + refusal]:
             self.assertFalse(runner.tidy_required(text))
 
+    def test_stock_version_requires_exact_pinned_release_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory)
+            with patch.object(runner, 'EVIDENCE', evidence):
+                for mode in ['ordinary', 'optional']:
+                    for newline in ['\n', '\r\n']:
+                        (evidence / (mode + '-version.log')).write_bytes(
+                            ('Xray 26.10.31 (Xray, Penetrates Everything.) Custom (go1.27.3 fixture/fixture)' +
+                             newline + 'A unified platform for anti-censorship.' + newline).encode())
+                        runner.require_stock_version(mode)
+                    for output in ['Xray 26.10.29 (old)', 'Xray 26.10.32 (future)',
+                                   'Xray 26.10.310 (prefix)', 'Xray 26.10.31-custom (suffix)',
+                                   'warning\nXray 26.10.31 (not first)', 'Xray 26.10.31']:
+                        with self.subTest(mode=mode, output=output):
+                            (evidence / (mode + '-version.log')).write_text(output + '\n')
+                            with self.assertRaises(ValueError):
+                                runner.require_stock_version(mode)
+
     def test_status_json_is_exact_and_single_document(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = Path(directory)

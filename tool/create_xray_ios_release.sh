@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-XRAY_VERSION="${XRAY_VERSION:-v26.10.29}"
-RELEASE_TAG="${RELEASE_TAG:-xray-ios-$XRAY_VERSION-r3}"
+XRAY_VERSION="${XRAY_VERSION:-v26.10.31}"
+RELEASE_TAG="${RELEASE_TAG:-xray-ios-$XRAY_VERSION-r1}"
 XCFRAMEWORK_PATH="${XCFRAMEWORK_PATH:-$REPO_ROOT/ios/XRay.xcframework}"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/build/xray-ios-release}"
 NOTES_FILE="${NOTES_FILE:-$REPO_ROOT/doc/release/$RELEASE_TAG.md}"
@@ -19,7 +19,7 @@ fi
 
 PREPARATION_RECEIPT="${PREPARATION_RECEIPT:-$REPO_ROOT/ios/build_xray_ios/classic-core-inputs.json}"
 : "${SOURCE_HEAD:?Set SOURCE_HEAD to the exact committed producer revision}"
-[[ "$XRAY_VERSION" == v26.10.29 && "$RELEASE_TAG" == xray-ios-v26.10.29-r3 ]] || { echo 'Unexpected canonical runtime release tag' >&2; exit 1; }
+[[ "$XRAY_VERSION" == v26.10.31 && "$RELEASE_TAG" == xray-ios-v26.10.31-r1 ]] || { echo 'Unexpected canonical runtime release tag' >&2; exit 1; }
 python3 "$REPO_ROOT/tool/package_apple_runtime_release.py" --platform ios \
     --framework "$XCFRAMEWORK_PATH" --preparation "$PREPARATION_RECEIPT" \
     --output "$OUTPUT_DIR" --head "$SOURCE_HEAD"
@@ -34,22 +34,15 @@ Tag:      $RELEASE_TAG
 Checksum: $CHECKSUM
 Notes:    $NOTES_FILE
 
-1. Create or update this GitHub release:
+1. Create this new immutable GitHub release:
 
    gh release create "$RELEASE_TAG" "$ARCHIVE_PATH" \\
      --repo XIIIFOX/flutter_vless \\
      --title "XRay iOS $XRAY_VERSION" \\
      --notes-file "$NOTES_FILE"
 
-   If the release already exists:
-
-   gh release edit "$RELEASE_TAG" \\
-     --repo XIIIFOX/flutter_vless \\
-     --notes-file "$NOTES_FILE"
-
-   gh release upload "$RELEASE_TAG" "$ARCHIVE_PATH" \\
-     --repo XIIIFOX/flutter_vless \\
-     --clobber
+   If this tag already exists, keep its assets unchanged and choose a new
+   reviewed native revision; do not replace a published archive.
 
 2. Update ios/flutter_vless/Package.swift and ios/flutter_vless.podspec with:
 

@@ -99,6 +99,14 @@ def require_status(name, expected):
         raise ValueError('CLI output differs from its fixed status contract')
 
 
+def require_stock_version(mode):
+    # Require the complete release token: accepting a numeric prefix would also
+    # accept a different release such as 26.10.310 or an unreviewed suffix.
+    output = (EVIDENCE / (mode + '-version.log')).read_text(encoding='utf-8')
+    if not output.startswith('Xray 26.10.31 ('):
+        raise ValueError('Stock version does not identify the pinned Core release')
+
+
 def copy_inputs(source):
     # The prerequisite remains immutable. Even its already-patched go.mod is
     # never edited: dependency wiring belongs only to these second copies.
@@ -247,8 +255,7 @@ def main(argv=None):
             run(mode + '-main-pure', [str(tests), '-test.run', core_runner.test_pattern(MAIN_TESTS), '-test.v', '-test.timeout=20s'], seconds=30)
             core_runner.require_pass(mode + '-main-pure', MAIN_TESTS, report['results'])
             run(mode + '-version', [str(binary), *safe_cli_args(['version'])], seconds=20)
-            if not (EVIDENCE / (mode + '-version.log')).read_text(encoding='utf-8').startswith('Xray 26.10.29'):
-                raise ValueError('Stock version does not identify the pinned Core release')
+            require_stock_version(mode)
             code, capability = (0, 1) if optional else (32, 0)
             run(mode + '-capabilities', [str(binary), *safe_cli_args(['native-routing', 'capabilities'])], seconds=20, expected=code)
             require_status(mode + '-capabilities', {'stage': 'capabilities', 'code': code, 'capability': capability})

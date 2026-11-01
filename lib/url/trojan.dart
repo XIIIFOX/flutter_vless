@@ -75,7 +75,7 @@ class TrojanURL extends FlutterVlessURL {
               "address": address,
               "method": "chacha20-poly1305",
               "ota": false,
-              "password": uri.userInfo,
+              "password": Uri.decodeComponent(uri.userInfo),
               "port": port,
               "level": level,
               "email": null,

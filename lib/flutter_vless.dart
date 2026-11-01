@@ -361,20 +361,28 @@ class FlutterVless {
   /// For raw Xray JSON, Clash YAML, sing-box JSON, or subscription payloads,
   /// use [parse] or [parseMany].
   static FlutterVlessURL parseFromURL(String url) {
-    switch (url.split("://")[0].toLowerCase()) {
+    final separator = url.indexOf('://');
+    if (separator <= 0) {
+      throw ArgumentError('url is invalid');
+    }
+    final scheme = url.substring(0, separator).toLowerCase();
+    // Only the scheme is case-insensitive. Base64, credentials and query
+    // values must retain their original bytes.
+    final normalized = scheme + url.substring(separator);
+    switch (scheme) {
       case 'vmess':
-        return VmessURL(url: url);
+        return VmessURL(url: normalized);
       case 'vless':
-        return VlessURL(url: url);
+        return VlessURL(url: normalized);
       case 'trojan':
-        return TrojanURL(url: url);
+        return TrojanURL(url: normalized);
       case 'ss':
-        return ShadowSocksURL(url: url);
+        return ShadowSocksURL(url: normalized);
       case 'socks':
-        return SocksURL(url: url);
+        return SocksURL(url: normalized);
       case 'hysteria2':
       case 'hy2':
-        return Hysteria2URL(url: url);
+        return Hysteria2URL(url: normalized);
       default:
         throw ArgumentError('url is invalid');
     }

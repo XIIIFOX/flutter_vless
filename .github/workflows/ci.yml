@@ -14,6 +14,7 @@ on:
           - apple-host-policy
           - apple-fakedns
           - core-dns-context
+          - compatibility
           - native-config
           - native-listeners
           - preparation-report
@@ -83,7 +84,7 @@ jobs:
         run: python tool/test_live_acceptance_clock.py -v
 
   core-dns-context:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'core-dns-context' || inputs.validation == 'native-listeners' || inputs.validation == 'preparation-report' || inputs.validation == 'native-config'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'core-dns-context' || inputs.validation == 'compatibility' || inputs.validation == 'native-listeners' || inputs.validation == 'preparation-report' || inputs.validation == 'native-config'
     name: Scoped Core DNS runtime (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
@@ -134,7 +135,7 @@ jobs:
           NATIVE_CONFIG_VALIDATION: ${{ inputs.validation }}
         run: |
           test_args=(--filter TunnelRoutingMetadataTests)
-          if [[ "$NATIVE_CONFIG_VALIDATION" == 'native-config' ]]; then
+          if [[ "$NATIVE_CONFIG_VALIDATION" == 'native-config' || "$NATIVE_CONFIG_VALIDATION" == 'compatibility' ]]; then
             test_args=()
           fi
           for platform in ios macos; do
@@ -172,7 +173,7 @@ jobs:
           retention-days: 7
 
   dart:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'preparation-report'
+    if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'preparation-report' || inputs.validation == 'compatibility'
     name: Dart and Flutter tests
     runs-on: ubuntu-latest
     steps:

@@ -78,7 +78,7 @@ class VlessURL extends FlutterVlessURL {
               "port": port,
               "users": [
                 {
-                  "id": uri.userInfo,
+                  "id": Uri.decodeComponent(uri.userInfo),
                   "alterId": null,
                   "security": security,
                   "level": level,

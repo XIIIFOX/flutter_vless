@@ -322,6 +322,16 @@ class RunnerGuards(unittest.TestCase):
             for runtime in [False,True]:
                 with self.assertRaises(ValueError):runner.selected_tests(root,'app/dispatcher',runtime=runtime)
 
+    def test_literal_ip_tls_runtime_is_selected_and_bound_without_local_execution(self):
+        overlay = runner.CAPABILITY / 'overlay'
+        name = 'TestNativeVPNRoutingRuntimeLiteralIPTLS'
+        selected = runner.selected_tests(overlay, 'app/dispatcher', runtime=True)
+        self.assertEqual(selected.count(name), 1)
+        self.assertNotIn(name, runner.selected_tests(overlay, 'app/dispatcher'))
+        source = overlay / 'app/dispatcher/native_routing_sniff_runtime_test.go'
+        relative = str(source.relative_to(runner.ROOT)).replace(os.sep, '/')
+        self.assertEqual(runner.source_snapshot()[relative], runner.digest(source))
+
     def test_success_markers_must_name_every_selected_top_level_test(self):
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(runner,'EVIDENCE',Path(temporary)):
             path=Path(temporary)/'pure.log'

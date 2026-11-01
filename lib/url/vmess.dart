@@ -31,10 +31,11 @@ class VmessURL extends FlutterVlessURL {
     String? fingerprint = (rawConfig['fp'] != null && rawConfig['fp'] != '')
         ? rawConfig['fp']
         : streamSettingsBuilder.tlsFingerprint;
+    final configuredSni = rawConfig['sni'] as String?;
     super.populateTlsSettings(
       streamSecurity: rawConfig['tls'],
       allowInsecure: allowInsecure,
-      sni: sni,
+      sni: configuredSni == null || configuredSni.isEmpty ? sni : configuredSni,
       fingerprint: fingerprint,
       alpns: rawConfig['alpn'],
       publicKey: null,
@@ -49,7 +50,7 @@ class VmessURL extends FlutterVlessURL {
   late final Map<String, dynamic> rawConfig;
 
   @override
-  String get remark => rawConfig['ps'];
+  String get remark => rawConfig['ps'] ?? '';
 
   @override
   String get address => rawConfig['add'] ?? '';

@@ -72,8 +72,10 @@ abstract final class XrayGeodataUpdate {
   static BigInt? _constantDelayNanoseconds(String cron) {
     if (!cron.startsWith('@every ')) return null;
     var input = cron.substring(7);
-    if (input.length > 256)
-      return null; // Bound optional early parsing; Core owns the complete grammar.
+    // Bound optional early parsing; Core owns the complete grammar.
+    if (input.length > 256) {
+      return null;
+    }
     var negative = false;
     if (input.startsWith('-') || input.startsWith('+')) {
       negative = input.startsWith('-');

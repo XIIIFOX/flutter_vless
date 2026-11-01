@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import http.client
 import errno
+from contextlib import contextmanager
 import importlib.util
 import faulthandler
 from pathlib import Path
@@ -18,6 +19,27 @@ import xml.etree.ElementTree as ET
 spec = importlib.util.spec_from_file_location('s3_fixture', Path(__file__).with_name('xdrive_s3_fixture.py'))
 fixture = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixture)
+
+
+@contextmanager
+def owned_thread_error_guard(test):
+    """Join callers before exit; fail on owned worker errors without messages."""
+    original = threading.excepthook
+    failures = []
+
+    def observe(args):
+        if args.thread.name.startswith('owned-s3-'):
+            if len(failures) < 16:
+                failures.append(args.exc_type.__name__)
+        else:
+            original(args)
+
+    threading.excepthook = observe
+    try:
+        yield
+    finally:
+        threading.excepthook = original
+        test.assertEqual(failures, [], 'Owned fixture thread exception')
 
 
 def sign(method, path, host, body=b'', secret=fixture.SECRET):
@@ -37,6 +59,32 @@ def sign(method, path, host, body=b'', secret=fixture.SECRET):
 
 
 class S3FixtureContract(unittest.TestCase):
+    def test_owned_thread_failure_guard_rejects_hidden_errors_and_restores_hook(self):
+        original = threading.excepthook
+
+        def fail():
+            raise RuntimeError('private background exception canary')
+
+        with self.assertRaises(AssertionError) as rejected:
+            with owned_thread_error_guard(self):
+                worker = threading.Thread(target=fail, name='owned-s3-guard-negative-control')
+                worker.start()
+                worker.join(1)
+                self.assertFalse(worker.is_alive())
+        self.assertIs(threading.excepthook, original)
+        self.assertIn('RuntimeError', str(rejected.exception))
+        self.assertNotIn('private background exception canary', str(rejected.exception))
+        delegated = []
+        with mock.patch.object(threading, 'excepthook', side_effect=lambda args: delegated.append(args.exc_type)) as prior:
+            with owned_thread_error_guard(self):
+                worker = threading.Thread(target=fail, name='unrelated-guard-negative-control')
+                worker.start()
+                worker.join(1)
+                self.assertFalse(worker.is_alive())
+            self.assertIs(threading.excepthook, prior)
+        self.assertEqual(delegated, [RuntimeError])
+        self.assertIs(threading.excepthook, original)
+
     def test_closing_admitted_http_worker_only_accepts_closed_descriptor_errors(self):
         cases = [('permission', lambda: PermissionError(errno.EACCES, 'private closing exception canary'), True),
                  ('unexpected-os', lambda: OSError(errno.EIO, 'private closing exception canary'), True),
@@ -47,7 +95,15 @@ class S3FixtureContract(unittest.TestCase):
         for name, make_error, fatal in cases:
             with self.subTest(case=name):
                 entered, release = threading.Event(), threading.Event()
+                loop_stopped, stop_ack = threading.Event(), threading.Event()
                 errors = []
+                original_loop = fixture.FixtureServer.serve_forever
+
+                def observed_loop(server, *args, **kwargs):
+                    try:
+                        return original_loop(server, *args, **kwargs)
+                    finally:
+                        loop_stopped.set()
 
                 class ClosingReply(fixture.FixtureHandler):
                     def send_body(self, status, *args, **kwargs):
@@ -58,7 +114,8 @@ class S3FixtureContract(unittest.TestCase):
                             raise make_error()
                         return super().send_body(status, *args, **kwargs)
 
-                with fixture.running_server() as server:
+                with mock.patch.object(fixture.FixtureServer, 'serve_forever', observed_loop), \
+                        owned_thread_error_guard(self), fixture.running_server() as server:
                     server.RequestHandlerClass = ClosingReply
 
                     def admitted_client():
@@ -71,12 +128,23 @@ class S3FixtureContract(unittest.TestCase):
                         else:
                             errors.append('UnexpectedHTTPResponse')
 
+                    def orderly_close():
+                        if not loop_stopped.is_set():
+                            server.shutdown()
+                        if not loop_stopped.wait(2):
+                            raise RuntimeError('Owned server loop did not stop before socket close')
+                        stop_ack.set()
+                        server.server_close()
+
                     client = threading.Thread(target=admitted_client, name='owned-s3-closing-client')
-                    closer = threading.Thread(target=server.server_close, name='owned-s3-closing-server')
+                    closer = threading.Thread(target=orderly_close, name='owned-s3-closing-server')
                     client.start()
                     try:
                         self.assertTrue(entered.wait(1), 'Signed request did not reach its real response worker')
                         closer.start()
+                        # shutdown can need serve_forever's 0.5s poll. Observe
+                        # that phase separately before timing close admission.
+                        self.assertTrue(stop_ack.wait(2), 'Owned serve loop did not acknowledge shutdown')
                         until = time.monotonic() + 1
                         while not server.closing and time.monotonic() < until:
                             time.sleep(.01)

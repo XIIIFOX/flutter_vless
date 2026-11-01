@@ -12,6 +12,8 @@ import 'package:flutter_vless_example/options_storage.dart';
 
 import 'acceptance_dns_probe.dart';
 import 'acceptance_web_probe.dart';
+import 'acceptance_connection_probe.dart';
+import 'import_contract_probe.dart';
 
 Future<void> main() async {
   enableFlutterDriverExtension(handler: handleLiveAcceptanceRequest);
@@ -42,6 +44,31 @@ Future<String> handleLiveAcceptanceRequest(
   String? request, {
   AcceptanceDnsProbeRunner? dnsProbe,
 }) async {
+  const connectedTargets = {
+    'acceptance-connected-delay-2ip': '2ip',
+    'acceptance-connected-delay-tfox': 'tfox',
+  };
+  final target = connectedTargets[request];
+  if (target != null) {
+    if (kReleaseMode) return 'acceptance-unsupported';
+    return jsonEncode(await runAcceptanceConnectedProbe(target));
+  }
+  if (request == 'acceptance-network-inventory' ||
+      request == 'acceptance-import-contract') {
+    if (kReleaseMode) return 'acceptance-unsupported';
+    if (!await acceptanceConnectionProbeAdmitted()) {
+      return 'acceptance-unavailable';
+    }
+    try {
+      return jsonEncode(
+        request == 'acceptance-network-inventory'
+            ? await runAcceptanceNetworkInventory()
+            : await runAcceptanceImportContract(),
+      );
+    } catch (_) {
+      return 'acceptance-unavailable';
+    }
+  }
   if (request == 'acceptance-own-view-snapshot') {
     if (kReleaseMode) return 'acceptance-unsupported';
     return captureAcceptanceOwnView();

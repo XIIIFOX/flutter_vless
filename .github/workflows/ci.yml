@@ -115,6 +115,12 @@ jobs:
         run: |
           python tool/test_apple_classic_core.py
           python tool/test_build_apple_core_preview.py
+      - name: Test bounded Apple delay sockets and strict authentication
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          python3 tool/test_apple_delay_deadline.py
+          bash tool/test_ios_local_proxy_transport.sh
       - name: Test unpublished DNS context with actual isolated Core instances
         run: python tool/test_native_dns_context_runtime.py --run-runtime
       - name: Test production preparation with Classic and H3 lifetime cleanup
@@ -169,6 +175,9 @@ jobs:
             build/native_tun_preview/*.jsonl
             build/native_tun_preview/*.log
             build/native_tun_preview/result.json
+            build/apple_delay_deadline/**/*.json
+            build/apple_delay_deadline/**/compiler.log
+            build/ios_local_proxy_transport/compiler.log
           if-no-files-found: error
           retention-days: 7
 

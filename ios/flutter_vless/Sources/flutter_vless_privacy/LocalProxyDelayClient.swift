@@ -7,16 +7,20 @@ import Darwin
 public enum LocalProxyDelayClient {
     public static func measure(url: URL, port: Int, credentials: LocalProxyCredentials?,
                                proxyProtocol: String = "socks", completion: @escaping (Int64) -> Void) {
+        let budget = LocalProxyIOBudget(timeout: 10)
         DispatchQueue.global(qos: .utility).async {
-            completion(measureResponse(url: url, port: port, credentials: credentials, proxyProtocol: proxyProtocol))
+            completion(measureResponse(url: url, port: port, credentials: credentials,
+                                       proxyProtocol: proxyProtocol, budget: budget))
         }
     }
 
-    private static func measureResponse(url: URL, port: Int, credentials: LocalProxyCredentials?, proxyProtocol: String) -> Int64 {
+    private static func measureResponse(url: URL, port: Int, credentials: LocalProxyCredentials?,
+                                        proxyProtocol: String, budget: LocalProxyIOBudget) -> Int64 {
         guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
               let rawHost = url.host, !rawHost.isEmpty, url.user == nil, url.password == nil,
               (1...65535).contains(port), ["socks", "http"].contains(proxyProtocol),
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return -1 }
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              budget.canContinue else { return -1 }
         let host = rawHost.hasPrefix("[") && rawHost.hasSuffix("]") ? String(rawHost.dropFirst().dropLast()) : rawHost
         let destinationPort = url.port ?? (scheme == "https" ? 443 : 80)
         let start = DispatchTime.now().uptimeNanoseconds
@@ -24,13 +28,13 @@ public enum LocalProxyDelayClient {
             let fd: Int32
             if proxyProtocol == "http" {
                 fd = try LocalHTTPProxyClient.openConnection(proxyPort: port, credentials: credentials,
-                    host: host, port: destinationPort, timeout: 8)
+                    host: host, port: destinationPort, timeout: 8, budget: budget)
             } else {
                 fd = try LocalSOCKS5Client.openConnection(proxyPort: port, credentials: credentials,
-                    host: host, port: destinationPort, timeout: 8)
+                    host: host, port: destinationPort, timeout: 8, budget: budget)
             }
             defer { close(fd) }
-            let connection = LocalProxyTLSConnection(fd: fd, deadline: start + 10_000_000_000)
+            let connection = LocalProxyTLSConnection(fd: fd, budget: budget)
             if scheme == "https", !connection.startTLS(host: host) { return -1 }
             let path = components.percentEncodedPath.isEmpty ? "/" : components.percentEncodedPath
             let target = path + (components.percentEncodedQuery.map { "?" + $0 } ?? "")
@@ -57,11 +61,24 @@ public enum LocalProxyDelayClient {
 /// HTTP bytes. SecureTransport remains available on iOS 15 and supports TLS 1.2.
 private final class LocalProxyTLSConnection {
     let fd: Int32
-    let deadline: UInt64
+    let budget: LocalProxyIOBudget
     private var tls: SSLContext?
 
-    init(fd: Int32, deadline: UInt64) { self.fd = fd; self.deadline = deadline }
-    private var withinDeadline: Bool { DispatchTime.now().uptimeNanoseconds < deadline }
+    init(fd: Int32, budget: LocalProxyIOBudget) { self.fd = fd; self.budget = budget }
+    private var withinDeadline: Bool { budget.canContinue }
+
+    private func waitForIO(write: Bool) -> Bool {
+        while budget.canContinue {
+            let milliseconds = budget.waitMilliseconds()
+            guard milliseconds > 0 else { return false }
+            var descriptor = pollfd(fd: fd, events: write ? Int16(POLLOUT) : Int16(POLLIN), revents: 0)
+            let result = Darwin.poll(&descriptor, 1, milliseconds)
+            guard budget.canContinue else { return false }
+            if result > 0 { return descriptor.revents & Int16(POLLNVAL) == 0 }
+            if result < 0 && errno != EINTR { return false }
+        }
+        return false
+    }
 
     func startTLS(host: String) -> Bool {
         guard let context = SSLCreateContext(kCFAllocatorDefault, .clientSide, .streamType) else { return false }
@@ -93,7 +110,7 @@ private final class LocalProxyTLSConnection {
 
     func write(_ bytes: [UInt8]) -> Bool {
         guard withinDeadline else { return false }
-        guard let tls else { return LocalSOCKS5Client.sendAll(fd: fd, bytes: bytes) }
+        guard let tls else { return LocalSOCKS5Client.sendAll(fd: fd, bytes: bytes, budget: budget) }
         var offset = 0
         while offset < bytes.count, withinDeadline {
             var count = 0
@@ -113,30 +130,28 @@ private final class LocalProxyTLSConnection {
                 if count > 0 { return Array(bytes.prefix(count)) }
                 guard status == errSecSuccess || status == errSSLWouldBlock else { return nil }
             } else {
-                count = bytes.withUnsafeMutableBytes { recv(fd, $0.baseAddress, maxCount, 0) }
-                if count > 0 { return Array(bytes.prefix(count)) }
-                guard count < 0 && errno == EINTR else { return nil }
+                return LocalSOCKS5Client.receiveSome(fd: fd, maxCount: maxCount, budget: budget)
             }
         }
         return nil
     }
 
     private func transportRead(_ data: UnsafeMutableRawPointer, _ size: UnsafeMutablePointer<Int>) -> OSStatus {
-        guard withinDeadline else { size.pointee = 0; return errSSLClosedAbort }
+        guard waitForIO(write: false) else { size.pointee = 0; return errSSLClosedAbort }
         let requested = size.pointee
-        let count = recv(fd, data, requested, 0)
+        let count = recv(fd, data, requested, MSG_DONTWAIT)
         size.pointee = max(0, count)
         if count > 0 { return count == requested ? errSecSuccess : errSSLWouldBlock }
         if count == 0 { return errSSLClosedGraceful }
-        return errno == EINTR ? errSSLWouldBlock : errSSLClosedAbort
+        return [EINTR, EAGAIN, EWOULDBLOCK].contains(errno) ? errSSLWouldBlock : errSSLClosedAbort
     }
 
     private func transportWrite(_ data: UnsafeRawPointer, _ size: UnsafeMutablePointer<Int>) -> OSStatus {
-        guard withinDeadline else { size.pointee = 0; return errSSLClosedAbort }
+        guard waitForIO(write: true) else { size.pointee = 0; return errSSLClosedAbort }
         let requested = size.pointee
-        let count = send(fd, data, requested, MSG_NOSIGNAL)
+        let count = send(fd, data, requested, MSG_NOSIGNAL | MSG_DONTWAIT)
         size.pointee = max(0, count)
         if count > 0 { return count == requested ? errSecSuccess : errSSLWouldBlock }
-        return errno == EINTR ? errSSLWouldBlock : errSSLClosedAbort
+        return [EINTR, EAGAIN, EWOULDBLOCK].contains(errno) ? errSSLWouldBlock : errSSLClosedAbort
     }
 }

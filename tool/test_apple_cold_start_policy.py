@@ -48,10 +48,16 @@ def main():
         helper = helper_source.decode()
         helper = "\n".join(line for line in helper.splitlines() if not line.startswith("import NetworkExtension") and not line.startswith("import flutter_vless"))
         helper = helper.replace("public ", "")  # fake OS types are intentionally internal
+        dns_path = support / "TunnelDNSPolicy.swift"
+        dns_source = dns_path.read_bytes()
+        dns_text = dns_source.decode()
+        begin = dns_text.index("    public static func requiresPhysicalInterfaceBinding(")
+        end = dns_text.index("\n    }\n", begin) + len("\n    }\n")
+        dns_binding = dns_text[begin:end]
         generated = output / (platform + ".swift")
         field_source = (privacy / "LocalProxyAccessPolicy.swift").read_text()
         field_source = field_source[field_source.index("public enum XrayJSONField {"):]
-        generated.write_text((ROOT / "tool/fixtures/apple_cold_start_policy.swift").read_text().replace("// ACTUAL_POLICY", helper).replace("// ACTUAL_START", entry).replace("// ACTUAL_PREPARATION_HELPERS", extras).replace("// ACTUAL_STOP", stop) + "\n" + field_source)
+        generated.write_text((ROOT / "tool/fixtures/apple_cold_start_policy.swift").read_text().replace("// ACTUAL_POLICY", helper).replace("// ACTUAL_START", entry).replace("// ACTUAL_PREPARATION_HELPERS", extras).replace("// ACTUAL_STOP", stop).replace("// ACTUAL_DNS_BINDING_REQUIREMENT", dns_binding) + "\n" + field_source)
         inputs = [privacy / "VlessNativeOptions.swift", privacy / "CorePreflightPolicy.swift", privacy / "XdriveServicePolicy.swift", privacy / "GeoDatAssetPolicy.swift", support / "TunnelSessionAdmission.swift", support / "TunnelEndpointPlanAdmission.swift", generated]
         binary = output / platform
         command = ["xcrun", "swiftc", "-O", "-parse-as-library"]
@@ -65,7 +71,8 @@ def main():
         log.write_text(run.stdout + run.stderr)
         assert (ROOT / provider).read_text() == text and helper_path.read_bytes() == helper_source
         assert fixture_path.read_bytes() == fixture_source and plan_path.read_bytes() == plan_source
-        results[platform] = {"exit": run.returncode, "fixture_sha256": hashlib.sha256(fixture_source).hexdigest(), "endpoint_plan_sha256": hashlib.sha256(plan_source).hexdigest(), "provider_sha256": hashlib.sha256((ROOT / provider).read_bytes()).hexdigest(), "policy_sha256": hashlib.sha256(helper_path.read_bytes()).hexdigest(), "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()}
+        assert dns_path.read_bytes() == dns_source
+        results[platform] = {"exit": run.returncode, "fixture_sha256": hashlib.sha256(fixture_source).hexdigest(), "endpoint_plan_sha256": hashlib.sha256(plan_source).hexdigest(), "provider_sha256": hashlib.sha256((ROOT / provider).read_bytes()).hexdigest(), "policy_sha256": hashlib.sha256(helper_path.read_bytes()).hexdigest(), "dns_policy_sha256": hashlib.sha256(dns_source).hexdigest(), "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()}
         print(platform, run.returncode, run.stdout, flush=True)
     (output / "result.json").write_text(json.dumps({"results": results, "fake_only": True, "real_Core_network_preferences_devices": False}, indent=2) + "\n")
     assert all(value["exit"] == 0 for value in results.values()), results

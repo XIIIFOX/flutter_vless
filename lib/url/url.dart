@@ -177,8 +177,8 @@ abstract class FlutterVlessURL {
       sni = host ?? "";
     } else if (normalizedTransport == 'xhttp') {
       // XHTTP links often rely on server-specific knobs in `extra`. Preserving
-      // them is required for compatibility, but it is not proof the transport
-      // will work on iOS; the provider HTTP health check is the real signal.
+      // them is required for compatibility. Measure an allowed destination
+      // through the connected runtime to check the actual network path.
       streamSettingsBuilder.network = 'xhttp';
       final xhttpExtra = decodeXhttpExtra(extra);
       streamSettingsBuilder.xhttpSettings = {

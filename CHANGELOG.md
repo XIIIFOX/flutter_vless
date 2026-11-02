@@ -1,5 +1,9 @@
 ## 1.1.7
 
+* Make Apple VPN readiness depend on the current packet worker and authenticated local listener, with a cancellable deadline. Remove fixed public connectivity targets so private-only and default-blocked profiles can become ready; measure an allowed URL separately with `getConnectedServerDelay`.
+
+* Prepare Apple `tcp+local`, `https+local` and `h2c+local` DNS through closed, interface-bound resolver branches. Preserve routed DoH hosts and per-domain selection, refuse unqualified local destinations and require native interface-binding support for DNS-only profiles too.
+
 * Add Core31 examples and bounded runtime regressions for GeoDAT gzip, XHTTP OPTIONS/server h2Params, fragmented QUIC SNI routing, Windows Core TUN protocol/port leak rules, and HTTP inbound 100-continue. Keep device acceptance separate from controlled native tests.
 
 * Consume the public Android runtime `26.10.31-protect2` with strict Maven checksums. Release the allocated XHTTP listener when malformed server `h2Params` is rejected, preserving successful configuration behavior and runtime capabilities. This native runtime update does not publish the Flutter plugin.

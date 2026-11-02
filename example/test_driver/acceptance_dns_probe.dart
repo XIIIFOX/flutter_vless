@@ -6,11 +6,18 @@ import 'dart:typed_data';
 
 typedef AcceptanceDnsSocketFactory = Future<RawDatagramSocket> Function();
 typedef AcceptanceDnsProbeRunner = Future<Map<String, Object>> Function();
+typedef AcceptanceNamedDnsProbeRunner =
+    Future<Map<String, Object>> Function(String domain);
 
 Future<Map<String, Object>> runAcceptanceDnsProbe({
+  String queryDomain = 'tfox.dev',
   AcceptanceDnsSocketFactory? socketFactory,
   int Function()? requestId,
 }) async {
+  // Fixed public QA targets only; this entrypoint is never a general DNS client.
+  if (!{'tfox.dev', '1cfresh.com'}.contains(queryDomain)) {
+    throw ArgumentError.value(queryDomain, 'queryDomain');
+  }
   final bind =
       socketFactory ??
       () => RawDatagramSocket.bind(
@@ -30,11 +37,11 @@ Future<Map<String, Object>> runAcceptanceDnsProbe({
       var id = nextId() & 0xffff;
       if (id == previousId) id = (id + 1) & 0xffff;
       previousId = id;
-      final reply = await _exchange(_query(id, type), bind);
+      final reply = await _exchange(_query(id, type, queryDomain), bind);
       if (reply.address.address != '10.0.85.53' || reply.port != 53) {
         throw const _InvalidResponse('peer');
       }
-      result = _parse(reply.data, id, type);
+      result = _parse(reply.data, id, type, queryDomain);
     } on TimeoutException {
       result = {'status': 'timeout', 'answerCount': 0, 'addressCount': 0};
     } on _InvalidResponse catch (error) {
@@ -50,12 +57,18 @@ Future<Map<String, Object>> runAcceptanceDnsProbe({
       result = {'status': 'io_error', 'answerCount': 0, 'addressCount': 0};
     }
     results.add({
+      'queryDomain': queryDomain,
       'queryType': type == 1 ? 'A' : 'AAAA',
       ...result,
       'durationMs': watch.elapsedMilliseconds,
     });
   }
-  return {'version': 1, 'probe': 'managed_dns', 'results': results};
+  return {
+    'version': 1,
+    'probe': 'managed_dns',
+    'queryDomain': queryDomain,
+    'results': results,
+  };
 }
 
 Future<Datagram> _exchange(
@@ -149,7 +162,7 @@ Future<Datagram> _exchange(
   }
 }
 
-Uint8List _query(int id, int type) => Uint8List.fromList([
+Uint8List _query(int id, int type, String domain) => Uint8List.fromList([
   id >> 8,
   id & 255,
   1,
@@ -162,15 +175,7 @@ Uint8List _query(int id, int type) => Uint8List.fromList([
   0,
   0,
   0,
-  4,
-  116,
-  102,
-  111,
-  120,
-  3,
-  100,
-  101,
-  118,
+  for (final label in domain.split('.')) ...[label.length, ...label.codeUnits],
   0,
   0,
   type,
@@ -178,7 +183,7 @@ Uint8List _query(int id, int type) => Uint8List.fromList([
   1,
 ]);
 
-Map<String, Object> _parse(Uint8List bytes, int id, int type) {
+Map<String, Object> _parse(Uint8List bytes, int id, int type, String domain) {
   if (bytes.length < 12 || bytes.length > 4096) {
     throw const _InvalidResponse('bounds');
   }
@@ -196,9 +201,7 @@ Map<String, Object> _parse(Uint8List bytes, int id, int type) {
   if (questions != 1 || answers > 64 || authority + additional > 64) {
     throw const _InvalidResponse('bounds');
   }
-  if (reader.name() != 'tfox.dev' ||
-      reader.word() != type ||
-      reader.word() != 1) {
+  if (reader.name() != domain || reader.word() != type || reader.word() != 1) {
     throw const _InvalidResponse('question');
   }
   final aliases = <String, String>{};
@@ -241,8 +244,8 @@ Map<String, Object> _parse(Uint8List bytes, int id, int type) {
     reader.position = end;
   }
   if (reader.position != bytes.length) throw const _InvalidResponse('bounds');
-  final chain = <String>{'tfox.dev'};
-  var terminal = 'tfox.dev';
+  final chain = <String>{domain};
+  var terminal = domain;
   while (aliases.containsKey(terminal)) {
     terminal = aliases[terminal]!;
     if (!chain.add(terminal) || chain.length > 17) {
@@ -260,7 +263,7 @@ Map<String, Object> _parse(Uint8List bytes, int id, int type) {
     'rcode': rcode,
     'answerCount': answers,
     'addressCount': count,
-    if (type == 1)
+    if (type == 1 && domain == 'tfox.dev')
       // A diagnostic expectation, never resolver configuration or a fallback.
       'expectedPublicAddressMatch':
           rcode == 0 &&

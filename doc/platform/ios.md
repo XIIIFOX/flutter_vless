@@ -237,14 +237,19 @@ supported by the configuration model. Standalone delay returns -1 while an
 app-process proxy-only runtime is active, so a probe cannot replace it.
 
 The current provider installs virtual system DNS `10.0.85.53`. Its requests pass
-through authenticated local SOCKS and a TCP DNS outbound chained to the selected
-remote proxy, including HTTP/SOCKS servers without UDP support. Service DNS rules
-precede application `UDP -> direct` rules. Proxy endpoint names are resolved
-before routes are installed; user DNS never falls back to the system resolver
-when proxy DNS fails. No public resolver is excluded from VPN routes.
+through authenticated local SOCKS to the caller's Core DNS configuration. When
+the caller has no explicit remote resolver, the protected default uses TCP DNS
+through the selected remote proxy, including HTTP/SOCKS servers without UDP
+support. Service DNS rules precede application `UDP -> direct` rules. Proxy
+endpoint names are resolved before routes are installed; user DNS never falls
+back to the system resolver when proxy DNS fails. No public resolver is excluded
+from VPN routes. See [Apple readiness and local DNS](../apple-readiness-and-dns.md)
+for bounded `tcp+local`, `https+local` and `h2c+local` preparation.
 
 DNS through a plain HTTP/SOCKS server does not encrypt that transport. `CONNECTED`
-means the maintained forwarding path passed an authenticated data check, not that
-every outbound in arbitrary raw JSON is reachable. Delay probes validate HTTPS
+means the current native packet worker and authenticated local listener are
+ready. Check an allowed URL with `getConnectedServerDelay` to measure the remote
+network path; private-only profiles need no public connectivity exceptions.
+Delay probes validate HTTPS
 certificates and hostnames; the iOS 15-compatible socket TLS probe supports TLS 1.2
 and returns -1 for a TLS-1.3-only destination rather than bypassing the proxy.

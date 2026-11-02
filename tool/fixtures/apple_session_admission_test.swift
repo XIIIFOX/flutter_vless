@@ -190,7 +190,8 @@ final class FixtureProvider: @unchecked Sendable {
     var drainHook: (() -> Void)?, coreHook: (() -> Void)?, workerHook: (() -> Void)?
     var attemptAdmissionHook: (() -> Void)?
     var rejectCore = false, rejectHealth = false, rejectWorkerStop = false
-    var inboundHealthHook: (() -> Void)?, connectHealthHook: (() -> Void)?
+    var rejectRemoteHealth = false
+    var inboundHealthHook: (() -> Void)?
     var connectHealthChecks = 0, httpHealthChecks = 0
     func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data? = nil) throws {
         coreStarts += 1
@@ -218,10 +219,12 @@ final class FixtureProvider: @unchecked Sendable {
         return rejectHealth ? "fixture unavailable" : "ok"
     }
     func socksConnectHealthCheck(port: Int, credentials: LocalProxyCredentials, budget: LocalProxyIOBudget) -> String {
-        connectHealthChecks += 1; connectHealthHook?(); return "ok"
+        connectHealthChecks += 1
+        return rejectRemoteHealth ? "fixture destination blocked by caller" : "ok"
     }
     func socksHTTPHealthCheck(port: Int, credentials: LocalProxyCredentials, budget: LocalProxyIOBudget) -> String {
-        httpHealthChecks += 1; return "ok"
+        httpHealthChecks += 1
+        return rejectRemoteHealth ? "fixture destination blocked by caller" : "ok"
     }
     var originalPreparationInputs: [Data] = []
     var preparationEntered: DispatchSemaphore?
@@ -270,10 +273,10 @@ final class FixtureProvider: @unchecked Sendable {
         precondition(endpointAdmission.commit(token))
         return RuntimeSpec(source: source, prepared: prepared, token: token, path: path, port: 10808)
     }
-    func begin(options: FixtureOptions = FixtureOptions()) -> RuntimeSpec {
+    func begin(options: FixtureOptions = FixtureOptions(), config: Data = Data("original-source".utf8)) -> RuntimeSpec {
         let epoch = sessionAdmission.begin()
         setForwardingReady(false, epoch: epoch)
-        let value = spec(epoch, options: options)
+        let value = spec(epoch, options: options, config: config)
         installedSettingsKey = ProtectedSettingsKey(value)
         precondition(startTunnelWatchdog(value))
         return value
@@ -523,6 +526,26 @@ final class FixtureProvider: @unchecked Sendable {
         // Sleep before the first actual native call must not turn that initial
         // launch into a forbidden retry when automatic reconnect is disabled.
         var budgetFailures = 0
+        // A caller can intentionally deny every public destination. That
+        // policy must not turn an authenticated, live local runtime into a
+        // failed session or cause hidden requests outside its allowed routes.
+        let privateOnly = FixtureProvider()
+        let privateOnlySpec = privateOnly.begin(config: Data(#"{"outbounds":[{"tag":"block","protocol":"blackhole"},{"tag":"private","protocol":"freedom"}],"routing":{"rules":[{"ip":["127.0.0.1/32"],"port":"4242","outboundTag":"private"}]}}"#.utf8))
+        privateOnly.hevLifecycle.beginStart(); privateOnly.hevLifecycle.markThreadEntered()
+        privateOnly.rejectRemoteHealth = true
+        let privateOnlyReady = privateOnly.watchdogQueue.sync {
+            privateOnly.performTunnelHealthCheck(trigger: "private-only", epoch: privateOnlySpec.epoch)
+        }
+        let privateOnlyAccepted = privateOnlyReady && privateOnly.isForwardingReady() && !privateOnly.reasserting
+            && privateOnly.healthChecks == 1 && privateOnly.connectHealthChecks == 0 && privateOnly.httpHealthChecks == 0
+            && privateOnly.watchdogPolicy.consecutiveFailures == 0 && privateOnly.recoveryCheck == nil
+        await privateOnly.stop()
+        if privateOnlyAccepted {
+            print("PASS private-only default-block profile is ready without unsolicited remote CONNECT or HTTP")
+        } else {
+            print("FAIL private-only local readiness depended on a caller-blocked external destination")
+            budgetFailures += 1
+        }
         let disabled = FixtureProvider()
         let disabledSpec = disabled.begin(options: FixtureOptions(retries: 1000, reconnectEnabled: false))
         let disabledEntered = DispatchSemaphore(value: 0), disabledRelease = DispatchSemaphore(value: 0)
@@ -660,23 +683,51 @@ final class FixtureProvider: @unchecked Sendable {
             budgetFailures += 1
         }
 
-        let connectCancelled = FixtureProvider(), connectCancelledSpec = connectCancelled.begin()
-        connectCancelled.hevLifecycle.beginStart(); connectCancelled.hevLifecycle.markThreadEntered()
-        connectCancelled.connectHealthHook = { _ = connectCancelled.sessionAdmission.revoke() }
-        let connectResult = connectCancelled.watchdogQueue.sync {
-            connectCancelled.performTunnelHealthCheck(trigger: "cancel-after-connect", epoch: connectCancelledSpec.epoch)
+        for stage in ["exit", "stop"] {
+            let dying = FixtureProvider(), dyingSpec = dying.begin()
+            dying.hevLifecycle.beginStart(); dying.hevLifecycle.markThreadEntered()
+            dying.inboundHealthHook = {
+                if stage == "exit" { _ = dying.hevLifecycle.markExited(code: 1) }
+                else { _ = dying.hevLifecycle.requestStop() }
+            }
+            let ready = dying.watchdogQueue.sync {
+                dying.performTunnelHealthCheck(trigger: "worker-\(stage)-during-auth", epoch: dyingSpec.epoch)
+            }
+            let refused = !ready && !dying.isForwardingReady() && dying.reasserting
+                && dying.healthChecks == 1 && dying.connectHealthChecks == 0 && dying.httpHealthChecks == 0
+                && dying.watchdogPolicy.consecutiveFailures == 1 && dying.recoveryCheck != nil
+            await dying.stop()
+            if refused { print("PASS worker \(stage) during authentication cannot publish readiness and retains bounded recovery") }
+            else { print("FAIL worker \(stage) during authentication published readiness or lost recovery"); budgetFailures += 1 }
         }
-        let connectCancellationRespected = !connectResult && connectCancelled.healthChecks == 1
-            && connectCancelled.connectHealthChecks == 1 && connectCancelled.httpHealthChecks == 0
-            && !connectCancelled.isForwardingReady() && connectCancelled.watchdogPolicy.consecutiveFailures == 0
-            && connectCancelled.recoveryCheck == nil && connectCancelled.coreStarts == 0
-        await connectCancelled.stop()
-        if connectCancellationRespected {
-            print("PASS cancellation after CONNECT prevents HTTP and consumes no watchdog failure or retry")
-        } else {
-            print("FAIL cancellation after CONNECT admitted HTTP or consumed a cancelled health sample")
-            budgetFailures += 1
+
+        let unauthenticated = FixtureProvider(), unauthenticatedSpec = unauthenticated.begin()
+        unauthenticated.hevLifecycle.beginStart(); unauthenticated.hevLifecycle.markThreadEntered()
+        unauthenticated.rejectHealth = true
+        let authenticationRefused = unauthenticated.watchdogQueue.sync {
+            let first = unauthenticated.performTunnelHealthCheck(trigger: "closed-or-wrong-auth-1", epoch: unauthenticatedSpec.epoch)
+            let second = unauthenticated.performTunnelHealthCheck(trigger: "closed-or-wrong-auth-2", epoch: unauthenticatedSpec.epoch)
+            return !first && !second && !unauthenticated.isForwardingReady() && unauthenticated.reasserting
+                && !unauthenticated.watchdogInboundHealthy && unauthenticated.watchdogPolicy.consecutiveFailures == 2
+                && unauthenticated.recoveryCheck != nil && unauthenticated.coreStarts == 0
+                && unauthenticated.connectHealthChecks == 0 && unauthenticated.httpHealthChecks == 0
         }
+        await unauthenticated.stop()
+        if authenticationRefused { print("PASS missing or unauthenticated listener stays reasserting with one bounded recovery slot") }
+        else { print("FAIL missing or unauthenticated listener became ready or lost recovery"); budgetFailures += 1 }
+
+        let deadline = FixtureProvider(), deadlineSpec = deadline.begin()
+        deadline.hevLifecycle.beginStart(); deadline.hevLifecycle.markThreadEntered()
+        deadline.inboundHealthHook = { Thread.sleep(forTimeInterval: 2.05) }
+        let deadlineReady = deadline.watchdogQueue.sync {
+            deadline.performTunnelHealthCheck(trigger: "late-authentication", epoch: deadlineSpec.epoch)
+        }
+        let lateResultRefused = !deadlineReady && !deadline.isForwardingReady() && deadline.reasserting
+            && deadline.healthChecks == 1 && deadline.watchdogPolicy.consecutiveFailures == 1
+            && deadline.connectHealthChecks == 0 && deadline.httpHealthChecks == 0
+        await deadline.stop()
+        if lateResultRefused { print("PASS authentication returned after shared deadline cannot publish readiness") }
+        else { print("FAIL authentication after shared deadline published readiness"); budgetFailures += 1 }
         // The one pending DNS lookup deliberately ignores Task cancellation.
         // A newer path must start its own plan, not await or adopt the old answer.
         let lateLookup = FixtureProvider(), lookupSpec = lateLookup.begin(options: FixtureOptions(retries: 3))

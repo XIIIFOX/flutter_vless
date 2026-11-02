@@ -43,6 +43,7 @@ class _AcceptanceApp extends StatelessWidget {
 Future<String> handleLiveAcceptanceRequest(
   String? request, {
   AcceptanceDnsProbeRunner? dnsProbe,
+  AcceptanceNamedDnsProbeRunner? namedDnsProbe,
 }) async {
   const connectedTargets = {
     'acceptance-connected-delay-2ip': '2ip',
@@ -77,15 +78,25 @@ Future<String> handleLiveAcceptanceRequest(
     if (kReleaseMode) return 'acceptance-unsupported';
     return captureAcceptanceOwnedManagerSafety();
   }
-  if (request == 'acceptance-dns-probe') {
+  if (request == 'acceptance-dns-probe' ||
+      request == 'acceptance-dns-probe-1cfresh') {
+    final domain = request == 'acceptance-dns-probe-1cfresh'
+        ? '1cfresh.com'
+        : 'tfox.dev';
     if (kReleaseMode) return 'acceptance-unsupported';
     try {
-      return jsonEncode(await (dnsProbe ?? runAcceptanceDnsProbe)());
+      final result = domain == 'tfox.dev'
+          ? await (dnsProbe ?? runAcceptanceDnsProbe)()
+          : await (namedDnsProbe ??
+                ((domain) =>
+                    runAcceptanceDnsProbe(queryDomain: domain)))(domain);
+      return jsonEncode(result);
     } catch (_) {
       return jsonEncode({
         'version': 1,
         'probe': 'managed_dns',
         'status': 'unavailable',
+        if (domain != 'tfox.dev') 'queryDomain': domain,
         'results': <Object>[],
       });
     }

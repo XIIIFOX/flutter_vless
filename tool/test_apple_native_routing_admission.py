@@ -36,6 +36,9 @@ def check_wiring(source):
     assert 'prepared.endpointPath == path' in initial
     assert initial.count('endpointAdmission.isCurrent(token)') >= 4
     assert preflight.index('(source.routingIntent == nil) == (prepared.routingEnvelope == nil)') < preflight.index('NativeRoutingSpec.check(')
+    binding = 'TunnelDNSPolicy.requiresPhysicalInterfaceBinding(in: prepared.data)'
+    assert binding in preflight and 'FLVlessCoreDarwinInterfaceBindingCapability() != 1' in preflight
+    assert preflight.index(binding) < preflight.index('XRaySetAssetLocation(') < preflight.index('NativeRoutingSpec.check(')
     assert 'if prepared.routingEnvelope != nil || FLVlessHasCorePreflight()' in preflight
     assert 'try NativeRoutingSpec.check(envelope, capability: FLVlessCoreRoutingCapability, check: FLVlessCheckCoreRoutingPrivate)' in preflight
     assert '} else { try CorePreflightPolicy.validate(prepared.data, check: FLVlessCheckCorePrivate) }' in preflight
@@ -61,6 +64,7 @@ def mutation_controls(source):
         'preflight-after-routes': source.replace(initial, reordered, 1),
         'direct-entry-route-bypass': source.replace(entry, entry.replace('        let epoch = sessionAdmission.begin()', '        try await setTunnelNetworkSettings(nil)\n        let epoch = sessionAdmission.begin()', 1), 1),
         'routing-check-made-optional': source.replace(preflight, preflight.replace('prepared.routingEnvelope != nil || FLVlessHasCorePreflight()', 'FLVlessHasCorePreflight()', 1), 1),
+        'physical-dns-binding-gate-dropped': source.replace(preflight, preflight.replace('TunnelDNSPolicy.requiresPhysicalInterfaceBinding(in: prepared.data)', 'false', 1), 1),
         'routing-config-unpaired': source.replace(spec, spec.replace('prepared.routingEnvelope?.configurationData ?? prepared.data', 'prepared.data', 1), 1),
         'routing-metadata-dropped': source.replace(spec, spec.replace('routingMetadata = prepared.routingEnvelope?.metadataData', 'routingMetadata = nil', 1), 1),
         'runtime-metadata-dropped': source.replace(native, native.replace('routingMetadata: spec.routingMetadata)', 'routingMetadata: nil)', 1), 1),
@@ -89,6 +93,12 @@ def main():
     inputs = [privacy / name for name in ['LocalProxyAccessPolicy.swift', 'XrayServiceTags.swift', 'NativeRoutingSpec.swift', 'CorePreflightPolicy.swift', 'XdriveServicePolicy.swift', 'GeoDatAssetPolicy.swift']]
     inputs += [support / 'TunnelSessionAdmission.swift', support / 'TunnelEndpointPlanAdmission.swift']
     hashes = {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs + [fixture_path, Path(__file__)]}
+    dns_paths = [ROOT / 'ios/flutter_vless/Sources/flutter_vless_tunnel_support/TunnelDNSPolicy.swift',
+                 ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_tunnel_support/TunnelDNSPolicy.swift']
+    assert dns_paths[0].read_text().replace('import flutter_vless_privacy', 'import flutter_vless_macos_privacy') == dns_paths[1].read_text()
+    dns_binding = block(dns_paths[0].read_text(), '    public static func requiresPhysicalInterfaceBinding(')
+    for path in dns_paths:
+        hashes[str(path.relative_to(ROOT))] = hashlib.sha256(path.read_bytes()).hexdigest()
     mutations = {}
     for platform, path in PROVIDERS.items():
         source = path.read_text()
@@ -102,6 +112,7 @@ def main():
         start_pair = [line for line in native.splitlines() if 'try startXRay(xrayConfig:' in line]
         assert len(capability) == len(start_pair) == 1
         generated = fixture.replace('    // SOURCE_ADMISSION_HELPERS', actual)
+        generated = generated.replace('    // SOURCE_DNS_BINDING_REQUIREMENT', dns_binding)
         generated = generated.replace('        // SOURCE_CAPABILITY_ENTRY', capability[0])
         generated = generated.replace('        // SOURCE_RUNTIME_START_PAIR', start_pair[0])
         generated = generated.replace('    // SOURCE_START', start_method.replace('private func', 'func'))
@@ -113,6 +124,7 @@ def main():
         (output / (platform + '.log')).write_text(result.stdout + result.stderr)
         assert result.returncode == 0, (platform, result.returncode, result.stderr, result.stdout)
         assert 'PASS provider exact routing pair, capability admission and no fallback' in result.stdout
+        assert 'PASS DNS-only physical branch requires binding capability before Core check/routes with no endpoint selections' in result.stdout
         print(platform + ': ' + result.stdout, end='')
         assert path.read_text() == source
     for name, digest in hashes.items():

@@ -65,17 +65,16 @@ def check_wiring(source):
     assert recovery.index('self.sessionAdmission.isCurrent(epoch)') < recovery.index('self.recoveryCheck = nil')
     assert recovery.index('self.recoveryCheck = nil') < recovery.index('guard self.sessionAdmission.permitsRuntime(epoch)')
     health = block(source, '    private func performTunnelHealthCheck')
-    assert 'LocalProxyIOBudget(timeout: 15, isCancelled:' in health
+    assert 'LocalProxyIOBudget(timeout: 2, isCancelled:' in health
     assert 'self?.sessionAdmission.permitsRuntime(epoch) != true || self?.endpointAdmission.ownsRuntime(token) != true' in health
     inbound = health.index('let inboundResult = socksInboundHealthCheck')
     assert inbound < health.index('guard sessionAdmission.permitsRuntime(epoch)', inbound) < health.index('watchdogInboundHealthy =')
-    assert health.count('budget: budget') == 3 and health.count('budget.canContinue') == 2
+    assert health.count('budget: budget') == 1 and 'budget.canContinue' in health
+    assert '!hevLifecycle.isStopRequested && hevLifecycle.isRunning' in health
     local = block(source, '    private func socksInboundHealthCheck')
     assert 'openProxyConnection' in local and 'timeout: 2, budget: budget' in local
-    connect = block(source, '    private func socksConnectHealthCheck')
-    assert 'timeout: 5, budget: budget' in connect
-    http = block(source, '    private func socksHTTPHealthCheck')
-    assert 'let httpBudget = budget.limited(to: 8)' in http and http.count('budget: httpBudget') == 3
+    assert 'socksConnectHealthCheck' not in source and 'socksHTTPHealthCheck' not in source
+    assert 'www.gstatic.com' not in source and 'host: "1.1.1.1"' not in source
     transition = block(source, '    private func commitEndpointPlan')
     assert transition.index('guard current()') < transition.index('self.stopNativeRuntime') < transition.index('installProtectedSettings') < transition.index('endpointAdmission.commit(spec.token)') < transition.index('self.startNativeRuntime')
     assert 'ownedBy: spec.epoch, token: spec.token' in transition
@@ -131,7 +130,7 @@ def main():
     (output / 'probe.log').write_text(result.stdout + result.stderr)
     print(result.stdout, end='')
     assert result.returncode == 0, (result.returncode, result.stderr)
-    assert len([line for line in result.stdout.splitlines() if line.startswith('PASS ')]) == (29 if args.platform == 'macos' else 28)
+    assert len([line for line in result.stdout.splitlines() if line.startswith('PASS ')]) == (33 if args.platform == 'macos' else 32)
     assert PROVIDERS[args.platform].read_text() == source and GATES[args.platform].read_bytes() == gate
     assert fixture_path.read_text() == fixture_source, 'Source changed during verification'
     assert budget.read_bytes() == budget_source, 'Budget source changed during verification'

@@ -8,6 +8,10 @@
 /// branching that is not tied to platform-specific casing or payload shape.
 enum VlessConnectionState {
   /// The platform backend reports that the session is active.
+  ///
+  /// On Apple VPN sessions this includes the native worker and authenticated
+  /// local listener being ready. Reachability depends on the caller's routing,
+  /// DNS and remote servers; measure an allowed URL separately when required.
   connected,
 
   /// The platform backend is starting or attaching the runtime.

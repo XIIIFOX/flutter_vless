@@ -53,7 +53,8 @@ struct TunnelEndpointCandidate {
 struct TunnelEndpointCandidates { let path: TunnelEndpointPath }
 struct TunnelEndpointSelection { let candidates: TunnelEndpointCandidates; let selected: TunnelEndpointCandidate }
 struct TunnelPreparedConfig {
-    let data = Data("{}".utf8), bootstrapAddresses = ["192.0.2.1"]
+    var data = Data("{}".utf8)
+    let bootstrapAddresses = ["192.0.2.1"]
     let routingEnvelope: Envelope? = nil
     var endpointPath: TunnelEndpointPath?
     var endpointSelections: [TunnelEndpointSelection] = []
@@ -76,7 +77,8 @@ enum TunnelXrayConfigPreparer {
         Kernel.onPrepare?()
         if Kernel.failure == "endpoint" { throw StartupError.endpointUnavailable }
         if Kernel.failure == "config" { throw StartupError.invalidConfiguration }
-        return TunnelPreparedConfig(endpointPath: endpointPath, endpointSelections: [TunnelEndpointSelection(candidates: TunnelEndpointCandidates(path: endpointPath), selected: TunnelEndpointCandidate())])
+        return TunnelPreparedConfig(data: Kernel.preparedData, endpointPath: endpointPath,
+            endpointSelections: Kernel.dnsOnly ? [] : [TunnelEndpointSelection(candidates: TunnelEndpointCandidates(path: endpointPath), selected: TunnelEndpointCandidate())])
     }
 }
 enum TunnelEndpointResolver {
@@ -95,6 +97,7 @@ func isIPv4Literal(_ value: String) -> Bool { true }
 enum TunnelDNSPolicy {
     static let virtualServer = "10.0.85.53"
     static func allowsRouteExclusions(_ value: [String]) -> Bool { true }
+    // ACTUAL_DNS_BINDING_REQUIREMENT
 }
 enum TunnelIPv6Policy { static func networkSettings(proxyAddresses: [String]) -> Int { 0 } }
 final class NEPacketTunnelNetworkSettings {
@@ -108,12 +111,14 @@ struct FakeQueue { func async(execute: () -> Void) { execute() }; func sync<T>(e
 enum Kernel {
     static var events: [String] = [], failure = ""
     static var bindingCapability: Int64 = 1
+    static var preparedData = Data("{}".utf8), dnsOnly = false
     static var profile = NETunnelProviderManager()
     static var onArm: (() -> Void)?, refreshFailures = 0
     static var onPrepare: (() -> Void)?
     static var onSettings: (() async -> Void)?
     static func reset(armed: Bool = false, failure: String = "") {
-        events = []; self.failure = failure; bindingCapability = 1; profile = NETunnelProviderManager(); onArm = nil; refreshFailures = 0; onPrepare = nil; onSettings = nil
+        events = []; self.failure = failure; bindingCapability = 1; preparedData = Data("{}".utf8); dnsOnly = false
+        profile = NETunnelProviderManager(); onArm = nil; refreshFailures = 0; onPrepare = nil; onSettings = nil
         profile.isOnDemandEnabled = armed; profile.onDemandRules = armed ? [NEOnDemandRuleConnect()] : nil
     }
 }
@@ -180,6 +185,16 @@ final class Provider {
         Kernel.reset(); Kernel.bindingCapability = 0
         do { try await Provider().startTunnel(); check("stock-runtime-binding-capability-refused", false) }
         catch { check("stock-runtime-binding-capability-refused", !Kernel.events.contains("settings") && !Kernel.events.contains("arm") && !Kernel.events.contains("runtime-admission")) }
+        for capability: Int64 in [0, 2, 1] {
+            Kernel.reset(); Kernel.bindingCapability = capability; Kernel.dnsOnly = true
+            Kernel.preparedData = Data(#"{"outbounds":[{"protocol":"blackhole"},{"protocol":"freedom","streamSettings":{"sockopt":{"interface":"en0"}}}]}"#.utf8)
+            do {
+                try await Provider().startTunnel()
+                check("DNS-only-binding-capability-\(capability)", capability == 1 && Kernel.events.contains("check") && Kernel.events.contains("runtime-admission"))
+            } catch {
+                check("DNS-only-binding-capability-\(capability)", capability != 1 && !Kernel.events.contains("check") && !Kernel.events.contains("settings") && !Kernel.events.contains("arm") && !Kernel.events.contains("runtime-admission"))
+            }
+        }
         Kernel.reset(); let changedDuringLookup = Provider()
         Kernel.onPrepare = {
             Kernel.onPrepare = nil

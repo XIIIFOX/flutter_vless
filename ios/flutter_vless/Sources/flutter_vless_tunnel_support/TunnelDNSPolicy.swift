@@ -68,7 +68,8 @@ public enum TunnelDNSPolicy {
         var addresses = Set<String>()
         guard output["dns"] == nil || output["dns"] is NSNull || output["dns"] is [String: Any] else { return nil }
         var dns = output["dns"] as? [String: Any] ?? [:]
-        guard prepareDNS(&dns, allocator: &allocator, selected: selected, rules: &privateRules) else { return nil }
+        guard prepareDNS(&dns, allocator: &allocator, selected: selected, rules: &privateRules,
+                         generated: &generated, denied: denied, endpointPath: endpointPath) else { return nil }
 
         // A caller dialer chain carries a logical destination. Pin only the
         // named handler's physical endpoint, never that logical destination.
@@ -171,8 +172,38 @@ public enum TunnelDNSPolicy {
         return addresses.sorted()
     }
 
+    /// Inspect the effective generated graph rather than public endpoint
+    /// selections: a local-only DNS configuration has no proxy selection but
+    /// still requires the native runtime to enforce its physical interface.
+    public static func requiresPhysicalInterfaceBinding(in preparedData: Data) -> Bool {
+        func fields(_ object: [String: Any], _ name: String) -> [Any] {
+            object.compactMap { XrayJSONField.matches($0.key, name) ? $0.value : nil }
+        }
+        guard let config = try? JSONSerialization.jsonObject(with: preparedData) as? [String: Any] else { return true }
+        let arrays = fields(config, "outbounds")
+        guard arrays.count == 1, let outbounds = arrays[0] as? [[String: Any]] else { return true }
+        for outbound in outbounds {
+            let streams = fields(outbound, "streamSettings")
+            guard streams.count <= 1 else { return true }
+            guard let rawStream = streams.first, !(rawStream is NSNull) else { continue }
+            guard let stream = rawStream as? [String: Any] else { return true }
+            let sockets = fields(stream, "sockopt")
+            guard sockets.count <= 1 else { return true }
+            guard let rawSocket = sockets.first, !(rawSocket is NSNull) else { continue }
+            guard let socket = rawSocket as? [String: Any] else { return true }
+            let interfaces = fields(socket, "interface")
+            guard interfaces.count <= 1 else { return true }
+            guard let rawInterface = interfaces.first, !(rawInterface is NSNull) else { continue }
+            guard let name = rawInterface as? String else { return true }
+            if !name.isEmpty { return true }
+        }
+        return false
+    }
+
     private static func prepareDNS(_ dns: inout [String: Any], allocator: inout XrayServiceTags,
-                                   selected: String?, rules: inout [[String: Any]]) -> Bool {
+                                   selected: String?, rules: inout [[String: Any]],
+                                   generated: inout [[String: Any]], denied: String,
+                                   endpointPath: TunnelEndpointPath?) -> Bool {
         // Read aliases without normalizing caller DNS maps or nested fields.
         func field(_ object: [String: Any], _ name: String) -> Any? {
             object.first { XrayJSONField.matches($0.key, name) }?.value
@@ -184,39 +215,41 @@ public enum TunnelDNSPolicy {
               (field(dns, "script") as? String ?? "").isEmpty,
               !systemStrategy(field(dns, "queryStrategy")) else { return false }
         let hosts = field(dns, "hosts") as? [String: Any] ?? [:]
-        func staticIP(_ host: String) -> Bool {
+        func staticAddresses(_ host: String) -> [String]? {
             func domainLower(_ value: String) -> String {
                 value.replacingOccurrences(of: "İ", with: "i", options: .literal).lowercased()
             }
-            func visit(_ query: String, remaining: Int) -> Bool {
+            func visit(_ query: String, remaining: Int) -> [String]? {
                 let keys = hosts.keys.filter { key in
                     // Rule prefixes are case-sensitive; map keys retain their
                     // terminal dot. Only the initial query trims its FQDN dot.
                     let domain = key.hasPrefix("full:") ? String(key.dropFirst(5)) : key
                     return domainLower(domain) == query
                 }
-                guard keys.count == 1, let value = hosts[keys[0]] else { return false }
-                func address(_ raw: String) -> Bool {
+                guard keys.count == 1, let value = hosts[keys[0]] else { return nil }
+                func address(_ raw: String) -> [String]? {
                     let parsed = LocalProxyAccessPolicy.coreAddressText(raw)
-                    if isLiteral(parsed) { return true }
+                    if isLiteral(parsed) { return [parsed] }
                     // Core StaticHosts.Lookup unwraps at most five aliases.
                     // Prove a numeric leaf without querying native/OS DNS.
                     // New alias admission is ASCII-only: Swift canonical equality
                     // and contextual case mapping must not invent a Core match.
-                    return remaining > 0 && !parsed.isEmpty && !parsed.hasPrefix("#")
-                        && parsed.utf8.allSatisfy({ $0 < 0x80 })
-                        && visit(domainLower(parsed), remaining: remaining - 1)
+                    guard remaining > 0, !parsed.isEmpty, !parsed.hasPrefix("#"),
+                          parsed.utf8.allSatisfy({ $0 < 0x80 }) else { return nil }
+                    return visit(domainLower(parsed), remaining: remaining - 1)
                 }
                 if let scalar = value as? String { return address(scalar) }
                 if let values = value as? [String], !values.isEmpty {
                     if values.count == 1 { return address(values[0]) }
                     // Keep mixed or ambiguous replacements outside admission.
-                    return values.allSatisfy { isLiteral(LocalProxyAccessPolicy.coreAddressText($0)) }
+                    let addresses = values.map { LocalProxyAccessPolicy.coreAddressText($0) }
+                    return addresses.allSatisfy { isLiteral($0) } ? addresses : nil
                 }
-                return false
+                return nil
             }
             return visit(domainLower(hostKey(host)), remaining: 5)
         }
+        func staticIP(_ host: String) -> Bool { staticAddresses(host) != nil }
         let serverKeys = dns.keys.filter { XrayJSONField.matches($0, "servers") }
         let original = serverKeys.first.flatMap { dns[$0] }
         guard original == nil || original is NSNull || original is [Any] else { return false }
@@ -263,11 +296,71 @@ public enum TunnelDNSPolicy {
                 // routing remains caller-owned for both IP families.
                 continue
             } else if let url = URLComponents(string: address), let scheme = url.scheme {
-                // A special/unsupported DNS URL cannot become a bare-host
-                // admission merely because a hosts key happens to match it.
-                guard ["tcp", "https", "h2c"].contains(scheme.lowercased()), let rawHost = url.host else { return false }
-                let host = LocalProxyAccessPolicy.coreAddressText(rawHost)
-                guard isLiteral(host) || (!isLiteral(host) && staticIP(host)) else { return false }
+                let mode = scheme.lowercased()
+                if ["tcp+local", "https+local", "h2c+local"].contains(mode) {
+                    // Core's +local clients call DialSystem without handler-owned
+                    // socket settings. Express the same local bypass through a
+                    // private routed client and a finite physical Freedom leaf.
+                    // The caller's source dictionary remains untouched; only this
+                    // effective server URL/tag changes, retaining TLS authority,
+                    // path/query, selection fields and all caller routing rules.
+                    guard let path = endpointPath, path.interfaceIndex != 0,
+                          let name = path.interfaceName, !name.isEmpty, !name.utf8.contains(0),
+                          let rawHost = url.host else { return false }
+                    let host = LocalProxyAccessPolicy.coreAddressText(rawHost)
+                    guard host.utf8.allSatisfy({ $0 < 0x80 }),
+                          let pinned = isLiteral(host) ? [host] : staticAddresses(host), !pinned.isEmpty else { return false }
+                    let usable = pinned.compactMap { TunnelEndpointAddress(text: $0, source: .literal) }.filter { parsed in
+                        parsed.isLoopback || (parsed.family == .ipv4 ? path.supportsIPv4 : path.supportsIPv6)
+                    }.map { $0.text }
+                    guard !usable.isEmpty,
+                          !usable.contains(where: { isLoopback($0) }) || usable.allSatisfy({ isLoopback($0) }) else { return false }
+                    let originalTag = field(entry, "tag")
+                    guard originalTag == nil || originalTag is NSNull || originalTag is String,
+                          unambiguous(entry, ["port"]) else { return false }
+                    if let serverPort = field(entry, "port"), !(serverPort is NSNull) {
+                        guard let number = serverPort as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                              number.doubleValue == Double(number.intValue), (0...65535).contains(number.intValue) else { return false }
+                    }
+                    // Core's URL clients use URL.Port/default, not the outer
+                    // NameServer.port (which is only meaningful for UDP DNS).
+                    let defaultPort = mode == "tcp+local" ? 53 : 443
+                    let requestedPort = url.port ?? defaultPort
+                    guard (1...65535).contains(requestedPort) else { return false }
+                    let addressKey = entry.keys.first { XrayJSONField.matches($0, "address") } ?? "address"
+                    let tagKey = entry.keys.first { XrayJSONField.matches($0, "tag") } ?? "tag"
+                    let remoteMode = String(mode.dropLast(6))
+                    entry[addressKey] = remoteMode + address.dropFirst(scheme.count)
+                    let scope = allocator.next("flutter-vless-local-dns-input")
+                    let leaf = allocator.next("flutter-vless-local-dns-direct")
+                    entry[tagKey] = scope
+                    let ips = Array(Set(usable.map { $0 + (isIPv4($0) ? "/32" : "/128") })).sorted()
+                    let hasIPv4 = usable.contains(where: { isIPv4($0) })
+                    let hasIPv6 = usable.contains(where: { !isIPv4($0) })
+                    let strategy = hasIPv4 && hasIPv6 ? "ForceIP" : hasIPv4 ? "ForceIPv4" : "ForceIPv6"
+                    var socket: [String: Any] = ["domainStrategy": strategy]
+                    guard bindPhysical(&socket, selected: usable.first(where: { !isLoopback($0) }) ?? usable[0],
+                                       sendThrough: nil, path: path) else { return false }
+                    // Non-loopback DNS sockets are bound to the selected underlay.
+                    // Pure loopback fixtures must remain on the loopback device.
+                    if usable.contains(where: { !isLoopback($0) }) { socket["interface"] = name }
+                    generated.append(["tag": leaf, "protocol": "freedom", "settings": ["domainStrategy": strategy,
+                        "finalRules": [["action": "allow", "network": "tcp", "port": String(requestedPort), "ip": ips], ["action": "block"]]],
+                        "streamSettings": ["sockopt": socket]])
+                    var rule: [String: Any] = ["type": "field", "inboundTag": [scope], "network": "tcp", "port": String(requestedPort), "outboundTag": leaf]
+                    if isLiteral(host) { rule["ip"] = ips }
+                    else { rule["domain"] = Array(Set(["full:" + host, "full:" + hostKey(host)])).sorted() }
+                    rules.append(rule)
+                    rules.append(["type": "field", "inboundTag": [scope], "outboundTag": denied])
+                    servers[index] = entry
+                    changed = true
+                } else {
+                    // Routed DNS remains caller-owned. In particular, a hosts
+                    // entry must not turn an unknown URL into a supported mode.
+                    guard ["tcp", "https", "h2c"].contains(mode), let rawHost = url.host else { return false }
+                    let host = LocalProxyAccessPolicy.coreAddressText(rawHost)
+                    guard isLiteral(host) || staticIP(host) else { return false }
+                }
                 continue
             } else if staticIP(address) {
                 continue

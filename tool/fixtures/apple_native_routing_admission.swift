@@ -3,12 +3,12 @@ import Foundation
 // All functions below are inert records, with no Core/HEV/OS framework linked.
 // The driver inserts the real provider's admission, RuntimeSpec and startXRay.
 enum Boundary {
-    static var capability: Int64 = 1, checkCode: Int64 = 0
+    static var capability: Int64 = 1, bindingCapability: Int64 = 1, checkCode: Int64 = 0
     static var preflight = true, startSucceeds = true
     static var events: [String] = []
     static var checked: [(Data, Data?)] = [], started: [(Data, Data?)] = []
     static func reset() {
-        capability = 1; checkCode = 0; preflight = true; startSucceeds = true
+        capability = 1; bindingCapability = 1; checkCode = 0; preflight = true; startSucceeds = true
         events = []; checked = []; started = []
     }
 }
@@ -66,9 +66,12 @@ struct FixturePrepared {
     }
 }
 typealias TunnelPreparedConfig = FixturePrepared
-enum TunnelDNSPolicy { static func allowsRouteExclusions(_ routes: [String]) -> Bool { true } }
+enum TunnelDNSPolicy {
+    static func allowsRouteExclusions(_ routes: [String]) -> Bool { true }
+    // SOURCE_DNS_BINDING_REQUIREMENT
+}
 enum TunnelXrayConfigPreparer { enum StartupError: Error { case endpointUnavailable, invalidConfiguration } }
-func FLVlessCoreDarwinInterfaceBindingCapability() -> Int64 { 1 }
+func FLVlessCoreDarwinInterfaceBindingCapability() -> Int64 { Boundary.bindingCapability }
 
 final class Provider: @unchecked Sendable {
     let logger = NSObject()
@@ -115,6 +118,29 @@ final class Provider: @unchecked Sendable {
             "protocol": "socks", "settings": ["auth": "password", "accounts": [["user": "fixture-user", "pass": "fixture-password"]]]]],
             "outbounds": [["tag": "direct", "protocol": "freedom"]]])
         let intent = try NativeRoutingIntent()
+        // A physical DNS leaf can exist without any proxy endpoint selection.
+        // Missing/unknown binding support must refuse before Core preflight or
+        // route installation, while the published capability admits the plan.
+        let localDNS = try JSONSerialization.data(withJSONObject: ["dns": ["servers": [["address": "tcp://192.0.2.53", "tag": "owned-dns"]]],
+            "outbounds": [["tag": "blocked", "protocol": "blackhole"], ["tag": "closed-dns", "protocol": "freedom",
+                "settings": ["domainStrategy": "ForceIPv4", "finalRules": [["action": "allow", "network": "tcp", "port": "53", "ip": ["192.0.2.53/32"]], ["action": "block"]]],
+                "streamSettings": ["sockopt": ["interface": "en0", "domainStrategy": "ForceIPv4"]]]]])
+        let dnsPrepared = FixturePrepared(data: localDNS, routingEnvelope: nil)
+        precondition(dnsPrepared.endpointSelections.isEmpty)
+        for capability: Int64 in [0, 2] {
+            Boundary.reset(); Boundary.bindingCapability = capability
+            var refused = false
+            do { _ = try await Provider().admit(dnsPrepared, intent: nil) }
+            catch { refused = true }
+            guard refused && Boundary.checked.isEmpty && Boundary.started.isEmpty && !Boundary.events.contains("routes") else {
+                print("FAIL DNS-only physical binding capability admitted an unsupported runtime")
+                exit(1)
+            }
+        }
+        Boundary.reset()
+        let dnsSpec = try await Provider().admit(dnsPrepared, intent: nil)
+        precondition(dnsSpec.selections.isEmpty && Boundary.checked.count == 1 && Boundary.events.contains("routes") && Boundary.started.isEmpty)
+        print("PASS DNS-only physical branch requires binding capability before Core check/routes with no endpoint selections")
         let envelope = try NativeRoutingSpec.freeze(finalData: bytes, managedInboundIndex: 0, managedInboundTag: "managed", authUser: "fixture-user", intent: intent)!
         // Both are valid JSON but differ byte-for-byte: a wrong choice of the
         // unpaired preparer data must fail the assertions below.
@@ -149,7 +175,7 @@ final class Provider: @unchecked Sendable {
             precondition(Boundary.events.isEmpty)
         }
         for available in [false, true] {
-            Boundary.reset(); Boundary.preflight = available; Boundary.capability = 0
+            Boundary.reset(); Boundary.preflight = available; Boundary.capability = 0; Boundary.bindingCapability = 0
             let ordinary = try await provider.admit(FixturePrepared(data: bytes, routingEnvelope: nil), intent: nil)
             precondition(Boundary.checked.count == (available ? 1 : 0) && ordinary.routingMetadata == nil)
             try provider.start(ordinary)

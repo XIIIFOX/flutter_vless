@@ -472,7 +472,8 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     private func checkEndpointPreflight(_ spec: RuntimeSpec, prepared: TunnelPreparedConfig, source: RuntimeSource) throws {
         guard sessionAdmission.isCurrent(spec.epoch), endpointAdmission.isCurrent(spec.token), spec.isFresh() else { throw CancellationError() }
         try ManagedServiceAssetPolicy.validate(prepared.data, directory: source.geoAssetsDirectory, geodataCapability: FLVlessCoreGeodataLifetimeCapability(), xdriveCapability: FLVlessCoreXdriveLifetimeCapability())
-        if spec.selections.contains(where: { !$0.selected.address.isLoopback }),
+        if (spec.selections.contains(where: { !$0.selected.address.isLoopback }) ||
+            TunnelDNSPolicy.requiresPhysicalInterfaceBinding(in: prepared.data)),
            FLVlessCoreDarwinInterfaceBindingCapability() != 1 {
             throw tunnelError("Xray runtime lacks physical interface binding; update the runtime")
         }
@@ -1047,9 +1048,10 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         watchdogQueue.asyncAfter(deadline: .now() + 3, execute: check)
     }
 
-    /// Checks both the HEV worker state and the Xray SOCKS-to-Internet path.
-    /// Recovery keeps protected sessions scoped to the tunnel. A dead local
-    /// runtime is restarted by the saved on-demand policy.
+    /// Readiness proves the current protected local runtime, not reachability
+    /// of a destination the caller may intentionally block. End-to-end HTTP
+    /// checks use getConnectedServerDelay with a caller-selected URL.
+    /// Recovery keeps protected sessions scoped to the tunnel.
     @discardableResult
     private func performTunnelHealthCheck(trigger: String, epoch: TunnelSessionAdmission.Epoch) -> Bool {
         guard sessionAdmission.permitsRuntime(epoch), runtimeSpec?.epoch == epoch, !watchdogSuspended,
@@ -1066,31 +1068,24 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             return false
         }
 
-        // Share one deadline across every handshake, fragment and HTTP read.
+        // Share one deadline across loopback connect and every authentication fragment.
         // Stop/sleep revoke admission directly, without waiting for this queue.
-        let budget = LocalProxyIOBudget(timeout: 15, isCancelled: { [weak self] in
+        let budget = LocalProxyIOBudget(timeout: 2, isCancelled: { [weak self] in
             self?.sessionAdmission.permitsRuntime(epoch) != true || self?.endpointAdmission.ownsRuntime(token) != true
         })
         let inboundResult = socksInboundHealthCheck(port: port, credentials: credentials, budget: budget)
         guard sessionAdmission.permitsRuntime(epoch), endpointAdmission.ownsRuntime(token) else { return false }
         watchdogInboundHealthy = inboundResult.hasPrefix("ok")
-        let connectResult = budget.canContinue
-            ? socksConnectHealthCheck(port: port, credentials: credentials, budget: budget)
-            : "health deadline elapsed"
-        guard sessionAdmission.permitsRuntime(epoch), endpointAdmission.ownsRuntime(token) else { return false }
-        let httpResult = budget.canContinue
-            ? socksHTTPHealthCheck(port: port, credentials: credentials, budget: budget)
-            : "health deadline elapsed"
-        guard sessionAdmission.permitsRuntime(epoch), endpointAdmission.ownsRuntime(token) else { return false }
         if let hevLogURL {
             try? TunnelFileLog.trimIfNeeded(hevLogURL)
         }
-        let success = inboundResult.hasPrefix("ok")
-            && connectResult.hasPrefix("ok")
-            && httpResult.hasPrefix("ok")
+        // A worker can exit while authentication is in flight. Recheck it
+        // and the shared deadline before publishing this session's sample.
+        let success = inboundResult.hasPrefix("ok") && budget.canContinue
+            && !hevLifecycle.isStopRequested && hevLifecycle.isRunning
 
         rememberTunnelLog(
-            "Watchdog \(trigger): success=\(success) inbound=[\(inboundResult)] connect=[\(connectResult)] http=[\(httpResult)]"
+            "Watchdog \(trigger): localRuntimeReady=\(success) inbound=[\(inboundResult)]"
         )
         guard sessionAdmission.permitsRuntime(epoch), endpointAdmission.ownsRuntime(token) else { return false }
         setForwardingReady(success, epoch: epoch)
@@ -1138,34 +1133,6 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             return "ok authenticated"
         } catch { return "authentication failed" }
     }
-
-    private func socksConnectHealthCheck(port: Int, credentials: LocalProxyCredentials,
-                                         budget: LocalProxyIOBudget) -> String {
-        do {
-            let fd = try LocalSOCKS5Client.openConnection(proxyPort: port, credentials: credentials,
-                                                        host: "1.1.1.1", port: 80, timeout: 5, budget: budget)
-            close(fd)
-            return "ok authenticated connect"
-        } catch { return "authenticated connect failed" }
-    }
-
-    /// Requires authenticated CONNECT and a successful HTTP response from the proxy path.
-    private func socksHTTPHealthCheck(port: Int, credentials: LocalProxyCredentials,
-                                      budget: LocalProxyIOBudget) -> String {
-        let httpBudget = budget.limited(to: 8)
-        do {
-            let fd = try LocalSOCKS5Client.openConnection(proxyPort: port, credentials: credentials,
-                                                        host: "www.gstatic.com", port: 80, budget: httpBudget)
-            defer { close(fd) }
-            let request = "GET /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\nConnection: close\r\n\r\n"
-            guard LocalSOCKS5Client.sendAll(fd: fd, bytes: Array(request.utf8), budget: httpBudget),
-                  let response = LocalSOCKS5Client.receiveSome(fd: fd, maxCount: 512, budget: httpBudget),
-                  let status = String(bytes: response, encoding: .utf8)?.split(separator: " ").dropFirst().first,
-                  let code = Int(status), (200...399).contains(code) else { return "HTTP response failed" }
-            return "ok authenticated HTTP"
-        } catch { return "authenticated HTTP connection failed" }
-    }
-
 
     private func hex(_ bytes: [UInt8]) -> String {
         bytes.map { String(format: "%02x", $0) }.joined(separator: " ")

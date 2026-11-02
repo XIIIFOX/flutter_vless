@@ -42,6 +42,178 @@ void main() {
     );
   });
 
+  test('fixed 1cfresh request invokes only the named runner', () async {
+    final domains = <String>[];
+    var defaultCalls = 0;
+    for (final request in [
+      'acceptance-dns-probe-1cfresh ',
+      'acceptance-dns-probe-1cfresh.com',
+      'acceptance-dns-probe?domain=1cfresh.com',
+    ]) {
+      expect(
+        await handleLiveAcceptanceRequest(
+          request,
+          dnsProbe: () async {
+            defaultCalls++;
+            return {};
+          },
+          namedDnsProbe: (domain) async {
+            domains.add(domain);
+            return {};
+          },
+        ),
+        'acceptance-unsupported',
+      );
+    }
+    final text = await handleLiveAcceptanceRequest(
+      'acceptance-dns-probe-1cfresh',
+      dnsProbe: () async {
+        defaultCalls++;
+        return {};
+      },
+      namedDnsProbe: (domain) async {
+        domains.add(domain);
+        return {'queryDomain': domain, 'results': <Object>[]};
+      },
+    );
+    expect(defaultCalls, 0);
+    expect(domains, ['1cfresh.com']);
+    expect(jsonDecode(text)['queryDomain'], '1cfresh.com');
+  });
+
+  test('named runner errors retain fixed domain and hide details', () async {
+    final text = await handleLiveAcceptanceRequest(
+      'acceptance-dns-probe-1cfresh',
+      namedDnsProbe: (_) async => throw StateError('private-canary'),
+    );
+    expect(jsonDecode(text)['queryDomain'], '1cfresh.com');
+    expect(jsonDecode(text)['status'], 'unavailable');
+    expect(text, isNot(contains('private-canary')));
+  });
+
+  test('only two exact query domains are admitted before binding', () async {
+    var binds = 0;
+    for (final domain in [
+      'other.invalid',
+      'TFOX.DEV',
+      'tfox.dev.',
+      '',
+      '1cfresh.com\x00',
+      '1cfresh.com/subdomain',
+    ]) {
+      await expectLater(
+        runAcceptanceDnsProbe(
+          queryDomain: domain,
+          socketFactory: () async {
+            binds++;
+            throw StateError('not reached');
+          },
+        ),
+        throwsArgumentError,
+      );
+    }
+    expect(binds, 0);
+  });
+
+  test(
+    '1cfresh A/AAAA frames and answer ownership match exact question',
+    () async {
+      final sockets = <_Socket>[];
+      final result = await runAcceptanceDnsProbe(
+        queryDomain: '1cfresh.com',
+        requestId: () => 41,
+        socketFactory: () async {
+          final socket = _Socket((s, q, peer, port) {
+            expect(peer.address, '10.0.85.53');
+            expect(port, 53);
+            expect(q.sublist(12, q.length - 4), _name('1cfresh.com'));
+            s.reply(
+              _records(q, [
+                _record('1cfresh.com', 5, _name('alias.invalid')),
+                _record(
+                  'alias.invalid',
+                  sockets.length == 1 ? 1 : 28,
+                  sockets.length == 1
+                      ? [203, 0, 113, 9]
+                      : [0x20, 1, 0x0d, 0xb8, ...List.filled(12, 0)],
+                ),
+              ]),
+            );
+          });
+          sockets.add(socket);
+          return socket;
+        },
+      );
+      expect(result['queryDomain'], '1cfresh.com');
+      final rows = result['results'] as List;
+      expect(rows.map((r) => r['status']), ['answer', 'answer']);
+      expect(rows.map((r) => r['queryType']), ['A', 'AAAA']);
+      expect(rows.every((r) => r['queryDomain'] == '1cfresh.com'), true);
+      expect(
+        rows.every((r) => !r.containsKey('expectedPublicAddressMatch')),
+        true,
+      );
+      expect(sockets.every((s) => s.closed && s.sent.length == 1), true);
+      expect(jsonEncode(result), isNot(contains('203.0.113.9')));
+    },
+  );
+
+  test('matching ID cannot qualify a different named question', () async {
+    for (final mutate in <void Function(Uint8List)>[
+      (q) => q[13] = 50,
+      (q) => q[q.length - 3] = q[q.length - 3] == 1 ? 28 : 1,
+      (q) => q[q.length - 1] = 3,
+    ]) {
+      final sockets = <_Socket>[];
+      final result = await runAcceptanceDnsProbe(
+        queryDomain: '1cfresh.com',
+        requestId: () => 42,
+        socketFactory: () async {
+          final s = _Socket((s, q, _, _) {
+            final reply = _response(q);
+            mutate(reply);
+            s.reply(reply);
+          });
+          sockets.add(s);
+          return s;
+        },
+      );
+      final rows = result['results'] as List;
+      expect(
+        rows.every(
+          (r) => r['status'] == 'invalid_response' && r['reason'] == 'question',
+        ),
+        true,
+      );
+      expect(sockets.every((s) => s.closed), true);
+    }
+  });
+
+  testWidgets('named probe retains deadline and socket cleanup', (
+    tester,
+  ) async {
+    final sockets = <_Socket>[];
+    final pending = runAcceptanceDnsProbe(
+      queryDomain: '1cfresh.com',
+      requestId: () => 43,
+      socketFactory: () async {
+        final s = _Socket((_, _, _, _) {});
+        sockets.add(s);
+        return s;
+      },
+    );
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 4));
+    final result = await pending;
+    expect((result['results'] as List).map((r) => r['status']), [
+      'timeout',
+      'timeout',
+    ]);
+    expect(sockets.every((s) => s.closed && s.sent.length == 1), true);
+  });
+
   test('A and AAAA use fixed VIP once and close both owned sockets', () async {
     final sockets = <_Socket>[];
     Future<RawDatagramSocket> bind() async {
@@ -100,7 +272,8 @@ void main() {
     );
     final encoded = jsonEncode(output);
     expect(encoded, isNot(contains('45.130.145.120')));
-    expect(encoded, isNot(contains('tfox.dev')));
+    expect(output['queryDomain'], 'tfox.dev');
+    expect(results.every((r) => (r as Map)['queryDomain'] == 'tfox.dev'), true);
   });
 
   test(

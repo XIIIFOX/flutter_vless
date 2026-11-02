@@ -292,6 +292,10 @@ class FlutterVless {
   ///
   /// Use this after [startVless] when you want a health signal for the active
   /// profile rather than a separate temporary delay probe.
+  /// Choose a URL allowed by the profile's routing and DNS policy. On Apple,
+  /// CONNECTED means the protected native runtime is ready; it does not imply
+  /// that this URL, or an arbitrary public Internet destination, is reachable.
+  /// A failed measurement does not disconnect the active tunnel.
   Future<int> getConnectedServerDelay(
       {String url = 'https://google.com/generate_204'}) async {
     return await VlessPlatform.instance.getConnectedServerDelay(url);

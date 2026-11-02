@@ -21,9 +21,9 @@ Flutter plugin to run VLESS/VMESS as a local proxy and VPN on iOS with XRay core
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
   s.static_framework = true
   xray_version = ENV['FLUTTER_VLESS_XRAY_VERSION'] || 'v26.10.31'
-  xray_release_tag = ENV['FLUTTER_VLESS_XRAY_RELEASE_TAG'] || 'xray-ios-v26.10.31-r1'
+  xray_release_tag = ENV['FLUTTER_VLESS_XRAY_RELEASE_TAG'] || 'xray-ios-v26.10.31-r2'
   xray_url = ENV['FLUTTER_VLESS_XRAY_URL'] || "https://github.com/XIIIFOX/flutter_vless/releases/download/#{xray_release_tag}/XRay.xcframework.zip"
-  xray_checksum = ENV['FLUTTER_VLESS_XRAY_CHECKSUM'] || '22813f46cd978341a2f6aa61f8d346fb57393c53a9f271d5f42b6b1a3371b9cc'
+  xray_checksum = ENV['FLUTTER_VLESS_XRAY_CHECKSUM'] || '8d693bc767b8f292f0ec0459850287f752c40499fa6542caef5b749c8bdc5f00'
 
   s.prepare_command = <<-CMD
     set -e

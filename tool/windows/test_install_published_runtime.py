@@ -23,9 +23,14 @@ class PublishedRuntime(unittest.TestCase):
             for name, data in self.files.items(): target.writestr(name, data)
         self.archive = packed.getvalue()
         self.doc = dict(success=True, head=subject.PRODUCER_HEAD, platform='windows-amd64',
-                        core='26.10.31', core_commit=subject.CORE_COMMIT, runtime_revision='26.10.31-r1',
+                        core='26.10.31', core_commit=subject.CORE_COMMIT, runtime_revision='26.10.31-r2',
                         archive=subject.ARCHIVE, archive_sha256=hashlib.sha256(self.archive).hexdigest(),
                         files_sha256={name: hashlib.sha256(data).hexdigest() for name, data in self.files.items()},
+                        lifetime_patch_scope=list(subject.LIFETIME_PATCH_SCOPE),
+                        xhttp_listener_cleanup_applied=True,
+                        xhttp_listener_cleanup_patch_sha256=subject.XHTTP_PATCH_SHA256,
+                        xhttp_listener_cleanup_source_sha256=subject.XHTTP_SOURCE_SHA256,
+                        source_sha256={subject.XHTTP_PATCH: subject.XHTTP_PATCH_SHA256},
                         capabilities={'stage': 'capabilities', 'code': 0, 'managed_service_lifetimes': 7})
         self.manifest = json.dumps(self.doc).encode()
         pins = patch.multiple(subject, ZIP_SHA256=self.doc['archive_sha256'],
@@ -45,13 +50,27 @@ class PublishedRuntime(unittest.TestCase):
                 subject.verify(archive, manifest)
 
     def test_pinned_metadata_must_match_release_and_extracted_files(self):
-        changes = [{'head': 'b' * 40}, {'core': '26.10.29'}, {'runtime_revision': '26.10.31-r2'},
+        changes = [{'head': 'b' * 40}, {'core': '26.10.29'}, {'runtime_revision': '26.10.31-r1'},
                    {'archive_sha256': 'b' * 64}, {'files_sha256': dict(self.doc['files_sha256'], **{'geoip.dat': 'b' * 64})},
                    {'capabilities': {'stage': 'capabilities', 'code': False, 'managed_service_lifetimes': 7}}]
         for change in changes:
             document = json.dumps(dict(self.doc, **change)).encode()
             with self.subTest(change=change), patch.object(subject, 'MANIFEST_SHA256', hashlib.sha256(document).hexdigest()), self.assertRaises(ValueError):
                 subject.verify(self.archive, document)
+
+    def test_cleanup_claim_cannot_be_missing_untyped_or_from_another_source(self):
+        changes = [{'lifetime_patch_scope': subject.LIFETIME_PATCH_SCOPE[:-1]},
+                   {'xhttp_listener_cleanup_applied': False}, {'xhttp_listener_cleanup_applied': 1},
+                   {'xhttp_listener_cleanup_patch_sha256': '0'*64},
+                   {'xhttp_listener_cleanup_source_sha256': '0'*64}, {'source_sha256': {}}]
+        for change in changes:
+            document = json.dumps(dict(self.doc, **change)).encode()
+            with self.subTest(change=change), patch.object(subject, 'MANIFEST_SHA256', hashlib.sha256(document).hexdigest()), self.assertRaisesRegex(ValueError, 'cleanup provenance'):
+                subject.verify(self.archive, document)
+        missing = dict(self.doc); del missing['xhttp_listener_cleanup_applied']
+        document = json.dumps(missing).encode()
+        with patch.object(subject, 'MANIFEST_SHA256', hashlib.sha256(document).hexdigest()), self.assertRaisesRegex(ValueError, 'cleanup provenance'):
+            subject.verify(self.archive, document)
 
     def test_host_cannot_install_or_execute_a_core(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -74,6 +93,10 @@ class PublishedRuntime(unittest.TestCase):
             capability.assert_called_once_with(directory/'xray.exe')
             self.assertEqual(result['core_sha256'], hashlib.sha256(self.files['xray.exe']).hexdigest())
             self.assertEqual(result['runtime_source'], 'published')
+            self.assertEqual(result['producer_head'], subject.PRODUCER_HEAD)
+            self.assertEqual(result['lifetime_patch_scope'], subject.LIFETIME_PATCH_SCOPE)
+            self.assertIs(result['xhttp_listener_cleanup_applied'], True)
+            self.assertEqual(result['xhttp_listener_cleanup_source_sha256'], subject.XHTTP_SOURCE_SHA256)
             self.assertEqual(json.loads((directory/'published-runtime-results.json').read_text()), result)
             self.assertEqual((directory/'published-runtime-manifest-results.json').read_bytes(), self.manifest)
             for name, data in self.files.items(): self.assertEqual((directory/name).read_bytes(), data)
@@ -92,10 +115,12 @@ class PublishedRuntime(unittest.TestCase):
 
 class PublishedWorkflow(unittest.TestCase):
     def test_fixed_public_asset_identity(self):
-        self.assertEqual(subject.TAG, 'xray-windows-v26.10.31-r1')
-        self.assertEqual(subject.ZIP_SHA256, '19268b7f9f5ddedbcf9c3cb294175f28f1c6a4d495327e790f8e519e8073aa48')
-        self.assertEqual(subject.CORE_SHA256, '00842f12870358c85a67fc3816a3dd75439566aef96a7d41d5a54e14e9a80eb0')
-        self.assertEqual(subject.MANIFEST_SHA256, '70aaad33abab2a7ff81e2e13771d5d74996eefbc323c0caa977f0c20674a1842')
+        self.assertEqual(subject.TAG, 'xray-windows-v26.10.31-r2')
+        self.assertEqual(subject.ZIP_SHA256, 'dfdf80c45268719d047cb14560fca11b6815b98961916c9b5dc68ad2a547f824')
+        self.assertEqual(subject.CORE_SHA256, '78268f751286f3e02f460dffbb2d7be6be8d2d870f3879a1d872c1eeb086d030')
+        self.assertEqual(subject.MANIFEST_SHA256, 'dfa575451499e028dd42108a8835eaca883d4b3c89c6bbc750c1b275750942f6')
+        self.assertEqual(subject.PRODUCER_HEAD, '2505694c4001e7d52f06d6a63f29780da8dc7d49')
+        self.assertEqual(subject.XHTTP_SOURCE_SHA256, '02e72bb06a541d150716276e105dbf8bfd505fd0206db4d4ac26d1fdfe431dce')
 
     def test_published_mode_never_builds_or_repackages_the_runtime(self):
         text = (Path(__file__).resolve().parents[2]/'.github/workflows/windows-runtime.yml').read_text()

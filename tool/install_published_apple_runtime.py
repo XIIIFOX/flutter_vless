@@ -15,13 +15,24 @@ import zipfile
 from package_apple_core_preview import digest, git_bindings, safe_name, tree
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = '13c47ed2caabd70b082449ed4917ce65574df91e'
+HEAD = '2505694c4001e7d52f06d6a63f29780da8dc7d49'
 CORE_COMMIT = 'a4a3dff5b20c2faae567b742c172c7b95e75c083'
+REVISION = 'r2'
+XHTTP_LISTENER_PATCH = 'third_party/xray-native-dns/xhttp_listener_lifetime_patch.py'
+XHTTP_LISTENER_SOURCE_SHA256 = 'cca83bacf332240835197de5532cc022e3870063e62880e1302a7defa263cf1e'
+LIFETIME_SOURCE_SCOPES = {
+    'classic_dns': 'third_party/xray-native-dns/classic_lifetime_patch.py',
+    'xhttp_h3_dial': 'third_party/xray-native-dns/h3_lifetime_patch.py',
+    'xdrive_services': 'third_party/xray-native-dns/xdrive_lifetime_patch.py',
+    'geodata_updater': 'third_party/xray-native-dns/geodata_lifetime_patch.py',
+    'xhttp_h2_listener_cleanup': XHTTP_LISTENER_PATCH,
+}
+DARWIN_BINDING_PATCH = 'third_party/xray-native-dns/darwin_interface_bind_patch.py'
 PINS = {
-    'ios': {'zip': '22813f46cd978341a2f6aa61f8d346fb57393c53a9f271d5f42b6b1a3371b9cc',
-            'manifest': '486a80ae724e685bdf40f1e97016fdcdfa54f3a2ca27474b3ba0804c06c7a28a'},
-    'macos': {'zip': '15de3fed0dc69604ba0a76172ff0d1550f2d64ebc1c173109e2308ef657cb07c',
-              'manifest': 'd462d49969c8e098378f896a908ea21a12469d70e490cba31f9fcfc480ba2d21'},
+    'ios': {'zip': '8d693bc767b8f292f0ec0459850287f752c40499fa6542caef5b749c8bdc5f00',
+            'manifest': 'db3947bbff4540a738d5c15983d036d433a0643f7c709424ab694fb9458e5073'},
+    'macos': {'zip': '59f41c9f8d6bafce3b15741adb0aefe37634737ff1b22075fa4ec9b56fdc2687',
+              'manifest': '86108dfa72e69d8e0d437d3bd32e243064d716e8e1d3879770c1473c5bee1b44'},
 }
 PATHS = {
     'ios': {'package': 'ios/flutter_vless/Package.swift', 'framework': 'ios/XRay.xcframework'},
@@ -34,12 +45,23 @@ def verify_archive(platform, archive, manifest):
     if digest(archive) != PINS[platform]['zip'] or digest(manifest) != PINS[platform]['manifest']:
         raise ValueError('Published Apple archive or manifest checksum differs')
     document = json.loads(manifest.read_text())
-    expected = dict(success=True, platform=platform, head=HEAD, release_version='26.10.31', runtime_revision='r1',
+    expected = dict(success=True, platform=platform, head=HEAD, release_version='26.10.31', runtime_revision=REVISION,
                     core_commit=CORE_COMMIT, archive='XRay.xcframework.zip', archive_sha256=PINS[platform]['zip'])
     if any(document.get(k) != v for k, v in expected.items()) or document.get('success') is not True \
             or any(type(document.get(k)) is not int or document[k] != 1 for k in
                    ['routing_capability_expected', 'darwin_interface_binding_capability_expected']):
         raise ValueError('Published Apple source identity or capability metadata differs')
+    sources = document.get('source_sha256')
+    required_sources = [*LIFETIME_SOURCE_SCOPES.values(), DARWIN_BINDING_PATCH]
+    if not isinstance(sources, dict) or any(not isinstance(sources.get(name), str)
+            or not re.fullmatch('[0-9a-f]{64}', sources[name]) for name in required_sources) \
+            or document.get('xhttp_listener_cleanup_applied') is not True \
+            or document.get('xhttp_listener_cleanup_patch_sha256') != sources[XHTTP_LISTENER_PATCH] \
+            or document.get('xhttp_listener_cleanup_source_sha256') != XHTTP_LISTENER_SOURCE_SHA256 \
+            or document.get('go_version') != 'go1.27.3' \
+            or document.get('root_ca_filter_toolchain_minimum') != 'go1.27.3' \
+            or type(document.get('h2buf_cap_kib')) is not int or document['h2buf_cap_kib'] != 128:
+        raise ValueError('Published Apple listener cleanup or qualified lifetime source binding differs')
     files = document['framework_sha256']
     if not files: raise ValueError('Published Apple file map is empty')
     for name in files: safe_name(name)
@@ -73,7 +95,7 @@ def verify_installed(root, platform, document):
 def install(root, platform, archive, manifest):
     document = verify_archive(platform, archive, manifest)
     package = (root/PATHS[platform]['package']).read_text()
-    if re.findall(r'let xrayReleaseTag = "([^"]+)"', package) != [f'xray-{platform}-v26.10.31-r1'] \
+    if re.findall(r'let xrayReleaseTag = "([^"]+)"', package) != [f'xray-{platform}-v26.10.31-{REVISION}'] \
             or re.findall(r'let xrayChecksum = "([0-9a-f]{64})"', package) != [PINS[platform]['zip']]:
         raise ValueError('SwiftPM public SDK pins differ')
     git_bindings(root, HEAD, document['source_sha256'])
@@ -88,9 +110,13 @@ def install(root, platform, archive, manifest):
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(extracted, destination)
     verify_installed(root, platform, document)
-    result = dict(success=True, platform=platform, runtime_source='published', tag=f'xray-{platform}-v26.10.31-r1',
+    result = dict(success=True, platform=platform, runtime_source='published', tag=f'xray-{platform}-v26.10.31-{REVISION}',
                   producer_head=HEAD, core_commit=CORE_COMMIT, archive_sha256=PINS[platform]['zip'],
                   manifest_sha256=PINS[platform]['manifest'], framework_sha256=document['framework_sha256'],
+                  xhttp_listener_cleanup_applied=True,
+                  xhttp_listener_cleanup_patch_sha256=document['xhttp_listener_cleanup_patch_sha256'],
+                  xhttp_listener_cleanup_source_sha256=document['xhttp_listener_cleanup_source_sha256'],
+                  verified_derived_lifetime_scope=list(LIFETIME_SOURCE_SCOPES),
                   runtime_checks_pending=True)
     output = root/'build/published_apple_runtime'/platform; output.mkdir(parents=True, exist_ok=True)
     (output/'result.json').write_text(json.dumps(result, indent=2)+'\n')
@@ -130,7 +156,7 @@ if __name__ == '__main__':
         else:
             output.mkdir(parents=True, exist_ok=False)
             for name, limit in [('XRay.xcframework.zip', 512*1024*1024), ('manifest.json', 2*1024*1024)]:
-                url = f'https://github.com/XIIIFOX/flutter_vless/releases/download/xray-{platform}-v26.10.31-r1/{name}'
+                url = f'https://github.com/XIIIFOX/flutter_vless/releases/download/xray-{platform}-v26.10.31-{REVISION}/{name}'
                 with urllib.request.urlopen(url, timeout=45) as response, (output/name).open('xb') as target:
                     count = 0
                     while block := response.read(1024*1024):

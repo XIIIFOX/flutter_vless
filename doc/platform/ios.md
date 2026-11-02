@@ -115,7 +115,11 @@ the file pair first.
 Most application integrators use the prebuilt `XRay.xcframework` and do not
 need this step. It is for maintainers rebuilding the iOS runtime.
 
-The build requires full Xcode and Go 1.27 or newer. To keep concurrent XHTTP
+The current GitHub source pins `xray-ios-v26.10.31-r2`, including listener cleanup
+after invalid server `h2Params`. The bundled framework and download checksum
+must come from that same published archive.
+
+The build requires full Xcode and Go 1.27.3 or newer. To keep concurrent XHTTP
 uploads within the iOS Network Extension memory budget, the build patches a
 temporary clone of Go's standard library and caps the HTTP/2 upload scratch
 buffer at 128 KiB per stream. Your installed Go toolchain is never modified.

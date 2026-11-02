@@ -1,5 +1,7 @@
 ## 1.1.7
 
+* Consume the public Android runtime `26.10.31-protect2` with strict Maven checksums. Release the allocated XHTTP listener when malformed server `h2Params` is rejected, preserving successful configuration behavior and runtime capabilities. This native runtime update does not publish the Flutter plugin.
+
 * Preserve explicit VMess TLS SNI independently of the transport Host, retain the Host fallback for absent/empty SNI, and accept a missing display name. Decode Trojan/VLESS URI credentials once and normalize only the share-link scheme's case.
 
 * Bound Apple delay measurements across proxy negotiation, TLS and HTTP with one monotonic deadline. Keep authentication and certificate validation strict; reject slow partial replies and retire the owned socket.

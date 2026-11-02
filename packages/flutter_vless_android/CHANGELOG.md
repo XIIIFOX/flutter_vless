@@ -4,7 +4,9 @@
 
 * Validate writable scheduled GeoDAT targets and seed bundled full datasets atomically only when missing, preserving downloaded files and caller-owned asset directories.
 
-* Runtime-only repository pin: use the published `26.10.31-protect1` AAR, rebuilt from Xray-core `v26.10.31` with Go `1.27.3`. Preserve upstream MPTCP defaults and caller opt-in, protected socket handling, native routing and Classic/XHTTP/XDRIVE/GeoDAT lifetime fixes. Pin the independently verified public Maven bytes. This source update does not republish or change the existing Pub.dev `1.1.7` package.
+* Runtime-only repository pin: use the published `26.10.31-protect2` AAR, rebuilt from Xray-core `v26.10.31` with Go `1.27.3`. Preserve upstream MPTCP defaults and caller opt-in, protected socket handling, native routing and Classic/XHTTP/XDRIVE/GeoDAT lifetime fixes. Pin the independently verified public Maven bytes. This source update does not republish or change the existing Pub.dev `1.1.7` package.
+
+* Release an allocated XHTTP listener when malformed server `h2Params` fails admission; retain successful behavior and capability values.
 
 * Retain immutable Quick Tile actions through unlock, permission, preflight and process launch. Revoke stale requests on options or session changes; disarm failed unstarted tile requests instead of retrying without their policy. Preserve established VPN and explicit app commands. Add actual-method JVM regressions.
 
@@ -73,6 +75,7 @@
 * Update the runtime to `dev.tfox.fluttervless:xray-android:26.10.17-protect1`, based on Xray-core `v26.10.17` (upstream pre-release).
 * Rebuild armeabi-v7a, arm64-v8a, x86 and x86_64 binaries with 16 KiB page alignment.
 * Adapt the socket-protection overlay to upstream dialer changes, preserving protected DNS, fallback sockets and failure propagation.
+
 
 ## 1.1.6
 

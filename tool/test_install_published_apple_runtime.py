@@ -21,16 +21,21 @@ class PublishedApple(unittest.TestCase):
         self.archive = self.root/'sdk.zip'
         with zipfile.ZipFile(self.archive, 'w') as packed:
             for name, data in self.files.items(): packed.writestr('XRay.xcframework/'+name, data)
-        self.document = dict(success=True, platform='ios', head=subject.HEAD, release_version='26.10.31', runtime_revision='r1',
+        self.document = dict(success=True, platform='ios', head=subject.HEAD, release_version='26.10.31', runtime_revision=subject.REVISION,
                              core_commit=subject.CORE_COMMIT, archive='XRay.xcframework.zip', archive_sha256=subject.digest(self.archive),
                              routing_capability_expected=1, darwin_interface_binding_capability_expected=1,
                              framework_sha256={name: hashlib.sha256(data).hexdigest() for name, data in self.files.items()},
-                             source_sha256={'synthetic-source.go': 'a'*64})
+                             source_sha256={name: 'a'*64 for name in
+                                            ['synthetic-source.go', *subject.LIFETIME_SOURCE_SCOPES.values(), subject.DARWIN_BINDING_PATCH]},
+                             xhttp_listener_cleanup_applied=True,
+                             xhttp_listener_cleanup_patch_sha256='a'*64,
+                             xhttp_listener_cleanup_source_sha256=subject.XHTTP_LISTENER_SOURCE_SHA256,
+                             go_version='go1.27.3', root_ca_filter_toolchain_minimum='go1.27.3', h2buf_cap_kib=128)
         self.manifest = self.root/'manifest.json'; self.manifest.write_text(json.dumps(self.document))
         self.pins = {'zip': subject.digest(self.archive), 'manifest': subject.digest(self.manifest)}
         pins = patch.dict(subject.PINS, {'ios': self.pins}); pins.start(); self.addCleanup(pins.stop)
         package = self.root/subject.PATHS['ios']['package']; package.parent.mkdir(parents=True)
-        package.write_text('let xrayReleaseTag = "xray-ios-v26.10.31-r1"\nlet xrayChecksum = "'+self.pins['zip']+'"\n')
+        package.write_text('let xrayReleaseTag = "xray-ios-v26.10.31-'+subject.REVISION+'"\nlet xrayChecksum = "'+self.pins['zip']+'"\n')
 
     def test_archive_and_full_file_set_are_verified_without_execution(self):
         result = subject.verify_archive('ios', self.archive, self.manifest)
@@ -42,8 +47,20 @@ class PublishedApple(unittest.TestCase):
 
     def test_signed_metadata_identity_and_binary_map_remain_required(self):
         for change in [{'head': 'b'*40}, {'platform': 'macos'}, {'release_version': '26.10.29'},
-                       {'framework_sha256': {}}, {'routing_capability_expected': True}]:
+                       {'runtime_revision': 'r1'}, {'framework_sha256': {}}, {'routing_capability_expected': True},
+                       {'xhttp_listener_cleanup_applied': False}, {'xhttp_listener_cleanup_applied': 1},
+                       {'xhttp_listener_cleanup_patch_sha256': 'b'*64},
+                       {'xhttp_listener_cleanup_source_sha256': 'a651b04643dde70653955a55501f4607d7ed6bb647ea3d39596fb63f7d734aaa'},
+                       {'go_version': 'go1.27.2'}, {'h2buf_cap_kib': 512},
+                       {'root_ca_filter_toolchain_minimum': 'go1.27.2'}]:
             self.manifest.write_text(json.dumps(dict(self.document, **change)))
+            with patch.dict(self.pins, {'manifest': subject.digest(self.manifest)}), self.assertRaises(ValueError):
+                subject.verify_archive('ios', self.archive, self.manifest)
+
+    def test_all_qualified_lifetime_sources_and_separate_darwin_binding_remain_required(self):
+        for missing in [*subject.LIFETIME_SOURCE_SCOPES.values(), subject.DARWIN_BINDING_PATCH]:
+            sources = dict(self.document['source_sha256']); del sources[missing]
+            self.manifest.write_text(json.dumps(dict(self.document, source_sha256=sources)))
             with patch.dict(self.pins, {'manifest': subject.digest(self.manifest)}), self.assertRaises(ValueError):
                 subject.verify_archive('ios', self.archive, self.manifest)
 
@@ -56,6 +73,8 @@ class PublishedApple(unittest.TestCase):
         source_binding.assert_called_once_with(self.root, subject.HEAD, self.document['source_sha256'])
         self.assertEqual(subject.tree(destination), self.document['framework_sha256'])
         self.assertTrue(result['runtime_checks_pending'])
+        self.assertTrue(result['xhttp_listener_cleanup_applied'])
+        self.assertEqual(result['verified_derived_lifetime_scope'], list(subject.LIFETIME_SOURCE_SCOPES))
         self.assertFalse((destination/'old-binary').exists())
 
     def test_preferred_package_local_wrong_cache_is_refused_before_replacing_primary(self):

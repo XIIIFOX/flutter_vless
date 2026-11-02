@@ -71,6 +71,8 @@ The `main` worktree uses Xray-core **26.10.31** through the separately published
 native runtimes. The Flutter plugin itself is not released by this runtime
 update. Existing pub.dev implementation packages named `1.1.7` contain older
 wrapper code; use the matching source packages when testing this branch.
+Android uses the public checksum-pinned `26.10.31-protect2` AAR, including
+cleanup of XHTTP listeners after rejected server `h2Params`.
 The bundled example already supplies local overrides. An external Git consumer
 can use:
 

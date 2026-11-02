@@ -9,7 +9,7 @@ Xray's asset directory from inside the Go runtime.
 
 Current source target Xray-core version: `v26.10.31`.
 Release commit used by the manifest: `a4a3dff5b20c2faae567b742c172c7b95e75c083`.
-Current verified runtime artifact tag: `xray-ios-v26.10.31-r1`.
+Current verified runtime artifact tag: `xray-ios-v26.10.31-r2`.
 The privacy revision adds `XRayStartPrivate`; all iOS entry points require this
 symbol so an older cached framework fails to link instead of bypassing policy.
 It disables raw access/error output, sanitizes startup/runtime callbacks, and
@@ -17,10 +17,12 @@ turns off REALITY debug prints and TLS key files, including XHTTP downloads and
 Realm finalmask TLS. The source build targets Xray-core 26.10.31; the H2BUF cap remains 128 KiB.
 Canonical builds retain routing capability 1, mandatory Darwin interface binding,
 Classic DNS lifetime and XHTTP HTTP/3 lifetime fixes from the qualified previews.
+Revision r2 also closes the XHTTP listener if server `h2Params` parsing fails,
+so a failed startup does not retain its TCP port.
 
 The verified public archive is available at
-`https://github.com/XIIIFOX/flutter_vless/releases/download/xray-ios-v26.10.31-r1/XRay.xcframework.zip`
-with SHA-256 `22813f46cd978341a2f6aa61f8d346fb57393c53a9f271d5f42b6b1a3371b9cc`.
+`https://github.com/XIIIFOX/flutter_vless/releases/download/xray-ios-v26.10.31-r2/XRay.xcframework.zip`
+with SHA-256 `8d693bc767b8f292f0ec0459850287f752c40499fa6542caef5b749c8bdc5f00`.
 SwiftPM and CocoaPods verify this checksum when downloading the framework.
 A rebuild may produce a different archive checksum; use a new revision and
 coordinate both manifests with the exact artifact.

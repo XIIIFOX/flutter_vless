@@ -13,13 +13,17 @@ import zipfile
 
 from package_managed_runtime import capabilities
 
-TAG = 'xray-windows-v26.10.31-r1'
+TAG = 'xray-windows-v26.10.31-r2'
 ARCHIVE = 'Xray-windows-managed-64.zip'
-ZIP_SHA256 = '19268b7f9f5ddedbcf9c3cb294175f28f1c6a4d495327e790f8e519e8073aa48'
-CORE_SHA256 = '00842f12870358c85a67fc3816a3dd75439566aef96a7d41d5a54e14e9a80eb0'
-MANIFEST_SHA256 = '70aaad33abab2a7ff81e2e13771d5d74996eefbc323c0caa977f0c20674a1842'
-PRODUCER_HEAD = '13c47ed2caabd70b082449ed4917ce65574df91e'
+ZIP_SHA256 = 'dfdf80c45268719d047cb14560fca11b6815b98961916c9b5dc68ad2a547f824'
+CORE_SHA256 = '78268f751286f3e02f460dffbb2d7be6be8d2d870f3879a1d872c1eeb086d030'
+MANIFEST_SHA256 = 'dfa575451499e028dd42108a8835eaca883d4b3c89c6bbc750c1b275750942f6'
+PRODUCER_HEAD = '2505694c4001e7d52f06d6a63f29780da8dc7d49'
 CORE_COMMIT = 'a4a3dff5b20c2faae567b742c172c7b95e75c083'
+LIFETIME_PATCH_SCOPE = ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup']
+XHTTP_PATCH = 'third_party/xray-native-dns/xhttp_listener_lifetime_patch.py'
+XHTTP_PATCH_SHA256 = '7ec0ea9b256b7373b0d068211350b7cd0b6dc6126b99e5ce9d4269f3a004a674'
+XHTTP_SOURCE_SHA256 = '02e72bb06a541d150716276e105dbf8bfd505fd0206db4d4ac26d1fdfe431dce'
 FILES = {'xray.exe', 'geoip.dat', 'geosite.dat', 'LICENSE.xray-core'}
 
 
@@ -32,13 +36,20 @@ def verify(archive, manifest):
         raise ValueError('Published archive or manifest checksum differs')
     document = json.loads(manifest)
     expected = dict(success=True, head=PRODUCER_HEAD, platform='windows-amd64', core='26.10.31',
-                    core_commit=CORE_COMMIT, runtime_revision='26.10.31-r1',
+                    core_commit=CORE_COMMIT, runtime_revision='26.10.31-r2',
                     archive=ARCHIVE, archive_sha256=ZIP_SHA256)
     capability = document.get('capabilities', {})
     if any(document.get(k) != v for k, v in expected.items()) or document.get('success') is not True \
             or capability != {'stage': 'capabilities', 'code': 0, 'managed_service_lifetimes': 7} \
             or type(capability.get('code')) is not int or type(capability.get('managed_service_lifetimes')) is not int:
         raise ValueError('Published manifest identity or capabilities differ')
+    if document.get('lifetime_patch_scope') != LIFETIME_PATCH_SCOPE \
+            or document.get('xhttp_listener_cleanup_applied') is not True \
+            or document.get('xhttp_listener_cleanup_patch_sha256') != XHTTP_PATCH_SHA256 \
+            or document.get('xhttp_listener_cleanup_source_sha256') != XHTTP_SOURCE_SHA256 \
+            or not isinstance(document.get('source_sha256'), dict) \
+            or document['source_sha256'].get(XHTTP_PATCH) != XHTTP_PATCH_SHA256:
+        raise ValueError('Published XHTTP listener cleanup provenance differs')
     with zipfile.ZipFile(io.BytesIO(archive)) as packed:
         if len(packed.infolist()) != len(FILES) or set(packed.namelist()) != FILES \
                 or sum(row.file_size for row in packed.infolist()) > 256 * 1024 * 1024:
@@ -72,6 +83,10 @@ def install(directory, archive, manifest):
         raise ValueError('Published files changed during probes')
     result = dict(success=True, runtime_source='published', tag=TAG, archive_sha256=ZIP_SHA256,
                   core_sha256=CORE_SHA256, manifest_sha256=MANIFEST_SHA256,
+                  producer_head=PRODUCER_HEAD, lifetime_patch_scope=document['lifetime_patch_scope'],
+                  xhttp_listener_cleanup_applied=True,
+                  xhttp_listener_cleanup_patch_sha256=document['xhttp_listener_cleanup_patch_sha256'],
+                  xhttp_listener_cleanup_source_sha256=document['xhttp_listener_cleanup_source_sha256'],
                   actual_version=child.stdout.decode().splitlines()[0], capabilities=actual)
     (directory/'published-runtime-results.json').write_text(json.dumps(result, indent=2)+'\n')
     return result

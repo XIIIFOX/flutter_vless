@@ -24,12 +24,17 @@ application directory. It does not search the current working directory,
 PATH or AppData for runtime executables. Keep `wintun.dll` beside tun2socks.
 
 For XDRIVE S3/Google Drive or scheduled GeoDAT updates, use the
-[managed Core 26.10.31-r1 companion](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-windows-v26.10.31-r1).
+[managed Core 26.10.31-r2 companion](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-windows-v26.10.31-r2).
 Extract its Core and full datasets into the same directory, retaining the
 compatible tunnel helper and Wintun files. Its `native-services capabilities`
 command returns bitmap `7` (GeoDAT, XDRIVE storage and idle worker ownership). A stock external Core remains supported for
 ordinary profiles; the Core version alone does not establish managed-service
 support. The plugin checks the actual selected executable before startup.
+Revision r2 additionally releases the bound XHTTP TCP listener if malformed
+server `h2Params` rejects startup. Its archive SHA-256 is
+`dfdf80c45268719d047cb14560fca11b6815b98961916c9b5dc68ad2a547f824`;
+the executable SHA-256 is
+`78268f751286f3e02f460dffbb2d7be6be8d2d870f3879a1d872c1eeb086d030`.
 
 ## VPN behavior
 

@@ -5,15 +5,20 @@ This directory contains the Windows-specific files for the flutter_vless example
 ## Xray Setup
 
 Before running the example on Windows, provide the x64 Xray executable.
-The recommended [managed Core 26.10.31-r1](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-windows-v26.10.31-r1)
+The recommended [managed Core 26.10.31-r2](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-windows-v26.10.31-r2)
 includes native routing and the owned XDRIVE/GeoDAT services (capability `7`).
+Revision r2 also closes the allocated XHTTP listener when server `h2Params`
+cannot be parsed, so a rejected configuration does not retain its TCP port.
 Its `Xray-windows-managed-64.zip` SHA-256 is
-`19268b7f9f5ddedbcf9c3cb294175f28f1c6a4d495327e790f8e519e8073aa48`.
+`dfdf80c45268719d047cb14560fca11b6815b98961916c9b5dc68ad2a547f824`.
+The extracted AMD64 `xray.exe` SHA-256 is
+`78268f751286f3e02f460dffbb2d7be6be8d2d870f3879a1d872c1eeb086d030`.
 Extract its Core and full datasets into `example/windows/xray/`, retaining the
 compatible `tun2socks.exe` and `wintun.dll` already supplied there.
 
-For ordinary profiles without these managed services, the official runtime is
-also supported:
+For ordinary profiles without these managed services, the separate official
+runtime is also supported. Its checksum below identifies the upstream archive;
+it does not identify the managed r2 executable or attest its listener fix:
 
 1. **Download the official Xray-core v26.10.31 release**:
    - Visit: https://github.com/XTLS/Xray-core/releases/tag/v26.10.31

@@ -538,7 +538,7 @@ jobs:
       - name: Install the checksum-pinned published Apple SDKs
         if: ${{ inputs.apple_runtime_source == 'published' }}
         run: |
-          git fetch --no-tags --depth=1 origin 13c47ed2caabd70b082449ed4917ce65574df91e
+          git fetch --no-tags --depth=1 origin 2505694c4001e7d52f06d6a63f29780da8dc7d49
           python3 tool/install_published_apple_runtime.py
       - name: Test PacketTunnel Swift helper
         run: |

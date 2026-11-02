@@ -107,8 +107,9 @@ The host and extension must share the App Group or dedicated Keychain access
 group used for profile references. Legacy plaintext profile migration is
 transactional. Dynamic geo assets must be readable by the extension.
 
-The private startup and asset-location APIs require macOS runtime revision
-`xray-macos-v26.10.31-r1`. SwiftPM/CocoaPods use the bundled XCFramework when
+The private startup and asset-location APIs use the pinned macOS runtime revision
+`xray-macos-v26.10.31-r2`, which also closes listeners after invalid server
+`h2Params`. SwiftPM/CocoaPods use the bundled XCFramework when
 available, otherwise the pinned release archive. Publish that archive before
 distributing packages that depend on the hosted fallback.
 

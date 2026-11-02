@@ -3,8 +3,8 @@
 import PackageDescription
 import Foundation
 
-let xrayReleaseTag = "xray-macos-v26.10.31-r1"
-let xrayChecksum = "15de3fed0dc69604ba0a76172ff0d1550f2d64ebc1c173109e2308ef657cb07c"
+let xrayReleaseTag = "xray-macos-v26.10.31-r2"
+let xrayChecksum = "59f41c9f8d6bafce3b15741adb0aefe37634737ff1b22075fa4ec9b56fdc2687"
 let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let xrayPackageLocalPath = "XRay.xcframework"
 let xrayRepoLocalPath = "../XRay.xcframework"

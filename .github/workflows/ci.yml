@@ -87,6 +87,8 @@ jobs:
           python-version: "3.12"
       - name: Test parent-local deadlines and different clock origins
         run: python tool/test_live_acceptance_clock.py -v
+      - name: Test Android emulator TCP relay ownership and peer interface policy
+        run: python tool/test_android_emulator_tcp_relay.py -v
 
   core-dns-context:
     if: github.event_name != 'workflow_dispatch' || inputs.validation == 'all' || inputs.validation == 'core-dns-context' || inputs.validation == 'compatibility' || inputs.validation == 'native-listeners' || inputs.validation == 'preparation-report' || inputs.validation == 'native-config'

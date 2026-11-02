@@ -40,22 +40,31 @@ The parsed objects expose low-level Xray maps. That makes advanced editing possi
 The snippet below assumes:
 
 ```dart
+import 'dart:convert';
 import 'package:flutter_vless/flutter_vless.dart';
 ```
 
 Examples:
 
 ```dart
-final parsed = FlutterVless.parse(shareLink);
+final parsed = FlutterVless.parseFromURL(shareLink);
+final document = parsed.fullConfiguration;
+final inbounds = (document['inbounds'] as List).cast<Map<String, dynamic>>();
+inbounds.first['port'] = 10890;
+inbounds.first['listen'] = '127.0.0.1';
+(document['routing'] as Map<String, dynamic>)['domainStrategy'] = 'AsIs';
 
-parsed.inbound['port'] = 10890;
-parsed.inbound['listen'] = '0.0.0.0';
-parsed.routing['domainStrategy'] = 'AsIs';
-
-final config = parsed.getFullConfiguration();
+final config = jsonEncode(document);
 ```
 
 Use this layer when you need custom routing, custom inbound ports, or platform-specific tweaks that are not covered by the share-link surface.
+
+This example edits the generated configuration of a supported share link.
+Serialize the edited `document`: calling `parsed.getFullConfiguration()` again
+for a share-link parser generates another document and loses those map edits.
+`XrayJsonConfig` instead retains its mutable raw-profile map; copy it first if
+you need to preserve the imported original. Raw profiles may omit `inbounds`
+or `routing`, so check/create those sections before applying equivalent edits.
 
 ## Typed Config Helpers
 

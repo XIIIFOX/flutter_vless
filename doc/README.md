@@ -18,6 +18,7 @@ The package page on pub.dev is driven by the root `README.md`. These guides keep
 10. [Architecture Notes](architecture.md)
 11. [Real-Device VPN Matrix](device_matrix.md)
 12. [Troubleshooting](troubleshooting.md)
+13. [Apple readiness and local DNS](apple-readiness-and-dns.md)
 
 ## Audience Split
 
@@ -32,3 +33,8 @@ The package page on pub.dev is driven by the root `README.md`. These guides keep
 - Keep this directory as the source of truth for human-written docs.
 - Use `README.md` for the pub.dev-facing summary and quick start.
 - Treat older root-level setup files as legacy during the transition to this docs layout.
+- Current guides describe the working 1.1.7 source. Its native runtimes are
+  published, while the main Flutter 1.1.7 package is not. Follow the root
+  README's coherent Git dependency setup for new APIs. Dated compatibility and
+  release records retain historical observations; use their latest closeout
+  links for current acceptance scope.

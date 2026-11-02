@@ -4,11 +4,27 @@ import 'package:flutter_vless/url/url.dart';
 import 'package:flutter_vless/url/xray_json.dart';
 import 'package:yaml/yaml.dart';
 
+/// Callback that parses one supported share link into a profile.
+///
+/// Parser exceptions propagate for recognized but malformed entries.
 typedef FlutterVlessUrlParser = FlutterVlessURL Function(String url);
 
+/// Offline importer for share-link lists and supported subscription payloads.
+///
+/// Handles supported plain/base64 link lists, Xray JSON profiles, and selected
+/// Clash/sing-box proxy definitions. Conversion of other formats covers their
+/// supported proxy fields, not every routing or service setting of the source
+/// format. The importer never downloads a subscription URL.
 class VlessSubscriptionParser {
   VlessSubscriptionParser._();
 
+  /// Parses all recognized profiles from the supplied [input] text.
+  ///
+  /// [parseUrl] handles supported share links; [parseJson] handles generated or
+  /// imported Xray profile JSON. Comments/blank share-link lines and unrecognized
+  /// entries can be skipped. Throws [ArgumentError] when no supported payload
+  /// is found; malformed recognized entries may throw from either callback.
+  /// The returned profiles still need native configuration validation.
   static List<FlutterVlessURL> parseMany({
     required String input,
     required FlutterVlessUrlParser parseUrl,

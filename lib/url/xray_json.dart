@@ -12,6 +12,9 @@ String foldXraySchemaField(String key) => String.fromCharCodes(key.runes.map(
     ));
 
 /// Read one inspected schema field without changing the imported document.
+/// Returns null for an absent or explicitly null [field] in [object].
+/// Throws [ArgumentError] if several keys match the same schema field. Do not
+/// use this lookup to fold arbitrary host/header/attribute dictionary keys.
 /// Native adapters also reject ambiguous aliases before adding private state.
 Object? readXraySchemaField(Map<String, dynamic> object, String field) {
   final wanted = foldXraySchemaField(field);
@@ -35,6 +38,9 @@ Object? readXraySchemaField(Map<String, dynamic> object, String field) {
 /// its streaming decoder, this API rejects trailing documents/data explicitly;
 /// they must not silently disappear. One leading UTF-8 BOM is a portable import
 /// extension; native Core always receives ordinary JSON after normalization.
+///
+/// Throws [FormatException] for malformed JSON, unsupported JSON5 forms, or
+/// trailing data. No network, file or native configuration validation is run.
 Object? decodeXrayJson(String input) {
   final source = input.startsWith('\uFEFF') ? input.substring(1) : input;
   final output = StringBuffer();

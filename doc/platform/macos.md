@@ -2,7 +2,7 @@
 
 macOS uses a Packet Tunnel Network Extension path for VPN mode and a separate local proxy path for proxy-only mode.
 
-## VPN protection in 1.1.6
+## VPN protection
 
 Packet Tunnel traffic protection is mandatory. It retains capture and virtual DNS
 while native workers recover; `CONNECTED` also requires the provider's forwarding
@@ -10,10 +10,12 @@ readiness. Explicit stop disables on-demand recovery before stopping the tunnel.
 
 VPN mode preserves imported listeners and adds its own loopback SOCKS adapter
 with a free profile port and unique tag. The plugin provides private session credentials
-and removes imported management APIs. IPv6 is captured and blocked while the
-forwarding path is IPv4-only. System DNS uses the selected Xray proxy without a
-physical resolver fallback. Domain-based direct rules remain supported, and
-IPv4 `bypassSubnets` become direct rules inside Xray below DNS/IPv6 protection.
+and preserves imported management APIs, services and caller statistics policy.
+IPv4 and IPv6 payloads are captured and delegated to caller routing. System
+A/AAAA queries use caller Core DNS; the native missing/localhost default uses
+TCP DNS through the selected proxy without a system-resolver fallback for failed
+remote queries. Domain-based direct rules remain supported, and IPv4
+`bypassSubnets` become direct rules inside Xray below managed DNS rules.
 Stop the current VPN before replacing its configuration.
 
 Profiles are stored using Keychain persistent references. The app and extension
@@ -25,8 +27,8 @@ are migrated when loaded.
 Update the plugin and the Packet Tunnel support product together. Runtime
 revision `xray-macos-v26.10.31-r2` supplies the private startup and asset
 location bridges and closes listeners after invalid server `h2Params`.
-Repository builds use the bundled XCFramework; the hosted
-fallback requires that revision to have been published before distribution.
+Repository builds use the bundled XCFramework; the hosted fallback uses the
+same published, checksum-pinned archive.
 
 ## Quick Run The Example
 
@@ -101,7 +103,9 @@ That note explains the routing, DNS, and packet-tunnel invariants that matter wh
 - proxy-only mode and tunnel mode are different code paths
 - the packet tunnel is more sensitive to DNS and route configuration than a normal proxy-only start
 - the provider captures IPv4 and IPv6, publishes virtual DNS `10.0.85.53`, and excludes only prepared transport endpoint addresses
-- provider readiness combines the HEV worker state with authenticated SOCKS forwarding checks; Network Extension's connected status alone is insufficient
+- provider readiness combines the current HEV worker state with authentication to the managed local SOCKS listener; check an allowed URL separately for remote reachability
+- routed DoH retains caller hosts and domain policy; bounded `tcp+local`, `https+local` and `h2c+local` use closed, interface-bound branches described in [Apple DNS](../apple-readiness-and-dns.md)
+- live IPv6-only/NAT64/handover and the owner's macOS VPN acceptance remain separate from source and Actions checks
 - use the architecture note before changing packet tunnel logic
 
 ## PacketTunnelProvider.swift

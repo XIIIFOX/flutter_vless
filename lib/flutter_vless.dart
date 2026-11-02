@@ -35,6 +35,8 @@ class FlutterVless {
   ///
   /// Call [initializeVless] before starting a connection so the platform
   /// implementation can attach its method channel and status event stream.
+  /// [options] is validated during initialization. To apply replacement options
+  /// on Apple, await [stopVless] before initializing the replacement controller.
   FlutterVless(
       {required this.onStatusChanged, this.options = const VlessOptions()});
 
@@ -57,6 +59,8 @@ class FlutterVless {
   /// not need this call because it does not install a VPN route.
   ///
   /// Returns `true` when the platform reports that startup may continue.
+  /// This does not validate a profile, prove connectivity or replace the Apple
+  /// extension/signing setup required by the host application.
   Future<bool> requestPermission() {
     return VlessPlatform.instance.requestPermission();
   }
@@ -81,6 +85,9 @@ class FlutterVless {
   ///
   /// Call this once during app startup, before [startVless],
   /// [getConnectedServerDelay], or [getCoreVersion].
+  /// Invalid [options] throw [ArgumentError]; unsupported requested native
+  /// capabilities or invalid Apple integration settings fail explicitly.
+  /// Legacy notification arguments override the corresponding option fields.
   Future<void> initializeVless({
     String? notificationIconResourceType,
     String? notificationIconResourceName,
@@ -132,7 +139,7 @@ class FlutterVless {
   ///
   /// [bypassSubnets] selects destination subnets that may bypass the proxy.
   /// On macOS and Windows VPN sessions, IPv4 CIDRs become Xray `direct` rules;
-  /// DNS protection and IPv6 blocking take precedence. They do not create
+  /// private system-DNS protection takes precedence. They do not create
   /// physical route exclusions. IPv6 bypass CIDRs are rejected.
   /// iOS VPN sessions reject non-empty system route exclusions. Use Xray
   /// `direct` routing rules to bypass selected destinations while retaining
@@ -150,7 +157,8 @@ class FlutterVless {
   /// and writable parent directories for atomic replacement. Apple downloads
   /// require an explicit writable App Group directory. Use a runtime with
   /// GeoDAT lifetime capability 1; the Core version alone is insufficient.
-  /// Core owns HTTPS downloads, cron validation and the 256 MiB response limit.
+  /// Core owns HTTPS downloads, cron validation and the 256 MiB decoded-asset
+  /// limit, including gzip input.
   ///
   /// [certificateAssetsDirectory] resolves relative TLS `certificateFile` and
   /// `keyFile` paths against an existing absolute directory, independently of
@@ -158,14 +166,26 @@ class FlutterVless {
   /// remain readable through Stop, including certificate reload and recovery.
   /// Apple VPN files need App Group access. Omit it for Core's default lookup.
   ///
-  /// [notificationDisconnectButtonName] controls the Android foreground
-  /// notification disconnect action label.
+  /// [notificationDisconnectButtonName] overrides the Android foreground
+  /// notification action label for this start. The action itself is selected by
+  /// [NotificationOptions.action].
   /// [androidDnsPolicy] defaults to preserving the supplied config. The `proxy`
   /// policy protects virtual system DNS through [androidDnsProxyOutboundTag]
   /// or the unambiguous proxy outbound; unsupported backends reject it.
   /// [vpnRouting] selects the original inbound's tag context and/or a
   /// default VPN outbound without rewriting caller rules. It requires a runtime
   /// built with VPN routing support and cannot be used in proxy-only mode.
+  ///
+  /// Completion means the platform accepted startup; observe [onStatusChanged]
+  /// for runtime state. On Apple, CONNECTED proves native worker/listener
+  /// readiness. Use [getConnectedServerDelay] with an allowed URL to check its
+  /// actual network path.
+  ///
+  /// A start superseded during capability checks by Stop, reinitialization or
+  /// a newer start throws a native-channel error with code `VPN_START_CANCELLED`.
+  /// Native preparation/start errors propagate; unsupported opt-in features
+  /// throw [UnsupportedError]. An obsolete completion must not clear a newer
+  /// session's UI state.
   Future<void> startVless({
     required String remark,
     required String config,
@@ -199,6 +219,12 @@ class FlutterVless {
   /// Starts with the same validation and routing behavior as [startVless],
   /// returning a safe per-invocation preparation report. Legacy native backends
   /// report unavailability. A passed Core check is not network readiness.
+  ///
+  /// All parameters and startup errors follow [startVless]. The report contains
+  /// closed operation codes without profile values. Native failures still
+  /// complete the future with an error; use
+  /// [VlessConfigurationFailure.fromDetails] on native exception details to
+  /// extract a supported failure stage and optional entry index.
   Future<VlessPreparationReport> startVlessWithReport({
     required String remark,
     required String config,
@@ -241,16 +267,28 @@ class FlutterVless {
     return report.withChanges(changes);
   }
 
-  /// Native capabilities and system-managed always-on/lockdown state.
+  /// Returns native feature support and current OS Always-on/lockdown state.
+  ///
+  /// Inspect supported quick-control surfaces before presenting their UI.
+  /// Older backends can return conservative defaults; the Core version string
+  /// alone does not prove that a particular managed capability is implemented.
   Future<VlessCapabilities> getCapabilities() =>
       VlessPlatform.instance.getCapabilities();
 
   /// Asks Android 13+ to show its user-controlled Add Tile dialog.
+  ///
+  /// Returns [QuickTileAddResult.unsupported] when the loaded backend cannot
+  /// request this surface. Available, enabled quick access and a foreground
+  /// Activity are required on supported Android versions; the user controls
+  /// whether the tile is added.
   Future<QuickTileAddResult> requestAddQuickTile() =>
       VlessPlatform.instance.requestAddQuickTile();
 
   /// Forgets the retained quick-control profile, for example on account logout.
-  /// The currently running session is stopped separately with stopVless().
+  ///
+  /// The active session is stopped separately with [stopVless]. Reinitializing
+  /// the app does not restore the forgotten quick profile; connect explicitly
+  /// again. Throws [UnsupportedError] on a backend without profile storage.
   Future<void> clearQuickAccessProfile() =>
       VlessPlatform.instance.clearQuickAccessProfile();
 
@@ -258,6 +296,10 @@ class FlutterVless {
   ///
   /// Platform implementations also use this call to clean up foreground
   /// services, system proxy settings, local Xray processes, and tunnel state.
+  /// Await successful completion before replacing a live Apple profile/options
+  /// or reinstalling its app. A timeout or preference error does not confirm
+  /// disconnection. Android OS-managed Always-on can reject this request with
+  /// `ALWAYS_ON_MANAGED` until the owner disables that system policy.
   Future<void> stopVless() async {
     await VlessPlatform.instance.stopVless();
   }
@@ -265,8 +307,8 @@ class FlutterVless {
   /// Measures delay for an Xray config without relying on an active session.
   ///
   /// [config] is validated with the same JSON validator used by [startVless].
-  /// [url] should point to a lightweight HTTP endpoint that returns quickly,
-  /// such as `https://google.com/generate_204`.
+  /// [url] should point to a lightweight HTTP(S) endpoint allowed by the
+  /// profile's DNS and routing, such as `https://google.com/generate_204`.
   ///
   /// Returns delay in milliseconds, or the platform-specific failure value when
   /// the native backend cannot complete the probe.
@@ -274,6 +316,9 @@ class FlutterVless {
   /// Apple and Android use [geoAssetsDirectory] as on [startVless]. Windows
   /// standalone profile delay remains unsupported and returns `-1`.
   /// [certificateAssetsDirectory] resolves TLS files as on [startVless].
+  /// Apple preparation paths without a physical-interface snapshot reject
+  /// local DNS modes that require that context. Prefer testing the active VPN
+  /// with [getConnectedServerDelay] for those profiles.
   Future<int> getServerDelay(
       {required String config,
       String url = 'https://google.com/generate_204',
@@ -296,6 +341,9 @@ class FlutterVless {
   /// CONNECTED means the protected native runtime is ready; it does not imply
   /// that this URL, or an arbitrary public Internet destination, is reachable.
   /// A failed measurement does not disconnect the active tunnel.
+  /// Returns milliseconds on success or the backend's negative failure result.
+  /// This uses the active profile and its routing; it does not validate every
+  /// outbound. HTTPS certificate and hostname validation remain enabled.
   Future<int> getConnectedServerDelay(
       {String url = 'https://google.com/generate_204'}) async {
     return await VlessPlatform.instance.getConnectedServerDelay(url);
@@ -314,9 +362,10 @@ class FlutterVless {
   /// proxy-only runtime.
   ///
   /// The snapshot is intended for support screens and failure reports. Its
-  /// contents differ by platform and can include Xray output, Packet Tunnel or
-  /// VPN-service diagnostics, and tun2socks output. The format is deliberately
-  /// human-readable and is not a stable serialization contract.
+  /// contents differ by platform and include privacy-filtered Core, provider
+  /// and packet-forwarder events within the configured bounds. Arbitrary raw
+  /// stdout/stderr, credentials and complete profiles are not exposed. The
+  /// human-readable format is not a stable serialization contract.
   ///
   /// Returns an empty string when the platform has not recorded diagnostics
   /// yet, for example before the first connection attempt. Stateless
@@ -334,6 +383,10 @@ class FlutterVless {
   /// from a bare `vless://` link. If a subscription contains multiple supported
   /// profiles, this returns the first one; use [parseMany] to keep the full
   /// list.
+  /// This is an offline import: subscription URLs are not downloaded. Parsing
+  /// is separate from native Core validation and successful remote traffic.
+  /// Throws [ArgumentError] for empty/unsupported input or invalid profiles;
+  /// malformed recognized share links may propagate their parser errors.
   static FlutterVlessURL parse(String input) {
     final trimmed = input.trim();
     if (_isSingleShareLink(trimmed)) {
@@ -347,9 +400,14 @@ class FlutterVless {
   /// Unsupported protocols are skipped intentionally. This plugin embeds Xray,
   /// so protocols that do not yet have a verified Xray import mapping should
   /// remain explicit product-scope gaps instead of silently producing broken
-  /// Xray JSON. WireGuard, Hysteria2, and HTTP proxy profiles are supported in
-  /// subscription import paths, but their runtime behavior still needs
-  /// platform artifact validation before release.
+  /// Xray JSON. WireGuard, Hysteria2 and HTTP proxy definitions have import
+  /// mappings; actual operation depends on the loaded native runtime and the
+  /// server's configuration. Conversion from Clash/sing-box covers supported
+  /// proxy fields, not their entire routing/service document.
+  ///
+  /// Throws [ArgumentError] when no supported payload is found. Malformed
+  /// recognized entries can propagate parser errors; unsupported entries can
+  /// be skipped. No remote subscription URL is fetched.
   static List<FlutterVlessURL> parseMany(String input) {
     return VlessSubscriptionParser.parseMany(
       input: input,
@@ -364,6 +422,8 @@ class FlutterVless {
   /// `hysteria2://`, and `hy2://`.
   /// For raw Xray JSON, Clash YAML, sing-box JSON, or subscription payloads,
   /// use [parse] or [parseMany].
+  /// Throws [ArgumentError] for an unsupported scheme. Each concrete parser
+  /// validates its fields and can throw for malformed credentials or values.
   static FlutterVlessURL parseFromURL(String url) {
     final separator = url.indexOf('://');
     if (separator <= 0) {

@@ -1,6 +1,12 @@
 import 'package:flutter_vless/url/url.dart';
 
+/// Hysteria 2 share links using `hysteria2://` or `hy2://`.
 class Hysteria2URL extends FlutterVlessURL {
+  /// Parses a lowercase Hysteria 2 link into a version-2 Hysteria outbound.
+  ///
+  /// Retains authentication, server identity and supported query parameters.
+  /// Invalid URI or scheme throws [ArgumentError]. Import support does not
+  /// establish that the selected native backend can run the transport.
   Hysteria2URL({required super.url}) {
     if (!url.startsWith('hysteria2://') && !url.startsWith('hy2://')) {
       throw ArgumentError('url is invalid');
@@ -39,6 +45,9 @@ class Hysteria2URL extends FlutterVlessURL {
     );
   }
 
+  /// Parsed source URI, including its credential-bearing authority and query.
+  ///
+  /// Do not log this value without redacting private fields.
   late final Uri uri;
 
   @override
@@ -47,8 +56,12 @@ class Hysteria2URL extends FlutterVlessURL {
   @override
   int get port => uri.hasPort ? uri.port : super.port;
 
+  /// Percent-decoded Hysteria authentication value from the URI authority.
   String get auth => Uri.decodeComponent(uri.userInfo);
 
+  /// Optional integer UDP idle timeout from either supported query spelling.
+  ///
+  /// Returns null when the link omits the value or it is not an integer.
   int? get udpIdleTimeout =>
       int.tryParse(uri.queryParameters['udpIdleTimeout'] ??
           uri.queryParameters['udp-idle-timeout'] ??

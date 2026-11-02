@@ -81,9 +81,11 @@ native error text are omitted from the provider snapshot. HEV retains bounded
 error-level file logging. This policy also covers iOS proxy-only and delay probes.
 
 Android also uses safe fixed events, native output draining, private no-backup
-config files and versioned diagnostic migration. On macOS and Windows, debug logs can contain server addresses, transport details, route decisions,
-and runtime errors. Avoid uploading logs automatically unless the user has
-reviewed them.
+config files and versioned diagnostic migration. Current macOS collectors map
+runtime callbacks to a closed safe vocabulary; Windows drains raw child output
+and records fixed native events. Snapshot collection is bounded and configurable
+through `DiagnosticsOptions`. Application-owned logs and older backend versions
+have their own contracts; review support attachments before sharing them.
 
 For support flows, prefer redacting:
 
@@ -105,8 +107,9 @@ the current session.
 ## iOS Traffic Protection
 
 With the current example Packet Tunnel provider, traffic protection is mandatory
-for VPN sessions. The saved profile enables `includeAllNetworks`
-and on-demand recovery. The provider keeps its routes and virtual DNS while
+for VPN sessions. The saved profile enables `includeAllNetworks` and applies the
+configured On Demand policy after successful preflight/network setup. The
+provider keeps its routes and virtual DNS while
 retrying a failed transport or restarting its HEV/Xray workers. Native runtime
 failures after route installation keep forwarding blocked. Endpoint bootstrap is
 retried before installing virtual DNS and routes; exhausted or invalid preparation
@@ -117,8 +120,11 @@ extension is terminated; system behavior must be checked on the device.
 `startVless()` can retry the connection, and
 `stopVless()` explicitly releases protection. The Dart status remains
 `CONNECTING` until the provider confirms forwarding readiness; the system VPN
-icon alone does not establish this. Health checks cover the local SOCKS and test forwarding
-paths; they do not establish the health of every outbound in a custom config.
+icon alone does not establish this. Readiness checks the current packet worker
+and authenticated managed listener within a cancellable deadline. A private-only
+or default-blocked profile needs no fixed public-site exceptions. Use
+`getConnectedServerDelay(url: ...)` to test a destination permitted by the caller;
+it does not establish the health of every outbound in a custom config.
 
 Xray `direct` rules intentionally send matching destinations through the physical
 network from inside the provider. They remain compatible with this policy.
@@ -156,8 +162,9 @@ and [`includeAllNetworks`](https://developer.apple.com/documentation/networkexte
 
 ## Local access, secret storage and Android recovery
 
-See the platform guides for the 1.1.6 contracts: [iOS](platform/ios.md#keychain-profile-migration-116)
-and [Android](platform/android.md#session-protection-and-local-proxy-access-116).
+See the platform guides for current contracts and migration notes:
+[iOS](platform/ios.md#keychain-profile-migration-116) and
+[Android](platform/android.md#session-protection-and-local-proxy-access).
 In 1.1.7, VPN adapter credentials are native session state; the exported
 configuration remains deterministic and contains no generated session password.
 Imported listeners keep their own explicit accounts/noauth policy in either
@@ -165,8 +172,10 @@ mode. Private adapter authentication does not change those imported access
 policies. Local accounts and remote outbound credentials are separate.
 
 The Android service retains TUN across internal worker recovery, but OS lockdown
-is needed for blocking across whole-service death. System DNS protection on
-Android is opt-in; on iOS it is part of the current provider contract. Neither
+is needed for blocking across whole-service death. Android's default config
+policy uses caller Core DNS through the managed resolver; the explicit proxy
+policy selects a proxy DNS override. Apple VPN also protects its managed
+resolver. Neither
 policy forbids intentional application `direct` rules or encrypts plaintext proxy
 transports.
 

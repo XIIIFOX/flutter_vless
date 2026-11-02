@@ -1,6 +1,12 @@
 import 'package:flutter_vless/url/url.dart';
 
+/// Trojan links with a password and optional transport/TLS settings.
 class TrojanURL extends FlutterVlessURL {
+  /// Parses a lowercase `trojan://` link, using TLS when security is omitted.
+  ///
+  /// The percent-encoded password is decoded when serializing the outbound.
+  /// Invalid scheme or URI throws [ArgumentError]; native Core checks runtime
+  /// compatibility separately.
   TrojanURL({required super.url}) {
     if (!url.startsWith('trojan://')) {
       throw ArgumentError('url is invalid');
@@ -52,6 +58,7 @@ class TrojanURL extends FlutterVlessURL {
       );
     }
   }
+  /// Trojan flow value from the link; empty when none was supplied.
   String flow = "";
 
   @override
@@ -63,6 +70,9 @@ class TrojanURL extends FlutterVlessURL {
   @override
   String get remark => Uri.decodeFull(uri.fragment.replaceAll('+', '%20'));
 
+  /// Parsed source URI, including its credential-bearing authority and query.
+  ///
+  /// Do not log this value without redacting private fields.
   late final Uri uri;
 
   @override

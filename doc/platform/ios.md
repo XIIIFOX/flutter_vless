@@ -85,9 +85,8 @@ await flutterVless.startVless(
 
 The directory must be an existing absolute path. The updated 1.1.7 Core bridge
 validates files referenced by the configuration, including custom `ext:` data;
-unused standard files are optional. This bridge currently requires the
-unpublished Core preview build; previously published frameworks still require
-both standard files. For Packet Tunnel mode use the App Group shared by `Runner`
+unused standard files are optional. The pinned published
+`xray-ios-v26.10.31-r2` SDK supplies this bridge. For Packet Tunnel mode use the App Group shared by `Runner`
 and `XrayTunnel`. Invalid referenced assets fail startup instead of silently
 falling back to bundle files. Certificate/key lookup has a separate Core root.
 
@@ -108,7 +107,7 @@ example/ios/XrayTunnel/PacketTunnelProvider.swift
 Calling Darwin `setenv()` in Swift is not equivalent: after gomobile has
 initialized the Go runtime, Xray's Go-side `os.LookupEnv()` does not observe
 that change. `XRaySetAssetLocation` performs the update inside Go and validates
-the file pair first.
+the requested asset location first; Core checks the files referenced by the profile.
 
 ## Rebuilding the Xray Framework
 

@@ -1,9 +1,20 @@
 import 'package:flutter_vless/url/xray_json.dart';
 import 'package:flutter_vless/url/xray_geodata_update.dart';
 
+/// Early structural checks for imported Xray configurations.
+///
+/// These checks do not run Core, resolve names, inspect files or prove platform
+/// support/network reachability. Unknown protocol and transport values are
+/// left to final native validation rather than a fixed Dart allowlist.
 class XrayConfigValidator {
+  /// Creates the stateless structural validator.
   const XrayConfigValidator();
 
+  /// Decodes and checks one JSON configuration object, returning its map.
+  ///
+  /// Supported Core-style comments and a leading BOM are accepted. Throws
+  /// [ArgumentError] for malformed JSON, a non-object root or invalid inspected
+  /// sections. The returned map is not a prepared native VPN configuration.
   Map<String, dynamic> validateJsonString(String config) {
     final decoded = _decodeJson(config);
     if (decoded is! Map<String, dynamic>) {
@@ -13,6 +24,11 @@ class XrayConfigValidator {
     return decoded;
   }
 
+  /// Checks inspected root, inbound, outbound and GeoDAT fields in [config].
+  ///
+  /// Allows missing inputs and Core-style inbound port syntax. Throws
+  /// [ArgumentError] for malformed inspected fields or conflicting schema aliases.
+  /// This does not mutate [config] or validate every Core-specific setting.
   void validate(Map<String, dynamic> config) {
     _validateObjectSection(config, 'log', required: false);
     _validateObjectSection(config, 'routing', required: false);

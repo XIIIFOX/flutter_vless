@@ -2,7 +2,13 @@ import 'dart:convert';
 
 import 'package:flutter_vless/url/url.dart';
 
+/// Base64-encoded VMess JSON share links.
 class VmessURL extends FlutterVlessURL {
+  /// Decodes the JSON payload of a lowercase `vmess://` link.
+  ///
+  /// Invalid scheme, base64 or JSON throws [ArgumentError]. Required VMess field
+  /// types must match the share-link format; malformed types can also throw
+  /// [TypeError]. This is not a native Core check.
   VmessURL({required super.url}) {
     if (!url.startsWith('vmess://')) {
       throw ArgumentError('url is invalid');
@@ -47,6 +53,9 @@ class VmessURL extends FlutterVlessURL {
           rawConfig['vcn'] ?? rawConfig['verifyPeerCertByName'],
     );
   }
+  /// Decoded VMess share-link document, including its client credentials.
+  ///
+  /// This map is retained by the parser; editing it affects generated settings.
   late final Map<String, dynamic> rawConfig;
 
   @override

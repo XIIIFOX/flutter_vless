@@ -10,15 +10,24 @@ import 'vpn_routing_options.dart';
 import 'vless_options.dart';
 import 'vless_preparation_report.dart';
 
+/// Shared Flutter-channel backend with capability-gated, cancellable startup.
+///
+/// Federated implementations can extend this class instead of duplicating the
+/// wire protocol. Startup and options retain the contracts in [VlessPlatform];
+/// native exceptions are surfaced to the caller without substituting a fallback
+/// runtime. Overridden methods inherit their platform contract documentation.
 class VlessMethodChannelAdapter extends VlessPlatform {
+  /// Creates an adapter, optionally substituting channels for a backend or test.
   VlessMethodChannelAdapter({
     this.methodChannel = const MethodChannel('flutter_vless'),
     this.eventChannel = const EventChannel('flutter_vless/status'),
   });
 
+  /// Method channel used for native requests; injectable for adapter tests.
   @visibleForTesting
   final MethodChannel methodChannel;
 
+  /// Broadcast channel carrying native [VlessStatus] events.
   @visibleForTesting
   final EventChannel eventChannel;
 

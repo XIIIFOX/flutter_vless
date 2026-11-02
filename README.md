@@ -1,4 +1,4 @@
-![flutter_vless — Xray/V2Ray VPN plugin for Flutter](doc/assets/flutter-vless-hero-1.1.6.png)
+![flutter_vless — Xray/V2Ray VPN plugin for Flutter](https://raw.githubusercontent.com/XIIIFOX/flutter_vless/main/doc/assets/flutter-vless-hero-1.1.6.png)
 
 # flutter_vless — Xray/V2Ray VPN plugin for Flutter
 [![Pub Publisher](https://img.shields.io/pub/publisher/flutter_vless)](https://pub.dev/publishers/tfox.dev/packages)
@@ -8,7 +8,7 @@ Build cross-platform VPN and proxy apps for Android, iOS, macOS and Windows with
 
 `flutter_vless` provides a compact Dart API for parsing share links and subscriptions, importing raw Xray JSON, Clash YAML, and sing-box JSON, generating Xray configurations, and running proxy-only or VPN/tunnel modes through native platform backends. WireGuard profiles are supported through Clash YAML and sing-box JSON imports.
 
-The package is open source and free to use. Platform-specific setup may be required for VPN/tunnel mode. See the [documentation](doc/README.md), [platform guides](doc/platform/README.md), and [compatibility matrix](doc/compatibility.md).
+The package is open source and free to use. Platform-specific setup may be required for VPN/tunnel mode. See the [documentation](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/README.md), [platform guides](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/platform/README.md), and [compatibility matrix](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/compatibility.md).
 
 
 ## Official Package
@@ -22,17 +22,17 @@ The package is open source and free to use. Platform-specific setup may be requi
 - Listed in the official Xray-core README under Xray Wrapper: [XTLS/Xray-core](https://github.com/XTLS/Xray-core#others-that-support-vless-xtls-reality-xudp-plux)
 
 Redistributions and derived packages must preserve the copyright and MIT
-license notices required by the license. See [NOTICE](NOTICE) and
-[TRADEMARKS.md](TRADEMARKS.md).
+license notices required by the license. See [NOTICE](https://github.com/XIIIFOX/flutter_vless/blob/main/NOTICE) and
+[TRADEMARKS.md](https://github.com/XIIIFOX/flutter_vless/blob/main/TRADEMARKS.md).
 
 ## At A Glance
 
 | Platform | VPN tunnel | Proxy only | Key setup requirements |
 | :--- | :---: | :---: | :--- |
-| **[Android](doc/platform/android.md)** | ✅ | ✅ | Uses `VpnService`; supports per-app bypass through `blockedApps`. |
-| **[iOS](doc/platform/ios.md)** | ✅ | ✅ | Requires Network Extension, App Group, and a signed physical device for tunnel testing. |
-| **[macOS](doc/platform/macos.md)** | ✅ | ✅ | Requires a Packet Tunnel extension, App Group, and application signing. |
-| **[Windows](doc/platform/windows.md)** | ✅ | ✅ | Requires a local `xray.exe`; tunnel mode may need administrator privileges. |
+| **[Android](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/platform/android.md)** | ✅ | ✅ | Uses `VpnService`; supports per-app bypass through `blockedApps`. |
+| **[iOS](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/platform/ios.md)** | ✅ | ✅ | Requires Network Extension, App Group, and a signed physical device for tunnel testing. |
+| **[macOS](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/platform/macos.md)** | ✅ | ✅ | Requires a Packet Tunnel extension, App Group, and application signing. |
+| **[Windows](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/platform/windows.md)** | ✅ | ✅ | Requires local runtime/helper files; tunnel mode requires administrator privileges. |
 
 
 | Protocol/profile |  Clash YAML | sing-box JSON | Raw Xray JSON |
@@ -56,14 +56,14 @@ license notices required by the license. See [NOTICE](NOTICE) and
 
 ## Recommended Reading
 
-1. New user setup: [Getting Started](doc/getting-started.md)
-2. Platform setup: [Platform Guides](doc/platform/README.md)
-3. Public API contract: [API Contract](doc/api.md)
-4. Practical scenarios: [Examples](doc/examples.md)
-5. Config formats and advanced editing: [Configuration Guide](doc/configuration.md)
-6. Compatibility and limits: [Compatibility](doc/compatibility.md)
-7. Security and runtime boundaries: [Security](doc/security.md)
-8. If something fails: [Troubleshooting](doc/troubleshooting.md)
+1. New user setup: [Getting Started](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/getting-started.md)
+2. Platform setup: [Platform Guides](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/platform/README.md)
+3. Public API contract: [API Contract](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/api.md)
+4. Practical scenarios: [Examples](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/examples.md)
+5. Config formats and advanced editing: [Configuration Guide](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/configuration.md)
+6. Compatibility and limits: [Compatibility](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/compatibility.md)
+7. Security and runtime boundaries: [Security](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/security.md)
+8. If something fails: [Troubleshooting](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/troubleshooting.md)
 
 ## Unreleased 1.1.7 From GitHub
 
@@ -71,8 +71,10 @@ The `main` worktree uses Xray-core **26.10.31** through the separately published
 native runtimes. The Flutter plugin itself is not released by this runtime
 update. Existing pub.dev implementation packages named `1.1.7` contain older
 wrapper code; use the matching source packages when testing this branch.
-Android uses the public checksum-pinned `26.10.31-protect2` AAR, including
-cleanup of XHTTP listeners after rejected server `h2Params`.
+The matching published runtime pins are Android `26.10.31-protect2`,
+iOS/macOS `26.10.31-r2`, and the managed Windows `26.10.31-r2` companion.
+They include cleanup of XHTTP listeners after rejected server `h2Params` and
+the capabilities required by per-session routing and managed services.
 The bundled example already supplies local overrides. An external Git consumer
 can use:
 
@@ -107,7 +109,7 @@ dependency_overrides:
 ```
 
 For a reproducible application build, replace every `main` ref with the same
-reviewed commit. See the [release preparation guide](doc/release/README.md)
+reviewed commit. See the [release preparation guide](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/release/README.md)
 for the remaining registry version and publication-order requirements.
 
 ## Try The Example First
@@ -145,16 +147,16 @@ the workspace.
 
 ## Installation
 
-```yaml
-dependencies:
-  flutter_vless: ^1.1.7
-```
-
-Then run:
+For the latest published stable plugin:
 
 ```bash
-flutter pub get
+flutter pub add flutter_vless
 ```
+
+The 1.1.7 APIs described in this checkout are not yet published as the main
+package. To use them now, follow [the coherent Git source setup](#unreleased-117-from-github)
+above for the main package and all four federated dependencies. Installing the
+older stable package alone does not provide this checkout's new APIs.
 
 For a macOS app, prepare the generated Flutter SwiftPM metadata before the first
 build. Proxy-only apps can run only the metadata step:
@@ -177,7 +179,7 @@ final flutterVless = FlutterVless(
   onStatusChanged: (status) {
     debugPrint(
       'status=${status.state} connection=${status.connectionState.name} '
-      'delay=${status.duration}s',
+      'duration=${status.duration}s',
     );
   },
 );
@@ -235,51 +237,51 @@ If you want a typed config builder instead of mutating maps, see
 Those helpers are useful when you want to construct or validate a config before
 turning it into JSON.
 
-If you need to edit the runtime config, start with [Configuration Guide](doc/configuration.md) and [Architecture Notes](doc/architecture.md).
+If you need to edit the runtime config, start with [Configuration Guide](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/configuration.md) and [Architecture Notes](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/architecture.md).
 
 ## Example App
 
 The bundled example app shows clipboard import, routing edits, proxy-only mode, and status tracking:
 
-- [example/README.md](example/README.md)
-- [example/lib/main.dart](example/lib/main.dart)
+- [example/README.md](https://github.com/XIIIFOX/flutter_vless/blob/main/example/README.md)
+- [example/lib/main.dart](https://github.com/XIIIFOX/flutter_vless/blob/main/example/lib/main.dart)
 
 ## Platform Setup
 
-- [Android](doc/platform/android.md)
-- [iOS](doc/platform/ios.md)
-- [macOS](doc/platform/macos.md)
-- [Windows](doc/platform/windows.md)
+- [Android](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/platform/android.md)
+- [iOS](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/platform/ios.md)
+- [macOS](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/platform/macos.md)
+- [Windows](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/platform/windows.md)
 
 ## Package Docs
 
-- [Docs index](doc/README.md)
-- [Getting Started](doc/getting-started.md)
-- [API Contract](doc/api.md)
-- [Examples](doc/examples.md)
-- [Configuration Guide](doc/configuration.md)
-- [Compatibility](doc/compatibility.md)
-- [Security](doc/security.md)
-- [Architecture Notes](doc/architecture.md)
-- [Protocol Support Roadmap](doc/protocol_support_roadmap.md)
-- [Real-Device VPN Matrix](doc/device_matrix.md)
-- [Troubleshooting](doc/troubleshooting.md)
-- [Release history](CHANGELOG.md)
+- [Docs index](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/README.md)
+- [Getting Started](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/getting-started.md)
+- [API Contract](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/api.md)
+- [Examples](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/examples.md)
+- [Configuration Guide](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/configuration.md)
+- [Compatibility](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/compatibility.md)
+- [Security](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/security.md)
+- [Architecture Notes](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/architecture.md)
+- [Protocol Support Roadmap](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/protocol_support_roadmap.md)
+- [Real-Device VPN Matrix](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/device_matrix.md)
+- [Troubleshooting](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/troubleshooting.md)
+- [Release history](https://github.com/XIIIFOX/flutter_vless/blob/main/CHANGELOG.md)
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+Read [CONTRIBUTING.md](https://github.com/XIIIFOX/flutter_vless/blob/main/CONTRIBUTING.md) before opening a pull request.
 
 ## Authorship And Trademarks
 
 `flutter_vless` is maintained by 13FOX Studio / tfox.dev. See
-[AUTHORS](AUTHORS), [NOTICE](NOTICE), and [TRADEMARKS.md](TRADEMARKS.md) for
+[AUTHORS](https://github.com/XIIIFOX/flutter_vless/blob/main/AUTHORS), [NOTICE](https://github.com/XIIIFOX/flutter_vless/blob/main/NOTICE), and [TRADEMARKS.md](https://github.com/XIIIFOX/flutter_vless/blob/main/TRADEMARKS.md) for
 attribution and brand-use notes.
 
 ## License
 
-[MIT License](LICENSE)
+[MIT License](https://github.com/XIIIFOX/flutter_vless/blob/main/LICENSE)
 
 ### Options and system controls (1.1.7)
 
-Use typed Notification, Quick Access, Reconnect, Protection and Diagnostics options. Native controls include Android Quick Tile, macOS menu bar, Windows tray and optional Apple Control Center host extensions. See [setup, capability matrix and examples](doc/options-and-system-controls.md).
+Use typed Notification, Quick Access, Reconnect, Protection and Diagnostics options. Native controls include Android Quick Tile, macOS menu bar, Windows tray and optional Apple Control Center host extensions. See [setup, capability matrix and examples](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/options-and-system-controls.md).

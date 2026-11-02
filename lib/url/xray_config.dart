@@ -5,16 +5,20 @@ import 'package:flutter_vless/url/xray_config_model.dart';
 import 'package:flutter_vless/url/xray_config_validator.dart';
 import 'package:flutter_vless/url/xray_json.dart';
 
-/// Raw Xray JSON import wrapper.
+/// Full-profile Xray JSON import with limited compatibility normalization.
 ///
-/// Happ-style subscriptions can provide full Xray JSON or JSON arrays instead
-/// of a compact share URL. Keep those configs as a 1:1 passthrough because some
-/// server-provisioned values do not exist in the URL surface at all. The most
-/// important current example is VLESS `users[].encryption` with
-/// `mlkem768x25519plus...`: without that exact client value, XHTTP/none can
-/// start Xray and pass SOCKS CONNECT while still failing to fetch real HTTP
-/// bytes on device.
+/// Unlike share-link generators, this preserves unknown fields, explicit nulls,
+/// empty containers and server-provided encryption values. Known transport
+/// aliases are normalized and unsupported TLS `allowInsecure` overrides removed
+/// at their schema owners; it is not a byte-for-byte passthrough. Native Core
+/// and each platform adapter still validate the final prepared configuration.
 class XrayJsonConfig extends FlutterVlessURL {
+  /// Imports an Xray object, or the first object of a nonempty JSON array.
+  ///
+  /// Accepts the supported Core-style comments and leading BOM. Throws
+  /// [ArgumentError] for invalid input or failed structural checks. A raw array
+  /// contains only one selected profile here; use `FlutterVless.parseMany` to
+  /// import every supported profile.
   XrayJsonConfig({required super.url}) {
     final decoded = _decodeJsonConfig(url);
     late final Map<String, dynamic> decodedConfig;
@@ -33,6 +37,11 @@ class XrayJsonConfig extends FlutterVlessURL {
         as Map<String, dynamic>;
   }
 
+  /// Structurally checked configuration used by [fullConfiguration].
+  ///
+  /// Unknown fields, explicit nulls and empty containers are retained, with
+  /// limited schema-owned compatibility normalization. This map is mutable and
+  /// can contain credentials. Editing it bypasses the constructor validation.
   late final Map<String, dynamic> rawConfig;
 
   dynamic _decodeJsonConfig(String rawJson) {
@@ -43,6 +52,7 @@ class XrayJsonConfig extends FlutterVlessURL {
     }
   }
 
+  /// Display name from `remarks`, `remark` or `ps`, falling back to `Xray JSON`.
   @override
   String get remark {
     final remarks = rawConfig['remarks'];
@@ -60,9 +70,16 @@ class XrayJsonConfig extends FlutterVlessURL {
     return 'Xray JSON';
   }
 
+  /// Returns [rawConfig] by reference, including all retained full-profile fields.
+  ///
+  /// This getter does not rebuild the document from typed share-link models.
   @override
   Map<String, dynamic> get fullConfiguration => rawConfig;
 
+  /// First imported outbound object, or an empty map after caller removal.
+  ///
+  /// It may be a direct/block output rather than a remote proxy. The returned
+  /// object belongs to [rawConfig]; edits are not revalidated by this getter.
   @override
   Map<String, dynamic> get outbound1 {
     final outbounds = readXraySchemaField(rawConfig, 'outbounds');
@@ -74,6 +91,9 @@ class XrayJsonConfig extends FlutterVlessURL {
     return {};
   }
 
+  /// Serializes the retained full profile using [indent] spaces per level.
+  ///
+  /// This does not revalidate later edits to [rawConfig] or run native preflight.
   @override
   String getFullConfiguration({int indent = 2}) {
     return JsonEncoder.withIndent(' ' * indent).convert(rawConfig);

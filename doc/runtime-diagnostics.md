@@ -58,8 +58,10 @@ or republishing their contents; other application files are untouched.
 
 iOS HEV keeps a bounded error-only `hev-socks5-tunnel-error-v2.log`; snapshots
 report only its size. A worker must be stopped before legacy HEV cleanup.
-macOS and Windows diagnostics retain their existing separate contracts and may
-contain server addresses, destinations, routes, paths and Xray context. Applications
-should let users review the snapshot before copying, uploading, or attaching it
-to a support request. Credentials and full configuration JSON must never be
-added by the diagnostic collectors.
+Current macOS collectors use the same typed scalar/fixed-message boundary and
+map arbitrary Xray callback strings to a closed vocabulary. Windows records safe
+native lifecycle/preparation events and drains raw child stdout/stderr.
+`DiagnosticsOptions` limits existing collection; disabling it clears the owned
+buffers. Backend snapshot shapes remain platform-specific, and older published
+wrappers or application-owned logs may have a different contract. Applications
+should let users review support attachments before sharing them.

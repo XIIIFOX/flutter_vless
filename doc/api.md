@@ -6,6 +6,11 @@ This document describes the app-facing Dart contract exposed by
 Use this page when you need to know what a method expects, what it returns, and
 which parts are platform-specific.
 
+This page describes the working 1.1.7 source. Use matching source packages as
+shown in the [Git setup](../README.md#unreleased-117-from-github) until the main
+1.1.7 plugin is published. Editor hover documentation is included on exported
+Dart declarations; platform setup remains necessary for VPN mode.
+
 ## Import
 
 ```dart
@@ -19,6 +24,11 @@ VPN/tunnel sessions.
 
 Create one instance and keep it for the lifetime of the screen, service, or app
 component that owns the connection.
+
+Pass typed `VlessOptions` to the constructor for notification, quick access,
+reconnect, protection and diagnostics settings. See [options and system
+controls](options-and-system-controls.md) for defaults, platform availability,
+host-extension setup and validation limits.
 
 ```dart
 final flutterVless = FlutterVless(
@@ -71,7 +81,8 @@ Platform notes:
 
 - Android uses this path for VPN and notification permission flows.
 - iOS and macOS depend on signing, App Groups, and Network Extension setup.
-- Windows may require elevated permissions for system routing changes.
+- Windows VPN requires administrator privileges. This call checks elevation;
+  it does not elevate the application.
 
 ## `startVless()`
 
@@ -88,27 +99,35 @@ await flutterVless.startVless(
 
 Required parameters:
 
-- `remark`: human-readable profile name used by native UI, notifications, and
-  logs.
+- `remark`: human-readable profile name used by native UI and notifications.
 - `config`: JSON-encoded Xray configuration object.
 
 Optional parameters:
 
 - `blockedApps`: Android package names excluded from the VPN route.
-- `bypassSubnets`: CIDR routes excluded from the tunnel where supported. iOS VPN
-  sessions reject non-empty values with `INCOMPATIBLE_ROUTING` before changing
-  the current session. Use Xray `direct` routing rules on iOS; traffic protection
-  is mandatory for VPN sessions.
+- `bypassSubnets`: on macOS/Windows, IPv4 CIDRs become protected Core `direct`
+  rules, with private system-DNS rules taking precedence; they do not create
+  physical route exclusions. IPv6 bypass CIDRs are rejected. iOS VPN sessions
+  reject non-empty values with `INCOMPATIBLE_ROUTING` before changing the
+  current session. Use Xray `direct` rules on iOS; VPN protection is mandatory.
 - `proxyOnly`: starts local proxy behavior without installing a VPN route.
-- `geoAssetsDirectory`: iOS-only absolute path to a directory containing
-  non-empty `geoip.dat` and `geosite.dat`. Use an App Group directory for VPN
-  mode so both the app and Packet Tunnel extension can read it. Omit this
-  parameter to keep Xray's default/bundled asset lookup.
+- `geoAssetsDirectory`: existing absolute data directory on Android, iOS,
+  macOS and Windows. Only files actually referenced by the profile are required;
+  custom-only and asset-free directories need no unused standard datasets.
+  Use an App Group directory for Apple VPN so the extension can read it. Keep
+  files available through Stop/recovery; omit this parameter for bundled/default
+  lookup. An explicit directory is not seeded with bundled files.
+- `certificateAssetsDirectory`: existing absolute base for relative Core TLS
+  certificate/key file references, independent of geodata. Absolute paths and
+  inline certificates retain their meaning. Files remain caller-owned and must
+  remain readable through recovery/reload; Apple VPN requires shared storage.
 - `notificationDisconnectButtonName`: Android notification action label.
 - `androidDnsPolicy`: `AndroidDnsPolicy.config` (default) sends private virtual
-  resolver A queries through the caller's Core DNS settings;
+  resolver A/AAAA queries through the caller's Core DNS settings;
   `AndroidDnsPolicy.proxy` intentionally overrides system DNS through a selected
-  proxy. Both use AAAA NODATA while the VPN forwards IPv4 only.
+  proxy. The config policy preserves caller query strategy: `UseIPv4` produces
+  AAAA NODATA intentionally. IPv6 payload capture is supported; IPv6-only
+  underlay/NAT64 qualification is separate.
 - `androidDnsProxyOutboundTag`: optional selected proxy tag, only with proxy DNS.
   Unsupported native backends reject explicitly requested new guarantees before
   starting or reconfiguring a session.
@@ -120,15 +139,19 @@ Optional parameters:
   default. Caller rules, imported listeners and private DNS/probe rules remain.
   Omit the whole option for ordinary startup; an explicit empty option still
   requires the routing factory. Proxy-only requests and unsupported runtimes
-  fail before replacing the current session. Factory-capable runtime artifacts
-  are currently unpublished CI previews, so ordinary published binaries cannot
-  use this option yet. Update the copied Apple provider together with the plugin.
+  fail before replacing the current session. The pinned published Android
+  `26.10.31-protect2`, Apple `26.10.31-r2` and managed Windows `26.10.31-r2`
+  runtimes supply the factory; the actual loaded artifact is checked. Update
+  the copied iOS provider together with the plugin.
 
 Validation:
 
 `startVless()` validates `config` before forwarding it to native code. It throws
 `ArgumentError` when the string is not valid JSON, is not a JSON object, has an
 invalid `inbounds` section, or does not contain at least one valid outbound.
+Core-style JSON comments and a leading BOM are accepted; trailing documents
+remain invalid. Native semantic/preflight errors are reported separately.
+Completion admits a start request; observe status for forwarding readiness.
 
 ## `startVlessWithReport()`
 
@@ -174,14 +197,15 @@ admission: this report does not promise rollback to the previous session.
 The example displays the report and safe error descriptions, and clears a
 superseded report when its configuration changes or another start is attempted.
 
-An Apple Core version string such as `26.10.17` does not identify the loaded
-bridge ABI. Released SDKs and unpublished previews can share that version while
-only the preview supplies the additive Check/routing capabilities. A missing
+An Apple Core version string alone does not identify the loaded bridge ABI.
+Use capabilities from the actual artifact; the pinned published r2 SDKs include
+the Check/routing interfaces used by the current adapters. A missing
 Check ABI yields `coreCheck: unavailable`; an explicit native routing request
 still requires native routing capability and fails closed when it is absent.
-Current physical iPhone preview observations are `host` preparation only, not
-final provider-report delivery or general DNS/internet acceptance. See the
-[source-bound CI qualification and remaining work](compatibility.md#remaining-compatibility-work).
+An Apple VPN report still covers `host` preparation, not final provider-report
+delivery or a general network guarantee. The separate [current iPhone/Actions
+qualification](release/apple-readiness-dns-validation.md) records actual
+DNS/data/routing checks and their limits.
 
 ## `stopVless()`
 
@@ -211,8 +235,13 @@ final delayMs = await flutterVless.getServerDelay(
 ```
 
 The config is validated with the same validator used by `startVless()`.
-On iOS, `geoAssetsDirectory` has the same validation and lookup behavior as
-the parameter on `startVless()`.
+Android and Apple use `geoAssetsDirectory` and `certificateAssetsDirectory`
+with the same lookup rules as startup. The temporary measurement does not take
+over an active VPN; Apple/Android omit imported API/metrics listeners for this
+isolated probe. Windows standalone profile delay is unsupported and returns
+`-1`; Apple also refuses to replace an active app-process proxy-only runtime.
+Apple `+local` DNS preparation without a physical-path snapshot remains an
+explicit unsupported case. A failed measurement is not a successful Core check.
 
 ## `getConnectedServerDelay()`
 
@@ -223,7 +252,24 @@ final delayMs = await flutterVless.getConnectedServerDelay();
 ```
 
 Use this after `startVless()` when the app needs a health signal for the active
-profile.
+profile. Choose `url:` according to the caller's routing policy. Apple readiness
+means the current local packet worker and authenticated listener are ready;
+an intentionally blocked external URL can fail without disconnecting that
+runtime. Delay failures do not prove that every route or the server is unusable.
+
+## Capabilities and quick access
+
+`getCapabilities()` returns the typed options, system-control surfaces,
+protection features and OS-managed Always-on/lockdown state of the loaded
+backend. Required native routing/asset/service capabilities are checked
+internally when their corresponding startup parameters are supplied; the
+public `VlessCapabilities` model has no routing or preparation-report boolean.
+Preparation reports express unsupported reporting with an unavailable scope.
+Capabilities describe implementation availability, not whether a remote server
+is reachable. `requestAddQuickTile()` requests Android's supported foreground
+add-tile flow and returns its typed result. `clearQuickAccessProfile()` removes
+the retained quick-access authorization/configuration while leaving an active
+session running. See [the platform matrix](options-and-system-controls.md).
 
 ## `getCoreVersion()`
 
@@ -248,22 +294,20 @@ final diagnostics = await flutterVless.getProviderDebugSnapshot();
 
 The contents are intentionally platform-specific:
 
-- iOS and macOS include Packet Tunnel provider/HEV diagnostics, or app-process
-  Xray output in proxy-only mode.
-- Android includes Xray and tun2socks process output plus bounded Xray
-  access/error file tails when the configuration enabled them.
-- Windows includes Xray and tun2socks stdout/stderr captured by the native
-  process manager.
+- Apple includes bounded provider lifecycle/worker metadata and safe app-process
+  events; raw HEV contents and arbitrary Xray callback text are omitted.
+- Android includes safe service/runtime stages, counters and exit codes.
+- Windows includes safe native lifecycle and preparation events; raw child
+  stdout/stderr is drained instead of exposed.
 
 The snapshot remains available after a normal stop or startup failure.
 In-process collectors reset when a new session begins; persisted Apple Packet
 Tunnel tails can contain timestamped entries from an earlier extension run. It
-returns an empty string before any diagnostics have been recorded. Treat the
-text as support data, not as a stable machine-readable format; it may contain
-destination addresses from Xray logs.
-Applications should show the snapshot to the user for review before copying or
-sharing it because server addresses, destinations, route details, and local
-filesystem paths can appear in native diagnostics.
+returns an empty string before any diagnostics have been recorded, or when
+collection is disabled. `DiagnosticsOptions` bounds collection and disabling it
+clears retained buffers. Treat the text as support data, not a stable parser
+format; current collectors omit raw configs, credentials and arbitrary native
+error text. Let users review support attachments before sharing them.
 
 ## `parse()`
 

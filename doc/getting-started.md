@@ -2,6 +2,10 @@
 
 This guide is for developers who want to add `flutter_vless` to an app and get a working connection with the smallest possible amount of setup.
 
+These instructions describe the repository's working 1.1.7 API. The main 1.1.7
+plugin is not published yet; use the bundled example or the matching
+[Git source dependencies](../README.md#unreleased-117-from-github) for its new APIs.
+
 ## Quick Run From The Example
 
 The fastest way to verify your environment is to run the bundled example app
@@ -39,16 +43,15 @@ targets, and Windows needs `xray.exe` in place. For macOS, run
 
 ## 1. Add The Dependency
 
-```yaml
-dependencies:
-  flutter_vless: ^1.1.7
-```
-
-Then run:
-
 ```bash
-flutter pub get
+flutter pub add flutter_vless
 ```
+
+That command installs the latest published stable package. For the working
+1.1.7 API, use the coherent Git setup linked above instead, including the
+platform-interface and Android/macOS/Windows source dependencies, then run
+`flutter pub get`. Do not mix this checkout's main package with older published
+platform wrappers when testing new options or runtime capabilities.
 
 For macOS, run the metadata preparation step before the first build:
 

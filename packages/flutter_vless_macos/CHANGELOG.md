@@ -1,80 +1,17 @@
 ## 1.1.7
 
-* Check native VPN readiness using the current packet worker and authenticated local listener, without fixed external connectivity targets. Keep caller-selected network measurements separate and preserve bounded recovery after local failures.
+Repository development changes; this section does not republish the existing
+pub.dev package numbered 1.1.7.
 
-* Prepare finite `tcp+local`, `https+local` and `h2c+local` DNS through closed physical-interface branches. Retain caller routed DoH policy and require interface-binding capability for DNS-only profiles before startup.
-
-* Prepare XDRIVE S3 and Google Drive API endpoints and admit scheduled GeoDAT updates only with the matching native lifetime capabilities. Validate writable App Group targets and retain caller datasets. Add NAT64 provenance and expiry regressions; live IPv6-only/NAT64 acceptance remains separate.
-
-* Retain control action, options and profile ownership across authentication and preference awaits. Revoke older controls on newer app/control commands, stage On Demand disabled, and report uncertain startup without compensating preference writes. Add 36 whole-method transaction regressions shared with iOS.
-
-* Prepare Apple transport endpoints from bounded IPv4/IPv6 candidate sets, preserving DNS TTLs and using documented OS synthesis for IPv4 literals on IPv6-only paths. Reprepare from the original configuration after path, wake, expiry or transport failures; serialize settings changes and scope native cleanup to the committed plan. Native NAT64/handover acceptance remains pending.
-
-* Enforce the selected interface on generated Apple physical sockets after optional/custom socket settings, including error returns. Add a distinct runtime capability and refuse unsupported artifacts before route installation; require the matching runtime capability before route installation.
-
-* Admit bounded static DNS hosts aliases for remote named resolvers without rewriting caller DNS or TLS identity. Cancel obsolete Dart startup capability checks after Stop or a newer Start.
-
-* Include XHTTP HTTP/3 socket-first teardown in Apple Core source and preview preparation, with guarded pinned-source validation. The verified macOS runtime now includes this fix.
-
-* Exclude loopback-owned dormant socket edges from chain validation while retaining active chain errors and sender settings. Add shared preparation and controlled XHTTP redispatch regressions.
-
-* Admit inactive TLS ECH settings in ordinary and immediate XHTTP download streams without rewriting them. Retain the active TLS fetch restriction and native bootstrap protection.
-
-* Close Classic DNS UDP channels and cleanup timers during Core shutdown, including concurrent requests and late EDNS retries.
-
-* Accept numeric IPv6 caller DNS addresses while preserving the original DNS configuration. Keep physical transport endpoint bootstrap unchanged and add paired native preparation regressions.
-
-* Share a cancellable deadline across authenticated watchdog probes and HTTP reads. Stop later probe phases and state publication after session cancellation, retaining the existing delay-client socket and TLS behavior.
-
-* Preserve native reconnect budgets when sleep cancels work before Core admission. Count actual admitted calls, retain finite retry limits and honor the recovery pause while previous workers drain.
-
-* Return per-start host/proxy preparation reports with actual typed edit codes, exact Core-check availability and safe preparation stages. Keep VPN provider preparation outside the host report.
-
-* Restrict XHTTP bootstrap chain admission to the upload and its active immediate download. Preserve unused grandchild socket settings while retaining missing-chain and cycle checks.
-
-* Bind relative Realm/XDNS TLS certificate and key files to the explicit certificate assets directory, retaining effective XHTTP download and opaque-data semantics.
-
-* Distinguish endpoint DNS exhaustion from rejected configuration preparation before VPN route installation, keeping diagnostics free of profile data.
-
-* Capture byte-exact environment names once for port/address binding, allocation and startup retries. Preserve distinct Unicode spellings and exact empty values, with isolated native-reader and host-admission checks.
-
-* Use Core-compatible Unicode environment aliases and whitespace for imported ports and addresses. Share validation and frozen port binding while preserving exact-value and empty-value precedence.
-
-* Validate the effective immediate XHTTP download transport in proxy-DNS preparation. Preserve inactive nested downloads and keep the immediate client's own socket policy separate from explicit parent inheritance.
-
-* Preserve caller `useSystemHosts` for numeric remote DNS instead of rejecting the flag before Core can read the hosts file. Keep named resolver and local transport admission unchanged; add shared DNS preservation controls.
-
-* Prepare compatible FakeDNS pools without changing caller DNS or imported sniffing. Move owned IPv4/DNS addresses outside the default pool and reject native namespace conflicts before bootstrap; add shared regressions.
-* Scope proxy-only traffic to the selected inbound without retagging caller inputs. Keep missing/disabled directions unavailable internally and reset speed baselines across gaps/restarts; retain HEV VPN counters. Add shared consumer and controlled payload regressions.
-* Consume per-session VPN routing selections through host/provider admission and exact checked startup/recovery pairs. Require the enabled routing ABI in the verified native runtime.
-* Refuse nonempty root `env` before in-process Core preflight, including cached older checker calls. Expose a redacted `environment-policy` error while preserving the working session and original profile; scoped environment support remains open.
-* Add per-start/profile-delay `certificateAssetsDirectory` with typed TLS/XHTTP file binding before preflight and profile persistence. Keep absolute/inline material and reload options; caller files must stay accessible to the provider.
-* Admit XHTTP download settings with parent `sockopt.penetrate` using one closed upload/download pin scope. Preserve caller chains and inactive child socket settings; retain exact endpoint and active ECH checks, with shared preparation and payload regressions.
-* Treat missing, null and empty localhost DNS tags consistently while rejecting malformed non-null types before modifying the profile. Preserve the other DNS fields and extend shared preparation and runtime regressions.
-* Match Core's literal `full:` hosts prefix and domain lowercasing when validating named DNS bootstrap. Preserve caller DNS and reject false static mappings; extend shared preparation and HTTPS DoH regressions.
-* Keep private service tags outside known nonempty balancer/observatory prefixes, preserving caller selectors and later outbound additions. Add shared allocation and native traffic regression fixtures; empty wildcard selection still needs Core integration.
-* Accept direct-only profiles with explicit caller DNS without inventing a proxy endpoint or changing the caller's default outbound. Retain refusal for an implicit native DNS detour without a qualified proxy; add shared preparation and runtime regression gates.
-* Retain IPv6 tunnel capture and caller IPv6 routing instead of inserting a blanket block. Delegate A/AAAA to preserved caller DNS and add shipped-HEV IPv6 TCP/UDP packet fixtures; IPv6-only bootstrap and NAT64 remain unqualified.
-* Permit explicit custom-only or asset-free data directories without unrelated standard GeoDAT files. Keep certificate lookup separate and validate referenced files through Core; add shared custom GeoSite runtime coverage for both Apple platforms.
-* Freeze listener address environment references before cross-process profile persistence and Unix/TCP allocation. Preserve explicit empty values and source JSON; reject recursive listener references.
-* Preserve existing stats/policy sections, including explicit null, disabled counters and levels-only policy. Add defaults only when a root section is absent; keep caller API/services intact.
-* Recognize MASQUE and Core role aliases while preserving internal DNS/loopback handlers. Select the actual proxy transport, match XHTTP null precedence, and allocate a real UDP/443 block target when needed.
-* Preserve explicit remote caller DNS and separate transport bootstrap pins from caller hosts. Use Core DNS for private VPN A queries; document the proxied native localhost default and unsupported DNS paths.
-* Revoke stale startup/recovery callbacks synchronously on Stop; keep sleep/wake admission ordered and release sleeping health-check retry slots before a valid wake.
-* Reserve caller metrics listener ports alongside API ports without rewriting their settings; cover simultaneous API, metrics and authenticated adapter traffic in runtime acceptance.
-* Wire Core decode/build preflight into app/provider startup for the unpublished preview runtime; preserve active sessions and expose redacted stage/index failures before route installation.
-* Bind port environment references before encrypted cross-process persistence and share Core port grammar/Unix-listener allocation checks with the other backends.
-* Apply configured diagnostic byte and line limits after assembling the complete snapshot, including provider metadata.
-* Disable and verify the saved profile when a system control disconnects; report the actual On Demand policy in private provider diagnostics.
-* Wait for full tunnel teardown after explicit Stop, verify that recovery is disabled, and keep live configuration/options changes explicit. Check forwarding readiness even with On Demand disabled.
-* Keep status events and traffic counter updates on the Flutter platform thread; cover delivery from background callbacks and cancelled listeners.
-* Add native menu-bar controls, optional macOS 26+ Control Center integration, validated typed options and native capability reporting.
-* Configure native worker retry limits, Apple On Demand and bounded private diagnostics while preserving protected VPN policy and Keychain references.
-* Add isolated options/control tests and an idempotent host WidgetKit setup generator in the main package.
-
-* Update the universal arm64/x86_64 Xray runtime to `v26.10.29`, pinned to commit `0afec66085a85191e9dd2a4a6646c7c9a94688d1`, using Go 1.27.3 for updated root CA filtering.
-* Update SwiftPM and CocoaPods to the matching verified `xray-macos-v26.10.29` XCFramework.
-* Preserve private preflight/startup, asset selection, authenticated local proxies and the 128 KiB HTTP/2 upload scratch cap. Retain routing capability 1, mandatory Darwin interface binding and Classic DNS/XHTTP HTTP/3 lifetime fixes in the runtime-only asset. The Flutter package remains 1.1.7 unreleased.
+* Use the published checksum-pinned `xray-macos-v26.10.31-r2` universal runtime with private startup/assets, native routing, mandatory interface binding and owned Classic DNS/XHTTP/XDRIVE/GeoDAT cleanup.
+* Check VPN readiness using the current packet worker and authenticated local listener, without fixed public connectivity targets. Keep caller-selected network measurements separate and preserve bounded recovery after local failures.
+* Prepare finite `tcp+local`, `https+local` and `h2c+local` DNS through closed physical-interface branches; retain routed DoH policy and require binding capability for DNS-only profiles before startup.
+* Add typed options/capabilities, menu-bar and optional Control Center actions, bounded reconnect and diagnostics. Preserve immutable action/profile ownership across authentication and preference operations; stage On Demand disabled and verify explicit Stop.
+* Preserve caller listeners, API/services/statistics, unknown JSON data, DNS hosts/domain rules, compatible FakeDNS and effective transport/download settings. Allocate authenticated private adapters without rebinding caller ports or acquiring caller selector references.
+* Capture IPv6 payload and prepare bounded IPv4/IPv6 transport candidates with freshness, cancellation and path-aware recovery. Retain finite retry budgets and protected capture while workers recover.
+* Add per-session VPN routing, typed preparation reports and separate data/certificate roots. Preserve caller datasets, validate XDRIVE/GeoDAT capability and writable targets, and freeze relative TLS files through recovery.
+* Bound authenticated listener checks, profile/connected delay and native lifecycle work; preserve strict TLS/authentication and socket cleanup.
+* Verify shared Apple policies, app/SwiftPM builds and published-runtime DNS/routing/packet behavior in Actions. Live owner macOS and IPv6-only/NAT64/handover remain separate acceptance work.
 
 ## 1.1.6
 

@@ -4,6 +4,9 @@
 /// runtimes reject the request before replacing the current session. Omit this
 /// option to retain the ordinary adapter path.
 class VpnRoutingOptions {
+  /// Creates optional inbound context and fallback-outbound selections.
+  ///
+  /// Null values retain the native adapter's ordinary routing behavior.
   const VpnRoutingOptions({this.sourceInboundIndex, this.defaultOutboundTag});
 
   /// An index into the ORIGINAL configuration's `inbounds` array, starting at
@@ -16,6 +19,10 @@ class VpnRoutingOptions {
   /// Null or empty keeps Core's ordinary default outbound selection.
   final String? defaultOutboundTag;
 
+  /// Throws [ArgumentError] when [sourceInboundIndex] is outside 32-bit bounds.
+  ///
+  /// Native preparation checks whether the selected original input and outbound
+  /// tag actually exist. These options are rejected in proxy-only mode.
   void validate() {
     final index = sourceInboundIndex;
     if (index != null && (index < 0 || index > 2147483647)) {

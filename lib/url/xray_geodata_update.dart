@@ -1,9 +1,17 @@
 import 'package:flutter_vless/url/xray_json.dart';
 
-/// Early checks for pinned Core 26.10.29's GeoDAT updater. Core remains the
-/// authority for cron syntax, native file resolution and the 256 MiB response cap.
+/// Early checks for pinned Core 26.10.31's GeoDAT updater. Core remains the
+/// authority for cron syntax, native file resolution and the 256 MiB decoded
+/// asset limit.
 /// This validator never downloads, reads files or rewrites caller fields.
 abstract final class XrayGeodataUpdate {
+  /// Checks the optional `geodata` section without changing [config].
+  ///
+  /// Every asset URL must use HTTPS. Enabled schedules additionally require at
+  /// most 100 assets with `.dat` targets and recognized constant intervals of
+  /// at least one minute. Throws [ArgumentError] for malformed inspected fields.
+  /// Core validates remaining cron grammar,
+  /// paths, native capabilities and download/decoded-size limits.
   static void validate(Map<String, dynamic> config) {
     final value = readXraySchemaField(config, 'geodata');
     if (value == null) return;

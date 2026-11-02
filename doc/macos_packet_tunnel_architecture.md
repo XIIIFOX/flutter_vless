@@ -25,10 +25,11 @@ that Network Extension packet forwarding works.
 1. The application validates the profile and IPv4 bypass CIDRs.
 2. It stores configuration bytes in a scoped shared Keychain item. Saved
    provider preferences contain a persistent reference, not the JSON profile.
-3. It saves the mandatory routing and on-demand policy, then starts the provider.
+3. It saves mandatory routing with On Demand staged disabled, then starts the provider.
 4. The provider reads the secret, supplies fresh local SOCKS credentials and
    prepares transport endpoint addresses before installing virtual DNS.
-5. It installs capture routes and starts its recovery watchdog.
+5. After Core/capability preflight, it installs capture routes and arms only the
+   configured recovery policy after network setup is confirmed.
 6. Xray and HEV start using the prepared configuration. An owned socket pair
    connects HEV to the public `NEPacketTunnelFlow` packet API.
 7. The application reports `CONNECTED` only when Network Extension is connected
@@ -38,17 +39,16 @@ Preparation failures reject startup. The provider never runs the original JSON
 as a fallback. An identical active configuration is an idempotent start; a
 changed profile requires an explicit stop before replacement.
 
-Endpoint bootstrap gives the system resolver two seconds per lookup. If it does
-not return an address, the provider resolves public transport names using HTTPS
-to `https://1.1.1.1/dns-query` with normal certificate validation, a five-second
-request/resource timeout, and no redirects, cookies or persistent cache. This
-uses the same upstream as tunnel DNS, without depending on mDNSResponder while
-the protected tunnel is starting. Single-label names and reserved local suffixes
-do not use the public fallback. Only transport endpoint names are queried, never
-routing domains, sniffed destinations or TLS/Reality server names. Responses must
-match the question and its CNAME chain. Cancellation stops outstanding lookups;
-bootstrap retries are bounded. No bootstrap lookup runs after virtual DNS is
-installed or during worker recovery.
+Endpoint preparation captures a physical-path generation and bounded IPv4/IPv6
+candidates with freshness/provenance. Encrypted bootstrap for public transport
+names uses certificate-validated HTTPS at `https://1.1.1.1/dns-query`, without
+redirects, cookies or persistent cache; reserved local names do not use that
+public fallback. Only physical transport endpoint names are queried, never
+caller routing domains or TLS/Reality identity names. Responses must match the
+question/CNAME chain. Cancellation and newer paths revoke stale answers. Path,
+wake, expiry and recovery can prepare a new plan from the original profile,
+using the selected physical interface and serialized network-setting commits.
+Caller DNS hosts and logical destinations retain their own meaning.
 
 ## Network and configuration invariants
 
@@ -56,19 +56,21 @@ installed or during worker recovery.
 | --- | --- |
 | Profile protection | `includeAllNetworks = true`, local network exclusions disabled, sleep disconnect disabled; APNs/cellular service exclusions disabled where available |
 | IPv4 | Default capture plus an explicit route to virtual DNS `10.0.85.53` |
-| IPv6 | Default capture and an Xray `::/0` block rule; application forwarding remains IPv4-only |
-| Endpoint bootstrap | Resolve before installing virtual DNS and retain prepared endpoint mappings during worker recovery; endpoint route exclusions prevent transport loops |
-| System DNS | Publish `10.0.85.53` with `matchDomains = [""]`; relay TCP/UDP DNS through Xray as TCP DNS to `1.1.1.1` via the selected proxy |
+| IPv6 | Default capture with caller IPv6 routing/query policy; real IPv6-only/NAT64/handover remains separate acceptance work |
+| Endpoint bootstrap | Use a current physical-path plan, private finite endpoint dialing branches and mandatory interface binding; renew stale/path-changed plans without a protection gap |
+| System DNS | Publish `10.0.85.53` with `matchDomains = [""]`; send private A/AAAA queries through caller Core DNS, with the selected-proxy TCP default for missing/localhost servers |
 | DNS fallback | No physical DNS host-route exclusions or system-resolver fallback after setup |
 | Managed listener | Separate authenticated loopback SOCKS adapter; preserve imported listeners, credentials and tags |
-| Imported management API | Remove it before running Xray |
-| Domain routing | Preserve user rules and remote credentials; use sniffing with `routeOnly = true` so domain rules cannot bypass the literal IPv6 block |
-| Subnet bypass | Translate IPv4 CIDRs into Xray direct rules below mandatory DNS/IPv6 rules, rather than adding system route exclusions |
+| Imported management API | Preserve caller API/services/statistics, including explicit null/disabled values; reserve its listener ports when allocating private adapters |
+| Domain routing | Preserve caller rules and remote credentials; managed sniffing restores the routing context without changing imported listeners |
+| Subnet bypass | Translate IPv4 CIDRs into Xray direct rules below managed DNS rules rather than adding system route exclusions |
 | Unsupported configuration | Reject ambiguous fields, incompatible FakeDNS and unsupported endpoint resolution forms |
 
-Server domains remain intact for TLS SNI, Reality and XHTTP. Prepared DNS host
-mappings align endpoint resolution with routing without rewriting remote
-credentials or the transport's domain fields.
+Server domains remain intact for TLS SNI, Reality and XHTTP. Private finite
+socket branches align physical dialing with the endpoint plan without inserting
+transport pins into caller DNS hosts or rewriting remote credentials. Explicit
+local DNS modes use separate closed, bound branches; see
+[Apple readiness and local DNS](apple-readiness-and-dns.md).
 
 ## Readiness, recovery and stop
 
@@ -88,7 +90,9 @@ Descriptors close only after the native worker exits.
 The adapter uses Apple's [public packet API](https://developer.apple.com/documentation/networkextension/nepackettunnelflow)
 and the framing used by [HEV 2.15.0](https://github.com/heiher/hev-socks5-tunnel/blob/2.15.0/src/hev-tunnel-macos.h).
 
-The provider checks the HEV worker state and authenticated SOCKS forwarding.
+The provider checks the current HEV worker and authenticated managed SOCKS
+listener under one cancellable deadline. It does not require a fixed public
+site; use a caller-allowed connected delay URL for remote reachability.
 Network Extension's connected status alone means that the system accepted the
 tunnel setup. It does not establish that the local workers can forward traffic.
 
@@ -110,8 +114,7 @@ transactional. Dynamic geo assets must be readable by the extension.
 The private startup and asset-location APIs use the pinned macOS runtime revision
 `xray-macos-v26.10.31-r2`, which also closes listeners after invalid server
 `h2Params`. SwiftPM/CocoaPods use the bundled XCFramework when
-available, otherwise the pinned release archive. Publish that archive before
-distributing packages that depend on the hosted fallback.
+available, otherwise the same checksum-pinned published release archive.
 
 Native diagnostics are bounded and omit imported log destinations, credentials
 and raw runtime output. Use `getProviderDebugSnapshot()` to inspect readiness and

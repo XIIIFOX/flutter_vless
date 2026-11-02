@@ -44,9 +44,11 @@ await flutterVless.startVless(
 
 The index refers to the original `inbounds` array, including index zero. Edited
 profiles retain stale selections visibly and reject them on Connect. These
-controls require VPN mode and a factory-capable runtime; current published
-artifacts do not include that capability. CI uses unpublished previews on all
-platforms. Turning the control off retains ordinary startup.
+controls require VPN mode and a factory-capable runtime. The repository's
+published Android `26.10.31-protect2`, Apple `26.10.31-r2` and managed Windows
+`26.10.31-r2` runtimes provide it; the plugin checks the artifact actually loaded.
+An arbitrary external Windows Core may not provide the capability. Turning the
+control off retains ordinary startup.
 
 ## External data files
 
@@ -198,12 +200,12 @@ The Windows backend does not download Xray automatically.
 - For the DNS preservation check, import full Xray JSON with `dns.hosts` and
   per-domain `dns.servers`, then keep Android's default `config` DNS policy.
   The explicit `proxy` policy intentionally overrides system DNS. See the
-  [DNS MVP behavior and current limits](../doc/compatibility.md#incremental-delivery-order-2026-10-19)
+  [current compatibility summary](../doc/compatibility.md#current-117-source-contract)
   before testing localhost defaults, IPv6 or FakeDNS. Use a fresh browser
   connection after changing a DNS or routing rule.
   HTTPS DoH URLs and caller DNS routing stay in the full JSON. Named resolver
-  bootstrap currently requires an explicit IPv4 entry in caller `dns.hosts`
-  on Apple/Windows. The controlled TLS test uses a disposable test CA; it does
+  bootstrap requires a finite numeric/static `dns.hosts` mapping on
+  Apple/Windows. The controlled TLS test uses a disposable test CA; it does
   not add a public certificate-installation option.
 - Use proxy-only mode first when you want the smallest runtime path.
 - The [IPv6 payload fixtures](../tool/fixtures/compatibility/ipv6-payload.json)

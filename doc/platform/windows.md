@@ -1,6 +1,6 @@
 # Windows
 
-The Windows backend supports a system proxy mode and an IPv4 VPN using Xray,
+The Windows backend supports a system proxy mode and a VPN using Xray,
 tun2socks and Wintun. VPN mode requires administrator privileges.
 
 ## Runtime files
@@ -45,10 +45,15 @@ configuration fields are rejected. Finite numeric IPv6 TCP proxy endpoints
 use the selected IPv6 interface and exact owned endpoint rules; other IPv6
 endpoint transports still require separate qualification.
 
-IPv6 is blocked while VPN forwarding is IPv4-only. DNS travels through the
-selected proxy without a physical resolver fallback. Xray domain rules remain
-available; IPv4 `bypassSubnets` become direct rules inside Xray, below mandatory
-DNS and IPv6 protection. IPv6 bypass CIDRs are unsupported.
+The owned tunnel captures IPv4 and IPv6 payloads. Physical IPv6 remains blocked
+except for finite, explicitly admitted proxy endpoint permissions; a configured
+direct IPv6 outbound is not a general physical-IPv6 bypass. Virtual system A/AAAA
+queries use caller Core DNS and retain its query strategy. Missing/localhost DNS
+uses the protected TCP proxy detour; failed remote DNS does not fall back to the
+system resolver. Xray domain rules remain available; IPv4 `bypassSubnets` become
+direct rules inside Xray below managed DNS protection. IPv6 bypass CIDRs are
+unsupported. IPv6-only underlay, NAT64 and additional endpoint transports need
+separate qualification.
 
 `CONNECTED` requires the local TUN → tun2socks → authenticated SOCKS → Xray
 packet path. It does not guarantee that a remote server or every Internet site

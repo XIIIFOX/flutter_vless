@@ -1,6 +1,10 @@
 // Copyright (c) 2024-2026 13FOX Studio / tfox.dev.
 // SPDX-License-Identifier: MIT
 
+/// Federated backend contracts, typed native options and runtime status models.
+///
+/// Applications normally use `package:flutter_vless/flutter_vless.dart`.
+/// Backend authors extend [VlessPlatform] or [VlessMethodChannelAdapter].
 library;
 
 export 'src/vless_platform.dart';

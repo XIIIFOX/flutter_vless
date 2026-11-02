@@ -1,6 +1,11 @@
 import 'package:flutter_vless/url/url.dart';
 
+/// VLESS links, including TLS, Reality and configured transport parameters.
 class VlessURL extends FlutterVlessURL {
+  /// Parses a lowercase `vless://` link and builds its transport settings.
+  ///
+  /// Throws [ArgumentError] when the URI or scheme is invalid. Successful parsing
+  /// does not prove that credentials, encryption or a remote server are usable.
   VlessURL({required super.url}) {
     if (!url.startsWith('vless://')) {
       throw ArgumentError('url is invalid');
@@ -51,6 +56,9 @@ class VlessURL extends FlutterVlessURL {
   @override
   String get remark => Uri.decodeFull(uri.fragment.replaceAll('+', '%20'));
 
+  /// Parsed source URI, including its credential-bearing authority and query.
+  ///
+  /// Do not log this value without redacting private fields.
   late final Uri uri;
 
   /// Xray VLESS Encryption value for this user.

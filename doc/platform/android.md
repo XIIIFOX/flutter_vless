@@ -109,7 +109,7 @@ For the strict runtime update and publishing checklist, see `doc/release/android
 - Forgetting the Gradle native-library extraction setting when needed
 - Copying iOS or macOS tunnel steps into an Android project
 
-## Session protection and local proxy access (1.1.6)
+## Session protection and local proxy access
 
 The VPN service owns its session, native credentials and workers. Internal Xray,
 tun2socks, FD transfer or connectivity failures retain an already established
@@ -143,9 +143,13 @@ from the VPN. User-requested `blockedApps` and Xray `direct` rules remain suppor
 Default `AndroidDnsPolicy.config` retains the supplied root DNS settings. The
 VPN advertises `10.0.85.53`; its private adapter sends A queries to Core's DNS
 client, including caller hosts, per-domain servers and tags. Missing/localhost
-DNS uses the existing physical-Network resolver protection. The current IPv4
-adapter returns AAAA NODATA and refuses other record types; FakeDNS is rejected
-before replacing a session. Proxy-only operation does not install this bridge.
+DNS uses the existing physical-Network resolver protection. Both A and AAAA
+queries retain the caller's query strategy: `UseIPv4` intentionally produces
+AAAA NODATA. Other record types are refused by the managed system resolver.
+Compatible FakeDNS pools are preserved and restored on the managed input;
+conflicting pools/private addresses fail preparation. Proxy-only operation does
+not install this bridge. IPv6 payload capture is enabled, while IPv6-only
+underlay, NAT64 and handover need separate network qualification.
 
 Choose an intentional proxy DNS override explicitly:
 

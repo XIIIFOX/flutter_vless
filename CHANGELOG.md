@@ -1,165 +1,41 @@
 ## 1.1.7
 
-* Make Apple VPN readiness depend on the current packet worker and authenticated local listener, with a cancellable deadline. Remove fixed public connectivity targets so private-only and default-blocked profiles can become ready; measure an allowed URL separately with `getConnectedServerDelay`.
+Current repository development version; Flutter packages have not been published
+from this revision. Native runtimes are published separately.
 
-* Prepare Apple `tcp+local`, `https+local` and `h2c+local` DNS through closed, interface-bound resolver branches. Preserve routed DoH hosts and per-domain selection, refuse unqualified local destinations and require native interface-binding support for DNS-only profiles too.
+### Native runtime
 
-* Add Core31 examples and bounded runtime regressions for GeoDAT gzip, XHTTP OPTIONS/server h2Params, fragmented QUIC SNI routing, Windows Core TUN protocol/port leak rules, and HTTP inbound 100-continue. Keep device acceptance separate from controlled native tests.
+* Use Xray-core **26.10.31** with the published Android `26.10.31-protect2`, iOS/macOS `26.10.31-r2` and managed Windows `26.10.31-r2` runtimes. Verify artifact checksums and required runtime capabilities before startup.
+* Retain Android device/emulator ABIs and 16 KiB alignment, Apple private startup/asset bridges and HTTP/2 memory cap, protected native routing and scoped service ownership.
+* Close Classic DNS, XHTTP HTTP/3, XDRIVE and GeoDAT resources on Stop. Release an allocated XHTTP listener when invalid server `h2Params` rejects startup.
 
-* Consume the public Android runtime `26.10.31-protect2` with strict Maven checksums. Release the allocated XHTTP listener when malformed server `h2Params` is rejected, preserving successful configuration behavior and runtime capabilities. This native runtime update does not publish the Flutter plugin.
+### API and system controls
 
-* Preserve explicit VMess TLS SNI independently of the transport Host, retain the Host fallback for absent/empty SNI, and accept a missing display name. Decode Trojan/VLESS URI credentials once and normalize only the share-link scheme's case.
+* Add typed Notification, Quick Access, Reconnect, Protection and Diagnostics options, validated settings persistence and native capability discovery.
+* Add Android Quick Settings Tile, macOS menu bar and Windows tray actions, plus optional Apple Control Center extension templates. Keep quick-profile reuse separate from automatic reconnect authorization and respect OS Always-on/lockdown policy.
+* Add per-start `VpnRoutingOptions`, optional preparation reports and `certificateAssetsDirectory`; retain existing startup calls and reject unsupported guarantees explicitly.
+* Cancel superseded starts and quick actions across permission, authentication and options changes. Preserve the current session/listener after rejected candidates, and report `VPN_START_CANCELLED` for an obsolete pending start.
+* Bound delay, readiness, statistics and diagnostics work; preserve Stop, socket/process cleanup, native reconnect budgets and status delivery on the Flutter platform thread.
+* Document public Dart APIs, options, parsers and typed models for editor hover/signature help; align setup guides and configuration examples with the current API.
 
-* Bound Apple delay measurements across proxy negotiation, TLS and HTTP with one monotonic deadline. Keep authentication and certificate validation strict; reject slow partial replies and retire the owned socket.
+### Configuration, DNS and routing
 
-* Bound Android standalone and connected delay probes across SOCKS, TLS and HTTP. Retry only listener startup refusals, cancel detached-engine work and reap the probe's sockets, child, output reader and private config file.
+* Accept full profiles with multiple or no imported listeners. Allocate a separate authenticated VPN adapter without changing caller authentication, sniffing, routing, API/services or disabled statistics.
+* Preserve unknown JSON fields, Core field aliases, caller DNS hosts/tags/domain selection, transport headers and effective XHTTP download settings. Support JSON comments/BOM, listener port lists/ranges and captured port/address environment values.
+* Preserve explicit VMess TLS SNI independently of transport Host; decode Trojan/VLESS URI credentials once and accept missing display names.
+* Delegate system A/AAAA queries to caller Core DNS and capture IPv6 payload. Preserve compatible FakeDNS pools and caller query strategies while preventing collisions with private addresses, ports and service tags.
+* On Apple, report readiness from the live packet worker and authenticated managed listener rather than fixed public websites. Measure a caller-allowed URL separately with `getConnectedServerDelay`.
+* Prepare Apple `tcp+local`, `https+local` and `h2c+local` DNS through closed interface-bound branches for finite numeric/static resolver destinations. Require binding capability for DNS-only profiles before routes or On Demand; retain routed DoH policy.
+* Support bounded Apple IPv4/IPv6 endpoint preparation and reprepare on path/expiry/recovery changes. Admit finite numeric IPv6 TCP proxy endpoints on Windows with exact interface/firewall permissions.
+* Honor caller data and certificate asset roots through preflight, startup, recovery and delay. Preserve custom datasets and freeze relative certificate/key paths without changing global trust roots.
+* Support capability-checked XDRIVE S3/Google Drive endpoints and scheduled GeoDAT updates, including writable-target validation, bounded cancellation and preservation of downloaded datasets.
 
-* Correct the XDRIVE examples to require VLESS Encryption and Mux. Add a registration-free S3 simulator and encrypted relay tests with fresh Core owners; cover Google OAuth/API identity, data and cancellation with controlled endpoints.
+### Integration and validation
 
-* Add an explicit per-domain DNS/data-routing example, preserving caller policy on all four adapters. Qualify both split directions on a physical iPhone using fixed IP endpoints; keep external website Loading and remote-peer timeouts separate from successful traffic checks.
-
-* Prepare XDRIVE S3 and Google Drive API endpoints on Android, iOS, macOS and Windows while preserving cloud credentials, signing identities and optional fronting settings. Bind cloud client caches and requests to their owning Core instance, and require the matching managed-service runtime capability before startup.
-
-* Support scheduled GeoDAT updates with Core-compatible HTTPS, asset-count and interval checks, writable target validation and bounded cancellation on Stop. Preserve downloaded Android datasets when seeding bundled assets; add update examples and cross-platform filesystem regressions.
-
-* Add legacy Freedom fragment/noises to finalmask migration examples, pinned-Core transport-security checks, and Apple NAT64 endpoint provenance and expiry regressions.
-
-* Update Android, iOS, macOS and Windows native runtimes to `v26.10.31`, pinned to commit `a4a3dff5b20c2faae567b742c172c7b95e75c083`. Preserve upstream MPTCP default-off, Go 1.27.3, Root CA filtering, native routing and managed-service cleanup. Pin consumers to verified public Maven/GitHub artifacts and qualify the published Windows runtime directly in Actions. Keep the Flutter release train at 1.1.7; native publication does not publish the plugin.
-
-* Cancel pending capability-gated starts after successful options/owner reinitialization on all four platforms. Preserve the pending request and status listener if native reinitialization fails. Keep Disconnect available in the example while permission or startup is pending; prevent older completions from clearing newer Start/Stop actions.
-
-* Retain quick-action intent across authentication and queued work on every platform. Reject superseded controls; keep Android tile admission through actual process launch and prevent policy-free retries. Stage Apple control startup with On Demand disabled and report uncertain preference saves without overwriting newer owners. Add focused cross-platform transaction regressions.
-
-* Prepare Apple transport endpoints from bounded IPv4/IPv6 candidate sets, preserving DNS TTLs and using documented OS synthesis for IPv4 literals on IPv6-only paths. Reprepare from the original configuration after path, wake, expiry or transport failures; serialize settings changes and scope native cleanup to the committed plan. Native NAT64/handover acceptance remains pending.
-
-* Enforce the selected interface on generated Apple physical sockets after optional/custom socket settings, including error returns. Add a distinct runtime capability and refuse unsupported artifacts before route installation; keep published SDK pins unchanged.
-
-* Stage new Apple VPN profiles with On Demand disabled and verify the stored policy before OS Start. Arm recovery after endpoint/configuration preflight and network settings succeed; scope failed-start cleanup to that start's immutable profile and report uncertain preference saves without claiming rollback.
-
-* Accept system-resolved IPv6 transport endpoints on iOS/macOS while preserving caller DNS, endpoint names and TLS identity. Discard endpoint results and failures after session cancellation; retain the IPv4-only resolver API.
-
-* Freeze the Apple options/profile owner for each queued Start. Cancel a start superseded by successful reinitialization before touching the replacement profile; preserve the active owner after invalid options.
-
-* Cancel pending capability-gated starts after Stop or a newer Start on every platform. Return the fixed `VPN_START_CANCELLED` code without private configuration or native error details.
-
-* Follow bounded static DNS hosts aliases when admitting named remote resolvers on Apple and Windows. Preserve the complete caller DNS document, resolver URL and TLS identity.
-
-* Admit finite numeric IPv6 TCP proxy endpoints on Windows with family-aware interface selection and an exact Core/interface/address/port firewall exception. Keep recovery scoped to the checked interface; add native and controlled packet-path regression gates.
-
-* Add unpublished CI-only Android runtime previews with four freshly compiled ABIs, exact AAR/source verification and 16 KiB ELF checks. Qualify a signed development example APK and verify all three original full JSON profiles with real browser traffic, domain split routing in both directions and Stop recovery in an owned Android emulator. Keep published runtime pins unchanged.
-
-* Add an unpublished CI-only iOS SDK preview with source, archive and ABI checks. Verify its signed example on the physical iPhone with all three original full JSON profiles, matching browser proxy exits, Stop and ordinary internet recovery.
-
-* Close dial-owned XHTTP HTTP/3 UDP sockets before joining their QUIC transport, including immediate dial failures and later connection termination. Include the guarded fix in source builds; published binary pins remain unchanged.
-
-* Ignore loopback-owned dormant socket chains during Apple graph admission, retaining active missing-target and cycle checks. Keep Android chained destinations logical instead of resolving them through physical bootstrap; add shared native and controlled traffic regressions.
-
-* Preserve dormant TLS ECH settings when TLS is disabled or Reality is selected. Apply Apple and inherited XHTTP download ECH admission only to active TLS; retain active-fetch restrictions and add shared native/Core regressions.
-
-* Close Classic DNS UDP channels and request-cleanup timers with Core, for both address families. Fence late requests and EDNS retries after shutdown; keep caller DNS selection and query policy unchanged.
-
-* Accept numeric IPv6 caller DNS servers on Apple and Windows without rewriting their addresses or query policy. Keep the transport endpoint bootstrap separate; add paired IPv6 and IPv4-mapped DNS regressions.
-
-* Share one cancellable Windows SOCKS-listener readiness deadline across startup retries. Use nonblocking authentication, retain fragmented replies and reject readiness after cancellation or deadline expiry, including socket cleanup.
-
-* Share one monotonic deadline across Apple and Android watchdog probes and across Windows packet-path exchanges. Observe session cancellation during probe I/O, and reject later probes or connected-state publication from a cancelled session.
-
-* Count Apple native reconnect attempts at the admitted Core call, after the previous workers drain. Preserve initial and finite retry budgets when sleep cancels queued work, and honor the explicit recovery pause while shutdown is pending.
-
-* Add optional per-start preparation reports with closed operation codes and safe failure stages, preserving the existing start API. Keep host checks separate from final-runtime checks, legacy unavailability and actual network readiness; show the report in example.
-
-* Follow Core's immediate XHTTP download socket dependencies on Apple and Windows. Preserve unused nested download chains without treating them as bootstrap requirements; retain active-chain validation and add controlled preparation/traffic regressions.
-
-* Apply `certificateAssetsDirectory` to Core-built Realm and XDNS TLS certificate/key files, including effective XHTTP download streams. Keep unrelated mask metadata and absolute/inline certificate settings unchanged across all four native platforms.
-
-* Use the existing bounded, cancellable Apple endpoint DNS bootstrap on iOS before installing VPN routes. Preserve caller DNS and distinguish endpoint resolution failures from rejected configuration preparation on both Apple platforms.
-
-* Ignore Android network events queued by an earlier VPN session before a replacement or Stop. Keep current-session recovery active and cover the registered availability/loss callbacks with native unit regressions.
-
-* Freeze Apple port, listener and endpoint environment values using byte-exact native names before validation, persistence and startup retries. Preserve canonically distinct Unicode keys, exact empty values and Core alias precedence; add isolated reader and actual host-admission regressions.
-
-* Preserve unknown full-profile JSON fields at every depth. Limit legacy transport/TLS compatibility edits to their Core schema owners, including effective XHTTP downloads and mask TLS settings. Keep opaque data separate from Android protected-feature admission; add shared native/Core and public import/start/delay regressions.
-
-* Accept Core-folded JSON schema fields through full-profile import, startup and delay without rewriting caller data. Defer string transport semantics to Core preflight so an explicit method can override a dormant empty network.
-
-* Preserve Core environment aliases for imported port lists and addresses using the pinned simple Unicode case mapping. Keep exact empty values and Core whitespace semantics; add shared public/native regressions.
-
-* Preserve routing-rule `attrs` keys and case-sensitive expressions through full-JSON import, startup and delay on all platform adapters. Keep dictionary data separate from Android protected-feature admission.
-
-* Preserve typed HTTPUpgrade, XHTTP/SplitHTTP, MASQUE, TCP/RAW HTTP and Hysteria masquerade header dictionaries, including lists and effective download streams. Add a shared ten-profile corpus and controlled XHTTP wire-header checks. Align protected proxy-DNS preparation with XHTTP socket inheritance while validating the active download transport.
-
-* Preserve WebSocket header dictionaries through full JSON imports, startup and delay checks on all four platforms. Keep header names/values separate from legacy settings; prevent Android DNS hosts and headers from being mistaken for protected socket features.
-
-* Preserve caller DNS hosts as data during raw JSON normalization, including names matching legacy settings. Accept remote DoH URL path/query data containing `+local` on Windows and caller `useSystemHosts` on Apple; retain local-DNS transport restrictions and TLS compatibility cleanup. Add shared preparation and targeted traffic regressions.
-
-* Preserve explicit nulls, empty objects and arrays, and null array elements when passing full Xray JSON through import, startup and delay checks. Retain raw FakeDNS engine semantics while keeping share-link cleanup separate.
-* Prepare default and custom FakeDNS profiles across native platforms without rewriting caller pools or DNS selection. Restore fake destinations on the managed input, move owned resolver/probe addresses outside Core's default pool, and reject conflicting or malformed pools before bootstrap. Add shared preparation and controlled traffic regressions.
-* Read Android/Windows and Apple proxy-only traffic from the selected session inbound. Preserve caller-disabled counters, distinguish unavailable directions internally, and reset speed baselines across gaps and restarts. Keep Apple VPN HEV counters unchanged; add shared wire and actual-consumer regressions.
-* Add per-session `VpnRoutingOptions` for an original inbound's tag context and an explicit default outbound on Android, iOS, macOS and Windows. Wire native admission, exact final config/metadata preflight, recovery and saved quick profiles; expose example controls. Factory-capable binaries remain unpublished previews pending runtime/device acceptance.
-* Validate frozen native configurations before replacing working sessions on every backend, retaining the exact checked bytes through startup and recovery.
-* Add static Apple routing ABI negotiation that refuses cached, incomplete and unknown runtimes before forwarding. Add an unpublished shared CLI entry for private capability/check/start lifecycle; preserve stock command logging. Keep native launcher adoption separate.
-* Wait for Wi-Fi restoration and controlled traffic even when the Android cellular handover test is skipped, before the next DNS scenario starts.
-* Add an unpublished, capability-gated mobile routing factory bound to the final config digest and exact compiled inbound. Preserve active sessions on rejected starts, seal before Start, revoke before Close, and compile optional Apple previews from disposable modules. Native launcher adoption and device acceptance remain separate.
-* Reject nonempty root `env` before in-process Apple Core preflight can change a working session's process environment. Return a fixed `environment-policy` error and protect cached older checkers; keep profile data and separate-process Android/Windows checking unchanged. Scoped Apple `env` support remains open.
-* Add `certificateAssetsDirectory` for relative TLS certificate/key files on every native platform. Bind Core-built TLS and XHTTP download paths before preflight, retain absolute/inline/reload settings and recovery paths, and reject unsupported older backends. Add shared file/Core controls and controlled TLS traffic coverage.
-* Accept Core-equivalent missing, null, empty and case-insensitive `none` socket address/port strategies across native adapters. Preserve raw caller values and existing protected routing; keep active endpoint overrides and malformed values closed. Add shared WebSocket/XHTTP upload/download/direct preparation controls.
-* Admit Core's exact IPv4-mapped DNS addresses on Apple and Windows without rewriting caller DNS. Keep genuine IPv6 restrictions unchanged; add shared Core-equivalence controls, Android preservation checks and mapped-host DoH traffic coverage.
-* Share Apple address preparation through the existing privacy module so both containing apps can freeze saved profiles without a tunnel-support dependency. Add a real module-boundary regression and verify unsigned iOS/macOS example builds.
-* Make the controlled logical DNS origin complete one framed exchange per connection; retain exact payload and drained request counts. Add memory-only malformed-frame controls and bounded Windows direct-only failure diagnostics without retries.
-* Freeze effective DNS outbound and imported `dokodemo-door`/`tunnel` destination addresses before profile handoff on every native backend. Match Core's `address`/`rewriteAddress` precedence, preserve dormant aliases and caller routing, and add shared build/preparation and controlled HTTP/DNS regressions.
-* Freeze typed root DNS `env:` addresses for saved Apple/Windows profiles and Android's caller DNS mode. Preserve server options, ECS overrides, hosts aliases and opaque strings; add shared Core-equivalence controls and a controlled DoH handoff regression. Compile the actual Apple preparation helpers in the profile transaction fixture.
-* Bind selected server and active XHTTP download `env:` addresses before protected preparation on Apple and Windows, and in Android's explicit proxy DNS mode. Preserve raw values and caller DNS, freeze Apple sessions before persistence, and add shared Core-equivalence and cross-process traffic regressions.
-* Isolate controlled XHTTP clients from the backend and later tests in bounded processes. Preserve strict payload/DNS checks and retain bounded packet sequence, body length, origin entry and backend failure evidence after transport errors.
-* Permit only the allocated loopback HTTP origin in the controlled XHTTP server's final rules. Retain Core's other defaults and the existing client restrictions.
-* Record bounded, content-free HTTP fixture stages and response lengths in Android CI when protected system DNS tests fail. Retain the original error and request behavior; add pure failure-path controls.
-* Prepare XHTTP upload/download with parent `sockopt.penetrate` on Apple and Windows. Share one closed endpoint pin scope or retain the caller's parent chain, preserve inactive child socket settings, and add shared preparation and controlled payload regressions.
-* Match Core's missing, null and empty localhost DNS server tags on Apple and Windows. Retain other caller DNS fields and reject malformed non-null tags before preparation; add shared cross-platform regressions.
-* Accept exact `full:` DNS hosts mappings for named resolvers on Windows. Match Core's prefix and domain case rules on both Apple platforms and Windows, preserve caller DNS, and add shared preparation and HTTPS DoH regressions.
-* Accept Core-style null outbound tags on Windows. Preserve untagged direct defaults and use the existing private-name allocation for an untagged remote endpoint; retain invalid-type and chain checks, with shared preparation regressions.
-* Keep private service tags outside known nonempty balancer/observatory selector prefixes on every native platform. Preserve caller selectors and dynamic outbound additions; add shared allocation and traffic regressions. Empty wildcard selectors remain an open Core integration requirement.
-* Match Core's legacy server fallback when a flat outbound address is explicitly null on Android and Windows. Add a shared Shadowsocks 2022 preparation/build regression and preserve caller encryption settings.
-* Admit direct-only Apple/Windows VPN profiles with explicit caller DNS. Preserve the first outbound, caller domain/DNS routes and existing physical dialing policy; add shared preparation and platform HTTP/DNS/blocking regressions.
-* Bound Android startup authentication and packet readiness to one owned-process deadline. Wait only for native connection-refused before the handshake; retain immediate failure for permissions, credentials and protocol errors. Add encrypted DoH trust/name acceptance fixtures and separate HEV simulator linking from physical iOS packet qualification.
-* Capture IPv6 payload in the Android and Windows tunnels, retain Apple capture, and delegate private A/AAAA queries to caller DNS. Remove managed IPv6 routing blocks while retaining caller rules and Windows physical-interface protection; add controlled TCP/UDP packet regressions. IPv6-only underlay, NAT64 and handover qualification remain separate.
-* Honor explicit data-asset directories on Android and Windows across preflight, launch and saved recovery profiles. Permit custom-only or empty asset roots on Apple, validate referenced files with Core, and keep certificate lookup independent. Add shared custom GeoSite and platform traffic regressions.
-* Bind imported listener address environment references before native port allocation. Preserve Unix socket semantics, empty-value precedence and the editor's source; reject recursive references and add shared address/Core-build and Unix runtime regressions.
-* Retain caller API/services and existing stats/policy sections, including explicit null and disabled counters. Query only plugin-owned statistics endpoints on Android/Windows; add shared full-profile preparation and real API/traffic regressions.
-* Broaden protected preparation for MASQUE, caller DNS/loopback handlers and Core role aliases. Match effective XHTTP/null selection across platforms; add a shared preparation/build corpus and keep live protocol qualification separate.
-* Preserve caller remote DNS hosts, servers, domain rules and tags in the VPN adapters. Use Core's DNS client for private system A queries; isolate Apple/Windows transport bootstrap from caller hosts. Keep the native localhost default and current IPv4 DNS limitations explicit.
-* Add an unpublished construction-bound managed DNS input with per-packet UDP destination checks and owned connection/pipe shutdown. Keep its restricted graph and connection limits separate from production platform integration.
-* Bound Android statistics command output before reading it, including stalled APIs, cancellation and process cleanup. Check Windows command deadlines during continuous output; add process-only regression coverage.
-* Add an unpublished per-runtime DNS wire-message primitive that retains caller hosts, per-domain servers and DNS tags. Add actual-Core and optional Android composition fixtures; system VPN DNS integration remains pending.
-* Wake blocked Android development-broker accepts/reads during shutdown and reject unexpected test socket errors. Verify preview provenance and package it only in explicitly enabled instrumentation builds.
-* Add an unpublished retained native DNS entry with per-instance ownership, private capability/preparation/status messages and bounded Stop/parent-EOF cleanup. Add a separate Android build path and development-only captured-network FD broker; keep official runtimes and ordinary launchers unchanged while qualification continues.
-* Reject stale Apple startup/recovery callbacks after Stop; preserve the latest sleep/wake decision and rearm health retries after sleep. Add causal provider tests and physical iPhone profile/routing/early-Stop regression coverage.
-* Reserve both Android standalone-delay listener ports during preparation with bounded allocation retries. Keep probe cleanup effective under cancellation and report only bounded, content-free stage/exit diagnostics.
-* Reserve caller metrics listener ports alongside API ports on Android, iOS, macOS and Windows, including Core's field aliases and Go's optional leading plus on decimal ports. Avoid metrics collisions with Windows proxy-only statistics; add shared allocation and real service/traffic regressions.
-* Keep Android Quick Tile available to stop an accepted VPN during worker recovery. Refresh an already-listening or re-added tile with current native state; preserve cold-start single-flight and OS Always-on restrictions. Add real SystemUI recovery-stop and authenticated Apple reasserting-stop regressions.
-* Preserve caller API listeners/services alongside native macOS counters. Isolate Apple/Android profile-delay measurements from caller API/metrics listeners; add occupied-port runtime regressions for Apple.
-* Preserve bounded Android emulator startup/crash evidence and Apple synthetic runtime logs in CI. Keep unclassified VM disappearance and post-entry failures visible without retries.
-* Reserve numeric `api.listen` TCP ports when choosing managed adapters on every native platform, including IPv6/host addresses and Core field aliases. Keep Unix/port-zero syntax intact; add shared allocation fixtures and an Apple runtime check for simultaneous API HTTP/2 and authenticated SOCKS traffic.
-* Scope Android protected system DNS and Android/Windows packet-path probes to the managed VPN input. Share the native DNS adapter identity across Android startup and recovery; retain imported input rules and test their blocking independently of VPN DNS.
-* Allocate private adapter/DNS/statistics tags against imported definitions and references, including API, reverse, balancers and nested dialers, across Android, iOS, macOS and Windows. Scope Apple's virtual DNS rule to the managed VPN input; add collision fixtures and real-Core traffic regressions.
-* Keep Windows VPN preflight documents and their Core image in the administrator-owned runtime directory; require filtered-token access checks and cleanup checks in Windows acceptance.
-* Accept Core-style JSON comments and a leading BOM in SDK configuration/import/subscription paths and the example routing editor, preserving quoted markers and unknown fields. Add a shared syntax corpus checked against pinned Core; keep trailing-document rejection explicit.
-
-* Add build-only Apple Core preflight previews with redacted stage/index errors before VPN routes, and Windows bundled-Core checks before session replacement. Preserve active sessions on rejected candidates; keep published runtime artifacts unchanged during acceptance.
-* Accept Core inbound port lists/ranges and zero in Dart; reserve native environment references and skip Unix-only listeners during private TCP port allocation. Bind Apple port references before saving cross-process sessions and report missing references without starting VPN. Add a shared corpus checked against pinned Core and native forwarding regressions.
-* Enforce Apple diagnostic byte and line limits on the complete response, including provider metadata and truncation markers. Explain disabled diagnostics in the example instead of asking the user to connect.
-* Disable and verify the Apple VPN profile on explicit Control Center Stop as well as app Stop. Report the actual On Demand policy in provider diagnostics when recovery is disabled.
-* Await Apple tunnel teardown after disabling and reading back recovery preferences before returning from Stop. Reject live configuration/options replacement and verify forwarding independently of On Demand, including when reconnect is disabled.
-* Deliver native status events on the Flutter platform thread on iOS, macOS and Windows. Keep Apple traffic polling on the main actor and route Windows callbacks through the top-level window; add real queue/thread regression checks.
-* Fix Android cold Always-on restoration with disabled library reconnect and required Always-on policy; preserve OS-managed protection before a VPN network exists.
-* Accept full VPN profiles with multiple or no imported listeners on Android, iOS, macOS and Windows. Add a separate authenticated VPN adapter with collision-safe service ports/tags; preserve imported authentication, sniffing and routing. Accept full JSON in the example clipboard importer and multi-listener Apple delay probes.
-
-* Add backward-compatible typed Notification, Quick Access/Quick Tile, Reconnect, Protection and Diagnostics options, native capability discovery and validated platform errors.
-* Add native Android Quick Tile, macOS menu bar, Windows tray and optional Apple Control Center host-extension templates/setup for iOS 18+ and macOS 26+; take the idea of PR #21 without merging its implementation.
-* Separate quick-profile reuse from automatic recovery authorization; add bounded worker retry policies, configurable Apple On Demand and explicit Android OS-managed Always-on handling while retaining mandatory VPN protection.
-* Add example settings, cross-language field/policy tests, native tile cold-reconnect checks, Apple setup tests and Windows workflow coverage. Physical iPhone, supplied-link routing and physical Android checks remain a separate validation phase.
-
-* Rebuild Android runtimes for all four ABIs and Apple XCFrameworks; update hosted runtime URLs, source pins and artifact checksums.
-* Adapt the Android socket-protection overlay to upstream controller failure propagation while preserving protected DNS and fallback dialers.
-* Refresh example desktop runtimes and geodata from verified upstream release archives.
+* Existing iOS hosts must update the copied `PacketTunnelProvider.swift` together with the Swift support package. macOS uses the packaged provider implementation.
+* Add examples for options, per-domain DNS/routing, XDRIVE, GeoDAT updates, `fragment`/`noises` migration to `finalmask`, XHTTP and HTTP `100-continue`.
+* Add native regressions for GeoDAT gzip corruption/limits/cancellation, XHTTP OPTIONS/H2, fragmented QUIC SNI routing, Windows Core TUN leak rules and HTTP `100-continue`.
+* Qualify published runtimes in Actions and live Android/iPhone acceptance, including fresh configurations, both domain-routing directions, Stop and ordinary-network recovery. Live owner macOS, real IPv6-only/NAT64/handover, external cloud accounts and a complete protocol/server matrix remain separately documented acceptance work.
 
 ## 1.1.6
 

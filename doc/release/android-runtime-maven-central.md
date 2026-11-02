@@ -90,51 +90,37 @@ Remove before upload:
 If Central shows two components, especially one with `?type=aar`, the bundle is
 wrong. Drop that deployment, fix the bundle, and upload a new deployment.
 
-## Update Flow
+## Update flow
 
-1. Rebuild Android device and emulator `libxray.so` and `libtun2socks.so` into `android_runtime/xray_android/src/main/jniLibs`.
-2. Update `geoip.dat` and `geosite.dat` in `android_runtime/xray_android/src/main/assets`.
-3. Update the Maven runtime version in `packages/flutter_vless_android/android/build.gradle`.
-4. If republishing the same upstream Xray version with packaging changes, use a Maven patch version such as `26.6.27.1` because Maven Central artifacts are immutable.
-5. Update release notes in `doc/release/` and package changelogs.
-6. Run the local Maven build:
+1. Freeze and review the Core source revision, Android toolchain, overlays,
+   runtime version and dataset inputs. A changed Maven component needs a new
+   immutable runtime revision; never overwrite an existing coordinate.
+2. Build and qualify a source-bound candidate with the
+   `Unpublished Android runtime preview` Actions workflow. Verify all four
+   ABIs, 16 KiB ELF alignment, exact source/packager provenance and expected
+   HEV/geodata inputs. A preview is not a published release artifact.
+3. Use the reviewed canonical release producer in `Publish Android Runtime AAR`
+   for that frozen source. Set `publishing_type=USER_MANAGED` explicitly for a
+   reviewable Central deployment; the workflow's default is `AUTOMATIC`.
+   Check the signed bundle and recorded candidate bytes before publication.
+4. In Central Portal, verify the single intended component and validation
+   result. Publish that same deployment after review. The workflow's
+   `existing_deployment_id` input publishes an existing validated deployment
+   without rebuilding/reuploading; do not accidentally create a second one.
+5. Verify public POM/AAR/signature/checksum availability, then compare the
+   anonymous Maven bytes with the exact reviewed candidate and GitHub assets.
+6. Update wrapper coordinates, strict verification metadata, source manifests
+   and release notes together. Run the strict Maven/APK check and an owned
+   Android device/emulator acceptance, including actual traffic and Stop.
+7. Flutter publication is a separate release decision. Select available package
+   versions and matching constraints, then publish the platform-interface,
+   changed Android/macOS/Windows implementations and root package in dependency
+   order. An already published wrapper version cannot be overwritten or skipped
+   when its code has changed.
 
-   ```bash
-   tool/build_android_runtime_maven.sh
-   ```
-
-7. Run CI or the GitHub workflow `Publish Android Runtime AAR` with `USER_MANAGED`.
-8. In Central Portal, confirm the deployment validates as one component.
-9. Click `Publish`.
-10. Verify public Maven availability:
-
-    ```bash
-    curl -I https://repo1.maven.org/maven2/dev/tfox/fluttervless/xray-android/<version>/xray-android-<version>.pom
-    curl -I https://repo1.maven.org/maven2/dev/tfox/fluttervless/xray-android/<version>/xray-android-<version>.aar
-    ```
-
-11. Run the Maven/APK smoke test:
-
-    ```bash
-    tool/test_android_maven_runtime.sh
-    ```
-
-12. Run the Android emulator smoke test:
-
-    ```bash
-    cd example
-    flutter test integration_test/android_xray_runtime_smoke_test.dart -d <android-device-id>
-    ```
-
-13. Publish Pub.dev packages in order:
-
-    ```text
-    flutter_vless_android
-    flutter_vless_macos
-    flutter_vless
-    ```
-
-Skip a package only when the same version is already published.
+The legacy local `tool/build_android_runtime_maven.sh` stock-input path is kept
+for historical fixtures. It is not the canonical producer or verification of
+the current release; use the source-bound Actions/packager flow above.
 
 ## Required Evidence
 
@@ -148,7 +134,7 @@ Before publishing the Android wrapper to Pub.dev, keep these checks green:
 - The emulator smoke test prints an Xray version matching the runtime release.
 ## Consumer verification (1.1.7)
 
-The official runtime is `dev.tfox.fluttervless:xray-android:26.10.29-protect3`.
+The current published runtime is `dev.tfox.fluttervless:xray-android:26.10.31-protect2`, based on Core 26.10.31.
 Copy [verification-metadata.xml](../../example/android/gradle/verification-metadata.xml)
 into **your application's root** `android/gradle/` directory, and run Gradle with
 `--dependency-verification=strict`. Merge the component pins into any broader
@@ -158,13 +144,13 @@ version in `dev.tfox.fluttervless`. Library publication alone cannot enable a
 consumer's root Gradle verification.
 
 The AAR's pinned SHA-256 is
-`ac498513218e640c6524e59eb5bba5431ff51c396f114931ada1837f79561ecb`,
-from [the release asset](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.10.29-protect3)
+`3280118949aa5fa05fa58d233642af5ebd3b7eb484bb3d30fffa29271cddcc12`,
+from [the release asset](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.10.31-protect2)
 and Maven Central. The GitHub AAR is the same published file; every AAR entry
 and all native binaries/geodata were independently matched to
 the repository inputs. The POM was reviewed against the committed publication
 definition (no dependencies or repositories), then pinned to
-`14a9499f793c94779f0a3a6cddd5dabf38c75865f2270912ef267c590959497b`.
+`7b5a26e33ed27725fe38301a36268e7cc549085167027a39794762aea1ae5107`.
 The empty sources/javadoc JARs are also pinned for IDE dependency resolution.
 No Gradle module metadata is published for this revision; a later unexpected
 module file is not trusted. These pins are intentionally not generated in CI.
@@ -175,12 +161,13 @@ the consuming example with strict verification. The official mode rejects runtim
 repository/version overrides; local development builds are a separate workflow.
 
 For new native development, use the manual unpublished Android runtime preview
-workflow and its isolated, source-bound output. The stock-input branch of
-`tool/build_android_runtime_maven.sh` is retained for historical 26.10.17
-fake-JVM fixtures; it cannot build or relabel a 26.10.29 release. Canonical
-26.10.29 candidates use the fresh CI producer, strict provenance checks and one
-signed Central deployment. Do not treat a historical local wrapper run as
-verification of the current published runtime.
+workflow and its isolated, source-bound output. Canonical release candidates use
+the fresh CI producer, strict provenance checks and one signed Central deployment.
+The current producer source is
+`2505694c4001e7d52f06d6a63f29780da8dc7d49`; the published payload is immutable.
+Do not treat a historical local wrapper run as verification of those bytes.
+See [Core31 validation](core31-five-followups-validation.md) for exact producer,
+publication and public-artifact evidence.
 
 To update a trusted release: review runtime source changes, reproduce and check
 all ABIs, publish the intended immutable artifact, compare the release-pipeline

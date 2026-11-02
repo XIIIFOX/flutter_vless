@@ -53,9 +53,12 @@ protobuf regeneration do not require a new public Flutter option.
   establish that an older failed public reference had expired credentials.
 * Choose available implementation-package versions, align root dependency
   constraints and rehearse publication order. A read-only registry check on
-  2026-11-02 confirms Android/macOS/Windows already have 1.1.7, while root
-  1.1.7 and platform-interface 1.1.7 are absent. Do not publish the current
-  work under conflicting versions or automatically bump them in this goal.
+  2026-11-03 confirms Android/macOS/Windows already have 1.1.7, while root
+  1.1.7 and platform-interface 1.1.7 are absent. Pub supports the proposed
+  implementation `1.1.7+1` versions; their endpoints are currently absent.
+  See the [candidate version plan](README.md#candidate-build-suffix-version-plan)
+  for minimum constraints and publication order. All current package versions
+  remain unchanged; no publication is authorized by this plan.
   [Android](https://pub.dev/packages/flutter_vless_android/versions),
   [macOS](https://pub.dev/packages/flutter_vless_macos/versions),
   [Windows](https://pub.dev/packages/flutter_vless_windows/versions).

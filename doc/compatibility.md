@@ -2,6 +2,32 @@
 
 This page lists the expected platform shape for `flutter_vless`.
 
+## Current 1.1.7 source contract
+
+The working main package remains unreleased 1.1.7. Its matching native pins are
+published: Android `26.10.31-protect2`, Apple `26.10.31-r2` and managed Windows
+`26.10.31-r2`. Use [matching source packages](../README.md#unreleased-117-from-github)
+for this checkout's new Dart and native APIs; older pub.dev wrappers numbered
+1.1.7 contain different implementation code.
+
+Current adapters preserve imported listeners/API/services and caller DNS/routing
+data. They capture IPv6 payload and delegate private A/AAAA queries to caller
+Core DNS; explicit `UseIPv4` retains AAAA NODATA. Compatible FakeDNS preparation
+is supported with private-address/pool checks. Per-session routing and
+managed-service features require capabilities from the actual loaded artifact.
+Apple local DNS support is bounded to the physical-path/numeric-or-static-hosts
+cases in [the DNS contract](apple-readiness-and-dns.md).
+
+Current [Core31 acceptance](release/core31-five-followups-validation.md) and
+[Apple readiness/DNS acceptance](release/apple-readiness-dns-validation.md)
+separate controlled runtime, Actions and physical-device proof. Live owner
+macOS, real IPv6-only/DNS64/NAT64/handover, external cloud accounts and a full
+server/transport matrix remain separately scoped work.
+
+The dated entries and development matrices below retain historical snapshots,
+including superseded preview pins and open-at-the-time observations. They do
+not override this summary or the current platform guides and linked closeouts.
+
 ## Package Scope
 
 `flutter_vless` is a federated Flutter plugin for Xray/V2Ray-compatible client
@@ -25,10 +51,10 @@ artifact before release.
 
 | Platform | Supported modes | Minimum / validated version | Native requirement | Main limitations |
 | --- | --- | --- | --- | --- |
-| Android | VPN, proxy-only | `minSdk` 23, target SDK 35 in the Android package (example: 24/36) | Xray runtime AAR from Maven Central; Gradle `packaging.jniLibs.useLegacyPackaging = true` when extracted native executables are required | Main AAR includes device and emulator ABIs. |
+| Android | VPN, proxy-only | `minSdk` 23, target SDK 35 in the Android package; example follows installed Flutter SDK defaults | Xray runtime AAR from Maven Central; Gradle `packaging.jniLibs.useLegacyPackaging = true` when extracted native executables are required | Main AAR includes device and emulator ABIs. |
 | iOS | VPN, proxy-only | iOS 15.0+ | Network Extension, Packet Tunnel target, App Group, signed real device for tunnel validation | Simulator is not a reliable VPN/tunnel test target. |
 | macOS | VPN, proxy-only | macOS 13.0+ for the validated setup | Packet Tunnel extension, App Group, Swift Package products, setup command | Packet Tunnel routing and DNS changes must follow the architecture note. |
-| Windows | VPN/tunnel, proxy-only | Recent Flutter Windows toolchain | Local `xray.exe` available to the app | Tunnel/system routing may require elevated permissions; the plugin does not download Xray for you. |
+| Windows | VPN/tunnel, proxy-only | Recent Flutter Windows toolchain | Local Core/helper files available to the app | VPN requires administrator privileges; the plugin does not download native binaries for you. |
 | Web | Not supported | N/A | N/A | No web implementation is registered. |
 
 Linux runners below test Xray Core and shared native preparation. The Flutter
@@ -103,9 +129,8 @@ The plugin appends the Packet Tunnel extension suffix internally.
 Windows needs a local `xray.exe`. Common lookup locations include:
 
 ```text
-windows/xray/xray.exe
-xray/xray.exe
 xray.exe
+xray/xray.exe
 data/flutter_assets/xray/xray.exe
 data/flutter_assets/windows/xray/xray.exe
 ```
@@ -142,7 +167,12 @@ with every feature or protocol accepted by the Xray command-line runtime.
 
 ## Remaining compatibility work
 
-These are implementation and acceptance tasks, not supported-feature claims.
+The sections below are the retained development journal and its earlier
+acceptance boundaries. For the current release follow-up list, use
+[the current scoped work](release/xray-v26.10.31-plugin-followups.md) and
+[the current summary](#current-117-source-contract). Historical use of words
+such as "current", "preview" or "pending" refers to that entry's recorded stage;
+it does not make those older artifacts the current consumer pins.
 
 ### Incremental delivery order (2026-10-19)
 

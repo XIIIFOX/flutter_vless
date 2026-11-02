@@ -2,7 +2,13 @@ import 'dart:convert';
 
 import 'package:flutter_vless/url/url.dart';
 
+/// Shadowsocks links with plain or base64-encoded method/password values.
 class ShadowSocksURL extends FlutterVlessURL {
+  /// Parses a lowercase `ss://` link, including legacy full-base64 authorities.
+  ///
+  /// Optional query parameters populate transport/TLS settings. Invalid URI or
+  /// scheme throws [ArgumentError]. Final cipher and transport support are
+  /// validated by the selected native Core.
   ShadowSocksURL({required super.url}) {
     if (!url.startsWith('ss://')) {
       throw ArgumentError('url is invalid');
@@ -60,14 +66,21 @@ class ShadowSocksURL extends FlutterVlessURL {
   @override
   String get remark => Uri.decodeFull(uri.fragment.replaceAll('+', '%20'));
 
+  /// Parsed source URI, including its credential-bearing authority and query.
+  ///
+  /// Do not log this value without redacting private fields.
   late final Uri uri;
 
   String? _address;
 
   int? _port;
 
+  /// Parsed Shadowsocks encryption method; defaults to `none` if not provided.
   String method = "none";
 
+  /// Parsed Shadowsocks password, retained for outbound generation.
+  ///
+  /// This is a credential; do not include it in diagnostics or logs.
   String password = "";
 
   String _decodeUserInfo(String value) {

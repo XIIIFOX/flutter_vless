@@ -2,27 +2,64 @@ import 'dart:convert';
 
 import 'package:flutter_vless/url/xray_config_model.dart';
 
+/// A parsed share link or imported Xray configuration.
+///
+/// Use `FlutterVless.parse` or `FlutterVless.parseMany` to select an importer.
+/// Parsing and JSON generation do not connect, resolve names or establish that
+/// the active native backend supports every requested transport. Configurations
+/// and source links can contain credentials; keep them out of application logs.
 abstract class FlutterVlessURL {
+  /// Creates a parsed-profile base with the original source text in [url].
   FlutterVlessURL({required this.url});
+
+  /// Original share link or configuration text, which may include credentials.
   final String url;
 
+  /// Legacy insecure-TLS hint; the base implementation is always false.
+  ///
+  /// JSON normalization removes unsupported certificate-verification overrides.
   bool get allowInsecure => false;
+
+  /// Default protocol-level cipher selection used by generated user settings.
+  ///
+  /// This is separate from the transport TLS/Reality security setting.
   String get security => "auto";
+
+  /// User policy level included in generated inbound and outbound settings.
   int get level => 8;
+
+  /// Remote server port; share-link implementations use 443 when omitted.
   int get port => 443;
+
+  /// Initial transport network used when creating [streamSettingsBuilder].
   String get network => "tcp";
+
+  /// Remote endpoint host exposed by this importer, or an empty base default.
+  ///
+  /// Full raw profiles can have several endpoints and retain the empty base
+  /// value; inspect their configuration instead of treating this as a summary.
   String get address => '';
+
+  /// Display name for the profile; the base implementation has no name.
   String get remark => '';
 
+  /// Primary outbound JSON for this profile.
+  ///
+  /// A generated share-link profile normally tags this outbound as `proxy`.
+  /// Imported full configurations can contain a different first outbound.
   Map<String, dynamic> get outbound1;
 
+  /// Full generated configuration with a local SOCKS input and proxy, direct
+  /// and blackhole outputs.
+  ///
+  /// Native VPN adapters add their managed authenticated input during preparation.
+  /// Raw-JSON importers override this getter to retain the imported configuration.
   Map<String, dynamic> get fullConfiguration {
     final proxyOutbound = outbound1;
     final document = XrayConfigDocument(
       log: const XrayLog(),
-      // This SOCKS inbound is the contract used by the iOS packet tunnel:
-      // HEV/tun2socks forwards device packets here, then Xray sends them to the
-      // selected outbound.
+      // Keep the generated caller input in the document. Native VPN
+      // preparation adds its own private authenticated packet adapter.
       inbounds: [XrayInbound.localSocksTunnel(userLevel: level)],
       outbounds: [
         XrayOutbound(
@@ -38,34 +75,42 @@ abstract class FlutterVlessURL {
         XrayOutbound.direct(),
         XrayOutbound.blackhole(),
       ],
-      // Keep generated configs deterministic for packet tunnels. Native tunnel
-      // code installs concrete route exclusions, so Xray must not introduce a
-      // second DNS strategy that can resolve the proxy differently.
+      // Keep the generated Core routing strategy deterministic. Native VPN
+      // preparation plans transport endpoint bootstrap separately from caller
+      // DNS selection and domain-routing rules.
       routing: const XrayRouting(),
     );
     return document.toJson();
   }
 
-  /// Generate Full Configuration
+  /// Serializes [fullConfiguration] as JSON with [indent] spaces per level.
   ///
-  /// indent: json encoder indent
+  /// This does not run native validation or start a connection. The result may
+  /// contain server credentials and should not be logged.
   String getFullConfiguration({int indent = 2}) {
     return JsonEncoder.withIndent(' ' * indent).convert(
       fullConfiguration,
     );
   }
 
+  /// Mutable transport builder used when generating the primary outbound.
+  ///
+  /// Changes made before reading [outbound1] or [fullConfiguration] affect generated
+  /// share-link profiles. Raw-JSON importers retain their own configuration instead.
   late final XrayStreamSettingsBuilder streamSettingsBuilder =
       XrayStreamSettingsBuilder(network: network);
 
+  /// Current builder settings serialized as the Xray `streamSettings` object.
   Map<String, dynamic> get streamSetting =>
       streamSettingsBuilder.build().toJson();
 
   /// Populates Xray `streamSettings` from VLESS URL query parameters.
   ///
-  /// These settings feed both normal Xray configs and the iOS packet tunnel.
-  /// The iOS provider later normalizes DNS/logging, but the transport shape
-  /// created here is still the source of truth for TCP/Reality vs XHTTP tests.
+  /// Returns the transport Host-derived SNI suggestion; an explicit TLS SNI
+  /// should take precedence. [transport] selects the network, while the other
+  /// parameters retain the protocol-specific headers, paths, keys, mode and
+  /// service name. [extra] carries XHTTP/HTTPUpgrade JSON settings.
+  /// Native Core remains responsible for accepting the effective transport.
   String populateTransportSettings({
     required String transport,
     required String? headerType,
@@ -203,6 +248,7 @@ abstract class FlutterVlessURL {
     return sni;
   }
 
+  /// Returns [fallback] when [value] is null or empty; otherwise returns [value].
   String emptyToDefault(String? value, String fallback) {
     return value == null || value.isEmpty ? fallback : value;
   }
@@ -252,6 +298,14 @@ abstract class FlutterVlessURL {
     return result.isEmpty ? null : result;
   }
 
+  /// Updates the transport builder from TLS/Reality share-link settings.
+  ///
+  /// [streamSecurity] selects the `tls` or `reality` settings object. [sni] keeps
+  /// the configured server identity; [alpns] is a comma-separated ALPN list.
+  /// [publicKey], [shortId] and [spiderX] are Reality parameters. Optional
+  /// [pinnedPeerCertSha256] and [verifyPeerCertByName] retain explicit verification
+  /// settings. [allowInsecure] is accepted for compatibility but is not emitted
+  /// as a certificate-verification bypass.
   void populateTlsSettings({
     required String? streamSecurity,
     required bool allowInsecure,
@@ -299,10 +353,20 @@ abstract class FlutterVlessURL {
     return value;
   }
 
+  /// Returns the legacy typed-generator cleanup of [params].
+  ///
+  /// This removes absent values and normalizes known aliases. For full imported
+  /// profiles use `sanitizeXrayJson(..., preserveStructure: true)` to retain
+  /// explicit nulls and empty containers.
   dynamic removeNulls(dynamic params) {
     return sanitizeXrayJson(params);
   }
 
+  /// Builds the `proxy` outbound from [protocol], its [settings] and the current
+  /// [streamSettingsBuilder], with mux disabled.
+  ///
+  /// The returned JSON can contain credentials. Native Core validates protocol
+  /// and transport compatibility when the configuration is prepared.
   Map<String, dynamic> buildProxyOutbound({
     required String protocol,
     required Map<String, dynamic> settings,

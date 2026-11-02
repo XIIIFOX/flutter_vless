@@ -2,7 +2,13 @@ import 'dart:convert';
 
 import 'package:flutter_vless/url/url.dart';
 
+/// SOCKS share links with optional plain or base64-encoded credentials.
 class SocksURL extends FlutterVlessURL {
+  /// Parses a lowercase `socks://` URI, including legacy full-base64 authorities.
+  ///
+  /// The server port defaults to 443 when no valid explicit port is available.
+  /// Invalid URI or scheme throws [ArgumentError]. Native Core performs final
+  /// configuration and server validation.
   SocksURL({required super.url}) {
     if (!url.startsWith('socks://')) {
       throw ArgumentError('url is invalid');
@@ -21,8 +27,17 @@ class SocksURL extends FlutterVlessURL {
     }
   }
 
+  /// Parsed SOCKS username, or null when the authority supplies none.
   String? username;
+
+  /// Parsed SOCKS password, or null when no password was supplied.
+  ///
+  /// This is a credential; do not include it in diagnostics or logs.
   String? password;
+
+  /// Parsed source URI, including its credential-bearing authority and query.
+  ///
+  /// Do not log this value without redacting private fields.
   late final Uri uri;
 
   String? _address;

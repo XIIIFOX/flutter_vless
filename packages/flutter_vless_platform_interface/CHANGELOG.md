@@ -1,15 +1,11 @@
 ## 1.1.7
 
-* Cancel obsolete capability-gated starts after Stop or a newer Start. Use the redacted `VPN_START_CANCELLED` error consistently across all four platform adapters.
-
-* Add optional startVlessWithReport, immutable closed preparation reports and safe configuration failure locations. Keep older platform implementations working with an explicit unavailable report.
-
-* Add optional `VpnRoutingOptions` to `startVless`, with capability checks, original inbound indices and an exact default outbound tag. Keep ordinary calls unchanged and reject proxy-only requests.
-* Add optional `certificateAssetsDirectory` to start and profile-delay calls. Require the native capability before forwarding the directory so older implementations cannot silently ignore it.
-* Add validated `VlessOptions.fromMap` for application-owned settings persistence.
-* Preserve the active status listener when native option reconfiguration is rejected.
-* Add all five typed Options blocks, quick-action/protection enums, validation, wire versioning and backward-compatible optional initialization.
-* Add native capabilities, add-tile result and clear-quick-profile contracts; refuse unsupported custom options before subscribing to status and clean up failed initialization.
+* Add typed Notification, Quick Access, Reconnect, Protection and Diagnostics options, action/protection enums and validated `VlessOptions.fromMap` persistence.
+* Add native capabilities, add-tile results and clear-quick-profile contracts with backward-compatible optional initialization and explicit rejection of unsupported custom guarantees.
+* Add `VpnRoutingOptions` for original-inbound context and explicit default outbound selection; reject proxy-only use.
+* Add `certificateAssetsDirectory` for startup/profile-delay and immutable optional per-start preparation reports with typed edit codes and safe failure stages.
+* Cancel obsolete capability-gated starts on Stop, a newer start or successful options reconfiguration. Use the redacted `VPN_START_CANCELLED` error and preserve the active status listener when native reconfiguration fails.
+* Document public constructors, fields, enum values, defaults, platform limits and backend contracts for editor assistance.
 
 ## 1.1.2
 

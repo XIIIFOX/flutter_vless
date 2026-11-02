@@ -20,6 +20,11 @@ This separate measurement can fail while the protected runtime remains active.
 A blocked default outbound or a private-only configuration is a valid policy;
 `CONNECTED` alone does not prove remote-server or general Internet availability.
 
+Existing iOS hosts must update their copied `PacketTunnelProvider.swift` from
+`example/ios/XrayTunnel` together with the Swift package. The provider belongs
+to the host extension; changing the package dependency alone cannot replace a
+previously copied provider. The macOS provider is part of its package.
+
 ## DNS policy
 
 Ordinary routed `tcp://`, `https://` and `h2c://` resolvers retain caller DNS

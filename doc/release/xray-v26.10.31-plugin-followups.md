@@ -46,11 +46,11 @@ protobuf regeneration do not require a new public Flutter option.
 * Android public routing was subsequently qualified on 2026-11-02 in both
   directions after configuring the emulator transport and responsive system
   DNS; see [the live setup/result](../android-emulator-host-vpn.md).
-  The iPhone DIRECT-domain pass uses explicit caller
-  DNS; investigate the original implicit-DNS policy with captured resolver
-  answers if that unmodified behavior is required. Do not silently rewrite
-  caller DNS or infer that a failed public reference proves expired credentials
-  or a plugin defect.
+  The subsequent fresh France iPhone import and both opposite domain-routing
+  cases pass without an explicit `dns` section, using the protected default
+  DNS policy; see [the Apple follow-up](apple-readiness-dns-validation.md).
+  This finite result does not qualify every resolver/network combination or
+  establish that an older failed public reference had expired credentials.
 * Choose available implementation-package versions, align root dependency
   constraints and rehearse publication order. A read-only registry check on
   2026-11-02 confirms Android/macOS/Windows already have 1.1.7, while root
@@ -65,24 +65,24 @@ protobuf regeneration do not require a new public Flutter option.
 These checks are needed before claiming the corresponding real-world coverage;
 they are separate from the finite controlled acceptance completed in this goal.
 
-* Make Apple readiness probes caller-aware or configurable. The current iOS
-  provider requires `1.1.1.1:80` and `www.gstatic.com:80/generate_204` through
-  its managed SOCKS input. A valid private-only or default-blocked profile can
-  therefore remain REASSERTING despite a usable caller inbound. The controlled
-  follow-up fixture supplies explicit, separate health/DNS permissions; it does
-  not change this production readiness policy or establish general Internet
-  reachability for that profile.
-* Extend DNS URL admission deliberately, including Core's `tcp+local://`
-  semantics, with cross-platform preparation and physical-underlay controls.
-  The current Apple `TunnelDNSPolicy` URL allowlist admits `tcp`, `https` and
-  `h2c`; upstream support alone does not make other schemes adapter-compatible.
-  Do not accept a new scheme without verifying its resolver and protected
-  socket behavior. These adapter gaps are separate from the five Core31
-  feature regression criteria.
+The Apple VPN readiness and bounded local-DNS follow-up is implemented in
+`0f16a94`: readiness checks the current native worker and authenticated listener,
+while an optional caller-selected URL checks network reachability. Protected
+`tcp+local`, `https+local` and `h2c+local` preparation requires a physical path
+and finite numeric/static resolver destinations. Physical iPhone regressions
+cover private/default-blocked readiness, original named DoH and actual TCP/HTTPS
+local DNS. See [the follow-up validation](apple-readiness-dns-validation.md).
 
-* Repeat canonical 2ip over VPN when its ordinary baseline is stable and fully
-  loaded. Its current OFF IP observation and historical Loading/503 evidence
-  do not establish a complete ON result; tfox/ipify qualify the current splits.
+* Extend DNS modes only with their own protected resolver/socket proof. The
+  bounded Apple VPN change does not qualify `+local` preparation/delay paths
+  without a physical-interface snapshot, unpinned resolver names, or
+  `quic+local`. These forms continue to fail preparation explicitly.
+
+* Track external 2ip page completion separately from VPN readiness. The new
+  France all-proxy iPhone case reaches HTTP 200 and a complete document; the
+  ordinary baseline shows its current IP without Loading while the document
+  remains interactive. Other network paths and challenge behavior still need
+  their own observations.
 * Qualify real IPv6-only/DNS64/NAT64 and Wi-Fi/mobile handover. Address carriage
   and controlled resolver/kernel tests are narrower evidence.
 * With authorized test accounts, qualify real S3/Google service limits and a

@@ -1,5 +1,9 @@
 ## 1.1.7
 
+* Check native VPN readiness using the current packet worker and authenticated local listener, without fixed external connectivity targets. Keep caller-selected network measurements separate and preserve bounded recovery after local failures.
+
+* Prepare finite `tcp+local`, `https+local` and `h2c+local` DNS through closed physical-interface branches. Retain caller routed DoH policy and require interface-binding capability for DNS-only profiles before startup.
+
 * Prepare XDRIVE S3 and Google Drive API endpoints and admit scheduled GeoDAT updates only with the matching native lifetime capabilities. Validate writable App Group targets and retain caller datasets. Add NAT64 provenance and expiry regressions; live IPv6-only/NAT64 acceptance remains separate.
 
 * Retain control action, options and profile ownership across authentication and preference awaits. Revoke older controls on newer app/control commands, stage On Demand disabled, and report uncertain startup without compensating preference writes. Add 36 whole-method transaction regressions shared with iOS.

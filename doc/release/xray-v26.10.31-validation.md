@@ -1,5 +1,12 @@
 # Native Core 26.10.31 qualification
 
+Current consumers use **Android protect2 / Apple and Windows r2**. Their
+published-byte checks, XHTTP listener correction and five bounded feature
+follow-ups are recorded in the
+[current supplement](core31-five-followups-validation.md). The r1/protect1
+publication and device evidence below remains historical; it is not relabelled
+as qualification of the later binaries.
+
 Flutter package sources remain **1.1.7**. This stage publishes only native
 artifacts: no Flutter package or plugin `v1.1.7` release is published by this
 stage. Previously published implementation versions are a separate registry

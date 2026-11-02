@@ -35,6 +35,20 @@ interim responses and cancellation. Each owns and closes its loopback sockets,
 workers and Core instances, with fixed deadlines. Results are qualified by the
 focused follow-up runner, rather than inferred from these JSON examples.
 
+When combining these tests with a private/loopback origin, Core's Freedom
+outbound blocks private targets by default for VLESS server inbounds. An
+isolated local test server must explicitly authorize its own destination, for
+example inside that server's Freedom `settings`:
+
+```json
+{"finalRules":[{"action":"allow","network":"tcp","ip":["127.0.0.1/32"],"port":"51236"}]}
+```
+
+Replace the port with the single test origin's port and retain the matching
+inbound/destination routing restriction. Other private destinations retain
+their default protection. This is explicit server policy; the plugin does not
+insert this permission into imported configurations.
+
 Sources: [OPTIONS versus preflight](https://github.com/XTLS/Xray-core/commit/e7a69fa85a18146e83e008b6ec0a72e996dc6cf9),
 [server h2Params](https://github.com/XTLS/Xray-core/commit/316e07a53822aa23661cb3f8b30e1132911c5b36),
 [short 100 response forwarding](https://github.com/XTLS/Xray-core/commit/bc7c895278a895a87881953e1ec522fcdb0f885b).

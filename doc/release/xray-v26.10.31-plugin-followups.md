@@ -4,27 +4,33 @@ Native Core publication is separate from Flutter package publication. Packages
 stay at 1.1.7 during the present goal. This is a follow-up list, not a claim that
 all configurations or real networks have been qualified.
 
-## New Core behavior needing additional examples or runtime coverage
+## Five Core31 follow-ups
 
-* **GeoDAT gzip:** cover compressed, corrupt, truncated and oversized decoded
+The five items below now have examples and successful bounded native-runtime
+acceptance on Linux/macOS/Windows. The
+[results and precise limits](core31-five-followups-validation.md) distinguish
+those completed criteria from remaining live-client investigation. They should
+not be listed again as unimplemented features.
+
+* **GeoDAT gzip:** covered compressed, corrupt, truncated and oversized decoded
   input, cancellation and atomic replacement. The 256 MiB decoded limit stays
   in force; gzip detection is based on file contents.
   [Upstream change](https://github.com/XTLS/Xray-core/commit/0c3402d77874f400640214055ac76d2eff70ee36).
-* **QUIC sniffing:** add active fragmented/gapped CRYPTO and empty-SNI controls
+* **QUIC sniffing:** added active fragmented/gapped CRYPTO and empty-SNI controls
   with both routing directions. Existing TCP-SNI and H3 checks do not qualify
   QUIC-SNI routing.
   [Upstream change](https://github.com/XTLS/Xray-core/commit/9b8190f52c970861c938dcd8c8c6eb696a77a900).
-* **XHTTP:** preserve and demonstrate ordinary `OPTIONS` uplink versus real
-  CORS preflight, and server `h2Params`; verify actual OPTIONS/H2 round trips.
+* **XHTTP:** preserved and demonstrated ordinary `OPTIONS` uplink versus real
+  CORS preflight, and server `h2Params`; verified actual OPTIONS/H2 round trips.
   `h2Params` is a server setting; the client uplink method is configurable.
   These changes do not automatically require new Flutter options.
   [OPTIONS](https://github.com/XTLS/Xray-core/commit/e7a69fa85a18146e83e008b6ec0a72e996dc6cf9),
   [h2Params](https://github.com/XTLS/Xray-core/commit/316e07a53822aa23661cb3f8b30e1132911c5b36).
-* **Windows Core TUN leak rules:** separately evaluate `tcp/port`, `udp/port`
+* **Windows Core TUN leak rules:** separately evaluated `tcp/port`, `udp/port`
   and TCP/UDP 853 in `autoSystemWfpBlockLeak`. The plugin has its own VPN/WFP
   path; do not silently map this distinct Core setting into ProtectionOptions.
   [Upstream change](https://github.com/XTLS/Xray-core/commit/6cdd323ad82fe21bb9c1d06e6a5c5f909de2ffaf).
-* **HTTP inbound:** add `Expect: 100-continue` upload regression coverage.
+* **HTTP inbound:** added `Expect: 100-continue` upload regression coverage.
   [Upstream change](https://github.com/XTLS/Xray-core/commit/bc7c895278a895a87881953e1ec522fcdb0f885b).
 
 The shared MPTCP default-off fix is already included in the protected SDK and
@@ -58,6 +64,21 @@ protobuf regeneration do not require a new public Flutter option.
 
 These checks are needed before claiming the corresponding real-world coverage;
 they are separate from the finite controlled acceptance completed in this goal.
+
+* Make Apple readiness probes caller-aware or configurable. The current iOS
+  provider requires `1.1.1.1:80` and `www.gstatic.com:80/generate_204` through
+  its managed SOCKS input. A valid private-only or default-blocked profile can
+  therefore remain REASSERTING despite a usable caller inbound. The controlled
+  follow-up fixture supplies explicit, separate health/DNS permissions; it does
+  not change this production readiness policy or establish general Internet
+  reachability for that profile.
+* Extend DNS URL admission deliberately, including Core's `tcp+local://`
+  semantics, with cross-platform preparation and physical-underlay controls.
+  The current Apple `TunnelDNSPolicy` URL allowlist admits `tcp`, `https` and
+  `h2c`; upstream support alone does not make other schemes adapter-compatible.
+  Do not accept a new scheme without verifying its resolver and protected
+  socket behavior. These adapter gaps are separate from the five Core31
+  feature regression criteria.
 
 * Repeat canonical 2ip over VPN when its ordinary baseline is stable and fully
   loaded. Its current OFF IP observation and historical Loading/503 evidence

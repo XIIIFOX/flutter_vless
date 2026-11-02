@@ -30,15 +30,29 @@ required before marking this goal complete. External limitations remain explicit
 
 ## Progress
 
-- [ ] GeoDAT gzip
-- [ ] XHTTP OPTIONS and h2Params
-- [ ] QUIC fragmented SNI and routing
-- [ ] Windows Core TUN leak rules
-- [ ] HTTP inbound 100-continue
-- [ ] Relevant live client checks, independent review and cleanup
+- [x] GeoDAT gzip
+- [x] XHTTP OPTIONS and h2Params
+- [x] QUIC fragmented SNI and routing
+- [x] Windows Core TUN leak rules
+- [x] HTTP inbound 100-continue
+- [x] Relevant live client checks, independent review and cleanup
 
 The progress checklist is updated from actual completed evidence, not from
 fixture implementation alone.
+
+All bounded criteria are complete. Published protect2/r2 consumers, Android
+GET/POST/OPTIONS, physical iPhone POST/OPTIONS, independent backend witnesses
+and final owned-process cleanup are recorded in the
+[validation report](core31-five-followups-validation.md). Broader compatibility
+and publication work stays in the separate
+[follow-up list](xray-v26.10.31-plugin-followups.md).
+
+All five source-runtime criteria pass on the immutable producer head
+`2505694c4001e7d52f06d6a63f29780da8dc7d49` in
+[four-runner acceptance](https://github.com/XIIIFOX/flutter_vless/actions/runs/41446768463).
+The Windows-specific group runs on both Windows 2022 and 2025; the other
+groups also run on Linux and macOS. This source-runtime result is distinct
+from the subsequent acceptance of published binaries and physical devices.
 
 ## First runtime result
 

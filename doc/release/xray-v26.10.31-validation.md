@@ -171,3 +171,15 @@ universal configuration or plugin-publication readiness. [Remaining plugin and n
 separates publication review from wider feature coverage. Real cloud accounts,
 physical IPv6-only/NAT64 and handover conditions remain separate from controlled
 fixtures. No native Core/SDK is executed on the owner's Mac for this stage.
+
+## Android public-routing follow-up — 2026-11-02
+
+The earlier unqualified Android result above is superseded for the tested P1
+profile by [the live host-VPN setup and result](../android-emulator-host-vpn.md).
+The exact public Core passes the all-proxy reference and both ipify/AWS splits
+in the actual example, with genuine uncached Chrome response/DOM evidence,
+18-second bounded sessions, fullStop/OFF and ordinary recovery after each.
+Only the emulator DNS/transport was adapted; the caller endpoint hostname and
+DNS policy remain unchanged. Both bootstrap DNS and the selected peer
+socket path were checked independently. No plugin publication or live Mac VPN
+run occurred. Wider protocol/IPv6 and other-profile acceptance is not inferred.

@@ -232,3 +232,14 @@ The VMess field mapping follows the
 [v2rayN share-link specification](https://github.com/2dust/v2rayN/wiki/Description-of-VMess-share-link).
 S3's independent signature verifier uses the public
 [AWS SigV4 reference](https://docs.aws.amazon.com/AmazonS3/latest/developerguide/sig-v4-header-based-auth.html).
+
+## Android public-routing follow-up — 2026-11-02, daytime
+
+The Android public-routing limitation in the earlier table is superseded for
+the tested P1 profile: a responsive emulator DNS and peer-only socket transport
+allow the exact published Core31 to pass all-proxy and both ipify/AWS routing
+directions in example. The caller endpoint remains a hostname and caller DNS
+remains absent. Stop/OFF and ordinary browsing recover after every session.
+[Reproducible setup and scope](android-emulator-host-vpn.md) records the network
+controls and limits. Mac VPN/system network settings stayed unchanged; owned
+test processes and emulator were stopped. No plugin was published.

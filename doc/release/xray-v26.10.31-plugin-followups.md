@@ -37,8 +37,10 @@ protobuf regeneration do not require a new public Flutter option.
 
 * Run live macOS VPN acceptance only when the owner can interrupt the existing
   VPN. Actions acceptance cannot establish behavior on that particular Mac.
-* Finish the Android public routing case with an independently healthy reference
-  on that device network. The iPhone DIRECT-domain pass uses explicit caller
+* Android public routing was subsequently qualified on 2026-11-02 in both
+  directions after configuring the emulator transport and responsive system
+  DNS; see [the live setup/result](../android-emulator-host-vpn.md).
+  The iPhone DIRECT-domain pass uses explicit caller
   DNS; investigate the original implicit-DNS policy with captured resolver
   answers if that unmodified behavior is required. Do not silently rewrite
   caller DNS or infer that a failed public reference proves expired credentials

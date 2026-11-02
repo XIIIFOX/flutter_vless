@@ -126,6 +126,7 @@ def main(argv=None):
         if any(source_before.get(path) != expected for path, expected in manifest['upstream_sha256'].items()):
             raise ValueError('Pinned source/cache preimage differs from the manifest')
         report['module_source_sha256'] = source_before
+        report['core_source'] = str(source)
         validate_output(output, source, cache)
         output.mkdir(parents=True)
         admitted = True
@@ -134,14 +135,18 @@ def main(argv=None):
         evidence = output
         applier = core_runner.load_module(CAPABILITY / 'apply.py', 'desktop_routing_applier')
         core = applier.copy_and_apply(source, output / 'Core', go=go, caches=[cache])
+        report['core_replacement'] = str(core)
         report['classic_dns_lifetime_applied'] = True
         report['h3_lifetime_applied'] = True
-        report['lifetime_patch_scope'] = ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater']
+        report['lifetime_patch_scope'] = ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup']
         report['h3_lifetime_patch_sha256'] = before['third_party/xray-native-dns/h3_lifetime_patch.py']
         report['xdrive_lifetime_applied'] = True
         report['geodata_lifetime_applied'] = True
         report['xdrive_lifetime_patch_sha256'] = before['third_party/xray-native-dns/xdrive_lifetime_patch.py']
         report['geodata_lifetime_patch_sha256'] = before['third_party/xray-native-dns/geodata_lifetime_patch.py']
+        report['xhttp_listener_cleanup_applied'] = True
+        report['xhttp_listener_cleanup_patch_sha256'] = before['third_party/xray-native-dns/xhttp_listener_lifetime_patch.py']
+        report['xhttp_listener_cleanup_source_sha256'] = core_runner.digest(core / 'transport/internet/splithttp/hub.go')
         mobile = output / 'Mobile'
         copy_mobile(mobile)
         core_initial, mobile_initial = core_runner.tree_snapshot(core), core_runner.tree_snapshot(mobile)

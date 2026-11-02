@@ -14,9 +14,11 @@ import zipfile
 import build_android_runtime_preview as builder
 from build_android_runtime_preview import digest, tree, safe_relative, git_head
 from verify_android_dns_preview import elf_alignment
+from package_apple_core_preview import require_xhttp_listener_cleanup
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGING_INPUTS = ('.github/workflows/android-runtime-preview.yml', 'tool/package_android_runtime_preview.py',
+                    'tool/package_apple_core_preview.py',
                     'tool/test_android_runtime_preview.py', 'tool/verify_android_dns_preview.py',
                     'tool/build_android_dns_preview.py', '.github/workflows/publish-android-runtime.yml',
                     'tool/build_android_runtime_maven.sh', 'tool/publish_android_runtime_maven.sh')
@@ -86,9 +88,9 @@ def validate(preview, head, repository=ROOT, *, release=False):
         raise ValueError('Ordinary Core receipt changed')
     receipt = json.loads(receipt_path.read_text())
     if any(receipt.get(k) is not True for k in ('success', 'source_unchanged', 'module_cache_source_unchanged',
-                                               'copies_unchanged', 'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'xdrive_lifetime_applied', 'geodata_lifetime_applied', 'darwin_interface_binding_source_applied')) \
+                                               'copies_unchanged', 'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'xdrive_lifetime_applied', 'geodata_lifetime_applied', 'xhttp_listener_cleanup_applied', 'darwin_interface_binding_source_applied')) \
             or type(receipt.get('routing_capability_expected')) is not int or receipt['routing_capability_expected'] != int(release) \
-            or receipt.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'] \
+            or receipt.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'] \
             or receipt.get('selected_abis') != list(builder.ABIS) \
             or any(receipt.get(k) is not False for k in ('runtime_executed', 'published')):
         raise ValueError('Ordinary lifetime proof differs')
@@ -122,6 +124,13 @@ def validate(preview, head, repository=ROOT, *, release=False):
     copied_h3 = receipt['core_copy_sha256'][builder.DIALER]
     if result['copied_h3_sha256'] != copied_h3:
         raise ValueError('Copied H3 provenance differs')
+    require_xhttp_listener_cleanup(receipt, sources, cache, copied, repository)
+    if result.get('xhttp_listener_cleanup_applied') is not True:
+        raise ValueError('XHTTP listener preview cleanup proof differs')
+    for field in ('xhttp_listener_cleanup_applied', 'xhttp_listener_cleanup_patch_sha256',
+                  'xhttp_listener_cleanup_source_sha256'):
+        if result.get(field) != receipt.get(field):
+            raise ValueError('XHTTP listener preview provenance differs')
     pins = json.loads((repository / builder.RUNTIME / 'runtime-inputs.sha256.json').read_text())
     pinned = {name: value for name, value in pins.items() if not name.endswith('/libxray.so')}
     if result['pinned_HEV_geodata_sha256'] != pinned or len(pinned) != 6:
@@ -219,6 +228,9 @@ def validate(preview, head, repository=ROOT, *, release=False):
             'core_commit': pin['core_commit'], 'core_module': pin['module'],
             'core_version': pin['module_version'], 'core_sum': pin['module_sum'],
             'h3_lifetime_patch_sha256': sources[builder.H3], 'copied_h3_sha256': copied_h3,
+            'xhttp_listener_cleanup_applied': True,
+            'xhttp_listener_cleanup_patch_sha256': receipt['xhttp_listener_cleanup_patch_sha256'],
+            'xhttp_listener_cleanup_source_sha256': receipt['xhttp_listener_cleanup_source_sha256'],
             'producer_receipts_sha256': {'preview.json': digest(preview / 'preview.json'),
                                         'core-build-receipt.json': digest(receipt_path)}}
 
@@ -301,7 +313,7 @@ def package(preview, output, head, repository=ROOT, *, release=False):
                    'central_bundle_members_sha256': expected}
     manifest = dict(checked, schema=1, success=True, head=head, platform='android',
                     archive=archive.name, archive_sha256=digest(archive), members_sha256=members,
-                    lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'],
+                    lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'],
                     runtime_executed=False, installed=False, published=False, **central)
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     return manifest

@@ -83,12 +83,13 @@ class ApplePreviewBuilderTest(unittest.TestCase):
             out.write('def copy_and_apply_lifetimes(source,destination,**kwargs):\n assert kwargs.get("routing",False) is False\n result=copy_and_apply(source,destination,**kwargs)\n (result/"h3-applied").write_text("h3")\n return result\n')
         classic = self.root / 'third_party/xray-native-dns'
         (classic / 'overlay/app/dns').mkdir(parents=True)
-        for name in ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py', 'xdrive_lifetime_patch.py', 'geodata_lifetime_patch.py', 'pin-manifest.json', 'overlay/main/native_services_cli.go', 'overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go', 'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go'):
+        for name in ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py', 'xdrive_lifetime_patch.py', 'geodata_lifetime_patch.py', 'xhttp_listener_lifetime_patch.py', 'pin-manifest.json', 'overlay/main/native_services_cli.go', 'overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go', 'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go'):
             (classic / name).parent.mkdir(parents=True,exist_ok=True)
             (classic / name).write_text('shared-classic-fixture')
         self.core = self.root / 'module-cache/core'
         self.core.mkdir(parents=True)
         (self.core / 'go.mod').write_text('module '+MODULE+'\n')
+        hub = self.core/'transport/internet/splithttp/hub.go'; hub.parent.mkdir(parents=True, exist_ok=True); hub.write_text('synthetic XHTTP listener source')
         self.bin = self.root / 'bin'; self.bin.mkdir()
         self.mock_mobile = self.root / 'gomobile-template'
         self.mock_mobile.write_text('#!'+sys.executable+'\n'+GOMOBILE)
@@ -154,7 +155,7 @@ class ApplePreviewBuilderTest(unittest.TestCase):
         self.assertIs(receipt['darwin_interface_binding_source_applied'],True)
         self.assertEqual(receipt['darwin_interface_binding_capability_expected'],1)
         self.assertEqual(receipt['darwin_interface_binding_patch_sha256'],hashlib.sha256((self.root/'third_party/xray-native-dns/darwin_interface_bind_patch.py').read_bytes()).hexdigest())
-        self.assertEqual(receipt['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'])
+        self.assertEqual(receipt['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'])
         self.assertEqual(receipt['h3_lifetime_patch_sha256'], hashlib.sha256((self.root/key).read_bytes()).hexdigest())
         self.assertEqual(receipt['source_sha256'][key], receipt['h3_lifetime_patch_sha256'])
 

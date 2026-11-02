@@ -6,7 +6,7 @@ on:
       xray_runtime_version:
         description: Xray runtime Maven artifact version
         required: true
-        default: "26.10.31-protect1"
+        default: "26.10.31-protect2"
       existing_deployment_id:
         description: Existing Central Portal deployment ID to publish instead of uploading a new bundle
         required: false
@@ -52,6 +52,7 @@ jobs:
         run: |
           python3 tool/test_build_native_routing_cli.py
           python3 tool/test_android_runtime_preview.py
+          python3 third_party/xray-native-dns/test_xhttp_listener_lifetime_patch.py
       - name: Compile four ABIs, verify and sign exact AAR, upload Central deployment
         if: ${{ inputs.existing_deployment_id == '' }}
         run: |

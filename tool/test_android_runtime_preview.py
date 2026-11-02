@@ -17,6 +17,7 @@ import zipfile
 
 import build_android_runtime_preview as builder
 import package_android_runtime_preview as package
+from fixtures.xhttp_listener_provenance import bind as bind_xhttp_cleanup
 
 
 HEAD = 'a' * 40
@@ -44,11 +45,11 @@ def elf(abi, tag=b'fresh H3 v26.10.31'):
 class AndroidPreviewControls(unittest.TestCase):
     def test_active_final_producer_version_and_all_entry_defaults_match(self):
         self.assertEqual(builder.CORE_TAG, 'v26.10.31')
-        self.assertEqual(builder.RELEASE_VERSION, '26.10.31-protect1')
+        self.assertEqual(builder.RELEASE_VERSION, '26.10.31-protect2')
         self.assertEqual(builder.preview_version(HEAD), '26.10.31-h3-preview.' + HEAD[:12])
         for name in ('tool/build_android_runtime_maven.sh', 'tool/publish_android_runtime_maven.sh', '.github/workflows/publish-android-runtime.yml'):
             source = (builder.ROOT / name).read_text()
-            self.assertIn('26.10.31-protect1', source, name)
+            self.assertIn('26.10.31-protect2', source, name)
             self.assertNotIn('26.10.29-protect3', source, name)
         build = (builder.ROOT / 'packages/flutter_vless_android/android/build_xray.sh').read_text()
         self.assertIn('XRAY_VERSION="${XRAY_VERSION:-v26.10.31}"', build)
@@ -112,7 +113,7 @@ class AndroidPreviewControls(unittest.TestCase):
                         'geodata_lifetime_patch_sha256': builder.digest(self.root/'third_party/xray-native-dns/geodata_lifetime_patch.py'),
                         'darwin_interface_binding_source_applied': True,
                         'darwin_interface_binding_patch_sha256': builder.digest(self.root/'third_party/xray-native-dns/darwin_interface_bind_patch.py'),
-                        'routing_capability_expected': 0, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'],
+                        'routing_capability_expected': 0, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'],
                         'runtime_executed': False, 'published': False, 'selected_abis': list(builder.ABIS),
                         'source_sha256': {name: builder.digest(self.root / name) for name in builder.ordinary_inputs(self.root)},
                         'h3_lifetime_patch_sha256': builder.digest(self.root / builder.H3),
@@ -122,6 +123,7 @@ class AndroidPreviewControls(unittest.TestCase):
                         'module_cache_before_sha256': builder.tree(self.cache),
                         'core_module': self.pin['module'], 'core': self.pin['module_version'],
                         'core_sum': self.pin['module_sum'], 'core_commit': self.pin['core_commit']}
+        bind_xhttp_cleanup(self.root, self.cache, self.core, self.receipt, self.receipt['source_sha256'])
         self.receipt_path.write_text(json.dumps(self.receipt))
         self.repo = self.project / 'build/repo'
         base = self.repo / f'dev/tfox/fluttervless/xray-android/{self.version}'
@@ -140,6 +142,9 @@ class AndroidPreviewControls(unittest.TestCase):
                        'core_build_receipt': self.receipt_path.relative_to(self.preview).as_posix(),
                        'core_build_receipt_sha256': builder.digest(self.receipt_path),
                        'copied_h3_sha256': builder.digest(self.core / builder.DIALER),
+                       'xhttp_listener_cleanup_applied': True,
+                       'xhttp_listener_cleanup_patch_sha256': self.receipt['xhttp_listener_cleanup_patch_sha256'],
+                       'xhttp_listener_cleanup_source_sha256': self.receipt['xhttp_listener_cleanup_source_sha256'],
                        'aar': self.aar.relative_to(self.preview).as_posix(), 'aar_sha256': builder.digest(self.aar),
                        'maven_files_sha256': builder.tree(self.repo), 'source_unchanged': True,
                        'copied_source_unchanged': True, 'module_cache_source_unchanged': True,
@@ -202,7 +207,7 @@ class AndroidPreviewControls(unittest.TestCase):
 
     def release_fixture(self):
         old_version = self.version
-        self.version = '26.10.31-protect1'
+        self.version = '26.10.31-protect2'
         new_core = self.root / 'build/security-android-routing.fixture/Core'
         shutil.copytree(self.core, new_core)
         self.core = new_core
@@ -243,7 +248,7 @@ class AndroidPreviewControls(unittest.TestCase):
     def test_final_release_requires_routing_and_signing_byte_provenance(self):
         self.release_fixture()
         checked = self.validate_release()
-        self.assertEqual('26.10.31-protect1', checked['version'])
+        self.assertEqual('26.10.31-protect2', checked['version'])
         self.assertEqual(1, checked['routing_capability_expected'])
         self.assertEqual(8, len(checked['signed_artifacts_sha256']))
 
@@ -298,7 +303,7 @@ class AndroidPreviewControls(unittest.TestCase):
         self.assertNotIn('SIGNING_IN_MEMORY_KEY', commands[0][2])
         self.assertEqual('synthetic-private-signing-key', commands[1][2]['SIGNING_IN_MEMORY_KEY'])
         self.assertNotIn('synthetic-private-signing-key', json.dumps(result))
-        self.assertEqual('26.10.31-protect1', result['version'])
+        self.assertEqual('26.10.31-protect2', result['version'])
 
     def test_final_release_central_bundle_roundtrip_and_corruption_rejected(self):
         self.release_fixture()

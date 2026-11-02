@@ -111,12 +111,13 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
         (capability/'pin-manifest.json').write_text(json.dumps({'module':CORE,'module_version':VERSION,'module_sum':SUM,'core_commit':'0afec66085a8','capability':'native-vpn-routing-source-preview-v1'}))
         (capability/'apply.py').write_text(ROUTING)
         classic=self.root/'third_party/xray-native-dns';(classic/'overlay/app/dns').mkdir(parents=True)
-        for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go'):
+        for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','xhttp_listener_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go'):
             (classic/name).parent.mkdir(parents=True,exist_ok=True)
             (classic/name).write_text('shared classic fixture')
         self.cache = self.root/'module-cache/Core';self.cache.mkdir(parents=True)
         (self.cache/'go.mod').write_text('module '+CORE+'\n')
         (self.cache/'go.sum').write_text('fixture sums\n')
+        hub = self.cache/'transport/internet/splithttp/hub.go'; hub.parent.mkdir(parents=True, exist_ok=True); hub.write_text('synthetic XHTTP listener source')
         self.bin = self.root/'bin';self.bin.mkdir()
         go = self.bin/'go';go.write_text('#!'+sys.executable+'\n'+GO);go.chmod(0o755)
         self.ndk = self.root/'ndk'
@@ -188,7 +189,7 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
     def assert_lifetime_receipt(self, receipt):
         key = 'third_party/xray-native-dns/h3_lifetime_patch.py'
         self.assertIs(receipt['h3_lifetime_applied'], True)
-        self.assertEqual(receipt['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'])
+        self.assertEqual(receipt['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'])
         self.assertEqual(receipt['h3_lifetime_patch_sha256'], hashlib.sha256((self.root/key).read_bytes()).hexdigest())
         self.assertEqual(receipt['source_sha256'][key], receipt['h3_lifetime_patch_sha256'])
 

@@ -42,6 +42,7 @@ jobs:
           python tool/windows/test_runtime_fixtures.py
           python tool/windows/test_package_managed_runtime.py
           python tool/windows/test_install_published_runtime.py
+          python third_party/xray-native-dns/test_xhttp_listener_lifetime_patch.py
       - name: Record toolchain and operating system
         shell: pwsh
         run: |

@@ -48,6 +48,10 @@ The separate malformed-`h2Params` admission test reproduces an owned-listener
 leak on every OS. Its minimal correction closes that listener on the existing
 parse-error branch. Corrected native artifacts must carry this correction on
 every platform; changing only test-source copies is not release readiness.
+Native revision `26.10.31-protect2` / `26.10.31-r2` is limited to delivering
+this reproduced correction with verified provenance. The upstream Core pin
+and Flutter plugin/package versions remain unchanged. Active consumer pins
+move only after the corresponding native assets have actually been published.
 
 Windows' first UDP observer expected `WSAEACCES`, while the kernel silently
 discarded the datagram. The stronger observer requires actual installed

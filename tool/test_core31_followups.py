@@ -340,7 +340,7 @@ def main(argv=None):
                 entry['test_binary_sha256'] = digest(binary)
                 phase = group['name']+'-runtime'
                 common.checked(phase, [str(binary), '-test.run', test_pattern(group['tests']), '-test.v', '-test.timeout='+str(group['seconds'])+'s'],
-                               cwd=core, environment=environment, seconds=group['seconds']+15, results=results)
+                               cwd=core / group['package'], environment=environment, seconds=group['seconds']+15, results=results)
                 verify_phase(results[-1])
                 entry.update(qualify((evidence / (phase+'.log')).read_text(encoding='utf-8'), group))
                 entry['status'] = 'passed'

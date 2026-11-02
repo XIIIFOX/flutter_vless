@@ -29,6 +29,7 @@ jobs:
           python3 tool/test_build_native_routing_cli.py
           python3 tool/test_apple_classic_core.py
           python3 tool/test_package_apple_runtime_release.py
+          python3 third_party/xray-native-dns/test_xhttp_listener_lifetime_patch.py
       - name: Build canonical routing-enabled runtime with private H2BUF toolchain
         env:
           PLATFORM: ${{ matrix.platform }}

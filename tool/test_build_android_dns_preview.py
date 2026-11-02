@@ -18,7 +18,7 @@ class AndroidDNSProducerTests(unittest.TestCase):
         self.capability = self.root/'third_party/xray-native-dns'
         (self.capability/'overlay/main').mkdir(parents=True)
         (self.capability/'overlay/main/fixture.go').write_text('package main\n')
-        for name in ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py'):
+        for name in ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py', 'xhttp_listener_lifetime_patch.py'):
             (self.capability/name).write_text('inert patch input\n')
         self.protection = self.root/'packages/flutter_vless_android/android/xray-protect'
         self.protection.mkdir(parents=True)
@@ -29,6 +29,7 @@ class AndroidDNSProducerTests(unittest.TestCase):
         self.h3_relative = 'transport/internet/splithttp/dialer.go'
         h3 = self.cache/self.h3_relative; h3.parent.mkdir(parents=True)
         h3.write_text('synthetic H3 source before mock compiler\n')
+        (self.cache/'transport/internet/splithttp/hub.go').write_text('synthetic XHTTP listener source before mock compiler\n')
         self.manifest = {'module': 'fixture.core', 'module_version': 'v1.0.0', 'module_sum': 'h1:fixture=',
                          'core_commit': 'fixture-commit', 'upstream_sha256': {'go.mod': hashlib.sha256((self.cache/'go.mod').read_bytes()).hexdigest()}}
         (self.capability/'pin-manifest.json').write_text(json.dumps(self.manifest))
@@ -95,7 +96,7 @@ def copy_and_apply(source,destination,**kwargs):
         self.assertIs(result['darwin_interface_binding_source_applied'],True)
         self.assertEqual(result['darwin_interface_binding_patch_sha256'],result['input_sha256']['third_party/xray-native-dns/darwin_interface_bind_patch.py'])
         self.assertIs(result['classic_dns_lifetime_applied'], True)
-        self.assertEqual(result['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'])
+        self.assertEqual(result['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'])
         self.assertEqual(result['h3_lifetime_patch_sha256'], result['input_sha256'][key])
         self.assertIs(result['runtime_executed'], False)
         self.assertIs(result['published'], False)
@@ -121,6 +122,13 @@ def copy_and_apply(source,destination,**kwargs):
             self.run_builder()
         self.assertIs(self.receipt()['success'], False)
         self.assertIs(self.receipt()['source_snapshot_unchanged'], False)
+
+    def test_mutated_prepared_xhttp_hub_cannot_claim_cleanup(self):
+        self.mutate = lambda: (self.output/'Core/transport/internet/splithttp/hub.go').write_text('foreign prepared listener')
+        with self.assertRaisesRegex(RuntimeError, 'Copied XHTTP listener source changed'):
+            self.run_builder()
+        self.assertIs(self.receipt()['success'], False)
+        self.assertIs(self.receipt()['xhttp_listener_cleanup_source_unchanged'], False)
 
     def test_failed_copy_never_claims_h3_applied_or_compiles(self):
         path = self.capability/'apply.py'

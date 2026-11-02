@@ -9,8 +9,9 @@ import re
 import subprocess
 import zipfile
 
-from package_apple_core_preview import (EXPORTS, XDRIVE_PATCH, GEODATA_PATCH, digest, git_bindings,
-                                       require_managed_lifetimes, safe_name, tree)
+from package_apple_core_preview import (EXPORTS, XDRIVE_PATCH, GEODATA_PATCH, XHTTP_LISTENER_PATCH,
+                                       digest, git_bindings, require_managed_lifetimes,
+                                       require_xhttp_listener_cleanup, safe_name, tree)
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE_COMMIT = 'a4a3dff5b20c2faae567b742c172c7b95e75c083'
@@ -39,7 +40,7 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
                   'module_cache_source_unchanged', 'core_copy_unchanged'):
         if report.get(field) is not True:
             raise ValueError('Incomplete canonical producer: '+field)
-    if report.get('stage') != 'post-build-verified' or report.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'] \
+    if report.get('stage') != 'post-build-verified' or report.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'] \
             or type(report.get('routing_capability_expected')) is not int or report['routing_capability_expected'] != 1 \
             or type(report.get('darwin_interface_binding_capability_expected')) is not int \
             or report['darwin_interface_binding_capability_expected'] != 1 \
@@ -63,7 +64,7 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
                        'third_party/xray-native-dns/pin-manifest.json',
                        'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime.go',
                        'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime_test.go'}
-    expected_inputs.update({XDRIVE_PATCH, GEODATA_PATCH,
+    expected_inputs.update({XDRIVE_PATCH, GEODATA_PATCH, XHTTP_LISTENER_PATCH,
                            'third_party/xray-native-dns/overlay/main/native_services_cli.go',
                            'third_party/xray-native-dns/overlay/transport/internet/xdrive/native_lifetime.go',
                            'third_party/xray-native-dns/overlay/transport/internet/native_service_lifetime.go'})
@@ -82,6 +83,8 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
     names += [p.relative_to(repository).as_posix() for p in (repository/'third_party/xray-mobile').glob('*.go')]
     sources.update({name: digest(repository/name) for name in names})
     git_bindings(repository, head, sources)
+    require_xhttp_listener_cleanup(report, sources, Path(report['core_source']),
+                                   Path(report['replacement']), repository)
     files = tree(framework)
     libraries = plistlib.loads((framework/'Info.plist').read_bytes()).get('AvailableLibraries')
     if not isinstance(libraries, list) or len(libraries) != (2 if platform == 'ios' else 1):
@@ -147,13 +150,16 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
                    [('core_source', 'module_cache_before_sha256'), ('replacement', 'core_copy_sha256')]):
         raise ValueError('Framework changed during packaging')
     git_bindings(repository, head, sources)
-    manifest = {'success': True, 'platform': platform, 'head': head, 'release_version': '26.10.31', 'runtime_revision': 'r1',
+    manifest = {'success': True, 'platform': platform, 'head': head, 'release_version': '26.10.31', 'runtime_revision': 'r2',
                 'core_commit': pin['core_commit'], 'core_version': pin['module_version'], 'core_sum': pin['module_sum'],
                 'archive': archive.name, 'archive_sha256': digest(archive), 'framework_sha256': files,
                 'architectures': architectures, 'strong_exports': symbols, 'source_sha256': sources,
                 'preparation_receipt_sha256': digest(preparation), 'go_version': report['go_version'],
                 'root_ca_filter_toolchain_minimum': 'go1.27.3', 'h2buf_cap_kib': 128,
                 'routing_capability_expected': 1, 'darwin_interface_binding_capability_expected': 1,
+                'xhttp_listener_cleanup_applied': True,
+                'xhttp_listener_cleanup_patch_sha256': sources[XHTTP_LISTENER_PATCH],
+                'xhttp_listener_cleanup_source_sha256': report['xhttp_listener_cleanup_source_sha256'],
                 'runtime_executed_by_packager': False, 'published': False}
     (destination/'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
     (destination/'SHA256SUMS').write_text(manifest['archive_sha256']+'  '+archive.name+'\n')

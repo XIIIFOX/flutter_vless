@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import package_apple_runtime_release as builder
+from fixtures.xhttp_listener_provenance import bind as bind_xhttp_cleanup
 
 
 class CanonicalPackageTests(unittest.TestCase):
@@ -31,7 +32,7 @@ class CanonicalPackageTests(unittest.TestCase):
                        'darwin_interface_binding_source_applied': True, 'module_cache_source_unchanged': True,
                        'core_copy_unchanged': True, 'routing_capability_expected': 1,
                        'darwin_interface_binding_capability_expected': 1, 'runtime_executed': False,
-                       'published': False, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'],
+                       'published': False, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'],
                        'go_version': 'go1.27.3', 'root_ca_filter_toolchain_minimum': 'go1.27.3',
                        'h2buf_cap_kib': 128, 'core_source': str(self.core), 'replacement': str(self.copied),
                        'module_cache_before_sha256': builder.tree(self.core),
@@ -61,6 +62,7 @@ class CanonicalPackageTests(unittest.TestCase):
                            managed_service_lifetime_capabilities_expected={'xdrive':2,'geodata':1},
                            xdrive_lifetime_patch_sha256=builder.digest(self.root/'third_party/xray-native-dns/xdrive_lifetime_patch.py'),
                            geodata_lifetime_patch_sha256=builder.digest(self.root/'third_party/xray-native-dns/geodata_lifetime_patch.py'))
+        bind_xhttp_cleanup(self.root, self.core, self.copied, self.report, self.report['source_sha256'])
         self.receipt = self.root/'producer.json'
         self.bad_symbol = None
 
@@ -105,7 +107,7 @@ class CanonicalPackageTests(unittest.TestCase):
                 result=self.run_package(platform,self.framework(platform))
                 self.assertFalse(result['published'])
                 self.assertEqual(result['release_version'], '26.10.31')
-                self.assertEqual(result['runtime_revision'], 'r1')
+                self.assertEqual(result['runtime_revision'], 'r2')
                 self.assertEqual(result['go_version'],'go1.27.3')
                 self.assertEqual(len(result['strong_exports']),3 if platform=='ios' else 2)
                 self.assertEqual(result['archive_sha256'],builder.digest(self.root/('packed-'+platform)/'XRay.xcframework.zip'))

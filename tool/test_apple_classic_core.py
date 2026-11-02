@@ -71,6 +71,7 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.managed_helpers = helper.applier().managed_service_helpers()
         self.inputs += [ROOT / 'third_party/xray-native-dns/xdrive_lifetime_patch.py',
                         ROOT / 'third_party/xray-native-dns/geodata_lifetime_patch.py',
+                        ROOT / 'third_party/xray-native-dns/xhttp_listener_lifetime_patch.py',
                         *self.managed_helpers]
         copier = SimpleNamespace(copy_and_apply=self.copy, copy_and_apply_lifetimes=self.copy, lifetime_input_paths=lambda: self.inputs,
                                  managed_service_helpers=lambda: self.managed_helpers,
@@ -155,6 +156,16 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.assertEqual(before, helper.tree(self.destination))
         self.assertEqual(self.edits, [])
 
+    def test_existing_xhttp_hub_without_exact_listener_cleanup_refused(self):
+        self.existing()
+        relative = 'transport/internet/splithttp/hub.go'
+        (self.destination / relative).write_text('original ' + relative)
+        before = helper.tree(self.destination)
+        with self.assertRaisesRegex(ValueError, 'exact lifetime patch'):
+            self.prepare()
+        self.assertEqual(before, helper.tree(self.destination))
+        self.assertEqual(self.edits, [])
+
     def test_new_copy_uses_checked_classic_and_h3_copier(self):
         before = helper.tree(self.source)
         report = self.prepare()
@@ -167,7 +178,7 @@ class AppleClassicPreparationTests(unittest.TestCase):
         self.assertTrue(report['h3_lifetime_applied'])
         self.assertTrue(report['darwin_interface_binding_source_applied'])
         self.assertEqual(report['darwin_interface_binding_capability_expected'],1)
-        self.assertEqual(report['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'])
+        self.assertEqual(report['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'])
         self.assertEqual(report['h3_lifetime_patch_sha256'], helper.digest(ROOT / 'third_party/xray-native-dns/h3_lifetime_patch.py'))
         self.assertTrue(report['xdrive_lifetime_applied'])
         self.assertTrue(report['geodata_lifetime_applied'])

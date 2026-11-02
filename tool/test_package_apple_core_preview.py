@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import package_apple_core_preview as subject
+from fixtures.xhttp_listener_provenance import bind as bind_xhttp_cleanup
 
 
 class AppleSDKPackagingTests(unittest.TestCase):
@@ -51,7 +52,7 @@ class AppleSDKPackagingTests(unittest.TestCase):
                              darwin_interface_binding_tag='flutter_vless_darwin_interface_binding',
                              darwin_interface_binding_patch_sha256=bindings[subject.BINDING_PATCH],
                              published=False, runtime_executed=False, routing_capability_expected=1,
-                             routing_tag='flutter_vless_vpn_routing', lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'],
+                             routing_tag='flutter_vless_vpn_routing', lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'],
                              core=self.pin['module_version'], core_module=self.pin['module'], core_sum=self.pin['module_sum'],
                              core_commit=self.pin['core_commit'], source_sha256=bindings,
                              h3_lifetime_patch_sha256=bindings[subject.H3_PATCH], core_source=str(self.cache),
@@ -60,6 +61,7 @@ class AppleSDKPackagingTests(unittest.TestCase):
         self.producer.update(managed_service_lifetime_capabilities_expected={'xdrive':2,'geodata':1},
                              xdrive_lifetime_patch_sha256=bindings[subject.XDRIVE_PATCH],
                              geodata_lifetime_patch_sha256=bindings[subject.GEODATA_PATCH])
+        bind_xhttp_cleanup(self.root, self.cache, self.core, self.producer, bindings)
         self.summary = dict(platform='ios', core=self.pin['module_version'], preflightABI=1, published=False)
         self.write_receipts()
         self.blobs = {p.relative_to(self.root).as_posix(): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
@@ -155,6 +157,30 @@ class AppleSDKPackagingTests(unittest.TestCase):
         source.write_bytes(original)
         self.blobs['third_party/xray-mobile/runtime.go'] = b'foreign Git source'
         with self.assertRaisesRegex(ValueError, 'Git source'): self.package()
+
+    def test_old_or_foreign_hub_cannot_self_attest_cleanup_with_matching_hashes(self):
+        hub = self.core/subject.XHTTP_HUB
+        original = hub.read_bytes()
+        for data in [(self.cache/subject.XHTTP_HUB).read_bytes(), original+b'\nforeign edit']:
+            with self.subTest(data=data[-40:]):
+                hub.write_bytes(data)
+                self.producer['core_copy_sha256'] = subject.tree(self.core)
+                self.producer['xhttp_listener_cleanup_source_sha256'] = subject.digest(hub)
+                self.write_receipts()
+                with self.assertRaisesRegex(ValueError, 'exact guarded cleanup'):
+                    self.package()
+                self.assertFalse(self.destination.exists())
+        hub.write_bytes(original)
+
+    def test_missing_false_or_unbound_xhttp_cleanup_metadata_is_refused(self):
+        original = copy.deepcopy(self.producer)
+        for field, value in [('xhttp_listener_cleanup_applied', 1),
+                             ('xhttp_listener_cleanup_patch_sha256', '0'*64),
+                             ('xhttp_listener_cleanup_source_sha256', '0'*64)]:
+            self.producer = copy.deepcopy(original); self.producer[field] = value; self.write_receipts()
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'XHTTP listener'):
+                self.package()
+            self.assertFalse(self.destination.exists())
 
     def test_omitted_or_unsafe_producer_input_refused(self):
         del self.producer['source_sha256']['third_party/xray-mobile/runtime.go']; self.write_receipts()

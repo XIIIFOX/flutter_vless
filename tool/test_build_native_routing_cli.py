@@ -115,6 +115,7 @@ class RoutingCLIBuilderTest(unittest.TestCase):
                          'core_commit': '0afec66085a85191e9dd2a4a6646c7c9a94688d1', 'capability': 'native-vpn-routing-source-preview-v1',
                          'upstream_sha256': {name: hashlib.sha256((self.core / name).read_bytes()).hexdigest() for name in ('go.mod', 'fixture.go')}}
         (self.capability / 'pin-manifest.json').write_text(json.dumps(self.manifest))
+        hub = self.core/'transport/internet/splithttp/hub.go'; hub.parent.mkdir(parents=True, exist_ok=True); hub.write_text('synthetic XHTTP listener source')
         self.calls = []
         self.metadata_sum = self.checksum
         self.mutate = None
@@ -200,7 +201,7 @@ class RoutingCLIBuilderTest(unittest.TestCase):
         self.assertEqual(Path(report['artifact']).name, 'xray.exe')
         self.assertTrue(report['classic_dns_lifetime_applied'])
         self.assertIs(report['h3_lifetime_applied'], True)
-        self.assertEqual(report['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'])
+        self.assertEqual(report['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'])
         key = 'third_party/xray-native-dns/h3_lifetime_patch.py'
         self.assertEqual(report['h3_lifetime_patch_sha256'], report['input_sha256'][key])
         self.assertIn('third_party/xray-native-dns/classic_lifetime_patch.py', report['input_sha256'])

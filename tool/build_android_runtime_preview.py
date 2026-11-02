@@ -13,12 +13,14 @@ import test_native_dns_context_runtime as processes
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE_TAG = 'v26.10.31'
-RELEASE_VERSION = '26.10.31-protect1'
+RELEASE_VERSION = '26.10.31-protect2'
 GO_VERSION = 'go1.27.3'
 ABIS = ('arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64')
 RUNTIME = 'android_runtime/xray_android'
 H3 = 'third_party/xray-native-dns/h3_lifetime_patch.py'
 DIALER = 'transport/internet/splithttp/dialer.go'
+XHTTP_LISTENER = 'third_party/xray-native-dns/xhttp_listener_lifetime_patch.py'
+XHTTP_HUB = 'transport/internet/splithttp/hub.go'
 PROJECT_FILES = ('build.gradle.kts', 'settings.gradle.kts', 'src/main/AndroidManifest.xml')
 WRAPPER_INPUTS = ('tool/build_android_runtime_preview.py', 'tool/test_native_dns_context_runtime.py',
                   RUNTIME + '/runtime-inputs.sha256.json', 'example/android/gradlew',
@@ -30,7 +32,7 @@ ORDINARY_FILES = ('packages/flutter_vless_android/android/build_xray.sh',
                   'third_party/xray-vpn-routing/apply.py', 'third_party/xray-vpn-routing/pin-manifest.json',
                   *(('third_party/xray-native-dns/' + name) for name in
                     ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py',
-                     'xdrive_lifetime_patch.py', 'geodata_lifetime_patch.py', 'pin-manifest.json',
+                     'xdrive_lifetime_patch.py', 'geodata_lifetime_patch.py', 'xhttp_listener_lifetime_patch.py', 'pin-manifest.json',
                      'overlay/main/native_services_cli.go', 'overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go',
                      'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go')))
 
@@ -169,9 +171,9 @@ def build(output, head, repository=ROOT, *, release=False):
             raise ValueError('One fresh ordinary Core receipt required')
         receipt = json.loads(receipts[0].read_text())
         if any(receipt.get(k) is not True for k in ('success', 'source_unchanged', 'module_cache_source_unchanged',
-                                                   'copies_unchanged', 'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'xdrive_lifetime_applied', 'geodata_lifetime_applied', 'darwin_interface_binding_source_applied')) \
+                                                   'copies_unchanged', 'classic_dns_lifetime_applied', 'h3_lifetime_applied', 'xdrive_lifetime_applied', 'geodata_lifetime_applied', 'xhttp_listener_cleanup_applied', 'darwin_interface_binding_source_applied')) \
                 or type(receipt.get('routing_capability_expected')) is not int or receipt['routing_capability_expected'] != int(release) \
-                or receipt.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'] \
+                or receipt.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'] \
                 or any(receipt.get(k) is not False for k in ('runtime_executed', 'published')) \
                 or receipt.get('selected_abis') != list(ABIS):
             raise ValueError('Ordinary lifetime build receipt differs')
@@ -201,9 +203,16 @@ def build(output, head, repository=ROOT, *, release=False):
         if set(receipt['source_sha256']) != set(ordinary_names) \
                 or any(inputs[name] != value for name, value in receipt['source_sha256'].items()):
             raise ValueError('Ordinary producer source provenance differs')
+        if receipt.get('xhttp_listener_cleanup_patch_sha256') != inputs[XHTTP_LISTENER] \
+                or receipt.get('xhttp_listener_cleanup_source_sha256') != digest(copied / XHTTP_HUB) \
+                or receipt['core_copy_sha256'].get(XHTTP_HUB) != digest(copied / XHTTP_HUB):
+            raise ValueError('XHTTP listener source provenance differs')
         result.update(core_build_receipt='fresh-jni/' + receipts[0].name,
                       core_build_receipt_sha256=digest(receipts[0]),
-                      copied_h3_sha256=receipt['core_copy_sha256'][DIALER])
+                      copied_h3_sha256=receipt['core_copy_sha256'][DIALER],
+                      xhttp_listener_cleanup_applied=True,
+                      xhttp_listener_cleanup_patch_sha256=inputs[XHTTP_LISTENER],
+                      xhttp_listener_cleanup_source_sha256=receipt['xhttp_listener_cleanup_source_sha256'])
         staged_before, fresh_before = tree(project / 'src/main'), tree(output / 'fresh-jni')
         result['staged_runtime_sha256'] = staged_before
         checked('isolated-aar-build', [str(repository / 'example/android/gradlew'), '-p', str(project), '--no-daemon',
@@ -244,7 +253,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--head', required=True)
-    parser.add_argument('--release', action='store_true', help='Signed final 26.10.31-protect1 candidate; never publish')
+    parser.add_argument('--release', action='store_true', help='Signed final 26.10.31-protect2 candidate; never publish')
     args = parser.parse_args()
     try:
         build(args.output, args.head, release=args.release)

@@ -9,10 +9,10 @@ import sys
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from package_apple_core_preview import digest, git_bindings
+from package_apple_core_preview import digest, git_bindings, require_xhttp_listener_cleanup
 
 ROOT = Path(__file__).resolve().parents[2]
-REVISION = '26.10.31-r1'
+REVISION = '26.10.31-r2'
 CORE_COMMIT = 'a4a3dff5b20c2faae567b742c172c7b95e75c083'
 
 
@@ -39,16 +39,21 @@ def package(directory, producer_path, destination, head, repository=ROOT):
         raise ValueError('Managed release Core commit differs')
     producer_digest = digest(producer_path)
     required = ('success', 'source_snapshot_unchanged', 'module_cache_source_unchanged',
-                'core_copy_unchanged', 'mobile_copy_unchanged', 'xdrive_lifetime_applied', 'geodata_lifetime_applied')
+                'core_copy_unchanged', 'mobile_copy_unchanged', 'xdrive_lifetime_applied', 'geodata_lifetime_applied',
+                'xhttp_listener_cleanup_applied')
     if any(producer.get(k) is not True for k in required) \
             or producer.get('tags') != 'flutter_vless_vpn_routing_cli,flutter_vless_vpn_routing,flutter_vless_managed_service_lifetimes' \
-            or producer.get('goos') != 'windows' or producer.get('goarch') != 'amd64':
+            or producer.get('goos') != 'windows' or producer.get('goarch') != 'amd64' \
+            or producer.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup']:
         raise ValueError('Incomplete managed Windows producer')
     sources = dict(producer['input_sha256'])
     for name in ('tool/windows/package_managed_runtime.py', 'tool/windows/test_package_managed_runtime.py',
+                 'tool/package_apple_core_preview.py',
                  '.github/workflows/windows-runtime.yml', 'tool/fixtures/xdrive-v26.10.29/LICENSE'):
         sources[name] = digest(repository/name)
     git_bindings(repository, head, sources)
+    require_xhttp_listener_cleanup(producer, sources, Path(producer['core_source']),
+                                   Path(producer['core_replacement']), repository)
     executable = directory/'xray.exe'
     if executable.is_symlink() or digest(executable) != producer.get('artifact_sha256'):
         raise ValueError('Selected Windows executable differs from its producer')
@@ -87,11 +92,17 @@ def package(directory, producer_path, destination, head, repository=ROOT):
     if digest(producer_path) != producer_digest:
         raise ValueError('Windows producer changed during packaging')
     git_bindings(repository, head, sources)
+    require_xhttp_listener_cleanup(producer, sources, Path(producer['core_source']),
+                                   Path(producer['core_replacement']), repository)
     manifest = dict(success=True, head=head, platform='windows-amd64', runtime_revision=REVISION,
                     core='26.10.31', core_commit=producer['core_commit'], producer_sha256=digest(producer_path),
                     acceptance_sha256=digest(directory/'proxy-results.json'),
                     capabilities=actual_capabilities, source_sha256=sources,
                     archive=archive.name, archive_sha256=digest(archive), files_sha256=hashes,
+                    lifetime_patch_scope=producer['lifetime_patch_scope'],
+                    xhttp_listener_cleanup_applied=True,
+                    xhttp_listener_cleanup_patch_sha256=producer['xhttp_listener_cleanup_patch_sha256'],
+                    xhttp_listener_cleanup_source_sha256=producer['xhttp_listener_cleanup_source_sha256'],
                     published=False)
     (destination/'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
     (destination/'SHA256SUMS').write_text(digest(archive)+'  '+archive.name+'\n')

@@ -5,6 +5,7 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+from fixtures.xhttp_listener_provenance import bind as bind_xhttp_cleanup
 from unittest import mock
 
 import verify_android_dns_preview as verifier
@@ -25,17 +26,28 @@ class PreviewVerificationTests(unittest.TestCase):
         struct.pack_into('<I', image, 64, 1)
         struct.pack_into('<Q', image, 64+48, 16384)
         self.binary.write_bytes(image)
+        hub = self.root/'Core/transport/internet/splithttp/hub.go'
+        hub.parent.mkdir(parents=True); hub.write_text('synthetic prepared XHTTP listener')
+        hub_hash = hashlib.sha256(hub.read_bytes()).hexdigest()
         pin = json.loads((verifier.builder.CAPABILITY / 'pin-manifest.json').read_text())
         self.metadata = {'success': True, 'source_snapshot_unchanged': True, 'module_cache_targeted_sources_unchanged': True,
                          'published': False, 'production_enabled': False, 'host_qualified': False,
                          'runtime_executed': False, 'classic_dns_lifetime_applied': True, 'h3_lifetime_applied': True,
-                         'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'], 'h3_lifetime_patch_sha256': 'a'*64,
+                         'xhttp_listener_cleanup_applied': True, 'xhttp_listener_cleanup_source_unchanged': True,
+                         'xhttp_listener_cleanup_patch_sha256': 'c'*64, 'xhttp_listener_cleanup_source_sha256': hub_hash,
+                         'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'], 'h3_lifetime_patch_sha256': 'a'*64,
                          'core_commit': pin['core_commit'], 'capability': 'native-instance-preview-1',
                          'arch': 'x86_64', 'artifact': str(self.binary), 'artifact_sha256': hashlib.sha256(image).hexdigest(),
-                         'input_sha256': {'source': 'verified', 'third_party/xray-native-dns/h3_lifetime_patch.py': 'a'*64}}
+                         'input_sha256': {'source': 'verified', 'third_party/xray-native-dns/h3_lifetime_patch.py': 'a'*64,
+                                          'third_party/xray-native-dns/xhttp_listener_lifetime_patch.py': 'c'*64}}
         patch = mock.patch.object(verifier.builder, 'input_hashes', return_value=self.metadata['input_sha256'])
         patch.start()
         self.addCleanup(patch.stop)
+        self.cache = self.root/'cache/Core'
+        self.metadata['core_source'] = str(self.cache)
+        bind_xhttp_cleanup(self.root, self.cache, self.root/'Core', self.metadata, self.metadata['input_sha256'])
+        patch = mock.patch.object(verifier.builder, 'ROOT', self.root)
+        patch.start(); self.addCleanup(patch.stop)
 
     def check(self, metadata=None):
         (self.root / 'result.json').write_text(json.dumps(self.metadata if metadata is None else metadata))
@@ -46,6 +58,14 @@ class PreviewVerificationTests(unittest.TestCase):
         self.assertEqual(result['artifact_sha256'], self.metadata['artifact_sha256'])
         self.assertEqual(result['load_alignments'], [16384])
         self.assertFalse(result['host_qualified'])
+
+    def test_forged_applied_old_hub_with_matching_hashes_is_refused(self):
+        relative = 'transport/internet/splithttp/hub.go'
+        (self.root/'Core'/relative).write_bytes((self.cache/relative).read_bytes())
+        forged = dict(self.metadata)
+        forged['xhttp_listener_cleanup_source_sha256'] = hashlib.sha256((self.root/'Core'/relative).read_bytes()).hexdigest()
+        with self.assertRaisesRegex(ValueError, 'exact guarded cleanup'):
+            self.check(forged)
 
     def test_incomplete_stale_or_published_build_is_refused(self):
         changes = [('success', False), ('source_snapshot_unchanged', False), ('module_cache_targeted_sources_unchanged', False),

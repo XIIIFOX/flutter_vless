@@ -61,10 +61,22 @@ def verify(directory):
         raise ValueError('Preview capability/Core pin mismatch')
     if metadata.get('input_sha256') != builder.input_hashes():
         raise ValueError('Preview source snapshot differs from this checkout')
-    if any(metadata.get(key) is not True for key in ('classic_dns_lifetime_applied', 'h3_lifetime_applied')) \
-            or metadata.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'] \
+    if any(metadata.get(key) is not True for key in ('classic_dns_lifetime_applied', 'h3_lifetime_applied',
+                                                   'xhttp_listener_cleanup_applied', 'xhttp_listener_cleanup_source_unchanged')) \
+            or metadata.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'] \
             or metadata.get('h3_lifetime_patch_sha256') != metadata['input_sha256'].get('third_party/xray-native-dns/h3_lifetime_patch.py'):
         raise ValueError('Preview lifetime patch evidence differs')
+    if metadata.get('xhttp_listener_cleanup_patch_sha256') != metadata['input_sha256'].get('third_party/xray-native-dns/xhttp_listener_lifetime_patch.py') \
+            or metadata.get('xhttp_listener_cleanup_source_sha256') != builder.copied_xhttp_listener_hash(directory/'Core'):
+        raise ValueError('Preview XHTTP listener source provenance differs')
+    # The scope has a targeted source receipt, rather than a whole-Core copy
+    # map. Adapt its freshly observed Hub bytes to the shared exact-transition
+    # guard; self-consistent metadata alone cannot qualify an unpatched Hub.
+    from package_apple_core_preview import require_xhttp_listener_cleanup, digest, XHTTP_HUB
+    cache = Path(metadata['core_source'])
+    proof = dict(metadata, module_cache_before_sha256={XHTTP_HUB: digest(cache/XHTTP_HUB)},
+                 core_copy_sha256={XHTTP_HUB: builder.copied_xhttp_listener_hash(directory/'Core')})
+    require_xhttp_listener_cleanup(proof, metadata['input_sha256'], cache, directory/'Core', builder.ROOT)
     arch = metadata.get('arch')
     if arch not in builder.TARGETS:
         raise ValueError('Preview ABI is unsupported')

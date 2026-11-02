@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare Classic DNS and XHTTP H3 lifetime fixes in a copied Apple build module."""
+"""Prepare shared DNS/transport lifetime fixes in a copied Apple build module."""
 from __future__ import annotations
 
 import argparse
@@ -14,12 +14,12 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = ('app/dns/dns.go', 'app/dns/nameserver_udp.go', 'transport/internet/udp/dispatcher.go',
-            'transport/internet/splithttp/dialer.go', 'transport/internet/sockopt_darwin.go',
+            'transport/internet/splithttp/dialer.go', 'transport/internet/splithttp/hub.go', 'transport/internet/sockopt_darwin.go',
             'core/xray.go', 'transport/internet/xdrive/xdrive.go', 'transport/internet/xdrive/client.go',
             'transport/internet/xdrive/drive.go', 'transport/internet/xdrive/s3.go',
             'transport/internet/xdrive/storage.go', 'app/geodata/geodata.go', 'app/geodata/download.go')
 HELPERS = ('native_classic_lifetime.go', 'native_classic_lifetime_test.go')
-LIFETIME_SCOPE = ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater']
+LIFETIME_SCOPE = ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup']
 
 
 def digest(path):
@@ -93,7 +93,7 @@ def reference_hashes(source, parent, routing=False):
         h3.apply(reference, replace)
         binding = load(ROOT / 'third_party/xray-native-dns/darwin_interface_bind_patch.py', 'ordinary_darwin_binding_reference')
         binding.apply(reference, replace)
-        for name in ('xdrive_lifetime_patch', 'geodata_lifetime_patch'):
+        for name in ('xdrive_lifetime_patch', 'geodata_lifetime_patch', 'xhttp_listener_lifetime_patch'):
             load(ROOT / 'third_party/xray-native-dns' / (name + '.py'), 'ordinary_' + name).apply(reference, replace)
         return {relative: digest(reference / relative) for relative in UPSTREAM}
 
@@ -165,7 +165,7 @@ def prepare(mobile, destination, go, *, routing=False):
     if tree(source) != before or tree(effective) != existing or any(digest(ROOT / name) != value for name, value in input_hashes.items()):
         raise ValueError('Core source or patch inputs changed')
     report = {'success': False, 'stage': 'pre-build-preparation', 'mode': mode, 'module': module, 'version': version, 'sum': checksum,
-              'scope': 'Classic DNS/XHTTP H3/XDRIVE/GeoDAT lifetime and mandatory Darwin interface binding; no full native-DNS context overlay',
+              'scope': 'Classic DNS/XHTTP H3/XDRIVE/GeoDAT lifetime, XHTTP H2 failed-listener cleanup and mandatory Darwin interface binding; no full native-DNS context overlay',
               'routing_capability_expected': 1 if routing else 0,
               'core_commit': pin.get('core_commit'), 'core_source': str(source),
               'module_cache_before_sha256': before,
@@ -178,6 +178,9 @@ def prepare(mobile, destination, go, *, routing=False):
               'managed_service_lifetime_capabilities_expected': {'xdrive': 2, 'geodata': 1},
               'xdrive_lifetime_patch_sha256': digest(ROOT / 'third_party/xray-native-dns/xdrive_lifetime_patch.py'),
               'geodata_lifetime_patch_sha256': digest(ROOT / 'third_party/xray-native-dns/geodata_lifetime_patch.py'),
+              'xhttp_listener_cleanup_applied': True,
+              'xhttp_listener_cleanup_patch_sha256': digest(ROOT / 'third_party/xray-native-dns/xhttp_listener_lifetime_patch.py'),
+              'xhttp_listener_cleanup_source_sha256': existing['transport/internet/splithttp/hub.go'],
               'replacement': str(effective), 'source_sha256': input_hashes,
               'upstream_cache_unchanged': True, 'replacement_unchanged_after_prepare': True,
               'core_copy_sha256': existing, 'runtime_executed': False}

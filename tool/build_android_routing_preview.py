@@ -2,11 +2,13 @@
 """Package the existing opt-in Android CLI build for instrumentation only."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 
 import build_android_dns_preview as common
+from package_apple_core_preview import require_xhttp_listener_cleanup
 
 ROOT = Path(__file__).resolve().parents[1]
 CAPABILITY = ROOT / 'third_party/xray-vpn-routing'
@@ -31,7 +33,10 @@ def source_hashes():
     paths += sorted(MOBILE.glob('*.go')) + sorted((MOBILE/'nativecli').rglob('*.go')) + sorted((CAPABILITY/'overlay').rglob('*.go'))
     paths += sorted(PROTECT.glob('*.py')) + sorted(PROTECT.glob('*.go'))
     classic = ROOT/'third_party/xray-native-dns'
-    paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+    paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xhttp_listener_lifetime_patch.py','pin-manifest.json','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
+    spec = importlib.util.spec_from_file_location('android_routing_managed_inputs', CAPABILITY/'apply.py')
+    applier = importlib.util.module_from_spec(spec); spec.loader.exec_module(applier)
+    paths += applier.managed_service_input_paths()
     if MOBILE.is_symlink() or (MOBILE/'nativecli').is_symlink() or any(path.is_symlink() for path in paths) or any(
             path.is_symlink() for base in (MOBILE/'nativecli', CAPABILITY/'overlay') for path in base.rglob('*')):
         raise ValueError('Routing source symlinks are unsupported')
@@ -44,13 +49,15 @@ def validate_receipt(receipt, arch, raw):
                 'core_commit': manifest['core_commit'], 'overlay_capability': manifest['capability'], 'routing_tags': TAGS,
                 'selected_abis': [arch], 'protection_overlay': 'ordinary H/P/D', 'routing_capability_expected': 1,
                 'classic_dns_lifetime_applied': True,
-                'h3_lifetime_applied': True, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'],
+                'h3_lifetime_applied': True, 'lifetime_patch_scope': ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'],
                 'h3_lifetime_patch_sha256': source_hashes()['third_party/xray-native-dns/h3_lifetime_patch.py'],
+                'xhttp_listener_cleanup_applied': True,
+                'xhttp_listener_cleanup_patch_sha256': source_hashes()['third_party/xray-native-dns/xhttp_listener_lifetime_patch.py'],
                 'darwin_interface_binding_source_applied': True,
                 'darwin_interface_binding_patch_sha256': source_hashes()['third_party/xray-native-dns/darwin_interface_bind_patch.py'],
                 }
     if any(receipt.get(k) != v for k, v in expected.items()) or receipt.get('routing_capability_expected') is True \
-            or any(receipt.get(k) is not True for k in ('classic_dns_lifetime_applied', 'h3_lifetime_applied', 'darwin_interface_binding_source_applied')):
+            or any(receipt.get(k) is not True for k in ('classic_dns_lifetime_applied', 'h3_lifetime_applied', 'xhttp_listener_cleanup_applied', 'darwin_interface_binding_source_applied')):
         raise ValueError('Routing build pin, protection or fixed tag evidence differs')
     if any(receipt.get(k) is not False for k in ('runtime_executed','published')):
         raise ValueError('Routing build must remain unpublished and unexecuted')
@@ -58,6 +65,13 @@ def validate_receipt(receipt, arch, raw):
         raise ValueError('Routing build evidence is incomplete')
     if receipt.get('source_sha256') != source_hashes() or Path(receipt.get('output_directory','')).absolute() != raw.absolute():
         raise ValueError('Routing build source snapshot or output differs')
+    hub = Path(receipt.get('core_replacement', ''))/'transport/internet/splithttp/hub.go'
+    if hub.is_symlink() or not hub.is_file() \
+            or digest(hub) != receipt.get('xhttp_listener_cleanup_source_sha256') \
+            or receipt.get('core_copy_sha256', {}).get('transport/internet/splithttp/hub.go') != digest(hub):
+        raise ValueError('Routing XHTTP listener source provenance differs')
+    require_xhttp_listener_cleanup(receipt, receipt['source_sha256'],
+                                   Path(receipt['core_source']), Path(receipt['core_replacement']), ROOT)
     artifacts = receipt.get('artifacts_sha256')
     if not isinstance(artifacts, dict) or set(artifacts) != {arch+'/libxray.so'}:
         raise ValueError('Routing build ABI artifact set differs')

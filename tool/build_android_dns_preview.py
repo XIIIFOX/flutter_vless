@@ -60,6 +60,14 @@ def copied_h3_hash(core):
     return hashlib.sha256(paths[-1].read_bytes()).hexdigest()
 
 
+def copied_xhttp_listener_hash(core):
+    parts = Path('transport/internet/splithttp/hub.go').parts
+    paths = [core.joinpath(*parts[:index]) for index in range(len(parts) + 1)]
+    if any(path.is_symlink() for path in paths) or not paths[-1].is_file():
+        raise ValueError('Copied XHTTP listener source must remain a real file')
+    return hashlib.sha256(paths[-1].read_bytes()).hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path, help='new disposable directory')
@@ -98,9 +106,11 @@ def main():
     report = {'published': False, 'production_enabled': False, 'host_qualified': False,
               'runtime_executed': False,
               'capability': 'native-instance-preview-1', 'core_commit': manifest['core_commit'],
+              'core_source': str(source),
               'arch': args.arch, 'module_sum': metadata['Sum'], 'go_binary': go, 'success': False,
               'input_sha256': initial_hashes}
     copied_h3_before = None
+    copied_listener_before = None
 
     def copied_h3_unchanged():
         try:
@@ -108,14 +118,24 @@ def main():
         except (OSError, ValueError):
             return False
 
+    def copied_listener_unchanged():
+        try:
+            return copied_xhttp_listener_hash(work) == copied_listener_before
+        except (OSError, ValueError):
+            return False
+
     try:
         copier.copy_and_apply(source, work, go=go)
         copied_h3_before = copied_h3_hash(work)
+        copied_listener_before = copied_xhttp_listener_hash(work)
         report['copied_h3_sha256'] = copied_h3_before
         report.update(classic_dns_lifetime_applied=True, h3_lifetime_applied=True,
-                      lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater'],
+                      lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'],
                       h3_lifetime_patch_sha256=initial_hashes['third_party/xray-native-dns/h3_lifetime_patch.py'],
                       darwin_interface_binding_source_applied=True,
+                      xhttp_listener_cleanup_applied=True,
+                      xhttp_listener_cleanup_patch_sha256=initial_hashes['third_party/xray-native-dns/xhttp_listener_lifetime_patch.py'],
+                      xhttp_listener_cleanup_source_sha256=copied_listener_before,
                       darwin_interface_binding_patch_sha256=initial_hashes['third_party/xray-native-dns/darwin_interface_bind_patch.py'])
         owned([os.sys.executable, str(PROTECTION / 'apply.py'), str(work)], cwd=ROOT,
               environment=environment, seconds=30)
@@ -129,6 +149,9 @@ def main():
         report['copied_h3_source_unchanged'] = copied_h3_unchanged()
         if not report['copied_h3_source_unchanged']:
             raise RuntimeError('Copied H3 source changed during build')
+        report['xhttp_listener_cleanup_source_unchanged'] = copied_listener_unchanged()
+        if not report['xhttp_listener_cleanup_source_unchanged']:
+            raise RuntimeError('Copied XHTTP listener source changed during build')
         report['artifact'] = str(artifact)
         report['artifact_sha256'] = hashlib.sha256(artifact.read_bytes()).hexdigest()
         report['source_snapshot_unchanged'] = input_hashes() == report['input_sha256']
@@ -158,6 +181,10 @@ def main():
         report['error_type'] = type(error).__name__
         raise
     finally:
+        if copied_listener_before is not None:
+            report['xhttp_listener_cleanup_source_unchanged'] = copied_listener_unchanged()
+            if not report['xhttp_listener_cleanup_source_unchanged']:
+                report['success'] = False
         if copied_h3_before is not None:
             report['copied_h3_source_unchanged'] = copied_h3_unchanged()
             if not report['copied_h3_source_unchanged']:
@@ -172,6 +199,8 @@ def main():
         raise RuntimeError('Original pinned sources changed')
     if report.get('copied_h3_source_unchanged') is not True:
         raise RuntimeError('Copied H3 source changed during build')
+    if report.get('xhttp_listener_cleanup_source_unchanged') is not True:
+        raise RuntimeError('Copied XHTTP listener source changed during build')
     return 0
 
 

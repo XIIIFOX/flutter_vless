@@ -244,7 +244,7 @@ func TestCore31HTTPContinueUpload(t *testing.T) {
 			if first.StatusCode != 100 {
 				t.Fatal("short interim 100 was not forwarded before upload", first.StatusCode)
 			}
-			// No upload byte is sent until the actual 23-byte interim response
+			// No upload byte is sent until the actual 25-byte interim response
 			// crosses the Core inbound. The old Peek(56) would deadlock here.
 			if _, err := client.Write(payload); err != nil {
 				t.Fatal(err)

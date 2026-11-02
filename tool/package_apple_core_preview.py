@@ -3,6 +3,7 @@
 import argparse
 import gzip
 import hashlib
+import importlib.util
 import json
 from pathlib import Path, PurePosixPath
 import plistlib
@@ -20,10 +21,12 @@ H3_PATCH = 'third_party/xray-native-dns/h3_lifetime_patch.py'
 BINDING_PATCH = 'third_party/xray-native-dns/darwin_interface_bind_patch.py'
 XDRIVE_PATCH = 'third_party/xray-native-dns/xdrive_lifetime_patch.py'
 GEODATA_PATCH = 'third_party/xray-native-dns/geodata_lifetime_patch.py'
+XHTTP_LISTENER_PATCH = 'third_party/xray-native-dns/xhttp_listener_lifetime_patch.py'
+XHTTP_HUB = 'transport/internet/splithttp/hub.go'
 PRODUCER_INPUTS = ('tool/build_apple_core_preview.sh', 'third_party/xray-mobile/go.mod',
                    'third_party/xray-mobile/go.sum', 'third_party/xray-vpn-routing/apply.py',
                    'third_party/xray-vpn-routing/pin-manifest.json',
-                   'third_party/xray-native-dns/classic_lifetime_patch.py', H3_PATCH, BINDING_PATCH, XDRIVE_PATCH, GEODATA_PATCH,
+                   'third_party/xray-native-dns/classic_lifetime_patch.py', H3_PATCH, BINDING_PATCH, XDRIVE_PATCH, GEODATA_PATCH, XHTTP_LISTENER_PATCH,
                    'third_party/xray-native-dns/pin-manifest.json',
                    'third_party/xray-native-dns/overlay/main/native_services_cli.go',
                    'third_party/xray-native-dns/overlay/transport/internet/xdrive/native_lifetime.go',
@@ -50,6 +53,31 @@ def require_managed_lifetimes(report, sources):
         if report.get(label+'_lifetime_applied') is not True or path not in sources \
                 or report.get(label+'_lifetime_patch_sha256') != sources[path]:
             raise ValueError('Managed-service patch input is not bound: '+label)
+
+
+def require_xhttp_listener_cleanup(report, sources, cache, copied, repository=ROOT):
+    """Bind metadata to the exact guarded upstream->prepared hub transition."""
+    patch_path = Path(repository) / XHTTP_LISTENER_PATCH
+    if report.get('xhttp_listener_cleanup_applied') is not True or XHTTP_LISTENER_PATCH not in sources \
+            or report.get('xhttp_listener_cleanup_patch_sha256') != sources[XHTTP_LISTENER_PATCH] \
+            or patch_path.is_symlink() or digest(patch_path) != sources[XHTTP_LISTENER_PATCH]:
+        raise ValueError('XHTTP listener cleanup patch input is not bound')
+    source, prepared = Path(cache) / XHTTP_HUB, Path(copied) / XHTTP_HUB
+    if source.is_symlink() or prepared.is_symlink() or not source.is_file() or not prepared.is_file():
+        raise ValueError('XHTTP listener source must remain a real file')
+    spec = importlib.util.spec_from_file_location('packaged_xhttp_listener_guard', patch_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    upstream = report.get('module_cache_before_sha256', report.get('module_source_sha256', {}))
+    original = source.read_text(encoding='utf-8')
+    if digest(source) != module.UPSTREAM_SHA256[XHTTP_HUB] or upstream.get(XHTTP_HUB) != digest(source) \
+            or original.count(module.BEFORE) != 1 \
+            or prepared.read_text(encoding='utf-8') != original.replace(module.BEFORE, module.AFTER):
+        raise ValueError('XHTTP listener source differs from the exact guarded cleanup')
+    actual = digest(prepared)
+    if report.get('xhttp_listener_cleanup_source_sha256') != actual \
+            or report.get('core_copy_sha256', {}).get(XHTTP_HUB) != actual:
+        raise ValueError('XHTTP listener prepared-source hash is not bound')
 
 
 def safe_name(name):
@@ -135,7 +163,7 @@ def package(preview, destination, head, repository=ROOT):
             or type(producer.get('darwin_interface_binding_capability_expected')) is not int \
             or producer.get('darwin_interface_binding_capability_expected') != 1 \
             or producer.get('darwin_interface_binding_tag') != 'flutter_vless_darwin_interface_binding' \
-            or producer.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater']:
+            or producer.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup']:
         raise ValueError('Producer scope differs')
     for field, key in (('core', 'module_version'), ('core_module', 'module'),
                        ('core_sum', 'module_sum'), ('core_commit', 'core_commit')):
@@ -168,6 +196,8 @@ def package(preview, destination, head, repository=ROOT):
     for path, field in copies:
         if tree(path) != producer.get(field):
             raise ValueError('Producer source/copy changed: ' + field)
+    require_xhttp_listener_cleanup(producer, sources, Path(producer['core_source']),
+                                   Path(producer['core_replacement']), repository)
     for protected in [preview, *[path for path, _ in copies]]:
         if destination.resolve() == protected.resolve() or protected.resolve() in destination.resolve().parents:
             raise ValueError('Package output overlaps build inputs')
@@ -233,6 +263,9 @@ def package(preview, destination, head, repository=ROOT):
                 'core_commit': pin['core_commit'], 'core_module': pin['module'],
                 'core_version': pin['module_version'], 'core_sum': pin['module_sum'],
                 'h3_lifetime_patch_sha256': sources[H3_PATCH], 'routing_capability_expected': 1, 'darwin_interface_binding_capability_expected': 1,
+                'xhttp_listener_cleanup_applied': True,
+                'xhttp_listener_cleanup_patch_sha256': sources[XHTTP_LISTENER_PATCH],
+                'xhttp_listener_cleanup_source_sha256': producer['xhttp_listener_cleanup_source_sha256'],
                 'darwin_interface_binding_patch_sha256': sources[BINDING_PATCH],
                 'runtime_executed': False, 'installed': False, 'published': False}
     (destination/'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')

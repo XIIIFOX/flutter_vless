@@ -13,6 +13,7 @@ import zipfile
 
 import build_android_routing_preview as builder
 import verify_android_routing_preview as verifier
+from fixtures.xhttp_listener_provenance import bind as bind_xhttp_cleanup
 
 
 class RoutingPreviewTests(unittest.TestCase):
@@ -22,7 +23,11 @@ class RoutingPreviewTests(unittest.TestCase):
         self.cache = self.root/'cache'; self.cache.mkdir(); self.calls = []
         self.h3_key = 'third_party/xray-native-dns/h3_lifetime_patch.py'
         self.binding_key = 'third_party/xray-native-dns/darwin_interface_bind_patch.py'
-        self.inputs = {'fixed-input':'snapshot', self.h3_key:'a'*64, self.binding_key:'c'*64}
+        self.listener_key = 'third_party/xray-native-dns/xhttp_listener_lifetime_patch.py'
+        self.inputs = {'fixed-input':'snapshot', self.h3_key:'a'*64, self.binding_key:'c'*64, self.listener_key:'e'*64}
+        self.core = self.root/'Core'; hub = self.core/'transport/internet/splithttp/hub.go'
+        hub.parent.mkdir(parents=True); hub.write_text('synthetic prepared XHTTP hub')
+        self.hub_hash = builder.digest(hub)
         patch = mock.patch.object(builder,'source_hashes',return_value=self.inputs); patch.start(); self.addCleanup(patch.stop)
         image = bytearray(256); image[:6] = b'\x7fELF\x02\x01'
         struct.pack_into('<HH',image,16,3,62); struct.pack_into('<QQ',image,24,0x1000,64)
@@ -33,10 +38,16 @@ class RoutingPreviewTests(unittest.TestCase):
             'overlay_capability':pin['capability'],'routing_tags':builder.TAGS,'selected_abis':['x86_64'],'protection_overlay':'ordinary H/P/D',
             'routing_capability_expected':1,'runtime_executed':False,'published':False,'success':True,'source_unchanged':True,
             'classic_dns_lifetime_applied':True,
-            'h3_lifetime_applied':True,'lifetime_patch_scope':['classic_dns','xhttp_h3_dial','xdrive_services','geodata_updater'],'h3_lifetime_patch_sha256':'a'*64,
+            'h3_lifetime_applied':True,'lifetime_patch_scope':['classic_dns','xhttp_h3_dial','xdrive_services','geodata_updater','xhttp_h2_listener_cleanup'],'h3_lifetime_patch_sha256':'a'*64,
             'darwin_interface_binding_source_applied':True,'darwin_interface_binding_patch_sha256':self.inputs[self.binding_key],
+            'xhttp_listener_cleanup_applied':True,'xhttp_listener_cleanup_patch_sha256':self.inputs[self.listener_key],
+            'xhttp_listener_cleanup_source_sha256':self.hub_hash,'core_replacement':str(self.core),
+            'core_copy_sha256':{'transport/internet/splithttp/hub.go':self.hub_hash},
             'module_cache_source_unchanged':True,'copies_unchanged':True,'source_sha256':self.inputs,
             'output_directory':str(self.output/'raw'),'artifacts_sha256':{'x86_64/libxray.so':hashlib.sha256(self.image).hexdigest()}}
+        self.receipt['core_source'] = str(self.cache)
+        bind_xhttp_cleanup(self.root, self.cache, self.core, self.receipt, self.inputs)
+        patch = mock.patch.object(builder, 'ROOT', self.root); patch.start(); self.addCleanup(patch.stop)
         def owned(command,**options):
             self.calls.append((command,options))
             if command[:2] == ['go','env']: return str(self.cache)
@@ -80,6 +91,17 @@ class RoutingPreviewTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'source snapshot'):builder.validate_receipt(receipt,'x86_64',self.output/'raw')
         self.assertEqual(self.calls,[]);self.assertFalse(self.output.exists())
 
+    def test_forged_applied_old_hub_with_matching_hashes_is_refused(self):
+        relative = 'transport/internet/splithttp/hub.go'
+        (self.core/relative).write_bytes((self.cache/relative).read_bytes())
+        forged = copy.deepcopy(self.receipt)
+        digest = builder.digest(self.core/relative)
+        forged['xhttp_listener_cleanup_source_sha256'] = digest
+        forged['core_copy_sha256'][relative] = digest
+        with self.assertRaisesRegex(ValueError, 'exact guarded cleanup'):
+            builder.validate_receipt(forged, 'x86_64', self.output/'raw')
+        self.assertFalse(self.output.exists())
+
     def test_source_and_cache_destination_refused_before_writes(self):
         for target in [builder.MOBILE/'uncreated-routing-test',self.cache/'new']:
             with self.subTest(target=target),self.assertRaises(SystemExit):
@@ -107,7 +129,7 @@ class RoutingPreviewTests(unittest.TestCase):
         with self.assertRaises(ValueError):verifier.verify(self.output)
 
     def test_harness_help_and_missing_flag_are_inert(self):
-        script = builder.ROOT/'tool/test_android_security_emulator.sh'
+        script = Path(__file__).resolve().parents[1]/'tool/test_android_security_emulator.sh'
         result = subprocess.run(['bash',str(script),'--help'],capture_output=True,text=True,timeout=5)
         self.assertEqual(result.returncode,0); self.assertIn('--native-routing-preview',result.stdout)
         result = subprocess.run(['bash',str(script),'--native-routing-preview'],capture_output=True,text=True,timeout=5)

@@ -8,6 +8,7 @@ from unittest.mock import patch
 import zipfile
 
 import package_managed_runtime as subject
+from fixtures.xhttp_listener_provenance import bind as bind_xhttp_cleanup
 
 
 class Packaging(unittest.TestCase):
@@ -27,7 +28,7 @@ class Packaging(unittest.TestCase):
         rows += [dict(check='owned traffic counter sample', passed=True)]*2
         self.rows = self.runtime/'proxy-results.json'; self.rows.write_text(json.dumps(rows))
         for name in ('tool/windows/package_managed_runtime.py', 'tool/windows/test_package_managed_runtime.py',
-                     '.github/workflows/windows-runtime.yml', 'tool/fixtures/xdrive-v26.10.29/LICENSE'):
+                     '.github/workflows/windows-runtime.yml', 'tool/fixtures/xdrive-v26.10.29/LICENSE', 'tool/package_apple_core_preview.py'):
             path = self.root/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_text('source fixture')
         self.report = dict(success=True, source_snapshot_unchanged=True, module_cache_source_unchanged=True,
                            core_copy_unchanged=True, mobile_copy_unchanged=True, xdrive_lifetime_applied=True,
@@ -35,6 +36,11 @@ class Packaging(unittest.TestCase):
                            goos='windows', goarch='amd64', artifact_sha256=subject.digest(self.runtime/'xray.exe'),
                            core_commit='a4a3dff5b20c2faae567b742c172c7b95e75c083',
                            input_sha256={'fixture.py':'a'*64})
+        self.cache, self.copied = self.root/'cache/Core', self.root/'copied/Core'
+        bind_xhttp_cleanup(self.root, self.cache, self.copied, self.report,
+                           self.report['input_sha256'], upstream_key='module_source_sha256')
+        self.report.update(core_source=str(self.cache), core_replacement=str(self.copied),
+                           lifetime_patch_scope=['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'])
         self.producer = self.root/'producer.json'
         self.producer.write_text(json.dumps(self.report))
         self.capability = {'stage':'capabilities','code':0,'managed_service_lifetimes':7}
@@ -50,7 +56,7 @@ class Packaging(unittest.TestCase):
     def test_exact_core_and_full_geodata_archive(self):
         value = self.package()
         self.assertTrue(value['success']); self.assertFalse(value['published'])
-        self.assertEqual(value['runtime_revision'], '26.10.31-r1')
+        self.assertEqual(value['runtime_revision'], '26.10.31-r2')
         self.assertEqual(value['core'], '26.10.31')
         self.assertEqual(value['core_commit'], self.report['core_commit'])
         with zipfile.ZipFile(self.output/value['archive']) as packed:

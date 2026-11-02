@@ -1,0 +1,25 @@
+{
+  "log": {"loglevel": "warning"},
+  "inbounds": [
+    {"tag": "socks-in", "listen": "127.0.0.1", "port": 10808, "protocol": "socks", "settings": {"auth": "noauth", "udp": true}}
+  ],
+  "outbounds": [
+    {
+      "tag": "proxy",
+      "protocol": "vless",
+      "settings": {"vnext": [{"address": "127.0.0.1", "port": 18081, "users": [{"id": "00000000-0000-4000-8000-000000000031", "encryption": "none"}]}]},
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "core31-xhttp.invalid",
+          "alpn": ["h2"],
+          "disableSystemRoot": true,
+          "certificates": [{"certificateFile": "core31-local-cert.pem", "usage": "verify"}]
+        },
+        "xhttpSettings": {"path": "/core31", "mode": "packet-up", "extra": {"uplinkHTTPMethod": "OPTIONS"}}
+      }
+    },
+    {"tag": "direct", "protocol": "freedom"}
+  ]
+}

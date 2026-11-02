@@ -1,0 +1,41 @@
+# Bounded Core31 follow-ups — 2026-11-02
+
+The active goal covers exactly the following five additions to the existing
+Core 26.10.31 acceptance. Work stays on `main`, packages remain `1.1.7`, and
+example remains `1.1.7+117`. No plugin/package publication is included.
+
+| Item | Completion boundary |
+| --- | --- |
+| GeoDAT gzip | Runnable example; actual content-sniffed gzip decoding, corrupt/truncated input, decoded-size boundary, active cancellation and atomic replacement controls; exact data and owned-resource cleanup. |
+| XHTTP | Client `OPTIONS` upload and actual CORS-preflight distinction; server `h2Params` observable on a real HTTP/2 exchange; exact bytes and bounded negative controls. |
+| QUIC SNI | Active fragmented/gapped CRYPTO, empty/unmatched SNI and incomplete-input controls; observed destination in both domain-routing directions. No full QUIC/NAT64 matrix. |
+| Windows Core TUN | Explicit `autoSystemWfpBlockLeak` TCP/UDP port and 853 checks, allowed/blocked controls and filter removal on Windows Actions. Remains separate from the plugin's ProtectionOptions and existing VPN path. |
+| HTTP inbound | Actual `Expect: 100-continue` upload with interim response and exact body; bounded truncated/stalled/cancel controls. |
+
+Tests and fault controls precede any necessary implementation correction.
+Positive adjacent tests do not qualify an untested new feature. Each result
+must identify source/runtime, selected tests, evidence and limitations.
+
+Native Core/SDK compilation and execution on the owner's Mac are excluded.
+Native runtime checks run in Actions on Windows/macOS/Linux. Applicable client
+cases additionally use the VPN-compatible Android emulator and the connected
+physical iPhone when available. Live macOS VPN testing, global network changes,
+real cloud accounts and a broader protocol/device matrix are outside scope.
+
+The Mac VPN stays connected. Preserve the two pre-existing analysis YAML edits.
+After device tests, explicitly stop the test VPN, verify ordinary browsing,
+and stop only owned emulators, servers, forwards, clients and build workers.
+Independent review, scoped checks, documented results and push to `main` are
+required before marking this goal complete. External limitations remain explicit.
+
+## Progress
+
+- [ ] GeoDAT gzip
+- [ ] XHTTP OPTIONS and h2Params
+- [ ] QUIC fragmented SNI and routing
+- [ ] Windows Core TUN leak rules
+- [ ] HTTP inbound 100-continue
+- [ ] Relevant live client checks, independent review and cleanup
+
+The progress checklist is updated from actual completed evidence, not from
+fixture implementation alone.

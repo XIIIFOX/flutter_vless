@@ -1,0 +1,7 @@
+{
+  "log": {"loglevel": "warning"},
+  "inbounds": [
+    {"tag": "owned-http-in", "listen": "127.0.0.1", "port": 10809, "protocol": "http", "settings": {}}
+  ],
+  "outbounds": [{"tag": "direct", "protocol": "freedom"}]
+}

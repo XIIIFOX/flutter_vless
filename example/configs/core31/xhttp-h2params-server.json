@@ -1,0 +1,26 @@
+{
+  "log": {"loglevel": "warning"},
+  "inbounds": [
+    {
+      "tag": "owned-xhttp-server",
+      "listen": "127.0.0.1",
+      "port": 18081,
+      "protocol": "vless",
+      "settings": {"clients": [{"id": "00000000-0000-4000-8000-000000000031"}], "decryption": "none"},
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "alpn": ["h2"],
+          "certificates": [{"certificateFile": "core31-local-cert.pem", "keyFile": "core31-local-key.pem"}]
+        },
+        "xhttpSettings": {
+          "path": "/core31",
+          "mode": "packet-up",
+          "extra": {"h2Params": {"MaxConcurrentStreams": 7, "MaxReadFrameSize": 32768}}
+        }
+      }
+    }
+  ],
+  "outbounds": [{"tag": "direct", "protocol": "freedom"}]
+}

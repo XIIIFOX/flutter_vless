@@ -1,0 +1,16 @@
+{
+  "inbounds": [
+    {
+      "tag": "standalone-core-tun",
+      "protocol": "tun",
+      "settings": {
+        "name": "Core31-WFP-Example",
+        "gateway": ["198.18.31.1/30"],
+        "dns": ["198.18.31.2"],
+        "autoSystemRoutingTable": ["0.0.0.0/0"],
+        "autoSystemWfpBlockLeak": ["dns", "tcp/853", "udp/853", "tcp/8443", "udp/8443"]
+      }
+    }
+  ],
+  "outbounds": [{"tag": "direct", "protocol": "freedom"}]
+}

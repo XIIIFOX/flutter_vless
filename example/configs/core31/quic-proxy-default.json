@@ -1,0 +1,19 @@
+{
+  "log": {"loglevel": "warning"},
+  "inbounds": [{
+    "tag": "socks-in",
+    "listen": "127.0.0.1",
+    "port": 10808,
+    "protocol": "socks",
+    "settings": {"auth": "noauth", "udp": true},
+    "sniffing": {"enabled": true, "destOverride": ["quic"], "routeOnly": true}
+  }],
+  "outbounds": [
+    {"tag": "proxy", "protocol": "socks", "settings": {"servers": [{"address": "127.0.0.1", "port": 10809}]}},
+    {"tag": "direct", "protocol": "freedom"}
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [{"type": "field", "network": "udp", "domain": ["full:quic-route.invalid"], "outboundTag": "direct"}]
+  }
+}

@@ -1,0 +1,40 @@
+name: Core31 bounded feature acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  feature-runtime:
+    name: Core31 follow-ups (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: third_party/xray-mobile/go.mod
+          cache-dependency-path: third_party/xray-mobile/go.sum
+      - name: Test fail-closed acceptance evidence and runtime admission
+        run: python tool/test_core31_followups_runner.py -v
+      - name: Run the five bounded feature groups on isolated pinned Core
+        run: python tool/test_core31_followups.py --run-runtime --output-dir build/core31_followups
+      - name: Preserve exact feature evidence and cleanup results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core31-followups-${{ matrix.os }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            build/core31_followups/*.log
+            build/core31_followups/result.json

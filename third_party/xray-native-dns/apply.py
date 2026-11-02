@@ -61,7 +61,8 @@ def copy_and_apply(source, destination, *, go='go', caches=None):
         'capability': MANIFEST['capability'], 'core_commit': MANIFEST['core_commit'],
         'published': False,
         'lifetime_patches': ['classic-udp-lifetime', 'xhttp-h3-owned-transport',
-                             'xdrive-owned-services', 'geodata-owned-downloads'],
+                             'xdrive-owned-services', 'geodata-owned-downloads',
+                             'xhttp-h2-listener-cleanup'],
         'darwin_interface_binding_applied': True,
     }, indent=2)+'\n')
     return destination
@@ -292,7 +293,7 @@ func LookupForIP(domain string, strategy DomainStrategy, localAddr net.Address) 
     spec.loader.exec_module(module)
     module.apply(root, replace)
 
-    for patch_name in ('xdrive_lifetime_patch', 'geodata_lifetime_patch'):
+    for patch_name in ('xdrive_lifetime_patch', 'geodata_lifetime_patch', 'xhttp_listener_lifetime_patch'):
         spec = importlib.util.spec_from_file_location('native_dns_' + patch_name, here / (patch_name + '.py'))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)

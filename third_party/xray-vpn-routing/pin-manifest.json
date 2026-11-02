@@ -18,6 +18,7 @@
     "app/dns/dns.go": "51675585d892f1dceeb0d2520303ac73ef0084e58af4414e52f86bf9b2bd5fef",
     "app/dns/nameserver_udp.go": "d5f53d45c9170c6b6c6a91af6f078b6c2f453b22a7679df818c643a23cf59a7f",
     "transport/internet/udp/dispatcher.go": "76bdf02b75c5c71c424bc177c4f6284d15b4b23c271b2b5653de0ced61b86dfe",
-    "transport/internet/system_listener.go": "b822d00bb6c6538e96c969db05b1e970f40bf7f0908299dbde1b4b6f9b201e4e"
+    "transport/internet/system_listener.go": "b822d00bb6c6538e96c969db05b1e970f40bf7f0908299dbde1b4b6f9b201e4e",
+    "transport/internet/splithttp/hub.go": "a651b04643dde70653955a55501f4607d7ed6bb647ea3d39596fb63f7d734aaa"
   }
 }

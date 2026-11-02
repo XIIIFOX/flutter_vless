@@ -16,11 +16,20 @@ the TUN's DNS configuration. The DNS server must be reachable through the TUN.
 The new acceptance invokes the **actual Core filter installer** in elevated
 Windows Actions, with loopback standing in for the TUN interface. It creates no
 TUN adapter and changes no routes/DNS. Exact TCP/UDP payloads first work from a
-separate executable. A nonmatching interface then blocks that client on two
+separate executable. A real, distinct nonloopback interface LUID then stands
+in for a nonmatching TUN and blocks that client on two
 random ports and TCP/UDP 853, while Core's own executable stays permitted.
+TCP blocking must report the kernel's access-denied error. Windows may silently
+drop UDP after a successful send, so a UDP timeout alone never counts as proof:
+the owned origin must receive zero copies of that phase's fresh nonce. Exact
+nonce receipts are checked per endpoint in every phase and again after the
+origin readers stop, so delayed packets cannot turn a drop into a false pass.
 Opposite protocols on the two custom ports and two unlisted endpoints must
 continue to exchange exact bytes while those filters are active; widening a
 port rule into a protocol-wide block therefore fails the test.
+The real WFP inventory must contain each typed protocol/remote-port block and
+matching interface permit on all four ALE layers, including the selected LUID;
+the test does not infer installed conditions from filter names or timeouts.
 Selecting the real loopback interface as the TUN must permit the independent
 client again. Closing each dynamic WFP session must restore the exact filter
 ID baseline and ordinary payload exchange. Permission errors and missing

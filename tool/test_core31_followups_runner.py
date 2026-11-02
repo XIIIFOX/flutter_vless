@@ -20,7 +20,7 @@ def sample_log(group):
     """Go -test.v-shaped positive witness, then mutate one contract at a time."""
     lines = ['=== RUN   '+group['tests'][0]]
     for source, marker in runner.marker_patterns(group['name']):
-        marker = marker.replace(r'\d+', '1024').replace('(?:build|start)', 'start')
+        marker = marker.replace(r'\d+', '1024').replace('(?:build|start)', 'start').replace(r'\.', '.').replace(r'\-', '-')
         lines.append('    '+source+':42: '+marker)
     lines.extend('--- PASS: '+name+' (0.01s)' for name in group['passes'])
     return '\n'.join(lines)+'\nPASS\n'
@@ -40,7 +40,7 @@ class Core31EvidenceAdmission(unittest.TestCase):
 
     def test_reviewed_scope_counts_and_windows_applicability(self):
         self.assertEqual({g['name']: len(g['passes']) for g in runner.groups('Windows')}, {
-            'geodat': 14, 'xhttp': 10, 'xhttp-admission': 1,
+            'examples': 8, 'geodat': 14, 'xhttp': 10, 'xhttp-admission': 1,
             'http-continue': 6, 'quic': 60, 'windows-core-tun-wfp': 1})
         for system in ['Linux', 'Darwin']:
             group = next(g for g in runner.groups(system) if g['name'] == 'windows-core-tun-wfp')
@@ -103,6 +103,15 @@ class Core31EvidenceAdmission(unittest.TestCase):
         group = self.group('xhttp-admission')
         with self.assertRaises(ValueError):
             runner.qualify(sample_log(group).replace(' valid_settings=true', ''), group)
+
+    def test_examples_require_each_exact_json_name_and_semantics(self):
+        group = self.group('examples')
+        output = sample_log(group)
+        for changed in [output.replace('name=geodat-gzip.json', 'name=geodat-gzipXjson'),
+                        output.replace(' semantics=true', ' semantics=false'),
+                        output.replace('native_core31_examples_test.go:', 'unrelated.go:')]:
+            with self.subTest(changed=changed[:150]), self.assertRaises(ValueError):
+                runner.qualify(changed, group)
 
     def test_successful_child_exit_requires_owned_complete_output(self):
         good = {'exit_code': 0, 'process_exit_code': 0, 'timed_out': False,

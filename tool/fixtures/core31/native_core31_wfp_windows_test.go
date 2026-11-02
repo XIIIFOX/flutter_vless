@@ -71,9 +71,15 @@ func core31WFPExchange(p core31WFPProbe, nonce string) string {
 	c, err := net.DialTimeout(p.Network, p.Address, 400*time.Millisecond)
 	if err == nil {
 		defer c.Close()
-		_ = c.SetDeadline(time.Now().Add(400 * time.Millisecond))
-		_, err = c.Write([]byte(nonce))
+		if err := c.SetDeadline(time.Now().Add(400 * time.Millisecond)); err != nil {
+			return fmt.Sprintf("deadline:%v", err)
+		}
+		var n int
+		n, err = c.Write([]byte(nonce))
 		if err == nil {
+			if n != len(nonce) {
+				return "short_write"
+			}
 			b := make([]byte, len(nonce))
 			_, err = io.ReadFull(c, b)
 			if err == nil && string(b) == nonce {
@@ -81,6 +87,14 @@ func core31WFPExchange(p core31WFPProbe, nonce string) string {
 			}
 			if err == nil {
 				return "wrong_payload"
+			}
+			// Windows WFP can silently drop UDP after a successful send. This
+			// observation is NEVER sufficient to pass by itself: the parent also
+			// requires exact installed port filters, zero nonce receipts at that
+			// owned origin, healthy simultaneous controls and later recovery.
+			var networkError net.Error
+			if p.Network == "udp4" && errors.As(err, &networkError) && networkError.Timeout() {
+				return "bounded_no_reply"
 			}
 		}
 	}
@@ -130,6 +144,36 @@ type core31WFPPeer struct {
 	mu     sync.Mutex
 	active map[net.Conn]bool
 	faults []string
+	seen   map[core31WFPProbe]map[string]int
+	want   map[core31WFPProbe]map[string]int
+}
+
+func (p *core31WFPPeer) record(probe core31WFPProbe, data []byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	nonce := string(data)
+	if len(data) != 32 {
+		p.faults = append(p.faults, "unexpected nonce length at "+probe.Network)
+	}
+	if _, known := p.want[probe][nonce]; !known {
+		p.faults = append(p.faults, "unowned nonce reached "+probe.Network)
+	}
+	p.seen[probe][nonce]++
+}
+
+func (p *core31WFPPeer) expect(probe core31WFPProbe, nonce string, count int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.want[probe][nonce] = count
+}
+
+func (p *core31WFPPeer) checkReceipt(t *testing.T, probe core31WFPProbe, nonce string) {
+	t.Helper()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if got, want := p.seen[probe][nonce], p.want[probe][nonce]; got != want {
+		t.Fatalf("owned origin receipt mismatch for %s %s: got=%d want=%d", probe.Network, probe.Address, got, want)
+	}
 }
 
 func core31WFPPeers(t *testing.T, tcpPort string, udpPort string) (*core31WFPPeer, []core31WFPProbe) {
@@ -143,7 +187,11 @@ func core31WFPPeers(t *testing.T, tcpPort string, udpPort string) (*core31WFPPee
 		_ = l.Close()
 		t.Fatal("required owned UDP port unavailable", err)
 	}
-	p := &core31WFPPeer{TCP: l, UDP: u, active: map[net.Conn]bool{}}
+	tcpProbe, udpProbe := core31WFPProbe{"tcp4", l.Addr().String()}, core31WFPProbe{"udp4", u.LocalAddr().String()}
+	p := &core31WFPPeer{TCP: l, UDP: u, active: map[net.Conn]bool{},
+		seen: map[core31WFPProbe]map[string]int{tcpProbe: {}, udpProbe: {}},
+		want: map[core31WFPProbe]map[string]int{tcpProbe: {}, udpProbe: {}},
+	}
 	p.wg.Add(2)
 	go func() {
 		defer p.wg.Done()
@@ -168,6 +216,7 @@ func core31WFPPeers(t *testing.T, tcpPort string, udpPort string) (*core31WFPPee
 					p.mu.Unlock()
 					return
 				}
+				p.record(tcpProbe, data)
 				if _, err := c.Write(data); err != nil {
 					p.mu.Lock()
 					p.faults = append(p.faults, err.Error())
@@ -184,6 +233,7 @@ func core31WFPPeers(t *testing.T, tcpPort string, udpPort string) (*core31WFPPee
 			if err != nil {
 				return
 			}
+			p.record(udpProbe, b[:n])
 			if _, err = u.WriteTo(b[:n], a); err != nil {
 				p.mu.Lock()
 				p.faults = append(p.faults, err.Error())
@@ -213,12 +263,37 @@ func core31WFPPeers(t *testing.T, tcpPort string, udpPort string) (*core31WFPPee
 		if len(p.active) != 0 || len(p.faults) != 0 {
 			t.Errorf("peer resources/faults: active=%d faults=%v", len(p.active), p.faults)
 		}
+		// Check again after every reader has stopped. A delayed blocked nonce
+		// arriving after a phase's immediate snapshot must still fail the test.
+		for probe, nonces := range p.want {
+			for nonce, want := range nonces {
+				if got := p.seen[probe][nonce]; got != want {
+					t.Errorf("final owned origin receipt mismatch for %s %s: got=%d want=%d", probe.Network, probe.Address, got, want)
+				}
+			}
+		}
 	})
-	return p, []core31WFPProbe{{"tcp4", l.Addr().String()}, {"udp4", u.LocalAddr().String()}}
+	return p, []core31WFPProbe{tcpProbe, udpProbe}
 }
 
-// Query the real WFP engine instead of inferring deletion from Close alone.
-func core31WFPFilterIDs(t *testing.T, engine windows.Handle) []uint64 {
+type core31WFPCondition struct {
+	field     windows.GUID
+	matchType uint32
+	valueType uint32
+	value     uint64
+}
+
+type core31WFPFilter struct {
+	id         uint64
+	name       string
+	layer      windows.GUID
+	action     uint32
+	conditions []core31WFPCondition
+}
+
+// Copy the real WFP inventory before freeing the native enum allocation. Its
+// port/interface conditions establish what was installed, not only its name.
+func core31WFPFilters(t *testing.T, engine windows.Handle) []core31WFPFilter {
 	t.Helper()
 	create := modfwpuclnt.NewProc("FwpmFilterCreateEnumHandle0")
 	enum := modfwpuclnt.NewProc("FwpmFilterEnum0")
@@ -228,7 +303,7 @@ func core31WFPFilterIDs(t *testing.T, engine windows.Handle) []uint64 {
 		t.Fatal(err)
 	}
 	defer destroy.Call(uintptr(engine), uintptr(handle))
-	var ids []uint64
+	var filters []core31WFPFilter
 	for batches := 0; batches < 100; batches++ {
 		var entries **fwpmFilter0
 		var count uint32
@@ -246,17 +321,148 @@ func core31WFPFilterIDs(t *testing.T, engine windows.Handle) []uint64 {
 				t.Fatal("nil WFP filter")
 			}
 			if strings.HasPrefix(windows.UTF16PtrToString(f.displayData.name), "Xray TUN:") {
-				ids = append(ids, f.filterID)
+				if f.numFilterConditions > 64 || f.numFilterConditions > 0 && f.filterCondition == nil {
+					t.Fatal("invalid WFP condition array")
+				}
+				item := core31WFPFilter{id: f.filterID, name: windows.UTF16PtrToString(f.displayData.name), layer: f.layerKey, action: f.action.typ}
+				for _, condition := range unsafe.Slice(f.filterCondition, int(f.numFilterConditions)) {
+					copied := core31WFPCondition{field: condition.fieldKey, matchType: condition.matchType, valueType: condition.conditionValue.typ}
+					switch copied.valueType {
+					case fwpUint8:
+						copied.value = uint64(uint8(condition.conditionValue.value))
+					case fwpUint16:
+						copied.value = uint64(uint16(condition.conditionValue.value))
+					case fwpUint32:
+						copied.value = uint64(uint32(condition.conditionValue.value))
+					case fwpUint64:
+						if condition.conditionValue.value == 0 {
+							t.Fatal("nil WFP UINT64 value")
+						}
+						copied.value = *(*uint64)(unsafe.Pointer(condition.conditionValue.value))
+					}
+					item.conditions = append(item.conditions, copied)
+				}
+				filters = append(filters, item)
 			}
 		}
 		procFwpmFreeMemory0.Call(uintptr(unsafe.Pointer(&entries)))
 		if count < 1000 {
-			slices.Sort(ids)
-			return ids
+			return filters
 		}
 	}
 	t.Fatal("unbounded WFP enumeration")
 	return nil
+}
+
+func core31WFPFilterIDs(t *testing.T, engine windows.Handle) []uint64 {
+	t.Helper()
+	var ids []uint64
+	for _, filter := range core31WFPFilters(t, engine) {
+		ids = append(ids, filter.id)
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// All four production ALE layers must contain each exact block/permit pair.
+// This rejects a name-only witness, protocol-wide block or wrong TUN LUID.
+func core31WFPRequirePortFilters(t *testing.T, filters []core31WFPFilter, baseline []uint64, selected []core31WFPProbe, tun winipcfg.LUID) {
+	t.Helper()
+	layers := map[windows.GUID]windows.GUID{
+		fwpmLayerALEAuthConnectV4:    fwpmConditionIPNexthopInterface,
+		fwpmLayerALEAuthConnectV6:    fwpmConditionIPNexthopInterface,
+		fwpmLayerALEAuthRecvAcceptV4: fwpmConditionIPArrivalInterface,
+		fwpmLayerALEAuthRecvAcceptV6: fwpmConditionIPArrivalInterface,
+	}
+	type key struct {
+		layer windows.GUID
+		proto uint64
+		port  uint64
+	}
+	blocks, permits := map[key]int{}, map[key]int{}
+	self := map[windows.GUID]int{}
+	wanted := map[key]bool{}
+	for layer := range layers {
+		for _, probe := range selected {
+			_, port, err := net.SplitHostPort(probe.Address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			number, err := strconv.ParseUint(port, 10, 16)
+			if err != nil {
+				t.Fatal(err)
+			}
+			protocol := uint64(windows.IPPROTO_UDP)
+			if probe.Network == "tcp4" {
+				protocol = uint64(windows.IPPROTO_TCP)
+			}
+			wanted[key{layer, protocol, number}] = true
+		}
+	}
+	installed := 0
+	for _, filter := range filters {
+		if slices.Contains(baseline, filter.id) {
+			continue
+		}
+		installed++
+		via, knownLayer := layers[filter.layer]
+		if !knownLayer {
+			t.Fatal("owned WFP filter on an unexpected layer")
+		}
+		conditions := map[windows.GUID]core31WFPCondition{}
+		for _, condition := range filter.conditions {
+			if condition.matchType != fwpMatchEqual {
+				t.Fatal("owned WFP port filter uses an unexpected comparison")
+			}
+			conditions[condition.field] = condition
+		}
+		if len(conditions) != len(filter.conditions) {
+			t.Fatal("owned WFP filter has duplicate conditions")
+		}
+		if filter.name == "Xray TUN: permit Xray" {
+			if filter.action != fwpActionPermit || len(conditions) != 1 || conditions[fwpmConditionALEAppID].valueType != fwpByteBlobType {
+				t.Fatal("Core application exemption metadata mismatch")
+			}
+			self[filter.layer]++
+			continue
+		}
+		protocol, port := conditions[fwpmConditionIPProtocol], conditions[fwpmConditionIPRemotePort]
+		if protocol.valueType != fwpUint8 || port.valueType != fwpUint16 {
+			t.Fatal("installed WFP rule omitted typed protocol/remote-port conditions")
+		}
+		entry := key{filter.layer, protocol.value, port.value}
+		if !wanted[entry] {
+			t.Fatal("installed WFP rule targets an unselected protocol/port")
+		}
+		switch filter.action {
+		case fwpActionBlock:
+			if len(conditions) != 2 {
+				t.Fatal("installed WFP block has unexpected extra conditions")
+			}
+			blocks[entry]++
+		case fwpActionPermit:
+			local, next := conditions[fwpmConditionIPLocalInterface], conditions[via]
+			if len(conditions) != 4 || local.valueType != fwpUint64 || next.valueType != fwpUint64 || local.value != uint64(tun) || next.value != uint64(tun) {
+				t.Fatal("installed WFP permit does not require the selected TUN LUID twice")
+			}
+			permits[entry]++
+		default:
+			t.Fatal("unexpected WFP port-rule action")
+		}
+	}
+	if installed != len(layers)*(2*len(selected)+1) {
+		t.Fatalf("owned Core WFP filter count mismatch: %d", installed)
+	}
+	for entry := range wanted {
+		if blocks[entry] != 1 || permits[entry] != 1 {
+			t.Fatal("missing or duplicated installed protocol/port block-permit pair")
+		}
+	}
+	for layer := range layers {
+		if self[layer] != 1 {
+			t.Fatal("missing or duplicated Core AppID exemption")
+		}
+	}
 }
 
 func TestNativeCore31WFPPortsAndCleanup(t *testing.T) {
@@ -273,8 +479,8 @@ func TestNativeCore31WFPPortsAndCleanup(t *testing.T) {
 			t.Fatal("invalid port accepted", value)
 		}
 	}
-	_, custom := core31WFPPeers(t, "0", "0")
-	_, tlsDNS := core31WFPPeers(t, "853", "853")
+	customPeer, custom := core31WFPPeers(t, "0", "0")
+	tlsDNSPeer, tlsDNS := core31WFPPeers(t, "853", "853")
 	_, tcpPort, err := net.SplitHostPort(custom[0].Address)
 	if err != nil {
 		t.Fatal(err)
@@ -286,10 +492,19 @@ func TestNativeCore31WFPPortsAndCleanup(t *testing.T) {
 	if tcpPort == udpPort {
 		t.Fatal("custom ports must differ for protocol isolation controls")
 	}
-	_, crossProtocol := core31WFPPeers(t, udpPort, tcpPort)
-	_, unlisted := core31WFPPeers(t, "0", "0")
+	crossPeer, crossProtocol := core31WFPPeers(t, udpPort, tcpPort)
+	unlistedPeer, unlisted := core31WFPPeers(t, "0", "0")
 	selected := append(custom, tlsDNS...)
 	probes := append(append(append([]core31WFPProbe{}, selected...), crossProtocol...), unlisted...)
+	owners := map[core31WFPProbe]*core31WFPPeer{}
+	for index, peer := range []*core31WFPPeer{customPeer, tlsDNSPeer, crossPeer, unlistedPeer} {
+		for _, probe := range probes[index*2 : index*2+2] {
+			if owners[probe] != nil {
+				t.Fatal("duplicate owned protocol/port endpoint")
+			}
+			owners[probe] = peer
+		}
+	}
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -302,26 +517,50 @@ func TestNativeCore31WFPPortsAndCleanup(t *testing.T) {
 	if err := os.WriteFile(child, data, 0700); err != nil {
 		t.Fatal(err)
 	}
-	var nonceBytes [16]byte
-	if _, err := rand.Read(nonceBytes[:]); err != nil {
-		t.Fatal(err)
-	}
-	nonce := hex.EncodeToString(nonceBytes[:])
-	expect := func(stage string, want string) {
+	newNonce := func() string {
 		t.Helper()
+		var nonceBytes [16]byte
+		if _, err := rand.Read(nonceBytes[:]); err != nil {
+			t.Fatal(err)
+		}
+		return hex.EncodeToString(nonceBytes[:])
+	}
+	register := func(nonce string, blocked bool) {
+		for i, probe := range probes {
+			count := 1
+			if blocked && i < len(selected) {
+				count = 0
+			}
+			owners[probe].expect(probe, nonce, count)
+		}
+	}
+	receiptPhases := 0
+	expect := func(stage string, blocked bool) {
+		t.Helper()
+		nonce := newNonce()
+		register(nonce, blocked)
 		seen := core31WFPChild(t, child, probes, nonce)
 		for i, result := range seen {
-			wanted := want
-			if stage == "outside-TUN-blocked" && i >= len(selected) {
-				wanted = "exact_payload"
+			wanted := "exact_payload"
+			if blocked && i < len(selected) {
+				wanted = "kernel_access_denied"
+				if probes[i].Network == "udp4" {
+					wanted = "bounded_no_reply"
+				}
 			}
-			if result != wanted {
+			// An explicit UDP WSAEACCES is also conclusive. The silent-drop
+			// alternative remains restricted to full-send + typed read timeout,
+			// and both alternatives require zero owned origin receipts below.
+			udpDenied := wanted == "bounded_no_reply" && result == "kernel_access_denied"
+			if result != wanted && !udpDenied {
 				t.Fatalf("%s %s %s: got %s want %s", stage, probes[i].Network, probes[i].Address, result, wanted)
 			}
+			owners[probes[i]].checkReceipt(t, probes[i], nonce)
 		}
+		receiptPhases++
 		t.Logf("CORE31_WFP_PHASE_PASS mode=%s cases=%d", stage, len(seen))
 	}
-	expect("before", "exact_payload")
+	expect("before", false)
 	var leaks []string
 	for _, p := range selected {
 		_, port, err := net.SplitHostPort(p.Address)
@@ -342,13 +581,37 @@ func TestNativeCore31WFPPortsAndCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	block := newLeakFilters(expanded, true, true)
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var loopback, outside winipcfg.LUID
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		luid, err := winipcfg.LUIDFromIndex(uint32(iface.Index))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if iface.Flags&net.FlagLoopback != 0 {
+			loopback = luid
+		} else if outside == 0 {
+			outside = luid
+		}
+	}
+	if loopback == 0 || outside == 0 || loopback == outside {
+		t.Fatal("real distinct loopback/nonloopback LUIDs required")
+	}
 	observer, err := openWFPEngine()
 	if err != nil {
 		t.Fatal("elevated WFP engine required; no skip", err)
 	}
 	defer closeWFPEngine(observer)
 	before := core31WFPFilterIDs(t, observer)
-	engine, err := blockLeaks(0, block)
+	// Use a real distinct LUID, not zero/unspecified, as the nonmatching TUN.
+	// All test packets are addressed to loopback; no interface is reconfigured.
+	engine, err := blockLeaks(outside, block)
 	if err != nil {
 		t.Fatal("real WFP install failed", err)
 	}
@@ -357,50 +620,40 @@ func TestNativeCore31WFPPortsAndCleanup(t *testing.T) {
 			closeWFPEngine(engine)
 		}
 	}()
-	during := core31WFPFilterIDs(t, observer)
-	if len(during) <= len(before) {
-		t.Fatal("no real Core WFP filters appeared")
-	}
-	expect("outside-TUN-blocked", "kernel_access_denied")
+	core31WFPRequirePortFilters(t, core31WFPFilters(t, observer), before, selected, outside)
+	expect("outside-TUN-blocked", true)
+	nonce := newNonce()
+	register(nonce, false)
 	for _, p := range probes {
 		if got := core31WFPExchange(p, nonce); got != "exact_payload" {
 			t.Fatal("Core application-ID exemption failed", p, got)
 		}
+		owners[p].checkReceipt(t, p, nonce)
 	}
+	receiptPhases++
 	t.Log("CORE31_WFP_SELF_EXEMPT_PASS")
 	closeWFPEngine(engine)
 	engine = 0
 	if after := core31WFPFilterIDs(t, observer); !reflect.DeepEqual(before, after) {
 		t.Fatal("dynamic Core filters were not removed", len(before), len(after))
 	}
-	expect("after-close", "exact_payload")
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var loopback winipcfg.LUID
-	for _, iface := range interfaces {
-		if iface.Flags&net.FlagLoopback != 0 {
-			loopback, err = winipcfg.LUIDFromIndex(uint32(iface.Index))
-			if err != nil {
-				t.Fatal(err)
-			}
-			break
-		}
-	}
-	if loopback == 0 {
-		t.Fatal("real loopback LUID missing")
-	}
+	expect("after-close", false)
 	engine, err = blockLeaks(loopback, block)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expect("through-TUN-interface-permitted", "exact_payload")
+	core31WFPRequirePortFilters(t, core31WFPFilters(t, observer), before, selected, loopback)
+	expect("through-TUN-interface-permitted", false)
 	closeWFPEngine(engine)
 	engine = 0
 	if after := core31WFPFilterIDs(t, observer); !reflect.DeepEqual(before, after) {
 		t.Fatal("through-TUN dynamic Core filters remained")
 	}
-	expect("final-recovery", "exact_payload")
+	expect("final-recovery", false)
+	if receiptPhases != 6 {
+		t.Fatal("missing nonce-bound origin receipt phase")
+	}
+	t.Log("CORE31_WFP_FILTERS_PASS stages=2 blocks=16 permits=16")
+	t.Log("CORE31_WFP_RECEIPTS_PASS phases=6 selected_zero=true permitted_exact=true")
 	t.Log("CORE31_WFP_CLEANUP_PASS filters_delta=0 ports=4")
 }

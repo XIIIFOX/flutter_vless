@@ -116,6 +116,7 @@ def fixture_pairs():
         (overlay / 'transport/internet/splithttp/native_core31_xhttp_admission_test.go', 'transport/internet/splithttp/native_core31_xhttp_admission_test.go'),
         (overlay / 'proxy/http/native_core31_continue_test.go', 'proxy/http/native_core31_continue_test.go'),
         (ROOT / 'tool/fixtures/core31/native_core31_wfp_windows_test.go', 'proxy/tun/native_core31_wfp_windows_test.go'),
+        (ROOT / 'tool/fixtures/core31/native_core31_examples_test.go', 'core31examples/native_core31_examples_test.go'),
     ]
 
 
@@ -144,6 +145,10 @@ HTTP_TEST = 'TestCore31HTTPContinueUpload'
 HTTP_MODES = ['short_continue', 'fragmented_continue', 'rejected_expectation', 'truncated_interim', 'cancelled_origin']
 XHTTP_TESTS = ['TestCore31XHTTPOptions', 'TestCore31XHTTPH2ParamsWire', 'TestCore31XHTTPInvalidH2ParamsAdmission']
 WFP_TEST = 'TestNativeCore31WFPPortsAndCleanup'
+EXAMPLES_TEST = 'TestCore31DocumentedExamplesBuild'
+EXAMPLE_NAMES = ['geodat-gzip.json', 'http-inbound-continue.json', 'quic-direct-default.json',
+                 'quic-proxy-default.json', 'windows-core-tun-leaks.json',
+                 'xhttp-h2params-server.json', 'xhttp-options-client.json']
 
 
 def groups(system):
@@ -153,6 +158,8 @@ def groups(system):
             parent = QUIC_TEST+'/route/default-'+default+'/sniff-'+sniff
             quic.extend([parent, *(parent+'/'+mode for mode in QUIC_MODES)])
     return [
+        {'name': 'examples', 'package': 'core31examples', 'core': 'ordinary', 'seconds': 30,
+         'tests': [EXAMPLES_TEST], 'passes': [EXAMPLES_TEST, *(EXAMPLES_TEST+'/'+name for name in EXAMPLE_NAMES)]},
         {'name': 'geodat', 'package': 'app/geodata', 'core': 'ordinary', 'seconds': 90,
          'tests': GEO_TESTS, 'passes': GEO_TESTS
          + [GEO_TESTS[0]+'/'+mode for mode in GEO_CONTENT_MODES]
@@ -173,6 +180,9 @@ def groups(system):
 
 
 def marker_patterns(name):
+    if name == 'examples':
+        return [('native_core31_examples_test.go', 'CORE31_EXAMPLE_BUILD_PASS name='+re.escape(example)+' semantics=true')
+                for example in EXAMPLE_NAMES]
     if name == 'geodat':
         return [('native_geodata_gzip_test.go', 'GEODAT_GZIP_CONTENT_PASS mode='+mode) for mode in GEO_CONTENT_MODES] + [
             ('native_geodata_gzip_test.go', r'GEODAT_GZIP_LIMIT_PASS mode=exact_256MiB decoded=268435456 wire=\d+'),
@@ -199,6 +209,8 @@ def marker_patterns(name):
         return [('native_core31_wfp_windows_test.go', 'CORE31_WFP_PHASE_PASS mode='+mode+' cases=8')
                 for mode in ['before', 'outside-TUN-blocked', 'after-close', 'through-TUN-interface-permitted', 'final-recovery']] + [
             ('native_core31_wfp_windows_test.go', 'CORE31_WFP_SELF_EXEMPT_PASS'),
+            ('native_core31_wfp_windows_test.go', 'CORE31_WFP_FILTERS_PASS stages=2 blocks=16 permits=16'),
+            ('native_core31_wfp_windows_test.go', 'CORE31_WFP_RECEIPTS_PASS phases=6 selected_zero=true permitted_exact=true'),
             ('native_core31_wfp_windows_test.go', 'CORE31_WFP_CLEANUP_PASS filters_delta=0 ports=4')]
     raise ValueError('Unknown group')
 
@@ -218,7 +230,7 @@ def qualify(output, group):
     patterns = marker_patterns(group['name'])
     seen = []
     for line in output.splitlines():
-        if not re.search(r'(?:GEODAT_GZIP|CORE31_(?:QUIC|XHTTP|HTTP_CONTINUE|WFP))', line):
+        if not re.search(r'(?:GEODAT_GZIP|CORE31_(?:EXAMPLE_BUILD|QUIC|XHTTP|HTTP_CONTINUE|WFP))', line):
             continue
         matches = [index for index, (source, marker) in enumerate(patterns)
                    if re.fullmatch(r'\s+'+re.escape(source)+r':\d+: '+marker, line)]
@@ -299,6 +311,11 @@ def main(argv=None):
             if kind == 'ordinary':
                 for original, target in fixture_pairs():
                     copy_fixture(original, core, target)
+                examples = ROOT / 'example/configs/core31'
+                if sorted(path.name for path in examples.glob('*.json')) != sorted(EXAMPLE_NAMES):
+                    raise ValueError('Documented Core31 JSON example set changed or is incomplete')
+                for name in EXAMPLE_NAMES:
+                    copy_fixture(examples / name, core, 'core31examples/testdata/core31/'+name)
             else:
                 relative = 'app/dispatcher/native_routing_quic_runtime_test.go'
                 copy_fixture(ROUTING / 'overlay' / relative, core, relative)

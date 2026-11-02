@@ -39,3 +39,18 @@ required before marking this goal complete. External limitations remain explicit
 
 The progress checklist is updated from actual completed evidence, not from
 fixture implementation alone.
+
+## First runtime result
+
+[Initial four-runner acceptance](https://github.com/XIIIFOX/flutter_vless/actions/runs/41441800609)
+at `75dfe57` passes the gzip, XHTTP data/wire, HTTP inbound and QUIC groups.
+The separate malformed-`h2Params` admission test reproduces an owned-listener
+leak on every OS. Its minimal correction closes that listener on the existing
+parse-error branch. Corrected native artifacts must carry this correction on
+every platform; changing only test-source copies is not release readiness.
+
+Windows' first UDP observer expected `WSAEACCES`, while the kernel silently
+discarded the datagram. The stronger observer requires actual installed
+protocol/port filters, zero nonce receipts for blocked endpoints, working
+unselected endpoints, permitted interface/application controls, exact filter
+removal and payload recovery. A timeout alone is never a passing observation.

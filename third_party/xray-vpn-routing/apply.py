@@ -29,7 +29,7 @@ def lifetime_input_paths():
 
 def managed_service_modules():
     result = []
-    for name in ('xdrive_lifetime_patch', 'geodata_lifetime_patch'):
+    for name in ('xdrive_lifetime_patch', 'geodata_lifetime_patch', 'xhttp_listener_lifetime_patch'):
         spec = importlib.util.spec_from_file_location('routing_' + name, CLASSIC / (name + '.py'))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -52,6 +52,7 @@ def managed_service_helpers():
 
 def managed_service_input_paths():
     return [CLASSIC / 'xdrive_lifetime_patch.py', CLASSIC / 'geodata_lifetime_patch.py',
+            CLASSIC / 'xhttp_listener_lifetime_patch.py',
             *managed_service_helpers()]
 
 

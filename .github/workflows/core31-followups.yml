@@ -25,7 +25,9 @@ jobs:
           go-version-file: third_party/xray-mobile/go.mod
           cache-dependency-path: third_party/xray-mobile/go.sum
       - name: Test fail-closed acceptance evidence and runtime admission
-        run: python tool/test_core31_followups_runner.py -v
+        run: |
+          python tool/test_core31_followups_runner.py -v
+          python third_party/xray-native-dns/test_xhttp_listener_lifetime_patch.py -v
       - name: Run the five bounded feature groups on isolated pinned Core
         run: python tool/test_core31_followups.py --run-runtime --output-dir build/core31_followups
       - name: Preserve exact feature evidence and cleanup results

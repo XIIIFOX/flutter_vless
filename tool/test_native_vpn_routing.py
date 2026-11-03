@@ -20,6 +20,7 @@ EVIDENCE = ROOT / 'build/native_vpn_routing'
 PACKAGES = [('core', 'core'), ('routing', 'features/routing'), ('dispatcher', 'app/dispatcher'),
             ('inbound', 'app/proxyman/inbound')]
 RUNTIME_TEST = 'TestNativeVPNRoutingRuntime'
+DISPATCHER_TEST_TAG = 'flutter_vless_core31_followups'
 
 
 def load_module(path, name):
@@ -109,6 +110,16 @@ def selected_tests(overlay, package, *, runtime=False):
 
 def test_pattern(names):
     return '^(' + '|'.join(re.escape(name) for name in names) + ')$'
+
+
+def compile_command(go, binary, package):
+    command = [str(go), 'test', '-mod=readonly']
+    if package == 'app/dispatcher':
+        # The selected QUIC-Initial acceptance fixture is opt-in at compile
+        # time. Keep it in the required runtime set and compile it into this
+        # binary rather than accepting a successful run that omitted it.
+        command.append('-tags=' + DISPATCHER_TEST_TAG)
+    return command + ['-c', '-o', str(binary), './' + package]
 
 
 def checked(name, command, *, environment, cwd, seconds, results):
@@ -207,7 +218,7 @@ def main(argv=None):
         binaries = {}
         for name, package in PACKAGES:
             binary = EVIDENCE / (name + ('.test.exe' if os.name == 'nt' else '.test'))
-            checked(name + '-compile', [str(go), 'test', '-mod=readonly', '-c', '-o', str(binary), './' + package],
+            checked(name + '-compile', compile_command(go, binary, package),
                     cwd=core, environment=environment, seconds=300, results=results)
             binaries[name] = binary
             checked(name + '-pure', [str(binary), '-test.run', test_pattern(selections[name]), '-test.v', '-test.timeout=30s'],

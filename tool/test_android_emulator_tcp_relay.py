@@ -189,6 +189,60 @@ class RelayTests(unittest.TestCase):
         self.assertTrue(response.startswith(b'HTTP/1.1 502 ')); self.assertNotIn(b'200', response)
         self.wait_idle(relay)
 
+    def test_timed_out_tunnel_closes_locally_and_next_tunnel_still_transfers(self):
+        # A real pollable upstream descriptor injects Darwin's ETIMEDOUT at
+        # recv(), after CONNECT succeeded. This is a per-connection failure;
+        # it must not close the listener or the next emulator connection.
+        created=[]
+        class TimeoutOnce:
+            def __init__(self,*_):
+                self.sock=socket.socket();self.inject_timeout=not created
+                self.closed=False;created.append(self)
+            def fileno(self):return self.sock.fileno()
+            def setblocking(self,value):self.sock.setblocking(value)
+            def connect_ex(self,address):return self.sock.connect_ex(address)
+            def getsockopt(self,*args):return self.sock.getsockopt(*args)
+            def recv(self,*args):
+                if self.inject_timeout:
+                    self.inject_timeout=False
+                    raise TimeoutError(errno.ETIMEDOUT,'Owned upstream timed out')
+                return self.sock.recv(*args)
+            def send(self,*args):return self.sock.send(*args)
+            def shutdown(self,*args):return self.sock.shutdown(*args)
+            def close(self):self.sock.close();self.closed=True
+
+        def origin_reply(connection):
+            connection.sendall(b'origin-ready:')
+            payload=connection.recv(4)
+            if payload:
+                payload+=read_exact(connection,4-len(payload))
+                connection.sendall(b'reply:'+payload)
+
+        origin=self.origin(origin_reply)
+        policy=Policy({'destinations':[{'host':'127.0.0.1','ports':[origin.port],
+            'addresses':['127.0.0.1']}]},test_loopback=True)
+        relay=ConnectRelay(policy,_socket_factory=TimeoutOnce).start();self.relays.append(relay)
+        first=self.client(relay);first.sendall(header(origin.port))
+        response,tail=read_header(first);self.assertIn(b' 200 ',response)
+        self.assertEqual(tail+read_all(first),b'')
+        self.wait_idle(relay)
+        snapshot=relay.snapshot()
+        self.assertEqual(snapshot['counts'].get('socket_closed'),1)
+        self.assertFalse(snapshot['stopping'])
+        self.assertEqual(snapshot['unexpected_worker_exceptions'],[])
+        self.assertTrue(created[0].closed)
+
+        second=self.client(relay);second.sendall(header(origin.port)+b'ping')
+        second.shutdown(socket.SHUT_WR)
+        response,tail=read_header(second);self.assertIn(b' 200 ',response)
+        self.assertEqual(tail+read_all(second),b'origin-ready:reply:ping')
+        self.wait_idle(relay)
+        final=relay.close()
+        self.assertEqual(final['active_workers'],0)
+        self.assertEqual(final['tracked_sockets'],0)
+        self.assertEqual(final['unexpected_worker_exceptions'],[])
+        self.assertTrue(all(value.closed for value in created))
+
     def test_header_limit_and_real_silent_header_deadline(self):
         reserved = socket.socket(); reserved.bind(('127.0.0.1',0)); self.addCleanup(reserved.close)
         relay = self.relay(reserved.getsockname()[1], header_seconds=.2, max_header_bytes=128)

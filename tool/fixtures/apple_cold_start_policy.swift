@@ -20,12 +20,12 @@ final class NETunnelProviderManager {
     }
     static func loadAllFromPreferences(completionHandler: @escaping ([NETunnelProviderManager]?, Error?) -> Void) { completionHandler([Kernel.profile.copy()], nil) }
     func saveToPreferences(completionHandler: @escaping (Error?) -> Void) {
-        Kernel.events.append(isOnDemandEnabled ? "arm" : "disarm"); Kernel.profile = copy()
+        Kernel.record(isOnDemandEnabled ? "arm" : "disarm"); Kernel.profile = copy()
         if isOnDemandEnabled { Kernel.onArm?() }
         completionHandler(nil)
     }
     func loadFromPreferences(completionHandler: @escaping (Error?) -> Void) {
-        if Kernel.refreshFailures > 0 { Kernel.refreshFailures -= 1; completionHandler(NSError(domain: "fixture.refresh", code: 1)); return }
+        if Kernel.consumeRefreshFailure() { completionHandler(NSError(domain: "fixture.refresh", code: 1)); return }
         isOnDemandEnabled = Kernel.profile.isOnDemandEnabled; onDemandRules = Kernel.profile.onDemandRules; completionHandler(nil)
     }
 }
@@ -73,7 +73,7 @@ enum TunnelXrayConfigPreparer {
     static func prepareForStartup(jsonData: Data, credentials: LocalProxyCredentials, routingIntent: NativeRoutingIntent?, tcpPortAvailable: (Int) -> Bool,
         environmentSnapshot: XrayEnvironmentSnapshot, endpointPath: TunnelEndpointPath, selectedAttempt: UInt64,
         resolveCandidates: (String) async throws -> TunnelEndpointCandidates, isCurrent: () -> Bool, attempts: Int) async throws -> TunnelPreparedConfig {
-        Kernel.events.append("prepare")
+        Kernel.record("prepare")
         Kernel.onPrepare?()
         if Kernel.failure == "endpoint" { throw StartupError.endpointUnavailable }
         if Kernel.failure == "config" { throw StartupError.invalidConfiguration }
@@ -89,9 +89,9 @@ final class TunnelDebugStore { static let shared = TunnelDebugStore(); func conf
 func FLVlessCoreRoutingCapability() -> Int64 { 1 }
 func FLVlessCoreDarwinInterfaceBindingCapability() -> Int64 { Kernel.bindingCapability }
 func FLVlessHasCorePreflight() -> Bool { true }
-func FLVlessCheckCorePrivate(_ value: Data) -> Int64 { Kernel.events.append("check"); return Kernel.failure == "core" ? 3 : 0 }
+func FLVlessCheckCorePrivate(_ value: Data) -> Int64 { Kernel.record("check"); return Kernel.failure == "core" ? 3 : 0 }
 func FLVlessCheckCoreRoutingPrivate(_ data: Data, _ metadata: Data) -> Int64 { 0 }
-func XRaySetAssetLocation(_ value: String, _ error: inout NSError?) -> Bool { Kernel.events.append("assets"); return true }
+func XRaySetAssetLocation(_ value: String, _ error: inout NSError?) -> Bool { Kernel.record("assets"); return true }
 func rememberTunnelLog(_ message: String) {}
 func isIPv4Literal(_ value: String) -> Bool { true }
 enum TunnelDNSPolicy {
@@ -107,19 +107,90 @@ final class NEPacketTunnelNetworkSettings {
 final class NEIPv4Settings { init(addresses: [String], subnetMasks: [String]) {}; var includedRoutes: [NEIPv4Route] = [], excludedRoutes: [NEIPv4Route] = [] }
 final class NEIPv4Route { init(destinationAddress: String, subnetMask: String) {}; static func `default`() -> Self { Self(destinationAddress: "0.0.0.0", subnetMask: "0.0.0.0") } }
 final class NEDNSSettings { init(servers: [String]) {}; var matchDomains: [String] = [] }
-struct FakeQueue { func async(execute: () -> Void) { execute() }; func sync<T>(execute: () throws -> T) rethrows -> T { try execute() } }
+/// Preserve the provider's serial queue ownership in the in-memory fixture.
+/// Reentrant sync is local to this fake; asynchronous writes still use FIFO.
+final class FakeQueue: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "fixture.provider.serial")
+    private let identity = DispatchSpecificKey<UInt8>()
+    init() { queue.setSpecific(key: identity, value: 1) }
+    func async(execute: @escaping () -> Void) { queue.async(execute: execute) }
+    func sync<T>(execute: () throws -> T) rethrows -> T {
+        if DispatchQueue.getSpecific(key: identity) != nil { return try execute() }
+        return try queue.sync(execute: execute)
+    }
+}
+
+/// Detached overlap starts and OS callbacks may run on different executors.
+/// A snapshot retains Array/closure storage under the same lock as mutations.
+final class FixtureState<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Value
+    init(_ value: Value) { self.value = value }
+    func withValue<Result>(_ body: (inout Value) -> Result) -> Result {
+        lock.lock(); defer { lock.unlock() }
+        return body(&value)
+    }
+}
 enum Kernel {
-    static var events: [String] = [], failure = ""
-    static var bindingCapability: Int64 = 1
-    static var preparedData = Data("{}".utf8), dnsOnly = false
-    static var profile = NETunnelProviderManager()
-    static var onArm: (() -> Void)?, refreshFailures = 0
-    static var onPrepare: (() -> Void)?
-    static var onSettings: (() async -> Void)?
+    private struct State {
+        var events: [String] = [], failure = ""
+        var bindingCapability: Int64 = 1
+        var preparedData = Data("{}".utf8), dnsOnly = false
+        var profile = NETunnelProviderManager()
+        var onArm: (() -> Void)?, refreshFailures = 0
+        var onPrepare: (() -> Void)?
+        var onSettings: (() async -> Void)?
+    }
+    private static let state = FixtureState(State())
+    static var events: [String] { state.withValue { $0.events } }
+    static func record(_ event: String) { state.withValue { $0.events.append(event) } }
+    static var failure: String {
+        get { state.withValue { $0.failure } }
+        set { state.withValue { $0.failure = newValue } }
+    }
+    static var bindingCapability: Int64 {
+        get { state.withValue { $0.bindingCapability } }
+        set { state.withValue { $0.bindingCapability = newValue } }
+    }
+    static var preparedData: Data {
+        get { state.withValue { $0.preparedData } }
+        set { state.withValue { $0.preparedData = newValue } }
+    }
+    static var dnsOnly: Bool {
+        get { state.withValue { $0.dnsOnly } }
+        set { state.withValue { $0.dnsOnly = newValue } }
+    }
+    static var profile: NETunnelProviderManager {
+        get { state.withValue { $0.profile } }
+        set { state.withValue { $0.profile = newValue } }
+    }
+    static var onArm: (() -> Void)? {
+        get { state.withValue { $0.onArm } }
+        set { state.withValue { $0.onArm = newValue } }
+    }
+    static var refreshFailures: Int {
+        get { state.withValue { $0.refreshFailures } }
+        set { state.withValue { $0.refreshFailures = newValue } }
+    }
+    static var onPrepare: (() -> Void)? {
+        get { state.withValue { $0.onPrepare } }
+        set { state.withValue { $0.onPrepare = newValue } }
+    }
+    static var onSettings: (() async -> Void)? {
+        get { state.withValue { $0.onSettings } }
+        set { state.withValue { $0.onSettings = newValue } }
+    }
+    static func consumeRefreshFailure() -> Bool {
+        state.withValue {
+            guard $0.refreshFailures > 0 else { return false }
+            $0.refreshFailures -= 1; return true
+        }
+    }
     static func reset(armed: Bool = false, failure: String = "") {
-        events = []; self.failure = failure; bindingCapability = 1; preparedData = Data("{}".utf8); dnsOnly = false
-        profile = NETunnelProviderManager(); onArm = nil; refreshFailures = 0; onPrepare = nil; onSettings = nil
-        profile.isOnDemandEnabled = armed; profile.onDemandRules = armed ? [NEOnDemandRuleConnect()] : nil
+        var next = State(); next.failure = failure
+        next.profile.isOnDemandEnabled = armed
+        next.profile.onDemandRules = armed ? [NEOnDemandRuleConnect()] : nil
+        state.withValue { $0 = next }
     }
 }
 final class FixturePacketBridge { func shutdown() {} }
@@ -148,19 +219,15 @@ final class Provider {
     // ACTUAL_PREPARATION_HELPERS
     func tunnelError(_ message: String) -> NSError { NSError(domain: "fixture.provider", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
     func setForwardingReady(_ value: Bool, epoch: TunnelSessionAdmission.Epoch) {}
-    func setStartupPreparation(_ value: Task<TunnelPreparedConfig, Error>?, epoch: TunnelSessionAdmission.Epoch) {
-        if let value { startupPreparation = (epoch, value) }
-        else if startupPreparation?.epoch == epoch { startupPreparation = nil }
-    }
     func parseConfig(jsonData: Data) -> (inboundPort: Int, unused: Int)? { (10808, 0) }
     func buildIPv4ExcludedRoutes(serverAddresses: [String]) -> [NEIPv4Route] { [] }
     func setTunnelNetworkSettings(_ settings: NEPacketTunnelNetworkSettings?) async throws {
-        Kernel.events.append(settings == nil ? "clear-settings" : "settings")
+        Kernel.record(settings == nil ? "clear-settings" : "settings")
         await Kernel.onSettings?()
     }
     func startTunnelWatchdog(_ spec: RuntimeSpec) -> Bool {
         guard sessionAdmission.activate(spec.epoch) else { return false }
-        runtimeSpec = spec; Kernel.events.append("runtime-admission"); return true
+        runtimeSpec = spec; Kernel.record("runtime-admission"); return true
     }
     func stopTunnelWatchdog(epoch: TunnelSessionAdmission.Epoch?) {
         if runtimeSpec?.epoch == epoch || runtimeSource?.epoch == epoch {
@@ -225,9 +292,23 @@ final class Provider {
         // The fake OS stores the old write until its callback is explicitly released.
         final class SettingsGate: @unchecked Sendable {
             let entered = DispatchSemaphore(value: 0)
-            var continuation: CheckedContinuation<Void, Never>?
-            func wait() async { await withCheckedContinuation { continuation = $0; entered.signal() } }
-            func release() { continuation?.resume(); continuation = nil }
+            private let lock = NSLock()
+            private var continuation: CheckedContinuation<Void, Never>?
+            private var released = false
+            func wait() async {
+                await withCheckedContinuation { next in
+                    lock.lock()
+                    precondition(continuation == nil, "Only one controlled settings write may wait")
+                    if released { lock.unlock(); next.resume() }
+                    else { continuation = next; lock.unlock() }
+                    entered.signal()
+                }
+            }
+            func release() {
+                lock.lock(); released = true
+                let pending = continuation; continuation = nil; lock.unlock()
+                pending?.resume()
+            }
         }
         Kernel.reset(); let overlap = Provider(), gate = SettingsGate()
         Kernel.onSettings = { await gate.wait() }

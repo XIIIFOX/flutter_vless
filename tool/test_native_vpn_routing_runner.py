@@ -332,6 +332,46 @@ class RunnerGuards(unittest.TestCase):
         relative = str(source.relative_to(runner.ROOT)).replace(os.sep, '/')
         self.assertEqual(runner.source_snapshot()[relative], runner.digest(source))
 
+    def test_dispatcher_compiles_every_selected_runtime_fixture_including_tagged_quic(self):
+        selected = runner.selected_tests(runner.CAPABILITY / 'overlay', 'app/dispatcher', runtime=True)
+        self.assertEqual(selected, [
+            'TestNativeVPNRoutingRuntime',
+            'TestNativeVPNRoutingRuntimeConstruction',
+            'TestNativeVPNRoutingRuntimeLiteralIPTLS',
+            'TestNativeVPNRoutingRuntimeQUICInitial',
+        ])
+        source = runner.CAPABILITY / 'overlay/app/dispatcher/native_routing_quic_runtime_test.go'
+        self.assertEqual(source.read_text().splitlines()[0],
+                         '//go:build flutter_vless_core31_followups')
+        self.assertEqual(runner.compile_command('go', 'dispatcher.test', 'app/dispatcher'), [
+            'go', 'test', '-mod=readonly', '-tags=flutter_vless_core31_followups',
+            '-c', '-o', 'dispatcher.test', './app/dispatcher',
+        ])
+        for _, package in runner.PACKAGES:
+            if package != 'app/dispatcher':
+                self.assertFalse(any(value.startswith('-tags') for value in
+                                     runner.compile_command('go', 'other.test', package)))
+
+    def test_quic_must_report_its_own_top_level_pass_not_skip_or_only_subtests(self):
+        selected = runner.selected_tests(runner.CAPABILITY / 'overlay', 'app/dispatcher', runtime=True)
+        name = 'TestNativeVPNRoutingRuntimeQUICInitial'
+        self.assertIn(name, selected)
+        others = ''.join(f'--- PASS: {test} (0.01s)\n' for test in selected if test != name)
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(runner, 'EVIDENCE', Path(temporary)):
+            log = Path(temporary) / 'runtime.log'
+            for omitted in ['', f'--- SKIP: {name} (0.01s)\n',
+                            f'    --- PASS: {name}/route (0.01s)\n']:
+                log.write_text(others + omitted + 'PASS\n')
+                result = [{}]
+                with self.assertRaisesRegex(RuntimeError, 'did not report PASS'):
+                    runner.require_pass('runtime', selected, result)
+                self.assertNotIn('selected_test_pass', result[0])
+            log.write_text(others + f'--- PASS: {name} (0.01s)\nPASS\n')
+            result = [{}]
+            runner.require_pass('runtime', selected, result)
+            self.assertTrue(result[0]['selected_test_pass'])
+            self.assertEqual(result[0]['selected_tests'], selected)
+
     def test_success_markers_must_name_every_selected_top_level_test(self):
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(runner,'EVIDENCE',Path(temporary)):
             path=Path(temporary)/'pure.log'
@@ -383,6 +423,13 @@ class RunnerGuards(unittest.TestCase):
                 selections=[cmd[cmd.index('-test.run')+1] for cmd in commands if '-test.run' in cmd]
                 self.assertEqual(selections,['^(TestNativeRouting'+name+')$' for name,_ in runner.PACKAGES])
                 self.assertFalse(any(runner.RUNTIME_TEST in value for value in selections))
+                compiles = [cmd for cmd in commands if '-c' in cmd]
+                self.assertEqual(len(compiles), len(runner.PACKAGES))
+                for command, (_, package) in zip(compiles, runner.PACKAGES):
+                    self.assertEqual(command[-1], './' + package)
+                    tags = [value for value in command if value.startswith('-tags')]
+                    self.assertEqual(tags, ['-tags=flutter_vless_core31_followups']
+                                     if package == 'app/dispatcher' else [])
                 fmt=next(command for command in commands if command[0].endswith(('gofmt','gofmt.exe')))
                 self.assertTrue(all(str(evidence/'Core') in p for p in fmt[2:]))
 

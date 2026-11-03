@@ -521,7 +521,7 @@ class ConnectRelay:
                 except (OSError, RelayFailure):
                     pass
         except OSError as error:
-            if error.errno in (errno.ECONNRESET, errno.EPIPE, errno.ENOTCONN, errno.ECONNABORTED) or self._stopping.is_set():
+            if error.errno in (errno.ECONNRESET, errno.EPIPE, errno.ENOTCONN, errno.ECONNABORTED, errno.ETIMEDOUT) or self._stopping.is_set():
                 self._count('socket_closed')
             else:
                 self._unexpected_error(error)

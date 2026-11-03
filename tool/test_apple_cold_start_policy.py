@@ -40,7 +40,8 @@ def main():
         extras = "\n".join(actual_block(marker) for marker in (
             "    private struct RuntimeSource", "    private struct RuntimeSpec", "    private struct ProtectedSettingsKey",
             "    private func prepareInitialRuntimeSpec", "    private func physicalPathChanged", "    private func prepareEndpointConfig", "    private func checkEndpointPreflight",
-            "    private func protectedNetworkSettings", "    private func installProtectedSettings", "    private func onRuntimeQueue"))
+            "    private func protectedNetworkSettings", "    private func installProtectedSettings", "    private func onRuntimeQueue",
+            "    private func setStartupPreparation"))
         stop_marker = "    " + ("open override" if platform == "macos" else "override") + " func stopTunnel("
         stop = actual_block(stop_marker).replace("open override func", "func", 1).replace("override func", "func", 1)
         helper_path = support / "TunnelOnDemandPolicy.swift"

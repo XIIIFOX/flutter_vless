@@ -4,6 +4,13 @@ Validated on 2026-11-02 with Android Emulator 36.6.11, the signed example
 1.1.7+117 and public Maven Core 26.10.31-protect1. No plugin was published.
 No Mac VPN profile, system route, DNS configuration or system proxy was changed.
 
+The follow-up on 2026-11-03 uses the published `26.10.31-protect2` runtime
+and the Android wrapper source `1.1.7+1`. A normal socket timeout closes only
+its relay tunnel, retaining the listener for subsequent connections. The new
+regression exercises that timeout, another real CONNECT exchange and complete
+worker/socket cleanup; all 20 helper tests pass locally. The original dated
+acceptance below remains the record for its earlier 19-test workflow run.
+
 ## Working transport
 
 Two independent controls exposed the network restrictions:

@@ -18,6 +18,7 @@ the main package and platform interface remain `1.1.7`.
 * Add per-start `VpnRoutingOptions`, optional preparation reports and `certificateAssetsDirectory`; retain existing startup calls and reject unsupported guarantees explicitly.
 * Cancel superseded starts and quick actions across permission, authentication and options changes. Preserve the current session/listener after rejected candidates, and report `VPN_START_CANCELLED` for an obsolete pending start.
 * Bound delay, readiness, statistics and diagnostics work; preserve Stop, socket/process cleanup, native reconnect budgets and status delivery on the Flutter platform thread.
+* Report Apple VPN readiness promptly in a bounded startup polling window; retain live worker checks, the normal traffic cadence and rejection of replies from stopped or replaced sessions.
 * Restore traffic counters for full profiles with caller policy levels and missing inbound statistics defaults. Preserve explicitly disabled counters and caller API settings; prevent stale polling replies from reviving stopped sessions.
 * Document public Dart APIs, options, parsers and typed models for editor hover/signature help; align setup guides and configuration examples with the current API.
 

@@ -770,6 +770,8 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private let proxyOnlyRunner = ProxyOnlyRunner()
 
     private var timer: Timer?
+    private var readinessTimer: Timer?
+    private var readinessPollingOwner: (manager: PacketTunnelManager, connectedDate: Date?, generation: UInt64)?
     private var eventSink: FlutterEventSink?
     private var totalUpload: Int = 0
     private var totalDownload: Int = 0
@@ -869,6 +871,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
 
         if self.timer != nil {
+            startReadinessPolling()
             pluginDebug("Traffic polling timer already running reason=\(reason) eventSink=\(self.eventSink != nil) vpnStatus=\(self.packetTunnelManager?.status?.rawValue ?? -1)")
             emitStatus(duration: currentDurationSeconds(), state: initialState ?? currentWireState(), reason: "timer-already-running:\(reason)")
             return
@@ -922,8 +925,16 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                     }
                 }
                 guard self.isCurrentTrafficPoll(manager, connectedDate: connectedDate, generation: generation) else { return }
-                await manager.refreshForwardingState()
+                let previousState = self.currentWireState()
+                await manager.refreshForwardingState {
+                    self.isCurrentTrafficPoll(manager, connectedDate: connectedDate, generation: generation)
+                }
                 guard self.isCurrentTrafficPoll(manager, connectedDate: connectedDate, generation: generation) else { return }
+                let readyState = self.currentWireState()
+                if readyState != previousState {
+                    self.emitStatus(duration: seconds, state: readyState, reason: "provider-readiness")
+                }
+                guard readyState == "CONNECTED" else { return }
                 do{
                     let response = try await manager.sendProviderMessage(data: "xray_traffic".data(using: .utf8)!)
                     guard self.isCurrentTrafficPoll(manager, connectedDate: connectedDate, generation: generation) else { return }
@@ -972,6 +983,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         })
         self.timer = timer
         RunLoop.main.add(timer, forMode: .common)
+        startReadinessPolling()
     }
 
     /// Stops status polling and resets counters.
@@ -989,6 +1001,9 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
 
         pluginDebug("Stopping traffic polling timer reason=\(reason) hadTimer=\(self.timer != nil) eventSink=\(self.eventSink != nil)")
+        self.readinessTimer?.invalidate()
+        self.readinessTimer = nil
+        self.readinessPollingOwner = nil
         self.trafficPollingGeneration &+= 1
         self.trafficPollInFlight = false
         self.timer?.invalidate()
@@ -1005,6 +1020,65 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         self.lastNetworkSnapshotLogDate = .distantPast
         self.lastAppNetworkProbeDate = .distantPast
         self.didScheduleConnectedDiagnostics = false
+    }
+
+    /// A short readiness-only window; traffic continues at its normal cadence.
+    /// The same in-flight lease serializes these replies with regular polling.
+    private func startReadinessPolling() {
+        guard timer != nil, !proxyOnlyRunner.isRunning,
+              let manager = packetTunnelManager, manager.status == .connected,
+              currentWireState() != "CONNECTED", readinessTimer == nil else { return }
+        let generation = trafficPollingGeneration
+        let connectedDate = manager.connectedDate
+        if let owner = readinessPollingOwner, owner.manager === manager,
+           owner.connectedDate == connectedDate, owner.generation == generation { return }
+        readinessPollingOwner = (manager, connectedDate, generation)
+        let started = trafficClock()
+        let rapid = Timer(timeInterval: 0.1, repeats: true) { [weak self] rapid in
+            guard let self else { rapid.invalidate(); return }
+            guard self.readinessTimer === rapid else { rapid.invalidate(); return }
+            guard manager.status == .connected,
+                  self.isCurrentTrafficPoll(manager, connectedDate: connectedDate, generation: generation) else {
+                rapid.invalidate()
+                self.readinessTimer = nil
+                // A replacement owner gets its own bounded window. An old
+                // request keeps its lease until its matching defer returns.
+                self.startReadinessPolling()
+                return
+            }
+            let now = self.trafficClock()
+            guard now >= started, now - started < 5_000_000_000,
+                  self.currentWireState() != "CONNECTED" else {
+                rapid.invalidate()
+                self.readinessTimer = nil
+                return
+            }
+            guard !self.trafficPollInFlight else { return }
+            self.trafficPollInFlight = true
+            Task { @MainActor in
+                defer {
+                    if self.trafficPollingGeneration == generation {
+                        self.trafficPollInFlight = false
+                    }
+                }
+                guard self.readinessTimer === rapid, manager.status == .connected,
+                      self.isCurrentTrafficPoll(manager, connectedDate: connectedDate, generation: generation) else { return }
+                await manager.refreshForwardingState {
+                    self.readinessTimer === rapid && manager.status == .connected
+                        && self.isCurrentTrafficPoll(manager, connectedDate: connectedDate, generation: generation)
+                }
+                guard self.readinessTimer === rapid, manager.status == .connected,
+                      self.isCurrentTrafficPoll(manager, connectedDate: connectedDate, generation: generation) else { return }
+                if self.currentWireState() == "CONNECTED" {
+                    self.emitStatus(duration: self.currentDurationSeconds(), state: "CONNECTED", reason: "provider-readiness-fast")
+                    rapid.invalidate()
+                    self.readinessTimer = nil
+                }
+            }
+        }
+        readinessTimer = rapid
+        RunLoop.main.add(rapid, forMode: .common)
+        rapid.fire()
     }
 
     private func isCurrentTrafficPoll(_ manager: PacketTunnelManager, connectedDate: Date?, generation: UInt64) -> Bool {
@@ -1862,15 +1936,18 @@ final class PacketTunnelManager: ObservableObject {
         pluginLog.info("VPN recovery disabled; manual stop requested")
     }
 
-    func refreshForwardingState() async {
+    @MainActor
+    func refreshForwardingState(isCurrent: () -> Bool = { true }) async {
+        guard isCurrent() else { return }
         guard status == .connected || status == .reasserting else {
             forwardingReady = false
             return
         }
         let session = manager
+        let connectionDate = connectedDate
         let response = try? await sendProviderMessage(data: Data("xray_runtime_state".utf8))
-        // Ignore a reply from a session replaced by a queued start/stop.
-        guard session === manager else { return }
+        // Ignore replies from an earlier connection, even if its manager is reused.
+        guard session === manager, connectedDate == connectionDate, isCurrent() else { return }
         forwardingReady = response == Data("ready".utf8) && status == .connected
     }
 

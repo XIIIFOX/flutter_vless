@@ -329,3 +329,6 @@ python3 "$ROOT/tool/test_apple_cold_start_policy.py" --receipts
 
 # Execute real host timers against held replies; no Core, SDK or VPN is used.
 python3 "$ROOT/tool/test_apple_traffic_polling.py"
+
+# Actual host readiness polling with held replies and timer-generation races.
+python3 "$ROOT/tool/test_apple_readiness_polling.py"

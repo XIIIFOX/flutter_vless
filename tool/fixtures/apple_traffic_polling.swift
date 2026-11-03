@@ -32,7 +32,7 @@ private final class PacketTunnelManager {
     var refreshReplies: [CheckedContinuation<Void, Never>] = []
     var replies: [CheckedContinuation<Data?, Error>?] = []
 
-    func refreshForwardingState() async {
+    func refreshForwardingState(isCurrent: () -> Bool = { true }) async {
         refreshCount += 1
         if holdRefresh {
             await withCheckedContinuation { refreshReplies.append($0) }
@@ -69,6 +69,8 @@ private final class PollingHost {
     var packetTunnelManager: PacketTunnelManager?
     let proxyOnlyRunner = ProxyOnlyRunner()
     var timer: Timer?
+    var readinessTimer: Timer?
+    var readinessPollingOwner: (manager: PacketTunnelManager, connectedDate: Date?, generation: UInt64)?
     var eventSink: (() -> Void)?
     var totalUpload = 0, totalDownload = 0, uploadSpeed = 0, downloadSpeed = 0
     var trafficPollingGeneration: UInt64 = 0

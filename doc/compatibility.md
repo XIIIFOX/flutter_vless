@@ -21,6 +21,15 @@ managed-service features require capabilities from the actual loaded artifact.
 Apple local DNS support is bounded to the physical-path/numeric-or-static-hosts
 cases in [the DNS contract](apple-readiness-and-dns.md).
 
+When the library owns Core's statistics API, its prepared copy enables missing
+inbound counter flags in `policy.system`, including profiles with custom levels
+or an empty system object. Existing levels, unknown fields and explicitly set
+flags/nulls remain authoritative. Caller API settings and explicitly disabled
+Core statistics are retained; Core-based monitoring can therefore be unavailable
+for those configurations. Apple VPN counters come from its packet worker.
+The example displays the existing connection counters and controls without an
+automatic Configuration Check panel; optional preparation reports remain API-only.
+
 Current [Core31 acceptance](release/core31-five-followups-validation.md) and
 [Apple readiness/DNS acceptance](release/apple-readiness-dns-validation.md)
 separate controlled runtime, Actions and physical-device proof. Live owner

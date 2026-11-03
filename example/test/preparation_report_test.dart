@@ -1,4 +1,3 @@
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_vless/flutter_vless.dart';
@@ -45,61 +44,23 @@ void main() {
     }
   });
 
-  testWidgets(
-    'host report cannot be mistaken for extension or internet success',
-    (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: PreparationReportCard(
-              report: VlessPreparationReport(
-                scope: VlessPreparationScope.host,
-                coreCheck: VlessCoreCheck.passed,
-                changes: [VlessPreparationChange.tlsOverrideRemoved],
-              ),
-            ),
+  for (final entry in {
+    'prepare': 'The configuration could not be prepared.',
+    'core-check':
+        'The Xray configuration check could not complete successfully.',
+    'start': 'The prepared configuration could not be started.',
+  }.entries) {
+    test('${entry.key} failures remain distinct without a report panel', () {
+      expect(
+        configurationFailureMessage(
+          PlatformException(
+            code: 'CORE_CONFIG_ERROR',
+            message: canary,
+            details: {'stage': entry.key, 'raw': canary},
           ),
         ),
+        entry.value,
       );
-      expect(
-        find.text('App configuration · Xray check passed'),
-        findsOneWidget,
-      );
-      expect(
-        find.textContaining('Only the app-side configuration'),
-        findsOneWidget,
-      );
-      expect(
-        find.textContaining('does not confirm internet access'),
-        findsOneWidget,
-      );
-      expect(
-        find.text('Legacy TLS verification override removed'),
-        findsOneWidget,
-      );
-      expect(find.textContaining('Final runtime configuration'), findsNothing);
-    },
-  );
-
-  testWidgets('old runtime displays unavailability with known Dart edits', (
-    tester,
-  ) async {
-    final report = const VlessPreparationReport.unavailable().withChanges([
-      VlessPreparationChange.tlsOverrideRemoved,
-    ]);
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(body: PreparationReportCard(report: report)),
-      ),
-    );
-    expect(
-      find.textContaining('Native preparation report unavailable'),
-      findsOneWidget,
-    );
-    expect(find.textContaining('Xray check passed'), findsNothing);
-    expect(
-      find.text('Legacy TLS verification override removed'),
-      findsOneWidget,
-    );
-  });
+    });
+  }
 }

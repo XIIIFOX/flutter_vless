@@ -3,6 +3,8 @@
 Unpublished implementation update for the main plugin 1.1.7 release train.
 The existing pub.dev package numbered 1.1.7 remains unchanged.
 
+* Restore missing owned inbound statistics defaults without replacing caller policy levels or explicit disabled values. Guard traffic replies against Stop/replacement and clamp worker-reset deltas.
+
 * Use the published checksum-pinned `xray-macos-v26.10.31-r2` universal runtime with private startup/assets, native routing, mandatory interface binding and owned Classic DNS/XHTTP/XDRIVE/GeoDAT cleanup.
 * Check VPN readiness using the current packet worker and authenticated local listener, without fixed public connectivity targets. Keep caller-selected network measurements separate and preserve bounded recovery after local failures.
 * Prepare finite `tcp+local`, `https+local` and `h2c+local` DNS through closed physical-interface branches; retain routed DoH policy and require binding capability for DNS-only profiles before startup.

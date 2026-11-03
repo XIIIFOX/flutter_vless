@@ -10,13 +10,37 @@ public enum XrayPrivacyConfig {
     public static func apply(to config: inout [String: Any], onLoggingChange: (() -> Void)?) -> Bool {
         var loggingChanged = false
         guard fields(&config, ["log", "inbounds", "outbounds", "api", "stats", "policy"]) else { return false }
-        // UI counters may use library defaults only when the caller omitted
-        // the root section. Explicit null, false flags, and levels-only policy
-        // remain caller decisions; unavailable counters can report zero.
+        // Keep the established defaults for an absent root. A levels-only
+        // imported policy does not disable monitoring: fill only its missing
+        // inbound-counter flags when the plugin owns statistics collection.
+        // Explicit null/false values and caller management APIs stay intact.
         if config["stats"] == nil { config["stats"] = [String: Any]() }
         if config["policy"] == nil {
             config["policy"] = ["system": ["statsInboundUplink": true, "statsInboundDownlink": true,
                                             "statsOutboundUplink": true, "statsOutboundDownlink": true]]
+        } else if config["api"] == nil, !(config["stats"] is NSNull),
+                  var policy = config["policy"] as? [String: Any] {
+            let keys = policy.keys.filter { XrayJSONField.matches($0, "system") }
+            // Do not choose among ambiguous caller spellings or replace an
+            // explicitly supplied null/malformed object before Core sees it.
+            if keys.count <= 1 {
+                let key = keys.first ?? "system"
+                if policy[key] == nil || policy[key] is [String: Any] {
+                    var system = policy[key] as? [String: Any] ?? [:]
+                    let counters = ["statsInboundUplink", "statsInboundDownlink"]
+                    let ambiguous = counters.contains { field in
+                        system.keys.filter { XrayJSONField.matches($0, field) }.count > 1
+                    }
+                    if !ambiguous {
+                        for field in counters
+                            where !system.keys.contains(where: { XrayJSONField.matches($0, field) }) {
+                            system[field] = true
+                        }
+                        policy[key] = system
+                        config["policy"] = policy
+                    }
+                }
+            }
         }
         guard config["log"] == nil || config["log"] is NSNull || config["log"] is [String: Any] else { return false }
         var log = config["log"] as? [String: Any] ?? [:]

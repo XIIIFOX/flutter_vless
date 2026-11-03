@@ -180,7 +180,7 @@ void main() {
     });
   }
 
-  testWidgets('an obsolete start cannot show an error over a newer report',
+  testWidgets('an obsolete start cannot show an error over a newer successful start',
       (tester) async {
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -226,12 +226,12 @@ void main() {
     await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
     expect(starts, 1);
-    expect(find.byKey(const Key('preparation-report')), findsOneWidget);
+    expect(find.byKey(const Key('preparation-report')), findsNothing);
     pending.completeError(PlatformException(code: 'private-old-check',
         message: 'synthetic-private-configuration'));
     await tester.pumpAndSettle();
     expect(find.byType(SnackBar), findsNothing);
-    expect(find.byKey(const Key('preparation-report')), findsOneWidget);
+    expect(find.byKey(const Key('preparation-report')), findsNothing);
     expect(starts, 1);
     expect(tester.takeException(), isNull);
   });
@@ -304,7 +304,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
   }
-  testWidgets('each startup displays its report and rejection clears stale success',
+  testWidgets('startup keeps the normal controls and safely displays a later rejection',
       (tester) async {
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -337,8 +337,8 @@ void main() {
         '{"outbounds":[{"protocol":"freedom"}]}');
     await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('preparation-report')), findsOneWidget);
-    expect(find.text('App configuration · Xray check passed'), findsOneWidget);
+    expect(find.byKey(const Key('preparation-report')), findsNothing);
+    expect(find.text('Configuration check'), findsNothing);
     expect(find.textContaining(canary), findsNothing);
     await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();

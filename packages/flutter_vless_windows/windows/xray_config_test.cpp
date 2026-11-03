@@ -269,6 +269,43 @@ void EffectiveDownloadChainCases() {
       "unused grandchild chain or socket settings were changed");
   Check(source.dump() == original, "chain preparation changed caller source");
 }
+void MissingInboundCounterDefaultCases() {
+  const Json counters = {{"statsInboundUplink", true}, {"statsInboundDownlink", true}};
+  const Json levels = {{"8", {{"bufferSize", 3}, {"handshake", 4}}}};
+  const std::vector<std::pair<Json, Json>> cases = {
+      {Json::object(), {{"system", counters}}},
+      {{{"levels", levels}}, {{"levels", levels}, {"system", counters}}},
+      {{{"levels", levels}, {"system", Json::object()}, {"future", {{"keep", true}}}},
+       {{"levels", levels}, {"system", counters}, {"future", {{"keep", true}}}}},
+      {{{"System", {{"StatsOutboundUplink", false}}}},
+       {{"System", {{"StatsOutboundUplink", false}, {"statsInboundUplink", true}, {"statsInboundDownlink", true}}}}},
+      {{{u8"ſyſtem", {{u8"StatſInboundUplink", false}, {"future", 9}}}},
+       {{u8"ſyſtem", {{u8"StatſInboundUplink", false}, {"future", 9}, {"statsInboundDownlink", true}}}}},
+      {{{"system", {{"statsInboundUplink", nullptr}}}},
+       {{"system", {{"statsInboundUplink", nullptr}, {"statsInboundDownlink", true}}}}},
+      {Json(nullptr), Json(nullptr)},
+      {{{"system", nullptr}}, {{"system", nullptr}}},
+      {{{"system", {{"statsInboundUplink", false}, {"statsInboundDownlink", nullptr}}}},
+       {{"system", {{"statsInboundUplink", false}, {"statsInboundDownlink", nullptr}}}}},
+      {{{"system", Json::object()}, {"System", Json::object()}},
+       {{"system", Json::object()}, {"System", Json::object()}}},
+      {{{"system", {{"statsInboundUplink", false}, {"StatsInboundUplink", true}}}},
+       {{"system", {{"statsInboundUplink", false}, {"StatsInboundUplink", true}}}}},
+  };
+  for (const auto& test : cases) {
+    Json prepared = {{"policy", test.first}};
+    Check(AddApi(prepared, 10085), "missing inbound counter defaults rejected policy");
+    Check(prepared["policy"] == test.second,
+        ("counter defaults mismatch: actual=" + prepared["policy"].dump() + " expected=" + test.second.dump()).c_str());
+    const auto first = prepared.dump();
+    Check(AddApi(prepared, 0) && prepared.dump() == first, "counter preparation is not idempotent");
+  }
+  for (const Json& service : {Json{{"api", Json::object()}}, Json{{"api", nullptr}}, Json{{"stats", nullptr}}}) {
+    auto prepared = service; prepared["policy"] = {{"levels", levels}};
+    Check(AddApi(prepared, 10085) && prepared["policy"] == Json{{"levels", levels}},
+        "caller API or explicit null statistics acquired new counter defaults");
+  }
+}
 void CallerServicePreservationCases() {
   std::ifstream input("tool/fixtures/compatibility/full-config.json");
   Check(input.good(), "shared full-config corpus is required");
@@ -291,7 +328,12 @@ void CallerServicePreservationCases() {
     auto verify = [&](const std::string& prepared) {
       const auto result = Parse(prepared);
       for (const auto* key : {"api", "stats", "policy"}) {
-        if (source.contains(key)) Check(result.contains(key) && result[key] == source[key], "caller API/stats/policy subtree changed");
+        if (source.contains(key)) {
+          auto expected = source[key];
+          if (std::string(key) == "policy" && item["name"] == "private_api_retains_caller_stats_policy")
+            expected["system"] = {{"statsInboundUplink", true}, {"statsInboundDownlink", true}};
+          Check(result.contains(key) && result[key] == expected, "caller API/stats/policy subtree changed beyond missing inbound defaults");
+        }
       }
       if (!source.contains("api")) Check(ApiPort(prepared).has_value(), "absent caller API lost the library-owned listener");
       Check(OwnedApiPort(original, prepared).has_value() == !source.contains("api"), "caller API was treated as a plugin-owned statistics endpoint");
@@ -554,6 +596,7 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::string(argv[1]) == "--asset-location") { AssetLocationCases(); return 0; }
   XdriveServiceCases();
   StaticDnsAliasCases();
+  MissingInboundCounterDefaultCases();
   CallerServicePreservationCases();
   OwnedApiPortCases();
   UnixInputProxyPreparationCases();

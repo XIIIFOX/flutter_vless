@@ -112,7 +112,7 @@ jobs:
           if ($log -notmatch 'WINDOWS_PACKET_PROBE_EXCLUSION_PURE_PASS=8') { throw 'Packet-probe listener exclusion and cleanup were not tested' }
           if ($log -notmatch 'WINDOWS_TRAFFIC_SOURCE_GUARD_PASS=4') { throw 'Actual traffic consumer wiring was not tested' }
           if ($log -notmatch 'WINDOWS_TRAFFIC_WIRE_PASS=11') { throw 'Shared Core counter wire cases were not tested' }
-          if ($log -notmatch 'WINDOWS_TRAFFIC_CONSUMER_PASS=12') { throw 'Owned counter selection and status lifecycle were not tested' }
+          if ($log -notmatch 'WINDOWS_TRAFFIC_CONSUMER_PASS=13') { throw 'Owned counter selection, elapsed rates and status lifecycle were not tested' }
       - name: Require numeric IPv6 native controls and bind compiled inputs
         shell: pwsh
         run: |

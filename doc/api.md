@@ -144,6 +144,14 @@ Optional parameters:
   runtimes supply the factory; the actual loaded artifact is checked. Update
   the copied iOS provider together with the plugin.
 
+Traffic events use bytes for `upload`/`download` and bytes per second for
+`uploadSpeed`/`downloadSpeed`. The plugin enables missing inbound statistics
+defaults when it owns Core's API, including full profiles with caller policy
+levels or `system: {}`. Explicit disabled values and caller API settings are
+preserved; Core-based counters can be unavailable in those cases. Apple VPN
+sessions use packet-worker counters. First samples and counter resets establish
+a new speed baseline rather than producing a spike or a negative rate.
+
 Validation:
 
 `startVless()` validates `config` before forwarding it to native code. It throws

@@ -82,6 +82,7 @@ if os.environ.get('APPLE_RUNTIME_PROBE_MODE') == 'fakedns-only':
         assert marker not in text, 'Private marker escaped'
     print('PASS: stock Apple SDK FakeDNS only, 2 generations')
     raise SystemExit(0)
+assert text.splitlines().count('MACOS_COUNTERS_MISSING_POLICY_DEFAULTS_PASS=2') == 1
 assert 'MACOS_COUNTERS_AND_API_PASSTHROUGH_PASS' in text
 for marker in ['MACOS_COUNTERS_UNTAGGED_UNAVAILABLE_PASS', 'MACOS_COUNTERS_DISABLED_UNAVAILABLE_PASS']:
     assert text.splitlines().count(marker) == 1, marker

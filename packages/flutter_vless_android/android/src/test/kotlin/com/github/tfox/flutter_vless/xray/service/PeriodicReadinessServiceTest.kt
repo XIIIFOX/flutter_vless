@@ -2,6 +2,7 @@ package com.github.tfox.flutter_vless.xray.service
 
 import android.content.Intent
 import android.app.Notification
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import com.github.tfox.flutter_vless.xray.core.LocalProxyCredentials
 import com.github.tfox.flutter_vless.xray.core.ReadinessFailure
@@ -15,6 +16,7 @@ import org.junit.Test
 import org.mockito.Answers
 import org.mockito.Mockito
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -24,6 +26,7 @@ import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /** Actual scheduled tick and Stop command; all probes/sockets/processes are mocks. */
@@ -245,6 +248,77 @@ class PeriodicReadinessServiceTest {
         assertEquals(listOf(ReadinessStage.PRIVATE_CHALLENGE, ReadinessStage.PACKET_CHALLENGE), stages)
         assertEquals(1, f.broadcasts.size); assertEquals(1, f.scheduled.size)
         assertTrue(f.recovery.authorized)
+    }
+
+    /** Real Stop revokes on the caller while queued worker cleanup cannot yet
+     * destroy Core. A process-identity check alone therefore cannot admit it. */
+    @Test(timeout = 10000) fun actualStopDuringStatsQueryCannotPublishConnectedOrRearm() = fixture { f ->
+        onProbe(f.probe) { _, _ -> }
+        AppConfigs.V2RAY_CONFIG!!.runtimeTrafficInboundTag = "owned-stats"
+        Mockito.doReturn(ApplicationInfo().apply { nativeLibraryDir = "/synthetic/apk/lib" })
+            .`when`(f.service).applicationInfo
+        val entered = CountDownLatch(1); val released = CountDownLatch(1); val finished = CountDownLatch(1)
+        val failure = AtomicReference<Throwable?>()
+        f.arm()
+        val thread = Thread({
+            try {
+                withStatsReply({
+                    entered.countDown()
+                    check(released.await(3, TimeUnit.SECONDS)) { "Stop waited for a blocked stats CLI" }
+                }) { f.fire() }
+            } catch (error: Throwable) { failure.set(error) }
+            finally { finished.countDown() }
+        }, "stats-publication-inert-test")
+        thread.start()
+        try {
+            assertTrue("Stats query reached its blocking response", entered.await(2, TimeUnit.SECONDS))
+            f.stop()
+            assertFalse(f.recovery.authorized)
+            assertEquals("Stop queues cleanup without waiting for statistics", 1, f.cleanup.size)
+            Mockito.verify(f.child, Mockito.never()).destroy()
+            released.countDown()
+            assertTrue(finished.await(700, TimeUnit.MILLISECONDS))
+            assertNull(failure.get())
+            assertTrue("An old stats response must not publish Connected after Stop", f.broadcasts.isEmpty())
+            assertTrue("A stopped generation must not schedule another tick", f.scheduled.isEmpty())
+        } finally {
+            released.countDown(); thread.join(3000)
+            assertFalse("Owned inert stats worker leaked", thread.isAlive)
+        }
+    }
+
+    @Test fun replacedCoreDuringStatsQueryCannotPublishConnectedOrRearm() = fixture { f ->
+        onProbe(f.probe) { _, _ -> }
+        AppConfigs.V2RAY_CONFIG!!.runtimeTrafficInboundTag = "owned-stats"
+        Mockito.doReturn(ApplicationInfo().apply { nativeLibraryDir = "/synthetic/apk/lib" })
+            .`when`(f.service).applicationInfo
+        withStatsReply({ f.replaceCore() }) { f.arm(); f.fire() }
+        assertTrue("A response for the old child must not publish even zero-valued Connected", f.broadcasts.isEmpty())
+        assertTrue(f.scheduled.isEmpty())
+        Mockito.verify(f.child, Mockito.never()).destroy()
+    }
+
+    private fun withStatsReply(beforeRead: () -> Unit, body: () -> Unit) {
+        Mockito.mockConstruction(ProcessBuilder::class.java) { builder, _ ->
+            Mockito.`when`(builder.redirectErrorStream(true)).thenReturn(builder)
+            val reply = Mockito.mock(Process::class.java)
+            val first = AtomicBoolean(true)
+            val input = ByteArrayInputStream("""{"stat":[
+                {"name":"inbound>>>owned-stats>>>traffic>>>uplink","value":8192},
+                {"name":"inbound>>>owned-stats>>>traffic>>>downlink","value":131072}]}""".toByteArray())
+            Mockito.`when`(reply.inputStream).thenAnswer {
+                if (first.compareAndSet(true, false)) beforeRead()
+                input
+            }
+            Mockito.`when`(reply.errorStream).thenReturn(ByteArrayInputStream(byteArrayOf()))
+            Mockito.`when`(reply.outputStream).thenReturn(ByteArrayOutputStream())
+            Mockito.`when`(reply.isAlive).thenReturn(false)
+            Mockito.`when`(reply.exitValue()).thenReturn(0)
+            Mockito.`when`(builder.start()).thenReturn(reply)
+        }.use { queries ->
+            body()
+            assertEquals("The actual traffic CLI was queried once", 1, queries.constructed().size)
+        }
     }
 
     @Test fun actualPeriodicStagesCannotRefreshTheAbsoluteBudget() = fixture { f ->

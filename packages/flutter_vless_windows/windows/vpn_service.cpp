@@ -404,6 +404,7 @@ void VpnService::UpdateTrafficStats() {
       && flutter_vless::native::Command(xray_executable_path_, {L"api", L"statsquery", L"-server=127.0.0.1:" + std::to_wstring(api_port_)}, output)
       && flutter_vless::traffic::ParseStats(output, stats))
     sample = flutter_vless::traffic::Select(stats, routing_provenance_.managed_tag);
+  sample.observed_at = std::chrono::steady_clock::now();
   std::lock_guard<std::mutex> lock(stats_mutex_); traffic_sample_ = sample;
 }
 flutter_vless::traffic::Sample VpnService::GetTrafficSample() {

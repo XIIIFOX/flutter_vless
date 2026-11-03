@@ -558,6 +558,7 @@ PY
 }
 
 instrument bundled-geodata "$CLASS_PREFIX.BundledGeoAssetsDeviceTest" 2 0
+instrument traffic-counters "$CLASS_PREFIX.TrafficCountersDeviceTest" 3 0
 instrument native-options "$CLASS_PREFIX.NativeOptionsDeviceTest" 2 0
 instrument native-quick-tile "$CLASS_PREFIX.NativeQuickTileDeviceTest" 3 0
 instrument native-preview-broker "$CLASS_PREFIX.NativePreviewBrokerDeviceTest" 4 0

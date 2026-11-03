@@ -499,7 +499,7 @@ class XrayVPNService : VpnService() {
             recovery.recovered()
             connectedAt = System.nanoTime()
             event(Event.CONNECTED)
-            XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_CONNECTED)
+            if (!publishConnected(owner)) return
             showForeground("Connected")
             tick(owner, 0)
         } catch (_: Exception) { if (recovery.owns(owner)) recover(if (tun == null) Event.TUN_FAILED else Event.WORKER_START_FAILED) }
@@ -583,6 +583,19 @@ class XrayVPNService : VpnService() {
         worker.schedule({ restartWorkers(next) }, delay, TimeUnit.MILLISECONDS)
     }
 
+    /** Stats CLI I/O stays outside the recovery lock. Admit only this same
+     * generation/child's final state update and broadcast under that lock. */
+    private fun publishConnected(owner: Long, seconds: Long = 0,
+        expectedChild: Process? = XrayCoreManager.currentCoreProcess()): Boolean {
+        val child = expectedChild ?: return false
+        return XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_CONNECTED, seconds) { publish ->
+            synchronized(recovery) {
+                if (!recovery.owns(owner) || !XrayCoreManager.ownsCoreProcess(child)) false
+                else { publish(); true }
+            }
+        }
+    }
+
     private fun tick(owner: Long, count: Int) {
         worker.schedule({
             if (!recovery.owns(owner)) return@schedule
@@ -613,7 +626,11 @@ class XrayVPNService : VpnService() {
                 return false
             }
             if (!healthOwnerCurrent()) return@schedule
-            XrayCoreManager.publishState(this, AppConfigs.V2RAY_STATES.V2RAY_CONNECTED, (System.nanoTime() - connectedAt) / 1_000_000_000)
+            if (!publishConnected(owner, (System.nanoTime() - connectedAt) / 1_000_000_000,
+                    checkedChild ?: XrayCoreManager.currentCoreProcess())) {
+                healthOwnerCurrent()
+                return@schedule
+            }
             if (healthOwnerCurrent()) tick(owner, count + 1)
         }, 1, TimeUnit.SECONDS)
     }

@@ -506,6 +506,15 @@ private actor ServerDelayRunner {
     }
 }
 
+// Exact integer B/s from monotonic nanoseconds; saturate instead of overflowing.
+private func trafficBytesPerSecond(_ delta: Int64, elapsed: UInt64) -> Int64 {
+    guard delta > 0, elapsed > 0 else { return 0 }
+    let scaled = UInt64(delta).multipliedFullWidth(by: 1_000_000_000)
+    guard scaled.high < elapsed else { return Int64.max }
+    let rate = elapsed.dividingFullWidth(scaled).quotient
+    return rate > UInt64(Int64.max) ? Int64.max : Int64(rate)
+}
+
 private final class ProxyOnlyRunner {
     private let logger = PluginXRayLogger()
     private(set) var isRunning = false
@@ -636,6 +645,8 @@ private final class ProxyOnlyRunner {
     private var activeCounterTag: String?
     private var previousUpload: Int64?
     private var previousDownload: Int64?
+    private var previousCounterTime: UInt64?
+    private var counterClock: () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }
     private let proxyCounterLock = NSLock()
 
     private func clearProxyCounterSession() {
@@ -654,6 +665,7 @@ private final class ProxyOnlyRunner {
         totalUpload = 0; totalDownload = 0
         uploadSpeed = 0; downloadSpeed = 0
         previousUpload = nil; previousDownload = nil
+        previousCounterTime = nil
     }
 
     private static func counterValue(_ raw: String, name: String) -> Int64? {
@@ -681,15 +693,18 @@ private final class ProxyOnlyRunner {
         let raw = XRayQueryStats("")
         let up = Self.counterValue(raw, name: "inbound>>>\(tag)>>>traffic>>>uplink")
         let down = Self.counterValue(raw, name: "inbound>>>\(tag)>>>traffic>>>downlink")
+        let now = counterClock()
+        let elapsed = previousCounterTime.map { now > $0 ? now - $0 : 0 } ?? 0
         if let up {
-            uploadSpeed = previousUpload.map { up >= $0 ? up - $0 : 0 } ?? 0
+            uploadSpeed = previousUpload.map { up >= $0 ? trafficBytesPerSecond(up - $0, elapsed: elapsed) : 0 } ?? 0
             totalUpload = up
         } else { totalUpload = 0; uploadSpeed = 0 }
         if let down {
-            downloadSpeed = previousDownload.map { down >= $0 ? down - $0 : 0 } ?? 0
+            downloadSpeed = previousDownload.map { down >= $0 ? trafficBytesPerSecond(down - $0, elapsed: elapsed) : 0 } ?? 0
             totalDownload = down
         } else { totalDownload = 0; downloadSpeed = 0 }
         previousUpload = up; previousDownload = down
+        previousCounterTime = now
         return (totalUpload, totalDownload, uploadSpeed, downloadSpeed)
     }
     func forceCleanup() { stop() }
@@ -760,6 +775,13 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private var totalDownload: Int = 0
     private var uploadSpeed: Int = 0
     private var downloadSpeed: Int = 0
+    // A provider reply belongs to one timer and one VPN connection only.
+    private var trafficPollingGeneration: UInt64 = 0
+    private var trafficPollInFlight = false
+    private var previousTrafficSampleTime: UInt64?
+    private var previousTrafficUpload: Int?
+    private var previousTrafficDownload: Int?
+    private var trafficClock: () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }
     private var lastTrafficLogDate: Date = .distantPast
     private var lastProviderDebugLogDate: Date = .distantPast
     private var lastNetworkSnapshotLogDate: Date = .distantPast
@@ -854,6 +876,8 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
         pluginDebug("Starting traffic polling timer reason=\(reason) mainThread=\(Thread.isMainThread) eventSink=\(self.eventSink != nil) vpnStatus=\(self.packetTunnelManager?.status?.rawValue ?? -1)")
         self.timer?.invalidate()
+        self.trafficPollingGeneration &+= 1
+        self.trafficPollInFlight = false
         emitStatus(duration: currentDurationSeconds(), state: initialState ?? currentWireState(), reason: "timer-start:\(reason)")
         logSystemNetworkSnapshot(reason: "timer-start:\(reason)")
         let timer = Timer(timeInterval: 1, repeats: true, block: { [weak self] _ in
@@ -885,16 +909,43 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             let elapsed = Date().timeIntervalSince(self.packetTunnelManager?.connectedDate ?? Date())
             let seconds = Int(elapsed)
             self.emitStatus(duration: seconds, state: self.currentWireState(), reason: "timer-vpn")
+            guard let manager = self.packetTunnelManager,
+                  manager.status == .connected || manager.status == .reasserting,
+                  !self.trafficPollInFlight else { return }
+            let generation = self.trafficPollingGeneration
+            let connectedDate = manager.connectedDate
+            self.trafficPollInFlight = true
             Task { @MainActor in
-                await self.packetTunnelManager?.refreshForwardingState()
+                defer {
+                    if self.trafficPollingGeneration == generation {
+                        self.trafficPollInFlight = false
+                    }
+                }
+                guard self.isCurrentTrafficPoll(manager, connectedDate: connectedDate, generation: generation) else { return }
+                await manager.refreshForwardingState()
+                guard self.isCurrentTrafficPoll(manager, connectedDate: connectedDate, generation: generation) else { return }
                 do{
-                    let response =  try await self.packetTunnelManager?.sendProviderMessage(data: "xray_traffic".data(using: .utf8)!)
+                    let response = try await manager.sendProviderMessage(data: "xray_traffic".data(using: .utf8)!)
+                    guard self.isCurrentTrafficPoll(manager, connectedDate: connectedDate, generation: generation) else { return }
+                    self.uploadSpeed = 0
+                    self.downloadSpeed = 0
+                    let previousTime = self.previousTrafficSampleTime
+                    let previousUp = self.previousTrafficUpload
+                    let previousDown = self.previousTrafficDownload
+                    self.previousTrafficSampleTime = nil
+                    self.previousTrafficUpload = nil
+                    self.previousTrafficDownload = nil
                     if response != nil{
                         let traffic = String(decoding: response!, as: UTF8.self)
                         let parts = traffic.split(separator: ",")
-                        if parts.count >= 2, let up = Int(parts[0]), let down = Int(parts[1]) {
-                            self.uploadSpeed = up - self.totalUpload
-                            self.downloadSpeed = down - self.totalDownload
+                        if parts.count >= 2, let up = Int(parts[0]), let down = Int(parts[1]), up >= 0, down >= 0 {
+                            let now = self.trafficClock()
+                            let elapsed = previousTime.map { now > $0 ? now - $0 : 0 } ?? 0
+                            self.uploadSpeed = previousUp.map { up >= $0 ? Int(trafficBytesPerSecond(Int64(up - $0), elapsed: elapsed)) : 0 } ?? 0
+                            self.downloadSpeed = previousDown.map { down >= $0 ? Int(trafficBytesPerSecond(Int64(down - $0), elapsed: elapsed)) : 0 } ?? 0
+                            self.previousTrafficUpload = up
+                            self.previousTrafficDownload = down
+                            self.previousTrafficSampleTime = now
                             self.totalUpload = up
                             self.totalDownload = down
                             if Date().timeIntervalSince(self.lastTrafficLogDate) >= 5 {
@@ -909,6 +960,12 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                         pluginDebug("Traffic polling returned nil provider response")
                     }
                 }catch{
+                    guard self.isCurrentTrafficPoll(manager, connectedDate: connectedDate, generation: generation) else { return }
+                    self.uploadSpeed = 0
+                    self.downloadSpeed = 0
+                    self.previousTrafficSampleTime = nil
+                    self.previousTrafficUpload = nil
+                    self.previousTrafficDownload = nil
                     pluginDebug("Error polling traffic: \(error.localizedDescription)")
                 }
             }
@@ -932,6 +989,8 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
 
         pluginDebug("Stopping traffic polling timer reason=\(reason) hadTimer=\(self.timer != nil) eventSink=\(self.eventSink != nil)")
+        self.trafficPollingGeneration &+= 1
+        self.trafficPollInFlight = false
         self.timer?.invalidate()
         self.timer = nil
         emitStatus(duration: 0, state: "DISCONNECTED", reason: "timer-stop:\(reason)")
@@ -939,10 +998,20 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         self.downloadSpeed = 0
         self.totalUpload = 0
         self.totalDownload = 0
+        self.previousTrafficSampleTime = nil
+        self.previousTrafficUpload = nil
+        self.previousTrafficDownload = nil
         self.lastProviderDebugLogDate = .distantPast
         self.lastNetworkSnapshotLogDate = .distantPast
         self.lastAppNetworkProbeDate = .distantPast
         self.didScheduleConnectedDiagnostics = false
+    }
+
+    private func isCurrentTrafficPoll(_ manager: PacketTunnelManager, connectedDate: Date?, generation: UInt64) -> Bool {
+        timer != nil && trafficPollingGeneration == generation
+            && packetTunnelManager === manager && manager.connectedDate == connectedDate
+            && !proxyOnlyRunner.isRunning
+            && (manager.status == .connected || manager.status == .reasserting)
     }
 
     private func currentDurationSeconds() -> Int {

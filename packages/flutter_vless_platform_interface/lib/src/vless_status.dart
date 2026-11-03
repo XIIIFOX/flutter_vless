@@ -59,10 +59,10 @@ class VlessStatus {
   /// Number of seconds reported by the native runtime since session start.
   final int duration;
 
-  /// Current upload speed reported by the native runtime.
+  /// Current upload speed in bytes per second, reported by the native runtime.
   final int uploadSpeed;
 
-  /// Current download speed reported by the native runtime.
+  /// Current download speed in bytes per second, reported by the native runtime.
   final int downloadSpeed;
 
   /// Total uploaded bytes reported by the native runtime.

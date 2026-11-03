@@ -277,6 +277,7 @@ void ProxyService::UpdateTrafficStats() {
   flutter_vless::traffic::Stats stats;
   if (api_client_ && !tag.empty() && api_client_->GetStats(stats))
     sample = flutter_vless::traffic::Select(stats, tag);
+  sample.observed_at = std::chrono::steady_clock::now();
   std::lock_guard<std::mutex> lock(stats_mutex_); traffic_sample_ = sample;
 }
 flutter_vless::traffic::Sample ProxyService::GetTrafficSample() {

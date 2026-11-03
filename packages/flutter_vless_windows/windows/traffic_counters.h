@@ -1,5 +1,6 @@
 #pragma once
 #include "xray_config.h"
+#include <chrono>
 #include <limits>
 #include <map>
 #include <optional>
@@ -8,6 +9,8 @@
 namespace flutter_vless::traffic {
 struct Sample {
   std::optional<int64_t> upload, download;
+  // Timestamp the completed query, not each later read of this cached sample.
+  std::optional<std::chrono::steady_clock::time_point> observed_at = std::nullopt;
 };
 using Stats = std::map<std::string, std::optional<int64_t>>;
 
@@ -71,4 +74,36 @@ struct Baseline {
   }
   void Reset() { previous.reset(); }
 };
+
+// Exact floor(delta * 1e9 / elapsed), saturating at the public int64 limit.
+// The fractional long division is portable to MSVC without a 128-bit type.
+inline int64_t BytesPerSecond(int64_t delta, uint64_t elapsed_nanoseconds) {
+  if (delta <= 0 || elapsed_nanoseconds == 0) return 0;
+  constexpr uint64_t scale = 1000000000;
+  constexpr auto maximum = static_cast<uint64_t>(INT64_MAX);
+  const auto bytes = static_cast<uint64_t>(delta);
+  const auto whole = bytes / elapsed_nanoseconds;
+  if (whole > maximum / scale) return INT64_MAX;
+  const auto integer = whole * scale;
+  const auto remainder = bytes % elapsed_nanoseconds;
+  uint64_t fraction = 0, rest = 0;
+  for (int bit = 29; bit >= 0; --bit) {
+    fraction *= 2;
+    if (rest >= elapsed_nanoseconds - rest) {
+      rest -= elapsed_nanoseconds - rest;
+      ++fraction;
+    } else {
+      rest *= 2;
+    }
+    if ((scale >> bit) & 1) {
+      if (rest >= elapsed_nanoseconds - remainder) {
+        rest -= elapsed_nanoseconds - remainder;
+        ++fraction;
+      } else {
+        rest += remainder;
+      }
+    }
+  }
+  return integer > maximum - fraction ? INT64_MAX : static_cast<int64_t>(integer + fraction);
+}
 }  // namespace flutter_vless::traffic

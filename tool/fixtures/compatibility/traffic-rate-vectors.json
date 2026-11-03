@@ -1,0 +1,122 @@
+[
+  {
+    "delta": "0",
+    "elapsedNanoseconds": "1",
+    "bytesPerSecond": "0"
+  },
+  {
+    "delta": "1",
+    "elapsedNanoseconds": "0",
+    "bytesPerSecond": "0"
+  },
+  {
+    "delta": "1",
+    "elapsedNanoseconds": "1",
+    "bytesPerSecond": "1000000000"
+  },
+  {
+    "delta": "1",
+    "elapsedNanoseconds": "500000000",
+    "bytesPerSecond": "2"
+  },
+  {
+    "delta": "1",
+    "elapsedNanoseconds": "2000000000",
+    "bytesPerSecond": "0"
+  },
+  {
+    "delta": "5",
+    "elapsedNanoseconds": "2000000000",
+    "bytesPerSecond": "2"
+  },
+  {
+    "delta": "300",
+    "elapsedNanoseconds": "3000000000",
+    "bytesPerSecond": "100"
+  },
+  {
+    "delta": "50",
+    "elapsedNanoseconds": "500000000",
+    "bytesPerSecond": "100"
+  },
+  {
+    "delta": "9223372036854775807",
+    "elapsedNanoseconds": "1",
+    "bytesPerSecond": "9223372036854775807"
+  },
+  {
+    "delta": "9223372036854775807",
+    "elapsedNanoseconds": "999999999",
+    "bytesPerSecond": "9223372036854775807"
+  },
+  {
+    "delta": "9223372036854775807",
+    "elapsedNanoseconds": "1000000000",
+    "bytesPerSecond": "9223372036854775807"
+  },
+  {
+    "delta": "9223372036854775807",
+    "elapsedNanoseconds": "1000000001",
+    "bytesPerSecond": "9223372027631403779"
+  },
+  {
+    "delta": "9223372036854775807",
+    "elapsedNanoseconds": "3000000000",
+    "bytesPerSecond": "3074457345618258602"
+  },
+  {
+    "delta": "9223372036854775807",
+    "elapsedNanoseconds": "9223372036854775807",
+    "bytesPerSecond": "1000000000"
+  },
+  {
+    "delta": "9223372036854775806",
+    "elapsedNanoseconds": "9223372036854775807",
+    "bytesPerSecond": "999999999"
+  },
+  {
+    "delta": "9223372036",
+    "elapsedNanoseconds": "1",
+    "bytesPerSecond": "9223372036000000000"
+  },
+  {
+    "delta": "9223372037",
+    "elapsedNanoseconds": "1",
+    "bytesPerSecond": "9223372036854775807"
+  },
+  {
+    "delta": "1234567890123456789",
+    "elapsedNanoseconds": "987654321",
+    "bytesPerSecond": "1249999988734374999"
+  },
+  {
+    "delta": "7654321098765432101",
+    "elapsedNanoseconds": "7777777777",
+    "bytesPerSecond": "984126998511111112"
+  },
+  {
+    "delta": "37",
+    "elapsedNanoseconds": "61",
+    "bytesPerSecond": "606557377"
+  },
+  {
+    "delta": "61",
+    "elapsedNanoseconds": "37",
+    "bytesPerSecond": "1648648648"
+  },
+  {
+    "delta": "1000000001",
+    "elapsedNanoseconds": "1000000000",
+    "bytesPerSecond": "1000000001"
+  },
+  {
+    "delta": "999999999",
+    "elapsedNanoseconds": "1000000000",
+    "bytesPerSecond": "999999999"
+  },
+  {
+    "delta": "9223372036854775807",
+    "elapsedNanoseconds": "9223372036854775806",
+    "bytesPerSecond": "1000000000"
+  }
+]

@@ -242,7 +242,7 @@ private final class Manager {
                   (actual.map { ";UP=\($0.0);DOWN=\($0.1)" } ?? ""))
             if !ok { failures += 1 }
         }
-        func sample(_ name: String, tag: String? = "selected-primary", policy: Any? = nil,
+        func sample(_ name: String, tag: String? = "selected-primary", policy: Any? = nil, preparedPolicy: Any? = nil,
                     extraInputs: [[String: Any]] = [], reply: (String) -> String,
                     expected: (Int64?, Int64?), after: ((ActualProxyRunner, String) -> Void)? = nil) throws {
             var primary: [String: Any] = ["listen": "127.0.0.1", "port": 18095, "protocol": "socks"]
@@ -256,6 +256,7 @@ private final class Manager {
             events = []; checkedData = []; startedData = []; prepareCount = 0
             available = true; coreCode = 0; assetFailure = false; rejectPreparedCheck = false
             let subject = ActualProxyRunner()
+            subject.fixtureSetTime(1_000_000_000)
             try subject.start(configData: sourceData, geoAssetsDirectory: nil)
             defer { subject.stop() }
             precondition(prepareCount == 1 && startedData.count == 1 && checkedData == startedData)
@@ -265,7 +266,7 @@ private final class Manager {
             let selectedTag = selected["tag"] as? String
             precondition(selectedTag == tag && inputs as NSArray == source["inbounds"] as! NSArray)
             if let policy {
-                precondition(NSDictionary(dictionary: ["value": prepared["policy"]!]) == NSDictionary(dictionary: ["value": policy]))
+                precondition(NSDictionary(dictionary: ["value": prepared["policy"]!]) == NSDictionary(dictionary: ["value": preparedPolicy ?? policy]))
             } else {
                 let system = (prepared["policy"] as! [String: Any])["system"] as! [String: Any]
                 check("absent-policy-inbound-default", system["statsInboundUplink"] as? Bool == true && system["statsInboundDownlink"] as? Bool == true)
@@ -308,7 +309,9 @@ private final class Manager {
                    reply: { owned($0, 11, 22) }, expected: (nil, nil))
         try sample("disabled-policy", policy: ["system": enabled.mapValues { _ in false }], reply: { _ in "" }, expected: (nil, nil))
         try sample("null-policy", policy: NSNull(), reply: { _ in "" }, expected: (nil, nil))
-        try sample("levels-only-policy", policy: ["levels": ["0": ["bufferSize": 3]]], reply: { _ in "" }, expected: (nil, nil))
+        try sample("levels-only-policy", policy: ["levels": ["0": ["bufferSize": 3]]],
+                   preparedPolicy: ["levels": ["0": ["bufferSize": 3]], "system": ["statsInboundUplink": true, "statsInboundDownlink": true]],
+                   reply: { owned($0, 11, 22) }, expected: (11, 22))
         try sample("default-policy", reply: { _ in "" }, expected: (nil, nil))
         for invalid in ["", "-1", "not-a-number", "9223372036854775808"] {
             try sample("invalid-up-\(invalid)", policy: ["system": enabled],
@@ -316,19 +319,33 @@ private final class Manager {
                                 "inbound>>>\($0)>>>traffic>>>downlink>>>22\n" }, expected: (nil, 22))
         }
         try sample("baseline-gaps-reset", policy: ["system": enabled], reply: { owned($0, 0, 0) }, expected: (0, 0)) { subject, tag in
+            subject.fixtureSetTime(2_000_000_000)
             counterReply = owned(tag, 5, 7)
             let increased = subject.queryTrafficStats()
             check("zero-is-available-baseline", increased.uploadSpeed == 5 && increased.downloadSpeed == 7)
+            subject.fixtureSetTime(4_000_000_000)
             counterReply = "inbound>>>\(tag)>>>traffic>>>downlink>>>9\n"
             let partial = subject.queryTrafficStats()
-            check("gap-direction-local", partial.uploadSpeed == 0 && partial.downloadSpeed == 2)
+            check("gap-direction-local-two-second-rate", partial.uploadSpeed == 0 && partial.downloadSpeed == 1)
+            subject.fixtureSetTime(4_500_000_000)
             counterReply = owned(tag, 8, 1)
             let resumed = subject.queryTrafficStats()
             check("gap-and-reset-first-speed-zero", resumed.uploadSpeed == 0 && resumed.downloadSpeed == 0)
+            subject.fixtureSetTime(7_500_000_000)
+            counterReply = owned(tag, 308, 601)
+            let delayed = subject.queryTrafficStats()
+            check("three-second-proxy-rate", delayed.uploadSpeed == 100 && delayed.downloadSpeed == 200)
+            subject.fixtureSetTime(8_000_000_000)
+            counterReply = owned(tag, 358, 701)
+            let short = subject.queryTrafficStats()
+            check("half-second-proxy-rate", short.uploadSpeed == 100 && short.downloadSpeed == 200)
+            counterReply = owned(tag, 360, 703)
+            let sameTime = subject.queryTrafficStats()
+            check("zero-interval-proxy-rate", sameTime.uploadSpeed == 0 && sameTime.downloadSpeed == 0)
             subject.stop()
             try! subject.start(configData: startedData[0], geoAssetsDirectory: nil)
             let restarted = subject.queryTrafficStats()
-            check("restart-clears-baselines", restarted.upload == 8 && restarted.download == 1 &&
+            check("restart-clears-baselines", restarted.upload == 360 && restarted.download == 703 &&
                   restarted.uploadSpeed == 0 && restarted.downloadSpeed == 0)
         }
 

@@ -15,6 +15,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 import java.io.File
 import java.io.IOException
+import java.math.BigInteger
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -27,6 +28,7 @@ object XrayCoreManager {
     private var runtimeInputs: NativeRuntimeConfig.Inputs? = null
     private var lastProxyUplink: Long? = null
     private var lastProxyDownlink: Long? = null
+    private var lastTrafficSampleNanos: Long? = null
     private fun nextFreePort(preferredPort: Int, usedPorts: Set<Int>, tcpAvailable: ((Int) -> Boolean)?): Int {
         require(preferredPort in 1..65535) { "Invalid private listener port" }
         var attempts = 0
@@ -280,6 +282,27 @@ object XrayCoreManager {
         if (!json.has("policy")) json.put("policy", JSONObject().put("system", JSONObject()
             .put("statsOutboundUplink", true).put("statsOutboundDownlink", true)
             .put("statsInboundUplink", true).put("statsInboundDownlink", true)))
+        else if (!json.has("api") && json.optJSONObject("stats") != null) {
+            // A caller's levels-only/empty system policy does not explicitly
+            // disable our inbound counters. Add just the missing defaults for
+            // the owned stats API, retaining all explicit values and aliases.
+            // Ambiguous/invalid caller shapes remain Core's interpretation.
+            json.optJSONObject("policy")?.let { policy ->
+                val systemKeys = policy.keys().asSequence().filter { schemaField(it) == "system" }.toList()
+                val system = when (systemKeys.size) {
+                    0 -> JSONObject().also { policy.put("system", it) }
+                    1 -> policy.optJSONObject(systemKeys.single())
+                    else -> null
+                }
+                system?.let { settings ->
+                    val defaults = listOf("statsInboundUplink", "statsInboundDownlink")
+                    val fields = settings.keys().asSequence().map(::schemaField).toList()
+                    if (defaults.none { key -> fields.count { it == schemaField(key) } > 1 }) {
+                        defaults.filter { schemaField(it) !in fields }.forEach { settings.put(it, true) }
+                    }
+                }
+            }
+        }
         if (json.has("api")) {
             // Zero means no library-owned API. Never query an arbitrary caller
             // service, including when the caller intentionally supplied null.
@@ -474,23 +497,34 @@ object XrayCoreManager {
     fun isXrayRunning() = AppConfigs.V2RAY_STATE != AppConfigs.V2RAY_STATES.V2RAY_DISCONNECTED
     fun getProviderDebugSnapshot(context: Context) = XrayDiagnosticsStore.snapshot(context.filesDir)
 
-    internal fun publishState(context: Context, state: AppConfigs.V2RAY_STATES, seconds: Long = 0) {
-        val changed = AppConfigs.V2RAY_STATE != state
-        AppConfigs.V2RAY_STATE = state
-        if (changed) com.github.tfox.flutter_vless.NativeQuickAccess.refresh(context)
+    /** Gather statistics before the service's short, atomic ownership admission.
+     * Stop can revoke a generation while the bounded CLI is still answering. */
+    internal fun publishState(context: Context, state: AppConfigs.V2RAY_STATES, seconds: Long = 0,
+        commit: ((() -> Unit) -> Boolean)? = null): Boolean {
         val traffic = if (state == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED) getV2rayTraffic(context)
             else { clearTrafficBaselines(); longArrayOf(0, 0, 0, 0) }
-        context.sendBroadcast(Intent(AppConfigs.V2RAY_CONNECTION_INFO).setPackage(context.packageName)
-            .putExtra("STATE", state).putExtra("DURATION", seconds.toString())
-            .putExtra("UPLOAD_SPEED", traffic[0]).putExtra("DOWNLOAD_SPEED", traffic[1])
-            .putExtra("UPLOAD_TRAFFIC", traffic[2]).putExtra("DOWNLOAD_TRAFFIC", traffic[3]))
+        var changed = false
+        val publish = {
+            changed = AppConfigs.V2RAY_STATE != state
+            AppConfigs.V2RAY_STATE = state
+            context.sendBroadcast(Intent(AppConfigs.V2RAY_CONNECTION_INFO).setPackage(context.packageName)
+                .putExtra("STATE", state).putExtra("DURATION", seconds.toString())
+                .putExtra("UPLOAD_SPEED", traffic[0]).putExtra("DOWNLOAD_SPEED", traffic[1])
+                .putExtra("UPLOAD_TRAFFIC", traffic[2]).putExtra("DOWNLOAD_TRAFFIC", traffic[3]))
+        }
+        val accepted = commit?.invoke(publish) ?: run { publish(); true }
+        // Refresh may read persistent options; keep that I/O outside admission.
+        if (accepted && changed) com.github.tfox.flutter_vless.NativeQuickAccess.refresh(context)
+        return accepted
     }
 
     internal fun statsQueryPort(config: XrayConfig?): Int? = config?.LOCAL_API_PORT?.takeIf { it in 1..65535 }
 
     internal data class TrafficSample(val uplink: Long? = null, val downlink: Long? = null)
 
-    private fun clearTrafficBaselines() { lastProxyUplink = null; lastProxyDownlink = null }
+    private fun clearTrafficBaselines() {
+        lastProxyUplink = null; lastProxyDownlink = null; lastTrafficSampleNanos = null
+    }
 
     internal fun readTraffic(context: Context): TrafficSample {
         val config = AppConfigs.V2RAY_CONFIG ?: return TrafficSample()
@@ -523,14 +557,26 @@ object XrayCoreManager {
         } catch (_: Exception) { TrafficSample() }
     }
 
-    fun getV2rayTraffic(context: Context): LongArray {
+    fun getV2rayTraffic(context: Context): LongArray = getV2rayTraffic(context, System::nanoTime)
+
+    /** Public speeds are bytes/second, including time spent in the stats CLI.
+     * A missing direction/reset establishes a new baseline rather than a spike. */
+    internal fun getV2rayTraffic(context: Context, nanoTime: () -> Long): LongArray {
         val sample = readTraffic(context)
-        fun delta(current: Long?, previous: Long?): Long =
-            if (current != null && previous != null && current >= previous) current - previous else 0
-        return longArrayOf(delta(sample.uplink, lastProxyUplink), delta(sample.downlink, lastProxyDownlink),
+        val now = nanoTime()
+        val elapsed = lastTrafficSampleNanos?.let { now - it }?.takeIf { it > 0 }
+        fun rate(current: Long?, previous: Long?): Long {
+            if (elapsed == null || current == null || previous == null || current < previous) return 0
+            // Integer arithmetic retains int64 precision without overflowing a
+            // delta * 1e9 intermediate. Saturate an unrepresentable B/s rate.
+            return BigInteger.valueOf(current - previous).multiply(BigInteger.valueOf(1_000_000_000))
+                .divide(BigInteger.valueOf(elapsed)).min(BigInteger.valueOf(Long.MAX_VALUE)).toLong()
+        }
+        return longArrayOf(rate(sample.uplink, lastProxyUplink), rate(sample.downlink, lastProxyDownlink),
             sample.uplink ?: 0, sample.downlink ?: 0).also {
             lastProxyUplink = sample.uplink
             lastProxyDownlink = sample.downlink
+            lastTrafficSampleNanos = now
         }
     }
 

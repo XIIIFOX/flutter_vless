@@ -19,8 +19,10 @@ final class NativePrivacyTests: XCTestCase {
         XCTAssertEqual((output["inbounds"] as? [[String: Any]])?.first?["port"] as? Int, 10810)
     }
 
-    func testExistingNullLevelsOnlyAndExplicitCounterFlagsDoNotAcquireDefaults() {
-        let policies: [Any] = [NSNull(), [String: Any](), ["levels": ["0": ["handshake": 7]]], ["system": NSNull()], ["System": ["StatsOutboundUplink": false, "statsOutboundDownlink": false]]]
+    func testExplicitNullAndDisabledCounterFlagsRemainAuthoritative() {
+        let policies: [Any] = [NSNull(), ["system": NSNull()],
+            ["system": ["statsInboundUplink": false, "statsInboundDownlink": false]],
+            ["System": ["StatsInboundUplink": false, "StatſInboundDownlink": NSNull()]]]
         for policy in policies {
             for stats: Any in [NSNull(), [String: Any](), ["caller-field": "preserved"]] {
                 var config: [String: Any] = ["Policy": policy, "STATS": stats]
@@ -35,7 +37,7 @@ final class NativePrivacyTests: XCTestCase {
         }
     }
 
-    func testStatisticsDefaultsOnlyFillAbsentRootSections() throws {
+    func testStatisticsDefaultsFillMissingInboundFlagsWithoutReplacingLevels() throws {
         var missing: [String: Any] = [:]
         XCTAssertTrue(XrayPrivacyConfig.apply(to: &missing))
         XCTAssertEqual(missing["stats"] as? NSDictionary, [:] as NSDictionary)
@@ -49,7 +51,42 @@ final class NativePrivacyTests: XCTestCase {
         var levelsOnly: [String: Any] = ["policy": ["levels": ["7": ["handshake": 3]]]]
         XCTAssertTrue(XrayPrivacyConfig.apply(to: &levelsOnly))
         XCTAssertEqual(levelsOnly["stats"] as? NSDictionary, [:] as NSDictionary)
-        XCTAssertEqual(levelsOnly["policy"] as? NSDictionary, ["levels": ["7": ["handshake": 3]]] as NSDictionary)
+        XCTAssertEqual(levelsOnly["policy"] as? NSDictionary, ["levels": ["7": ["handshake": 3]],
+            "system": ["statsInboundUplink": true, "statsInboundDownlink": true]] as NSDictionary)
+    }
+
+    func testMissingCounterFlagsRespectCallerAliasesAndExplicitChoices() {
+        let defaults: [String: Any] = ["statsInboundUplink": true, "statsInboundDownlink": true]
+        let levels: [String: Any] = ["8": ["bufferSize": 3, "handshake": 4]]
+        let cases: [(Any, Any)] = [
+            ([String: Any](), ["system": defaults]),
+            (["levels": levels], ["levels": levels, "system": defaults]),
+            (["levels": levels, "system": [:], "future": ["keep": true]],
+             ["levels": levels, "system": defaults, "future": ["keep": true]]),
+            (["System": ["StatsOutboundUplink": false]],
+             ["System": ["StatsOutboundUplink": false, "statsInboundUplink": true, "statsInboundDownlink": true]]),
+            (["ſyſtem": ["StatſInboundUplink": false, "future": 9]],
+             ["ſyſtem": ["StatſInboundUplink": false, "statsInboundDownlink": true, "future": 9]]),
+            (["system": ["statsInboundUplink": NSNull()]],
+             ["system": ["statsInboundUplink": NSNull(), "statsInboundDownlink": true]]),
+            (["system": [:], "System": [:]], ["system": [:], "System": [:]]),
+            (["system": ["statsInboundUplink": false, "StatsInboundUplink": true]],
+             ["system": ["statsInboundUplink": false, "StatsInboundUplink": true]])
+        ]
+        for (source, expected) in cases {
+            var config: [String: Any] = ["policy": source]
+            XCTAssertTrue(XrayPrivacyConfig.apply(to: &config))
+            XCTAssertEqual(["value": config["policy"]!] as NSDictionary, ["value": expected] as NSDictionary)
+            let first = config as NSDictionary
+            XCTAssertTrue(XrayPrivacyConfig.apply(to: &config))
+            XCTAssertEqual(config as NSDictionary, first, "Counter defaults must be idempotent")
+        }
+        for service: [String: Any] in [["api": [:]], ["api": NSNull()], ["stats": NSNull()]] {
+            var config = service
+            config["policy"] = ["levels": levels]
+            XCTAssertTrue(XrayPrivacyConfig.apply(to: &config))
+            XCTAssertEqual(config["policy"] as? NSDictionary, ["levels": levels] as NSDictionary)
+        }
     }
 
     func testSharedFullConfigServiceCorpusPreservesCallerSubtrees() throws {
@@ -69,7 +106,13 @@ final class NativePrivacyTests: XCTestCase {
                 let key = source.keys.first { XrayJSONField.matches($0, name) }
                 if let key, let expected = source[key] {
                     let actual = try XCTUnwrap(output[name], "Missing caller service section: \(item["name"] as? String ?? "fixture")")
-                    XCTAssertEqual(["value": actual] as NSDictionary, ["value": expected] as NSDictionary)
+                    if name == "policy", item["name"] as? String == "private_api_retains_caller_stats_policy" {
+                        let expectedPolicy: [String: Any] = ["levels": ["8": ["bufferSize": 3, "handshake": 4]],
+                            "system": ["statsInboundUplink": true, "statsInboundDownlink": true]]
+                        XCTAssertEqual(actual as? NSDictionary, expectedPolicy as NSDictionary)
+                    } else {
+                        XCTAssertEqual(["value": actual] as NSDictionary, ["value": expected] as NSDictionary)
+                    }
                 } else if name == "api" {
                     XCTAssertNil(output[name], "Apple must not create a management listener for UI counters")
                 }

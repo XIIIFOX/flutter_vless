@@ -274,15 +274,39 @@ final class Provider {
             check("initial-path-replaced-reprepares", Kernel.events.filter { $0 == "prepare" }.count == 2 && Kernel.events.filter { $0 == "runtime-admission" }.count == 1)
         } catch { check("initial-path-replaced-reprepares", false) }
         Kernel.reset(); let ownSettings = Provider()
+        let ownSettingsCallback = FixtureState((queued: false, applied: false))
         Kernel.onSettings = {
             Kernel.onSettings = nil
-            ownSettings.pathObserver?.onChange?(TunnelEndpointPath())
+            let previous = ownSettings.watchdogQueue.sync {
+                let token = ownSettings.endpointAdmission.currentToken
+                ownSettings.pathObserver?.onChange?(TunnelEndpointPath())
+                // The observer only enqueues work: returning from its callback
+                // does not mean that the provider has handled the path event.
+                ownSettingsCallback.withValue { $0.queued = token != nil && ownSettings.endpointAdmission.currentToken == token }
+                return token
+            }
+            // This case models a path event DURING the settings write. Drain
+            // that exact FIFO event before the mocked OS completes the write.
+            ownSettings.watchdogQueue.sync {
+                ownSettingsCallback.withValue { $0.applied = previous != nil && ownSettings.endpointAdmission.currentToken != previous }
+            }
+        }
+        func ownSettingsResult(started: Bool) -> Bool {
+            let events = Kernel.events, callback = ownSettingsCallback.withValue { $0 }
+            let prepares = events.filter { $0 == "prepare" }.count, settings = events.filter { $0 == "settings" }.count
+            let arms = events.filter { $0 == "arm" }.count, admissions = events.filter { $0 == "runtime-admission" }.count
+            let passed = started && callback.queued && callback.applied && prepares == 2 && settings == 1 && arms == 1 && admissions == 1
+            if !passed {
+                print("APPLE_COLD_START_DIAGNOSTIC=own-settings-event-reprepares-without-second-write;started=\(started);callbackQueued=\(callback.queued);pathAppliedBeforeSettingsReturn=\(callback.applied);prepare=\(prepares);settings=\(settings);arm=\(arms);runtime-admission=\(admissions);events=\(events.joined(separator: ","))")
+            }
+            return passed
         }
         do { try await ownSettings.startTunnel()
-            check("own-settings-event-reprepares-without-second-write", Kernel.events.filter { $0 == "prepare" }.count == 2 &&
-                Kernel.events.filter { $0 == "settings" }.count == 1 && Kernel.events.filter { $0 == "arm" }.count == 1 &&
-                Kernel.events.filter { $0 == "runtime-admission" }.count == 1)
-        } catch { check("own-settings-event-reprepares-without-second-write", false) }
+            check("own-settings-event-reprepares-without-second-write", ownSettingsResult(started: true))
+        } catch {
+            print("APPLE_COLD_START_ERROR=own-settings-event-reprepares-without-second-write;type=\(String(reflecting: type(of: error)))")
+            check("own-settings-event-reprepares-without-second-write", ownSettingsResult(started: false))
+        }
         Kernel.reset(); try? await Provider().startTunnel()
         let order = Kernel.events
         check("arm-after-settings-before-admission", Kernel.profile.isOnDemandEnabled && order.firstIndex(of: "settings")! < order.firstIndex(of: "arm")! && order.firstIndex(of: "arm")! < order.firstIndex(of: "runtime-admission")!)

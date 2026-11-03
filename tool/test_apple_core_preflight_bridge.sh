@@ -266,7 +266,8 @@ for index, path in enumerate(sources):
  source=path.read_text()
  a=source.index('private final class ProxyOnlyRunner {')
  b=source.index('\n    func stop()',a)
- runner=source[a:b].replace('private final class ProxyOnlyRunner {', 'private final class ActualProxyRunner {')
+ rate=source[source.index('private func trafficBytesPerSecond('):a]
+ runner=rate+source[a:b].replace('private final class ProxyOnlyRunner {', 'private final class ActualProxyRunner {')
  helper_start=source.index('    fileprivate static func buildProxyOnlyConfigData', a)
  helper_end=source.index('\n    }\n', helper_start)+6
  prepare=source[helper_start:helper_end].replace('buildProxyOnlyConfigData', 'fixtureRealProxyPreparation', 1)
@@ -282,6 +283,7 @@ for index, path in enumerate(sources):
  runner+='\n'+source[stop_start:stop_end]
  runner+='''
     func fixtureSetRunning() { isRunning = true }
+    func fixtureSetTime(_ value: UInt64) { counterClock = { value } }
     func fixtureCounterDirections() -> (Int64?, Int64?) {
         proxyCounterLock.lock(); defer { proxyCounterLock.unlock() }
         return (previousUpload, previousDownload)
@@ -324,3 +326,6 @@ python3 "$ROOT/tool/test_apple_start_owner.py"
 
 # Fresh On Demand starts arm only after preparation; rollback owns its save.
 python3 "$ROOT/tool/test_apple_cold_start_policy.py" --receipts
+
+# Execute real host timers against held replies; no Core, SDK or VPN is used.
+python3 "$ROOT/tool/test_apple_traffic_polling.py"

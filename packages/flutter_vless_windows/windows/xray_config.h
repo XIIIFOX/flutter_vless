@@ -653,11 +653,40 @@ class ServiceTags {
 inline bool AddApi(Json& config, uint16_t api_port) {
   if (!config.is_object()) return false;
   if (!config.contains("stats")) config["stats"] = Json::object();
-  // Explicit roots, including null and disabled flags, belong to the caller.
-  // Enabling counters is a default only when the entire policy is absent.
+  // Retain the existing absent-root defaults. Imported policy levels or an
+  // empty system object do not opt out of monitoring; only fill missing
+  // inbound flags when we own the statistics API. Explicit false/null flags,
+  // caller services, levels and opaque fields remain authoritative.
   if (!config.contains("policy")) config["policy"] = {{"system", {
       {"statsInboundUplink", true}, {"statsInboundDownlink", true},
       {"statsOutboundUplink", true}, {"statsOutboundDownlink", true}}}};
+  else if (!config.contains("api") && !config["stats"].is_null() && config["policy"].is_object()) {
+    auto& policy = config["policy"];
+    std::vector<std::string> systems;
+    for (auto it = policy.begin(); it != policy.end(); ++it)
+      if (Fold(it.key()) == "system") systems.push_back(it.key());
+    // Ambiguous spellings and explicit non-object values belong to Core.
+    if (systems.size() <= 1) {
+      const auto key = systems.empty() ? std::string("system") : systems.front();
+      if (!policy.contains(key) || policy[key].is_object()) {
+        if (!policy.contains(key)) policy[key] = Json::object();
+        auto& system = policy[key];
+        bool ambiguous = false;
+        for (const auto* field : {"statsInboundUplink", "statsInboundDownlink"}) {
+          unsigned supplied = 0;
+          for (auto it = system.begin(); it != system.end(); ++it)
+            if (Fold(it.key()) == Fold(field)) ++supplied;
+          if (supplied > 1) ambiguous = true;
+        }
+        if (!ambiguous) for (const auto* field : {"statsInboundUplink", "statsInboundDownlink"}) {
+          bool supplied = false;
+          for (auto it = system.begin(); it != system.end(); ++it)
+            if (Fold(it.key()) == Fold(field)) supplied = true;
+          if (!supplied) system[field] = true;
+        }
+      }
+    }
+  }
   // Xray's API listen creates its own listener. No duplicate routing block,
   // synthetic catch-all rule, or tag-dependent inbound is needed.
   if (!config.contains("api")) {

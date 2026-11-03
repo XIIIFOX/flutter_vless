@@ -147,6 +147,7 @@ class FlutterVlessPlugin : public flutter::Plugin {
   int64_t upload_speed_ = 0;     ///< Current upload speed (bytes/second)
   int64_t download_speed_ = 0;   ///< Current download speed (bytes/second)
   flutter_vless::traffic::Baseline upload_baseline_, download_baseline_;
+  std::optional<std::chrono::steady_clock::time_point> last_traffic_sample_time_;
   
   // Platform-thread callback dispatcher for status, method results and controls
   HWND main_window_handle_ = nullptr;  ///< Main window handle for PostMessage
@@ -640,7 +641,7 @@ void FlutterVlessPlugin::HandleMethodCall(
 }
 
 void FlutterVlessPlugin::StartStatusTimer() {
-  { std::lock_guard<std::mutex> lock(status_mutex_); upload_baseline_.Reset(); download_baseline_.Reset(); }
+  { std::lock_guard<std::mutex> lock(status_mutex_); upload_baseline_.Reset(); download_baseline_.Reset(); last_traffic_sample_time_.reset(); }
   should_stop_ = false;
   status_thread_ = std::thread([this]() {
     while (!should_stop_ && is_running_) {
@@ -655,7 +656,7 @@ void FlutterVlessPlugin::StopStatusTimer() {
   if (status_thread_.joinable()) {
     status_thread_.join();
   }
-  std::lock_guard<std::mutex> lock(status_mutex_); upload_baseline_.Reset(); download_baseline_.Reset();
+  std::lock_guard<std::mutex> lock(status_mutex_); upload_baseline_.Reset(); download_baseline_.Reset(); last_traffic_sample_time_.reset();
 }
 
 
@@ -712,8 +713,17 @@ void FlutterVlessPlugin::UpdateStatus() {
 
   // Get traffic stats from v2ray manager
   const auto sample = V2rayManager::GetInstance().GetTrafficSample();
-  upload_speed_ = upload_baseline_.Advance(sample.upload);
-  download_speed_ = download_baseline_.Advance(sample.download);
+  upload_speed_ = 0;
+  download_speed_ = 0;
+  if (!sample.observed_at) {
+    upload_baseline_.Reset(); download_baseline_.Reset(); last_traffic_sample_time_.reset();
+  } else if (!last_traffic_sample_time_ || *sample.observed_at > *last_traffic_sample_time_) {
+    const auto elapsed = last_traffic_sample_time_ ? static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        *sample.observed_at - *last_traffic_sample_time_).count()) : uint64_t{0};
+    upload_speed_ = flutter_vless::traffic::BytesPerSecond(upload_baseline_.Advance(sample.upload), elapsed);
+    download_speed_ = flutter_vless::traffic::BytesPerSecond(download_baseline_.Advance(sample.download), elapsed);
+    last_traffic_sample_time_ = sample.observed_at;
+  }
   total_upload_ = sample.upload.value_or(0);
   total_download_ = sample.download.value_or(0);
 

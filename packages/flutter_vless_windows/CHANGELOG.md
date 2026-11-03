@@ -3,6 +3,8 @@
 Unpublished implementation update for the main plugin 1.1.7 release train.
 The existing pub.dev package numbered 1.1.7 remains unchanged.
 
+* Restore missing owned inbound statistics defaults for full profiles with policy levels or an empty system object; retain caller API settings and explicit disabled counters.
+
 * Support the verified managed `xray-windows-v26.10.31-r2` companion with native routing, XDRIVE/GeoDAT capability checks and owned service cleanup, including invalid XHTTP `h2Params` listener cleanup. Ordinary compatible external Core builds remain supported for profiles without managed services.
 * Add typed options/capabilities, tray toggle/open-app actions, `.ico` presentation, explicit quick-profile clearing, bounded reconnect and diagnostics. Preserve WFP protection after retry exhaustion.
 * Bind tray/pending startup work to immutable session/options owners; reject stale commands and preserve an active session after a candidate fails preflight.

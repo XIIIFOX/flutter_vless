@@ -44,7 +44,11 @@ def extracted(sources):
         last = source.find(end, first + len(begin))
         if last < first or token not in source[first:last]:
             raise ValueError("Traffic lifecycle reset boundary changed")
-    return "\n".join(output)
+        if name == "flutter_vless_plugin.cpp" and "last_traffic_sample_time_.reset();" not in source[first:last]:
+            raise ValueError("Traffic lifecycle clock reset boundary changed")
+    # Only the clock boundary is substituted; producer, parser, ownership,
+    # baseline, integer scaling and public event assembly execute unchanged.
+    return "\n".join(output).replace("std::chrono::steady_clock::now()", "FixtureClockNow()")
 
 
 HEADER = r'''
@@ -60,6 +64,8 @@ HEADER = r'''
 using Json = flutter_vless::xray_config::Json;
 namespace fs = std::filesystem;
 struct Reply { bool ok = true; unsigned calls = 0; std::string output; } reply;
+auto fixture_now = std::chrono::steady_clock::time_point(std::chrono::nanoseconds(1000000000));
+auto FixtureClockNow() { return fixture_now; }
 namespace flutter_vless::native {
 bool Command(const fs::path&, const std::vector<std::wstring>&, std::string& output) {
   ++reply.calls; output = reply.output; return reply.ok;
@@ -102,6 +108,7 @@ class FlutterVlessPlugin { public:
   std::mutex status_mutex_, sink_mutex_; std::chrono::steady_clock::time_point start_time_ = std::chrono::steady_clock::now();
   int64_t total_upload_ = 0, total_download_ = 0, upload_speed_ = 0, download_speed_ = 0;
   flutter_vless::traffic::Baseline upload_baseline_, download_baseline_;
+  std::optional<std::chrono::steady_clock::time_point> last_traffic_sample_time_;
   flutter::EncodableList emitted_status;
   void UpdateStatus(); void RefreshTray() {}
   void RunOnUIThread(const std::function<void()>& action) { action(); } // no OS/UI thread
@@ -150,7 +157,10 @@ int main(int argc, char** argv) try {
   }
   const std::string tag = "owned"; auto config = ProxyConfig(tag);
   proxy.current_config_ = config.dump(); vpn.routing_provenance_.managed_tag = tag;
-  auto sample = [&](const Json& rows) { reply = {}; reply.output = Json{{"stat",rows}}.dump(); vpn.UpdateTrafficStats(); proxy.UpdateTrafficStats(); };
+  auto sample = [&](const Json& rows, int64_t elapsed = 1000000000) {
+    fixture_now += std::chrono::nanoseconds(elapsed);
+    reply = {}; reply.output = Json{{"stat",rows}}.dump(); vpn.UpdateTrafficStats(); proxy.UpdateTrafficStats();
+  };
   const std::string up = "inbound>>>owned>>>traffic>>>uplink", down = "inbound>>>owned>>>traffic>>>downlink";
   sample(Json::array({{{"name",up},{"value",37}},{{"name",down},{"value",61}},{{"name","noise"},{"value",Json::object()}}}));
   Same(vpn.GetTrafficSample(), Json{{"uplink",37},{"downlink",61}}); Same(proxy.GetTrafficSample(), Json{{"uplink",37},{"downlink",61}}); ++controls;
@@ -185,17 +195,34 @@ int main(int argc, char** argv) try {
     sample(Json::array({{{"name",up},{"value",41}},{{"name",down},{"value",66}}})); Public(plugin,41,66,4,5);
     sample(Json::array({{{"name",up},{"value",43}}})); Public(plugin,43,0,2,0);
     sample(Json::array({{{"name",up},{"value",45}},{{"name",down},{"value",80}}})); Public(plugin,45,80,2,0);
+    fixture_now += std::chrono::seconds(1); // Cached snapshot: no producer reply.
+    Public(plugin,45,80);
+    sample(Json::array({{{"name",up},{"value",345}},{{"name",down},{"value",680}}}),2000000000);
+    Public(plugin,345,680,100,200); // Three seconds since the last actual sample.
+    sample(Json::array({{{"name",up},{"value",395}},{{"name",down},{"value",780}}}),500000000);
+    Public(plugin,395,780,100,200);
+    Public(plugin,395,780); // Same unique sample cannot repeat a positive speed.
+    fixture_now += std::chrono::seconds(1);
     reply.ok = false; vpn.UpdateTrafficStats(); proxy.UpdateTrafficStats(); Public(plugin,0,0);
     sample(Json::array({{{"name",up},{"value",80}},{{"name",down},{"value",90}}})); Public(plugin,80,90);
     sample(Json::array({{{"name",up}},{{"name",down}}})); Public(plugin,0,0);
     sample(Json::array({{{"name",up},{"value",3}},{{"name",down},{"value",5}}})); Public(plugin,3,5,3,5);
-    plugin.upload_baseline_.Reset(); plugin.download_baseline_.Reset(); Public(plugin,3,5);
+    plugin.upload_baseline_.Reset(); plugin.download_baseline_.Reset(); plugin.last_traffic_sample_time_.reset(); Public(plugin,3,5);
+    vpn.ready_.store(false); proxy.ready_.store(false); Public(plugin,0,0);
+    vpn.ready_.store(true); proxy.ready_.store(true); Public(plugin,3,5);
   }
+  ++controls;
+  using flutter_vless::traffic::BytesPerSecond;
+  Require(BytesPerSecond(INT64_MAX,1) == INT64_MAX && BytesPerSecond(INT64_MAX,1000000000) == INT64_MAX
+      && BytesPerSecond(INT64_MAX,3000000000) == INT64_MAX/3, "int64 rate overflow or precision loss");
+  Require(BytesPerSecond(1,0) == 0 && BytesPerSecond(-1,1) == 0 && BytesPerSecond(5,2000000000) == 2,
+      "invalid interval/delta or fractional rate rounding changed");
+  // SHARED_RATE_VECTOR_CHECKS
   ++controls;
   auto prepared = ProxyConfig(tag).dump(); const auto original_policy = Json::parse(prepared)["policy"];
   Require(flutter_vless::xray_config::PrepareProxy(prepared,[](uint16_t){return true;},[]{return uint16_t{19001};})
       && Json::parse(prepared)["policy"] == original_policy, "stats collection enabled caller policy"); ++controls;
-  Require(controls == 12, "control count changed");
+  Require(controls == 13, "control count changed");
   std::cout << "WINDOWS_TRAFFIC_WIRE_PASS=" << wire_passed << '\n' << "WINDOWS_TRAFFIC_CONSUMER_PASS=" << controls << '\n';
   return 0;
 } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
@@ -204,6 +231,19 @@ int main(int argc, char** argv) try {
 
 def sources():
     return {name: (WINDOWS / name).read_text() for name in {p[0] for p in PARTS}}
+
+
+def rate_vectors():
+    vectors = json.loads((ROOT / "tool/fixtures/compatibility/traffic-rate-vectors.json").read_text())
+    if len(vectors) != 24:
+        raise ValueError("Shared integer rate vector count changed")
+    checks = []
+    for vector in vectors:
+        delta, elapsed, expected = (int(vector[key]) for key in ("delta", "elapsedNanoseconds", "bytesPerSecond"))
+        if not 0 <= delta <= 2**63-1 or not 0 <= elapsed <= 2**63-1 or not 0 <= expected <= 2**63-1:
+            raise ValueError("Invalid shared integer rate vector")
+        checks.append(f'Require(flutter_vless::traffic::BytesPerSecond({delta}LL,{elapsed}ULL) == {expected}LL, "shared exact integer rate vector");')
+    return "\n".join(checks)
 
 
 class Guards(unittest.TestCase):
@@ -240,7 +280,7 @@ def main():
     if not result.wasSuccessful(): return 1
     if args.generate:
         current = sources(); args.generate.parent.mkdir(parents=True, exist_ok=True)
-        args.generate.write_text(HEADER + extracted(current) + TESTS)
+        args.generate.write_text(HEADER + extracted(current) + TESTS.replace("// SHARED_RATE_VECTOR_CHECKS", rate_vectors()))
         args.generate.with_suffix(".sources.json").write_text(json.dumps({
             "source_sha256": {p: hashlib.sha256(text.encode()).hexdigest() for p, text in current.items()},
             "real_native_runtime_executed": False, "source_guard_tests": 4

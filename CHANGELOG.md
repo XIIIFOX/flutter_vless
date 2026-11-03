@@ -18,6 +18,7 @@ the main package and platform interface remain `1.1.7`.
 * Add per-start `VpnRoutingOptions`, optional preparation reports and `certificateAssetsDirectory`; retain existing startup calls and reject unsupported guarantees explicitly.
 * Cancel superseded starts and quick actions across permission, authentication and options changes. Preserve the current session/listener after rejected candidates, and report `VPN_START_CANCELLED` for an obsolete pending start.
 * Bound delay, readiness, statistics and diagnostics work; preserve Stop, socket/process cleanup, native reconnect budgets and status delivery on the Flutter platform thread.
+* Restore traffic counters for full profiles with caller policy levels and missing inbound statistics defaults. Preserve explicitly disabled counters and caller API settings; prevent stale polling replies from reviving stopped sessions.
 * Document public Dart APIs, options, parsers and typed models for editor hover/signature help; align setup guides and configuration examples with the current API.
 
 ### Configuration, DNS and routing
@@ -38,6 +39,7 @@ the main package and platform interface remain `1.1.7`.
 
 * Existing iOS hosts must update the copied `PacketTunnelProvider.swift` together with the Swift support package. macOS uses the packaged provider implementation.
 * Add examples for options, per-domain DNS/routing, XDRIVE, GeoDAT updates, `fragment`/`noises` migration to `finalmask`, XHTTP and HTTP `100-continue`.
+* Remove the example's automatic Configuration Check panel while retaining configuration errors and the optional report API. Cover existing status displays and controls with regression tests.
 * Add native regressions for GeoDAT gzip corruption/limits/cancellation, XHTTP OPTIONS/H2, fragmented QUIC SNI routing, Windows Core TUN leak rules and HTTP `100-continue`.
 * Qualify published runtimes in Actions and live Android/iPhone acceptance, including fresh configurations, both domain-routing directions, Stop and ordinary-network recovery. Live owner macOS, real IPv6-only/NAT64/handover, external cloud accounts and a complete protocol/server matrix remain separately documented acceptance work.
 

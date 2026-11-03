@@ -51,7 +51,6 @@ class _HomePageState extends State<HomePage> {
       ValueNotifier<VlessStatus>(VlessStatus());
 
   late VlessOptions pluginOptions = widget.options;
-  VlessPreparationReport? preparationReport;
   int preparationRequest = 0;
   int? pendingConnectionRequest;
   late String reportEditorText;
@@ -87,7 +86,6 @@ class _HomePageState extends State<HomePage> {
 
   void _invalidatePreparation() {
     preparationRequest++;
-    if (preparationReport != null) setState(() => preparationReport = null);
   }
 
   void _configurationEdited() {
@@ -174,7 +172,7 @@ class _HomePageState extends State<HomePage> {
       }
 
       if (!mounted || request != preparationRequest) return;
-      final report = await flutterVless.startVlessWithReport(
+      await flutterVless.startVless(
         remark: remark,
         config: config.text,
         proxyOnly: proxyOnly,
@@ -185,9 +183,6 @@ class _HomePageState extends State<HomePage> {
             ? null
             : certificateDirectory.text,
       );
-      if (mounted && request == preparationRequest) {
-        setState(() => preparationReport = report);
-      }
     } finally {
       if (mounted && pendingConnectionRequest == request) {
         setState(() => pendingConnectionRequest = null);
@@ -426,10 +421,6 @@ class _HomePageState extends State<HomePage> {
                       _buildConfigCard(),
                       const SizedBox(height: 12),
                       _buildStatusCard(),
-                      if (preparationReport case final report?) ...[
-                        const SizedBox(height: 12),
-                        PreparationReportCard(report: report),
-                      ],
                       const SizedBox(height: 12),
                       _buildControls(),
                       const SizedBox(height: 52),

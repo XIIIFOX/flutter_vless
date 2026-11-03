@@ -21,6 +21,12 @@ import java.util.concurrent.TimeUnit
 /** Actual public traffic producer, with an inert CLI reply and no real child or socket. */
 class XrayTrafficConsumerTest {
     private val credentials = LocalProxyCredentials("synthetic-user", "synthetic-password")
+    private var sampleNanos = 0L
+
+    private fun traffic(context: Context, at: Long = sampleNanos + 1_000_000_000): LongArray {
+        sampleNanos = at
+        return XrayCoreManager.getV2rayTraffic(context) { sampleNanos }
+    }
 
     @Test fun absentWholePolicyEnablesOwnedInputCountersAlongsideLegacyOutboundDefaults() {
         val source = source(true).apply { remove("policy") }
@@ -32,6 +38,66 @@ class XrayTrafficConsumerTest {
         assertTrue("Absent policy must enable owned inbound download counters", system.optBoolean("statsInboundDownlink"))
         assertTrue(system.getBoolean("statsOutboundUplink")); assertTrue(system.getBoolean("statsOutboundDownlink"))
         assertEquals(before, source.toString()); assertEquals(before, profile.V2RAY_FULL_JSON_CONFIG)
+    }
+
+    @Test fun levelsOnlyAndEmptySystemPoliciesEnableMissingOwnedInputCounters() {
+        for (policy in listOf(
+            JSONObject("""{"levels":{"8":{"bufferSize":3,"handshake":2}},"futurePolicy":{"value":null}}"""),
+            JSONObject("""{"levels":{"8":{"bufferSize":3,"handshake":2}},"system":{},"futurePolicy":{"value":null}}"""),
+            JSONObject("""{"levels":{"8":{"bufferSize":3,"handshake":2}},"system":{"statsOutboundUplink":false,"futureSystem":{"value":null}},"futurePolicy":{"value":null}}"""))) {
+            val source = source(true).put("policy", policy)
+            val before = source.toString()
+            val profile = XrayConfig(V2RAY_FULL_JSON_CONFIG = before)
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(profile, File("."), credentials)
+            val actual = runtime.getJSONObject("policy")
+            val system = actual.getJSONObject("system")
+            assertTrue("An existing partial policy must not silence owned upload statistics", system.getBoolean("statsInboundUplink"))
+            assertTrue("An existing partial policy must not silence owned download statistics", system.getBoolean("statsInboundDownlink"))
+            assertEquals(policy.getJSONObject("levels").toString(), actual.getJSONObject("levels").toString())
+            assertEquals(policy.getJSONObject("futurePolicy").toString(), actual.getJSONObject("futurePolicy").toString())
+            if (policy.has("system")) for (key in policy.getJSONObject("system").keys())
+                assertEquals("Existing system settings remain authoritative", policy.getJSONObject("system").get(key).toString(), system.get(key).toString())
+            assertEquals(before, source.toString()); assertEquals(before, profile.V2RAY_FULL_JSON_CONFIG)
+        }
+    }
+
+    @Test fun statisticsDefaultsRespectExplicitValuesAliasesAndDisabledSources() {
+        for (policy in listOf<Any>(JSONObject.NULL,
+            JSONObject("""{"system":{"statsInboundUplink":false,"statsInboundDownlink":null}}"""),
+            JSONObject("""{"System":{"StatsInboundUplink":false,"StatsInboundDownlink":null}}"""),
+            JSONObject("""{"\u017fy\u017ftem":{"\u017ftatsInboundUplink":false,"\u017ftatsInboundDownlink":null}}"""),
+            JSONObject("""{"system":null}"""),
+            JSONObject("""{"system":{"statsInboundUplink":true,"StatsInboundUplink":false}}"""),
+            JSONObject("""{"system":{},"System":{"statsInboundUplink":false}}"""))) {
+            val source = source(true).put("policy", policy)
+            val before = source.toString()
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(XrayConfig(V2RAY_FULL_JSON_CONFIG = before), File("."), credentials)
+            assertEquals(policy.toString(), runtime.get("policy").toString())
+            assertEquals(before, source.toString())
+        }
+        for (callerApi in listOf<Any?>(null, JSONObject.NULL, JSONObject("""{"tag":"caller-api","services":["StatsService"]}"""))) {
+            val source = source(true).put("policy", JSONObject("""{"levels":{"8":{"bufferSize":3}},"system":{}}"""))
+            if (callerApi == null) source.put("stats", JSONObject.NULL) else source.put("api", callerApi)
+            val before = source.toString()
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(XrayConfig(V2RAY_FULL_JSON_CONFIG = before), File("."), credentials)
+            assertEquals(source.getJSONObject("policy").toString(), runtime.getJSONObject("policy").toString())
+            assertEquals(before, source.toString())
+        }
+    }
+
+    @Test fun oneExplicitCounterDirectionKeepsItsValueWhileMissingDirectionGetsDefault() {
+        for ((key, value) in listOf("statsInboundUplink" to false, "StatsInboundUplink" to JSONObject.NULL)) {
+            val policy = JSONObject().put("System", JSONObject().put(key, value).put("unknown", "retained"))
+            val source = source(true).put("policy", policy)
+            val before = source.toString()
+            val runtime = XrayCoreManager.buildRuntimeConfigJson(XrayConfig(V2RAY_FULL_JSON_CONFIG = before), File("."), credentials)
+            val actual = runtime.getJSONObject("policy").getJSONObject("System")
+            assertEquals(value.toString(), actual.get(key).toString())
+            assertFalse(actual.has(if (key == "statsInboundUplink") "StatsInboundUplink" else "statsInboundUplink"))
+            assertEquals("retained", actual.getString("unknown"))
+            assertTrue(actual.getBoolean("statsInboundDownlink"))
+            assertEquals(before, source.toString())
+        }
     }
 
     private fun source(enabled: Boolean, callerApi: Any? = null): JSONObject = JSONObject("""{
@@ -82,9 +148,11 @@ class XrayTrafficConsumerTest {
         val processField = XrayCoreManager::class.java.getDeclaredField("xrayProcess").apply { isAccessible = true }
         val lastUp = XrayCoreManager::class.java.getDeclaredField("lastProxyUplink").apply { isAccessible = true }
         val lastDown = XrayCoreManager::class.java.getDeclaredField("lastProxyDownlink").apply { isAccessible = true }
+        val lastTime = XrayCoreManager::class.java.getDeclaredField("lastTrafficSampleNanos").apply { isAccessible = true }
         val previousProcess = processField.get(XrayCoreManager)
         val previousConfig = AppConfigs.V2RAY_CONFIG
         val previousUp = lastUp.get(XrayCoreManager); val previousDown = lastDown.get(XrayCoreManager)
+        val previousTime = lastTime.get(XrayCoreManager)
         val activeChild = Mockito.mock(Process::class.java)
         Mockito.`when`(activeChild.isAlive).thenReturn(true)
         val context = Mockito.mock(Context::class.java)
@@ -93,7 +161,8 @@ class XrayTrafficConsumerTest {
         try {
             processField.set(XrayCoreManager, activeChild)
             AppConfigs.V2RAY_CONFIG = profile
-            lastUp.set(XrayCoreManager, null); lastDown.set(XrayCoreManager, null)
+            lastUp.set(XrayCoreManager, null); lastDown.set(XrayCoreManager, null); lastTime.set(XrayCoreManager, null)
+            sampleNanos = 0
             Mockito.mockConstruction(ProcessBuilder::class.java) { builder, construction ->
                 command = (construction.arguments()[0] as Array<*>).map { it as String }
                 Mockito.`when`(builder.redirectErrorStream(true)).thenReturn(builder)
@@ -105,7 +174,7 @@ class XrayTrafficConsumerTest {
                 Mockito.`when`(reply.exitValue()).thenReturn(0)
                 Mockito.`when`(builder.start()).thenReturn(reply)
             }.use { builders ->
-                val result = XrayCoreManager.getV2rayTraffic(context)
+                val result = traffic(context)
                 assertEquals(if (expectQuery) 1 else 0, builders.constructed().size)
                 assertEquals(raw, source.toString())
                 assertEquals(raw, profile.V2RAY_FULL_JSON_CONFIG)
@@ -121,6 +190,7 @@ class XrayTrafficConsumerTest {
             processField.set(XrayCoreManager, previousProcess)
             AppConfigs.V2RAY_CONFIG = previousConfig
             lastUp.set(XrayCoreManager, previousUp); lastDown.set(XrayCoreManager, previousDown)
+            lastTime.set(XrayCoreManager, previousTime)
         }
     }
 
@@ -208,7 +278,73 @@ class XrayTrafficConsumerTest {
             assertArrayEquals(longArrayOf(0, 0, 10, 20), first)
             for (expected in listOf(longArrayOf(5, 5, 15, 25), longArrayOf(0, 5, 0, 30),
                 longArrayOf(0, 5, 40, 35), longArrayOf(4, 15, 44, 50), longArrayOf(0, 0, 5, 7),
-                longArrayOf(3, 4, 8, 11))) assertArrayEquals(expected, XrayCoreManager.getV2rayTraffic(context))
+                longArrayOf(3, 4, 8, 11))) assertArrayEquals(expected, traffic(context))
+        }
+    }
+
+    @Test fun ratesUseElapsedTimeAcrossSlowQueriesAndFractionalSeconds() {
+        val values = listOf(10L to 20L, 19L to 38L, 22L to 44L, null to 52L, 100L to 56L, 106L to 64L)
+        var index = 0
+        consumer(source(true), null, null, replyBytes = { tag ->
+            val pair = values[index++]; response(tag, pair.first, pair.second)
+        }) { first, _, _, context, _ ->
+            assertArrayEquals(longArrayOf(0, 0, 10, 20), first)
+            assertArrayEquals("The CLI plus scheduled gap is three seconds, not one",
+                longArrayOf(3, 6, 19, 38), traffic(context, 4_000_000_000))
+            assertArrayEquals("Half-second samples scale to bytes per second",
+                longArrayOf(6, 12, 22, 44), traffic(context, 4_500_000_000))
+            assertArrayEquals(longArrayOf(0, 4, 0, 52), traffic(context, 6_500_000_000))
+            assertArrayEquals("An unavailable direction needs a fresh baseline",
+                longArrayOf(0, 2, 100, 56), traffic(context, 8_500_000_000))
+            assertArrayEquals(longArrayOf(12, 16, 106, 64), traffic(context, 9_000_000_000))
+        }
+    }
+
+    @Test fun ratesKeepInt64PrecisionAndSaturateWithoutIntermediateOverflow() {
+        val values = listOf(0L, Long.MAX_VALUE, 0L, Long.MAX_VALUE)
+        var index = 0
+        consumer(source(true), null, null, replyBytes = { tag ->
+            val value = values[index++]; response(tag, value, value)
+        }) { _, _, _, context, _ ->
+            assertArrayEquals(longArrayOf(Long.MAX_VALUE / 2, Long.MAX_VALUE / 2, Long.MAX_VALUE, Long.MAX_VALUE),
+                traffic(context, 3_000_000_000))
+            assertArrayEquals("A counter reset is not negative traffic", longArrayOf(0, 0, 0, 0),
+                traffic(context, 4_000_000_000))
+            assertArrayEquals(longArrayOf(Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE),
+                traffic(context, 4_000_000_001))
+        }
+    }
+
+    @Test fun nonIncreasingClockCannotProduceInvalidRatesOrPoisonFollowingSample() {
+        var value = 0L
+        consumer(source(true), null, null, replyBytes = { tag ->
+            value += 10; response(tag, value, value)
+        }) { _, _, _, context, _ ->
+            assertArrayEquals(longArrayOf(0, 0, 20, 20), traffic(context, 1_000_000_000))
+            assertArrayEquals(longArrayOf(0, 0, 30, 30), traffic(context, 500_000_000))
+            assertArrayEquals(longArrayOf(10, 10, 40, 40), traffic(context, 1_500_000_000))
+        }
+    }
+
+    @Test fun sharedIntegerRateVectorsFeedActualPublicTrafficProducer() {
+        val vectors = JSONArray(requireNotNull(javaClass.getResource("/traffic-rate-vectors.json")).readText())
+        assertTrue(vectors.length() > 0)
+        for (index in 0 until vectors.length()) {
+            val vector = vectors.getJSONObject(index)
+            val delta = vector.getString("delta").toLong()
+            val elapsed = vector.getString("elapsedNanoseconds").toLong()
+            val expected = vector.getString("bytesPerSecond").toLong()
+            var first = true
+            consumer(source(true), null, null, replyBytes = { tag ->
+                val current = if (first) 0 else delta
+                first = false; response(tag, current, current)
+            }) { baseline, _, _, context, _ ->
+                assertArrayEquals(longArrayOf(0, 0, 0, 0), baseline)
+                // Signed nanoTime rollover still has the same positive elapsed
+                // subtraction for an interval bounded by Long.MAX_VALUE.
+                assertArrayEquals("Shared rate vector $index: $vector", longArrayOf(expected, expected, delta, delta),
+                    traffic(context, sampleNanos + elapsed))
+            }
         }
     }
 
@@ -223,7 +359,7 @@ class XrayTrafficConsumerTest {
             assertTrue(XrayCoreManager.stopWorkers())
             Mockito.verify(child).destroy()
             field.set(XrayCoreManager, child) // Inert replacement: no process or probe construction.
-            assertArrayEquals(longArrayOf(0, 0, 61, 73), XrayCoreManager.getV2rayTraffic(context))
+            assertArrayEquals(longArrayOf(0, 0, 61, 73), traffic(context))
         }
     }
 
@@ -236,7 +372,7 @@ class XrayTrafficConsumerTest {
             // file/process/monitor construction, but still invalidate baselines.
             assertFalse(XrayCoreManager.startCore(Mockito.mock(Service::class.java), profile,
                 NativeRuntimeConfig.freeze(JSONObject()), null, 1) { _, _ -> fail("No monitor may run") })
-            assertArrayEquals(longArrayOf(0, 0, 61, 73), XrayCoreManager.getV2rayTraffic(context))
+            assertArrayEquals(longArrayOf(0, 0, 61, 73), traffic(context))
         }
     }
 
@@ -314,7 +450,7 @@ class XrayTrafficConsumerTest {
                 assertEquals(name, "inbound>>>$tag>>>traffic>>>", command.last())
                 assertEquals(name, sample, XrayCoreManager.readTraffic(context))
                 assertArrayEquals(name, public, first)
-                assertArrayEquals(name, public, XrayCoreManager.getV2rayTraffic(context))
+                assertArrayEquals(name, public, traffic(context))
             }
             assertEquals(name, before, item.toString())
         }

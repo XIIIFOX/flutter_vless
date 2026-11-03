@@ -265,8 +265,13 @@ class XrayCoreManagerTest {
             assertEquals("$label/caller outbound order, protocol or tag changed", source.getJSONArray("outbounds").toString(),
                 output.getJSONArray("outbounds").toString())
             fun field(key: String) = key.replace('\u017f', 's').replace('\u212a', 'k').lowercase(java.util.Locale.ROOT)
-            for (key in source.keys()) if (field(key) in setOf("api", "stats", "policy"))
-                assertEquals("$label/$key", source.get(key).toString(), output.get(field(key)).toString())
+            for (key in source.keys()) if (field(key) in setOf("api", "stats", "policy")) {
+                val expected = if (label == "private_api_retains_caller_stats_policy" && field(key) == "policy")
+                    JSONObject(source.getJSONObject(key).toString()).put("system", JSONObject()
+                        .put("statsInboundUplink", true).put("statsInboundDownlink", true))
+                else source.get(key)
+                assertEquals("$label/$key", expected.toString(), output.get(field(key)).toString())
+            }
             val callerApi = source.keys().asSequence().any { field(it) == "api" }
             assertEquals(label, if (callerApi) 1 else 2, output.getJSONArray("inbounds").length())
             if (callerApi) {

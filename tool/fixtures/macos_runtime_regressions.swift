@@ -38,6 +38,39 @@ func runAppleProxyCounterChecks() async throws {
     print(markerPrefix + "AND_API_PASSTHROUGH_PASS")
     runner.stop()
 
+    // Regress the imported HAPP shape: level tuning and an optional empty
+    // system object do not explicitly disable interface traffic monitoring.
+    for emptySystem in [false, true] {
+        var imported = raw
+        imported.removeValue(forKey: "API")
+        var policy: [String: Any] = ["levels": ["8": ["bufferSize": 3, "handshake": 4]]]
+        if emptySystem { policy["system"] = [String: Any]() }
+        imported["policy"] = policy
+        try runner.start(configData: JSONSerialization.data(withJSONObject: imported), geoAssetsDirectory: nil)
+        try payload()
+        var first = runner.queryTrafficStats()
+        for _ in 0..<10 where first.upload == 0 || first.download == 0 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            first = runner.queryTrafficStats()
+        }
+        precondition(first.upload > 0 && first.download > 0, "Imported level policy lost real byte counters")
+        try payload()
+        var next = runner.queryTrafficStats()
+        var sawUploadSpeed = next.uploadSpeed > 0
+        var sawDownloadSpeed = next.downloadSpeed > 0
+        for _ in 0..<10 where next.upload <= first.upload || next.download <= first.download || !sawUploadSpeed || !sawDownloadSpeed {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            next = runner.queryTrafficStats()
+            sawUploadSpeed = sawUploadSpeed || next.uploadSpeed > 0
+            sawDownloadSpeed = sawDownloadSpeed || next.downloadSpeed > 0
+        }
+        precondition(next.upload > first.upload && next.download > first.download &&
+                     sawUploadSpeed && sawDownloadSpeed,
+                     "Imported level policy lost real transfer speed")
+        runner.stop()
+    }
+    print(markerPrefix + "MISSING_POLICY_DEFAULTS_PASS=2")
+
     // A real payload does not make unavailable input counters available.
     // Preserve the caller's untagged input and explicit disabled policy.
     for disabled in [false, true] {
@@ -57,5 +90,5 @@ func runAppleProxyCounterChecks() async throws {
     }
     origin.stop()
     let observed = origin.state()
-    precondition(observed.0 == 3 && !observed.1 && origin.connections() == 3)
+    precondition(observed.0 == 7 && !observed.1 && origin.connections() == 7)
 }

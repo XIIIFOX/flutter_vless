@@ -106,6 +106,7 @@ if os.environ.get('APPLE_RUNTIME_PROBE_MODE') == 'fakedns-only':
         assert marker not in text, 'Private marker escaped'
     print('PASS: stock Apple SDK FakeDNS only, 2 generations')
     raise SystemExit(0)
+assert text.splitlines().count('IOS_COUNTERS_MISSING_POLICY_DEFAULTS_PASS=2') == 1
 for marker in ['IOS_COUNTERS_AND_API_PASSTHROUGH_PASS', 'IOS_COUNTERS_UNTAGGED_UNAVAILABLE_PASS', 'IOS_COUNTERS_DISABLED_UNAVAILABLE_PASS']:
     assert text.splitlines().count(marker) == 1, marker
 for marker in ['privacy-canary.invalid','synthetic-password-canary','d2719f44-f51f-4c35-aeae-246230d21f38','local-user-canary','local-password-canary']:

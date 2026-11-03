@@ -38,7 +38,14 @@ object Utilities {
         return dir.absolutePath
     }
 
-    /** Seed missing bundled data once. Scheduled/caller updates always win. */
+    /** Seed missing bundled data once. Scheduled/caller updates always win.
+     *
+     * Android's app sandbox forbids hard links. Publish a create-only symlink
+     * to a complete private backing file instead: readers never observe a
+     * partial copy, and a concurrently installed caller/Core DAT is retained.
+     * The backing file remains owned application data after publication. Core
+     * reads it normally and its atomic updater replaces the symlink itself.
+     */
     @Throws(IOException::class)
     fun copyAssets(context: Context) {
         val assets = context.assets
@@ -47,7 +54,8 @@ object Utilities {
             if (filename != "geoip.dat" && filename != "geosite.dat") continue
             val target = File(getUserAssetsPath(context), filename)
             if (target.exists()) continue
-            val staged = File.createTempFile(".flutter-vless-geodat-seed-", ".tmp", target.parentFile)
+            val staged = File.createTempFile(".flutter-vless-geodat-bundle-", ".dat", target.parentFile)
+            var published = false
             try {
                 assets.open(filename).use { input ->
                     FileOutputStream(staged).use { output ->
@@ -56,10 +64,12 @@ object Utilities {
                     }
                 }
                 try {
-                    // link() publishes a complete file only if the target is
-                    // still absent. Unlike rename(), it cannot overwrite a DAT
-                    // committed concurrently by Core's scheduler. API21+.
-                    android.system.Os.link(staged.absolutePath, target.absolutePath)
+                    // Both paths are in the same app-private directory. A
+                    // relative symlink also survives relocation of app data.
+                    // symlink() is atomic/create-only; rename() could replace
+                    // data committed concurrently by Core's scheduler.
+                    android.system.Os.symlink(staged.name, target.absolutePath)
+                    published = true
                 } catch (error: android.system.ErrnoException) {
                     if (error.errno != android.system.OsConstants.EEXIST) {
                         throw IOException("Cannot publish bundled GeoDAT asset")
@@ -68,7 +78,7 @@ object Utilities {
             } catch (_: IOException) {
                 throw IOException("Cannot prepare bundled GeoDAT asset")
             } finally {
-                if (staged.exists() && !staged.delete()) {
+                if (!published && staged.exists() && !staged.delete()) {
                     throw IOException("Cannot clean bundled GeoDAT staging file")
                 }
             }

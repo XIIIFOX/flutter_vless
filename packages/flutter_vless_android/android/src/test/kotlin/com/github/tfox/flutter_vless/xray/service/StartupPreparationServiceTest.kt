@@ -1,6 +1,7 @@
 package com.github.tfox.flutter_vless.xray.service
 
 import android.content.pm.ApplicationInfo
+import android.content.res.AssetManager
 import com.github.tfox.flutter_vless.xray.core.*
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.utils.AppConfigs
@@ -12,11 +13,15 @@ import org.mockito.Mockito
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
+import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.lang.reflect.InvocationTargetException
 import java.net.ServerSocket
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Actual admission/producer wiring; queued workers, probes and native parser children are all inert fakes. */
 class StartupPreparationServiceTest {
@@ -28,6 +33,111 @@ class StartupPreparationServiceTest {
             Long::class.javaPrimitiveType, Boolean::class.javaPrimitiveType, StartupPreparationOutcome::class.java)
             .apply { isAccessible = true }.invoke(service, profile, true, 1L, false, outcome) as Boolean
     } catch (error: InvocationTargetException) { throw error.targetException }
+
+    @Test fun bundledPreparationAndNativeRejectionHaveDistinctStagesAndPreserveTheWorkingSession() {
+        val directory = Files.createTempDirectory("startup-stage-boundary").toFile()
+        val service = Mockito.mock(XrayVPNService::class.java, Answers.CALLS_REAL_METHODS)
+        val assets = Mockito.mock(AssetManager::class.java)
+        Mockito.`when`(assets.list("")).thenThrow(IOException("PRIVATE_CANARY_asset_failure"))
+        Mockito.doReturn(assets).`when`(service).assets
+        Mockito.doReturn(directory).`when`(service).filesDir
+        Mockito.doReturn(directory).`when`(service).noBackupFilesDir
+        Mockito.doReturn(ApplicationInfo().apply { nativeLibraryDir = directory.absolutePath }).`when`(service).applicationInfo
+        val recovery = SessionRecoveryPolicy().apply { activate() }
+        val generation = recovery.generation
+        val worker = Mockito.mock(SessionWorkQueue::class.java)
+        val profiles = Mockito.mock(AuthorizedProfileStore::class.java)
+        field("requests").set(service, AtomicLong(1)); field("recovery").set(service, recovery)
+        field("worker").set(service, worker); field("profiles").set(service, profiles)
+        val probes = (0..1).map {
+            Mockito.mock(SessionReadinessProbe::class.java).also { probe ->
+                Mockito.`when`(probe.configure(anyJson(), Mockito.anyInt())).thenAnswer {
+                    JSONObject(it.getArgument<JSONObject>(0).toString())
+                }
+            }
+        }
+        Mockito.doReturn(probes[0], probes[1]).`when`(service).createReadinessProbe(anyJson())
+        val childField = XrayCoreManager::class.java.getDeclaredField("xrayProcess").apply { isAccessible = true }
+        val previousChild = childField.get(XrayCoreManager)
+        val activeChild = Mockito.mock(Process::class.java)
+        val previousConfig = AppConfigs.V2RAY_CONFIG
+        val activeConfig = XrayConfig(V2RAY_FULL_JSON_CONFIG = """{"outbounds":[{"protocol":"freedom"}]}""")
+        val started = mutableListOf<Process>()
+        try {
+            childField.set(XrayCoreManager, activeChild); AppConfigs.V2RAY_CONFIG = activeConfig
+            Mockito.mockConstruction(ProcessBuilder::class.java) { builder, _ ->
+                Mockito.`when`(builder.redirectErrorStream(true)).thenReturn(builder)
+                Mockito.`when`(builder.environment()).thenReturn(mutableMapOf())
+                Mockito.`when`(builder.start()).thenAnswer {
+                    Mockito.mock(Process::class.java).also { process ->
+                        Mockito.`when`(process.inputStream).thenReturn(ByteArrayInputStream(byteArrayOf()))
+                        Mockito.`when`(process.errorStream).thenReturn(ByteArrayInputStream(byteArrayOf()))
+                        Mockito.`when`(process.outputStream).thenReturn(ByteArrayOutputStream())
+                        Mockito.`when`(process.isAlive).thenReturn(false)
+                        Mockito.`when`(process.exitValue()).thenReturn(1)
+                        started += process
+                    }
+                }
+            }.use {
+                val beforeParser = StartupPreparationOutcome()
+                assertFalse(accept(service, XrayConfig(V2RAY_FULL_JSON_CONFIG = activeConfig.V2RAY_FULL_JSON_CONFIG,
+                    PLUGIN_OPTIONS_JSON = "{}"), beforeParser))
+                assertEquals(PreparationStage.PREPARE, beforeParser.stage)
+                assertNull(beforeParser.report)
+                Mockito.verify(assets).list("")
+                assertTrue("Bundled asset failure must not launch the parser", started.isEmpty())
+
+                val parserRefusal = StartupPreparationOutcome()
+                assertFalse(accept(service, XrayConfig(V2RAY_FULL_JSON_CONFIG = activeConfig.V2RAY_FULL_JSON_CONFIG,
+                    GEO_ASSETS_DIRECTORY = directory.absolutePath, PLUGIN_OPTIONS_JSON = "{}"), parserRefusal))
+                assertEquals(PreparationStage.CORE_CHECK, parserRefusal.stage)
+                assertNull(parserRefusal.report)
+                assertEquals(1, started.size)
+            }
+            assertSame(activeChild, childField.get(XrayCoreManager))
+            assertSame(activeConfig, AppConfigs.V2RAY_CONFIG)
+            assertTrue(recovery.authorized); assertEquals(generation, recovery.generation)
+            Mockito.verifyNoInteractions(activeChild, worker, profiles)
+            probes.forEach { Mockito.verify(it).close() }
+            assertFalse(directory.listFiles()!!.any { it.name.startsWith("validate-") })
+        } finally {
+            childField.set(XrayCoreManager, previousChild); AppConfigs.V2RAY_CONFIG = previousConfig
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun failedCheckObserverCannotLeakTheChildBeforePreflightAdoptsIt() {
+        val directory = Files.createTempDirectory("startup-observer-cleanup").toFile()
+        val service = Mockito.mock(XrayVPNService::class.java)
+        Mockito.`when`(service.filesDir).thenReturn(directory)
+        Mockito.`when`(service.noBackupFilesDir).thenReturn(directory)
+        Mockito.`when`(service.applicationInfo).thenReturn(ApplicationInfo().apply { nativeLibraryDir = directory.absolutePath })
+        val alive = AtomicBoolean(true)
+        val child = Mockito.mock(Process::class.java)
+        val output = Mockito.mock(InputStream::class.java)
+        val errorStream = Mockito.mock(InputStream::class.java)
+        val input = Mockito.mock(OutputStream::class.java)
+        Mockito.`when`(child.inputStream).thenReturn(output)
+        Mockito.`when`(child.errorStream).thenReturn(errorStream)
+        Mockito.`when`(child.outputStream).thenReturn(input)
+        Mockito.`when`(child.isAlive).thenAnswer { alive.get() }
+        Mockito.`when`(child.destroyForcibly()).thenAnswer { alive.set(false); child }
+        try {
+            Mockito.mockConstruction(ProcessBuilder::class.java) { builder, _ ->
+                Mockito.`when`(builder.redirectErrorStream(true)).thenReturn(builder)
+                Mockito.`when`(builder.environment()).thenReturn(mutableMapOf())
+                Mockito.`when`(builder.start()).thenReturn(child)
+            }.use {
+                assertFalse(XrayCoreManager.validateNative(service,
+                    NativeRuntimeConfig.freeze(JSONObject("""{"outbounds":[{"protocol":"freedom"}]}""")),
+                    directory.absolutePath) { error("PRIVATE_CANARY_observer_failure") })
+            }
+            assertFalse(alive.get())
+            Mockito.verify(child).destroyForcibly()
+            Mockito.verify(output).close(); Mockito.verify(errorStream).close(); Mockito.verify(input).close()
+            assertFalse(directory.listFiles()!!.any { it.name.startsWith("validate-") })
+        } finally { directory.deleteRecursively() }
+    }
 
     @Test fun actualAdmissionsKeepReportsWithCheckedPendingCandidatesAndNeverPublishStartFailureAsSuccess() {
         val directory = Files.createTempDirectory("startup-service-report").toFile()

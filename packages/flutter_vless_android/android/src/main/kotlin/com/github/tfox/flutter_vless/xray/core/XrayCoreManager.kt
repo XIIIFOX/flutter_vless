@@ -398,15 +398,26 @@ object XrayCoreManager {
         }
     } catch (_: Exception) { false }
 
-    /** Validate the actual native parser before replacing a working session. No raw output escapes. */
-    internal fun validateNative(context: Context, configuration: NativeRuntimeConfig, geoAssetsDirectory: String? = null): Boolean {
+    /** Validate the actual native parser before replacing a working session. No raw output escapes.
+     * Preparation failures remain separate from a check that actually started. */
+    internal fun validateNative(context: Context, configuration: NativeRuntimeConfig, geoAssetsDirectory: String? = null,
+        onCoreCheck: () -> Unit = {}): Boolean {
         if (!managedServicesAllowed(context, configuration.bytes.toString(Charsets.UTF_8), configuration.hasRouting, geoAssetsDirectory)) return false
         return configuration.preflightInputs(context.noBackupFilesDir, launch = { inputs ->
             val executable=runtimeExecutable(context,configuration.hasRouting).absolutePath
             val builder = ProcessBuilder(*inputs.command(executable, check=true).toTypedArray()).redirectErrorStream(true)
             Utilities.configureXrayAssets(context, builder.environment(), geoAssetsDirectory)
             if (configuration.hasRouting) builder.environment().remove("FLUTTER_VLESS_PROTECT_SOCKET")
-            builder.start()
+            val process = builder.start()
+            try {
+                onCoreCheck()
+                process
+            } catch (error: Throwable) {
+                // The preflight owner has not adopted this child until launch
+                // returns. Even an observer failure must drain/reap that gap.
+                BoundedCoreCommand.capture(process, timeoutMillis = 1)
+                throw error
+            }
         })
     }
 

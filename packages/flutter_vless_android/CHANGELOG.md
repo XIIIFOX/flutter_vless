@@ -4,6 +4,7 @@ Unpublished implementation update for the main plugin 1.1.7 release train.
 The existing pub.dev package numbered 1.1.7 remains unchanged.
 
 * Use the published checksum-pinned Maven runtime `26.10.31-protect2` for all four device/emulator ABIs with 16 KiB alignment, protected sockets, native routing and managed-service cleanup.
+* Fix first-install bundled GeoDAT preparation under Android app sandbox restrictions, preserving complete files and concurrent caller updates. Report preparation failures separately from Core checks, with real sandbox regression tests in the emulator gate.
 * Close Classic DNS/XHTTP/XDRIVE/GeoDAT resources with the owning runtime, including rejected XHTTP `h2Params` listener cleanup.
 * Add native Quick Tile, Android 13+ add-tile dialog, notification customization, validated options/capabilities, independent quick-profile authorization, bounded reconnect and OS Always-on/lockdown handling.
 * Retain immutable pending actions across unlock, permission and startup; cancel obsolete starts/network callbacks after Stop, replacement or successful options reconfiguration.

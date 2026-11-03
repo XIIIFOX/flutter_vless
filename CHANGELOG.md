@@ -25,6 +25,8 @@ the main package and platform interface remain `1.1.7`.
 * Accept full profiles with multiple or no imported listeners. Allocate a separate authenticated VPN adapter without changing caller authentication, sniffing, routing, API/services or disabled statistics.
 * Preserve unknown JSON fields, Core field aliases, caller DNS hosts/tags/domain selection, transport headers and effective XHTTP download settings. Support JSON comments/BOM, listener port lists/ranges and captured port/address environment values.
 * Preserve explicit VMess TLS SNI independently of transport Host; decode Trojan/VLESS URI credentials once and accept missing display names.
+* Import commented plain-link subscriptions without mistaking them for JSON; retain full JSON and first-profile subscription selection, with regressions for Reality links, base64 lists, multiple profiles and unknown fields.
+* Fix Android first-install bundled GeoDAT preparation in the application sandbox without replacing caller updates; distinguish file preparation failures from checks actually run by Core.
 * Delegate system A/AAAA queries to caller Core DNS and capture IPv6 payload. Preserve compatible FakeDNS pools and caller query strategies while preventing collisions with private addresses, ports and service tags.
 * On Apple, report readiness from the live packet worker and authenticated managed listener rather than fixed public websites. Measure a caller-allowed URL separately with `getConnectedServerDelay`.
 * Prepare Apple `tcp+local`, `https+local` and `h2c+local` DNS through closed interface-bound branches for finite numeric/static resolver destinations. Require binding capability for DNS-only profiles before routes or On Demand; retain routed DoH policy.

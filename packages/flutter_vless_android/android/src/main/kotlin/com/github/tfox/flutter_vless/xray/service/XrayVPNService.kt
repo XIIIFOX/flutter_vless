@@ -405,8 +405,9 @@ class XrayVPNService : VpnService() {
             base, createProbe = { if (current.PROXY_ONLY) null else createReadinessProbe(base) },
             configure = { probe, json -> probe.configure(json, current.LOCAL_SOCKS5_PORT) },
             validate = { final ->
-                outcome?.stage = PreparationStage.CORE_CHECK
-                XrayCoreManager.validateNative(this, final, current.GEO_ASSETS_DIRECTORY)
+                XrayCoreManager.validateNative(this, final, current.GEO_ASSETS_DIRECTORY) {
+                    outcome?.stage = PreparationStage.CORE_CHECK
+                }
             },
             freeze = { final -> routing?.freeze(final, authUser) ?: NativeRuntimeConfig.freeze(final) },
             changes = changes).also { outcome?.stage = PreparationStage.PREPARE }

@@ -17,6 +17,17 @@ import java.nio.file.Files
 import java.nio.file.Paths
 
 class GeodataBundledSeedTest {
+    // The mockable Android jar may zero both constants and constructor fields.
+    // Set errno explicitly and choose a fatal value distinct from EEXIST so
+    // publication denial cannot accidentally exercise the harmless race case.
+    private val deniedErrno: Int
+        get() = if (OsConstants.EACCES != OsConstants.EEXIST) OsConstants.EACCES else -1
+
+    private fun errnoFailure(operation: String, errno: Int): ErrnoException =
+        ErrnoException(operation, errno).also {
+            ErrnoException::class.java.getDeclaredField("errno").setInt(it, errno)
+        }
+
     private fun context(root: java.io.File, source: () -> InputStream): Context {
         val assets=mock(AssetManager::class.java)
         `when`(assets.list("")).thenReturn(arrayOf("geoip.dat"))
@@ -26,13 +37,15 @@ class GeodataBundledSeedTest {
         `when`(context.filesDir).thenReturn(root)
         return context
     }
-    // Resource access is synthetic; publication uses the real host hard-link
-    // syscall, matching Android Os.link create-only/EEXIST semantics.
-    private fun withLink(body: () -> Unit) {
+    // Resource access is synthetic; publication uses real host symlinks.
+    // Hard links deliberately fail as they do in Android's app SELinux domain.
+    // A run-as/shell UID alone does not reproduce that domain restriction.
+    private fun withSymlink(body: () -> Unit) {
         mockStatic(Os::class.java).use { mocked ->
-            mocked.`when`<Unit> { Os.link(anyString(),anyString()) }.thenAnswer { call ->
-                try { Files.createLink(Paths.get(call.getArgument<String>(1)),Paths.get(call.getArgument<String>(0))) }
-                catch (_: FileAlreadyExistsException) { throw ErrnoException("link",OsConstants.EEXIST) }
+            mocked.`when`<Unit> { Os.link(anyString(),anyString()) }.thenThrow(errnoFailure("link",deniedErrno))
+            mocked.`when`<Unit> { Os.symlink(anyString(),anyString()) }.thenAnswer { call ->
+                try { Files.createSymbolicLink(Paths.get(call.getArgument<String>(1)),Paths.get(call.getArgument<String>(0))) }
+                catch (_: FileAlreadyExistsException) { throw errnoFailure("symlink",OsConstants.EEXIST) }
                 null
             }
             body()
@@ -46,7 +59,7 @@ class GeodataBundledSeedTest {
             assertEquals("updated-full-data",file.readText())
         } finally { root.deleteRecursively() }
     }
-    @Test fun partialReadFailureLeavesNeitherFinalFileNorOwnedStage() = withLink {
+    @Test fun partialReadFailureLeavesNeitherFinalFileNorOwnedStage() = withSymlink {
         val root=Files.createTempDirectory("geodat-seed-").toFile()
         try {
             val stream=object: InputStream() {
@@ -61,7 +74,7 @@ class GeodataBundledSeedTest {
             assertTrue(root.list()!!.isEmpty())
         } finally { root.deleteRecursively() }
     }
-    @Test fun finalFileBecomesVisibleOnlyAfterCompleteCopy() = withLink {
+    @Test fun finalFileBecomesVisibleOnlyAfterCompleteCopyWithHardLinksDenied() = withSymlink {
         val root=Files.createTempDirectory("geodat-seed-").toFile()
         try {
             val target=root.resolve("geoip.dat")
@@ -74,7 +87,61 @@ class GeodataBundledSeedTest {
             }
             Utilities.copyAssets(context(root) { stream })
             assertArrayEquals(bytes,target.readBytes())
+            assertTrue(Files.isSymbolicLink(target.toPath()))
+            val backing=Files.readSymbolicLink(target.toPath())
+            assertFalse(backing.isAbsolute)
+            assertArrayEquals(bytes,root.resolve(backing.toString()).readBytes())
+            assertEquals(2,root.list()!!.size)
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test fun updatePublishedDuringCopyWinsAndUnusedBackingIsRemoved() = withSymlink {
+        val root=Files.createTempDirectory("geodat-seed-").toFile()
+        try {
+            val target=root.resolve("geoip.dat")
+            val stream=object: ByteArrayInputStream("bundle".toByteArray()) {
+                override fun close() {
+                    target.writeText("concurrently-updated-data")
+                    super.close()
+                }
+            }
+            Utilities.copyAssets(context(root) { stream })
+            assertEquals("concurrently-updated-data",target.readText())
+            assertFalse(Files.isSymbolicLink(target.toPath()))
             assertEquals(listOf("geoip.dat"),root.list()!!.toList())
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test fun atomicCoreReplacementAndRollbackKeepCompleteData() = withSymlink {
+        val root=Files.createTempDirectory("geodat-seed-").toFile()
+        try {
+            val target=root.resolve("geoip.dat")
+            Utilities.copyAssets(context(root) { ByteArrayInputStream("bundle".toByteArray()) })
+            val backup=root.resolve("update.bak")
+            assertTrue(target.renameTo(backup))
+            val update=root.resolve("update.tmp").apply { writeText("updated-data") }
+            assertTrue(update.renameTo(target))
+            Utilities.copyAssets(context(root) { throw AssertionError("Updated data must not reopen bundle") })
+            assertEquals("updated-data",target.readText())
+            assertTrue(target.delete())
+            assertTrue(backup.renameTo(target))
+            assertTrue(Files.isSymbolicLink(target.toPath()))
+            assertEquals("bundle",target.readText())
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test fun failedPublicationLeavesNoTargetOrBackingFile() {
+        val root=Files.createTempDirectory("geodat-seed-").toFile()
+        try {
+            mockStatic(Os::class.java).use { mocked ->
+                val failure=errnoFailure("symlink",deniedErrno)
+                assertNotEquals(OsConstants.EEXIST,failure.errno)
+                mocked.`when`<Unit> { Os.symlink(anyString(),anyString()) }.thenThrow(failure)
+                assertThrows(IOException::class.java) {
+                    Utilities.copyAssets(context(root) { ByteArrayInputStream("bundle".toByteArray()) })
+                }
+            }
+            assertTrue(root.list()!!.isEmpty())
         } finally { root.deleteRecursively() }
     }
 }

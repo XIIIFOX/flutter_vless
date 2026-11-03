@@ -28,6 +28,12 @@ directory name.
 
 ## Per-session VPN routing
 
+For an ordinary share-link test, use **Import (clipboard)**, then **Connect**.
+Leave **VPN routing** off and **Certificate files** empty unless the profile
+requires those advanced settings. The importer accepts raw JSON/JSONC and plain
+or base64 subscription lists; a list imports its first supported profile.
+Leading subscription comments do not turn a link list into a JSON document.
+
 The **VPN routing** controls choose an original input's inbound-tag context and
 an explicit default outbound without editing the imported JSON. For example:
 

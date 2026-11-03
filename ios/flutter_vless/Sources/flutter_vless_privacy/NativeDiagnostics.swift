@@ -19,6 +19,21 @@ public struct NativeDiagnosticMessage: ExpressibleByStringLiteral, ExpressibleBy
     }
 }
 
+/// A process-local monotonic diagnostic span, independent of wall-clock changes.
+/// Integer milliseconds are truncated; a backwards injected clock reports zero.
+public struct NativeDiagnosticTimer: Sendable {
+    private let started: UInt64
+
+    public init(now: UInt64 = DispatchTime.now().uptimeNanoseconds) {
+        started = now
+    }
+
+    public func elapsedMilliseconds(now: UInt64 = DispatchTime.now().uptimeNanoseconds) -> UInt64 {
+        guard now >= started else { return 0 }
+        return (now - started) / 1_000_000
+    }
+}
+
 public struct NativePrivacyLogger {
     private let logger: Logger
     public init(subsystem: String, category: String) { logger = Logger(subsystem: subsystem, category: category) }

@@ -116,8 +116,14 @@ def main():
     fixture = fixture_source
     assert fixture.count('    // SOURCE_PROVIDER_METHODS') == 1
     fixture = fixture.replace('    // SOURCE_PROVIDER_METHODS', actual)
+    timer_path = (ROOT / 'ios/flutter_vless/Sources/flutter_vless_privacy/NativeDiagnostics.swift' if args.platform == 'ios' else
+                  ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_privacy/NativeDiagnostics.swift')
+    timer_source = timer_path.read_bytes()
+    diagnostics = timer_source.decode()
+    timer_start = diagnostics.index('public struct NativeDiagnosticTimer:')
+    timer = diagnostics[timer_start:diagnostics.index('\n}\n', timer_start) + 3]
     generated = output / 'Probe.swift'
-    generated.write_text(fixture)
+    generated.write_text("import Foundation\n" + timer + "\n" + fixture)
     support = ROOT / 'ios/flutter_vless/Sources/flutter_vless_tunnel_support/TunnelRuntimeSupport.swift'
     privacy = (ROOT / 'ios/flutter_vless/Sources/flutter_vless_privacy' if args.platform == 'ios' else
                ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_privacy')
@@ -135,9 +141,11 @@ def main():
     assert fixture_path.read_text() == fixture_source, 'Source changed during verification'
     assert budget.read_bytes() == budget_source, 'Budget source changed during verification'
     assert plan.read_bytes() == plan_source, 'Endpoint plan source changed during verification'
+    assert timer_path.read_bytes() == timer_source, 'Diagnostic timer source changed during verification'
     (output / 'result.json').write_text(json.dumps({
         'platform': args.platform, 'provider_sha256': hashlib.sha256(source.encode()).hexdigest(),
         'gate_sha256': hashlib.sha256(gate).hexdigest(),
+        'diagnostic_timer_sha256': hashlib.sha256(timer_source).hexdigest(),
         'endpoint_plan_sha256': hashlib.sha256(plan_source).hexdigest(),
         'clock_boundary': 'Production Task.sleep replaced by inert FixtureSleep; fixture callback/wait bounds use monotonic elapsed time',
         'fixture_sha256': hashlib.sha256(fixture_source.encode()).hexdigest(),

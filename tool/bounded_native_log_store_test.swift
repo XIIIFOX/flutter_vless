@@ -83,6 +83,24 @@ struct BoundedNativeLogStoreTest {
         for index in 0..<20 { store.append(source:"runtime",message:"line-\(index)") }
         let limited=store.snapshot()
         precondition(limited.contains("line-19") && !limited.contains("line-16") && limited.utf8.count<=4096)
+
+        // Use the production scalar formatter and timer at the real bounded
+        // diagnostic sink, including the disabled-policy path.
+        let timer = NativeDiagnosticTimer(now: 1_000_000)
+        let secret = "private-timing-canary.example.com"
+        BoundedNativeLogStore.configure(enabled: false, maxBytes: 4096, maxLines: 3)
+        let hidden: NativeDiagnosticMessage = "Endpoint DNS timing totalMs=\(timer.elapsedMilliseconds(now: .max)) value=\(secret)"
+        store.append(source: "startup", message: hidden.text)
+        precondition(store.snapshot().isEmpty)
+        BoundedNativeLogStore.configure(enabled: true, maxBytes: 4096, maxLines: 3)
+        for index in 0..<1_000 {
+            let message: NativeDiagnosticMessage = "Endpoint DNS timing totalMs=\(timer.elapsedMilliseconds(now: UInt64(index) * 1_000_000)) callbackSeen=\(true) value=\(secret)"
+            store.append(source: "startup", message: message.text)
+        }
+        let timings = store.snapshot()
+        precondition(timings.split(separator: "\n").count == 3 && timings.utf8.count <= 4096)
+        precondition(timings.contains("totalMs=998") && !timings.contains(secret))
+        precondition(timings.contains("value=<redacted>"))
         store.reset()
         precondition(store.snapshot().isEmpty)
     }

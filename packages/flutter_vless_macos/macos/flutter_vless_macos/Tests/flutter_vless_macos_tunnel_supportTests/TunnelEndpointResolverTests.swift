@@ -62,7 +62,8 @@ final class TunnelEndpointResolverTests: XCTestCase {
         XCTAssertEqual(calls, ["ipv4", "ipv6", "fallback"])
         XCTAssertEqual(result?.family, .ipv4)
         XCTAssertEqual(result?.source, .encryptedIPv4Answer)
-        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(messages.count, 3)
+        XCTAssertTrue(messages.contains { $0.hasPrefix("Endpoint DNS encryptedBootstrapMs=") })
         XCTAssertFalse(messages.joined().contains(host))
         XCTAssertFalse(messages.joined().contains("192.0.2.8"))
     }
@@ -149,7 +150,8 @@ final class TunnelEndpointResolverTests: XCTestCase {
             event: { messages.append($0.text) })
         XCTAssertEqual(requested, [host])
         XCTAssertEqual(address, "192.0.2.8")
-        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(messages.count, 3)
+        XCTAssertTrue(messages.contains { $0.hasPrefix("Endpoint DNS encryptedBootstrapMs=") })
         XCTAssertFalse(messages.joined().contains(host))
         XCTAssertFalse(messages.joined().contains("192.0.2.8"))
     }

@@ -20,11 +20,14 @@ python3 - "$ROOT_DIR" "$PROBE_DIR" <<'PYTHON'
 from pathlib import Path
 import sys
 root,out=map(Path,sys.argv[1:])
+diagnostics=(root/'ios/flutter_vless/Sources/flutter_vless_privacy/NativeDiagnostics.swift').read_text()
+timer_start=diagnostics.index('public struct NativeDiagnosticTimer:')
+timer=diagnostics[timer_start:diagnostics.index('\n}\n',timer_start)+3]
 s=(root/'example/ios/XrayTunnel/PacketTunnelProvider.swift').read_text()
 a=s.index('    override func startTunnel(options:')
 b=s.index('        TunnelDebugStore.shared.configure',a)
 entry=s[a:b].replace('override func','func').replace('configuration.providerBundleIdentifier ?? ""', 'configuration.providerBundleIdentifier ?? "", client: keychain')
-(out/'Provider.swift').write_text('import Foundation\nfinal class ProviderEntryProbe {\n var protocolConfiguration: NEVPNProtocol?\n var keychain = FixtureKeychain()\n var reachedBootstrap = false\n var nativeOptions = try! VlessNativeOptions()\n var recoveryFailures = 0\n var recoveryExhausted = false\n var initialRuntimeAttempted = false\n func tunnelError(_ message: String) -> NSError { NSError(domain: "fixture.provider", code: 1) }\n'+entry+'        reachedBootstrap = true\n    }\n}\n')
+(out/'Provider.swift').write_text('import Foundation\n'+timer+'\nfinal class ProviderEntryProbe {\n var protocolConfiguration: NEVPNProtocol?\n var keychain = FixtureKeychain()\n var reachedBootstrap = false\n var nativeOptions = try! VlessNativeOptions()\n var recoveryFailures = 0\n var recoveryExhausted = false\n var initialRuntimeAttempted = false\n func tunnelError(_ message: String) -> NSError { NSError(domain: "fixture.provider", code: 1) }\n'+entry+'        reachedBootstrap = true\n    }\n}\n')
 s=(root/'ios/flutter_vless/Sources/flutter_vless/FlutterVlessPlugin.swift').read_text()
 helper_start=s.index('    fileprivate static func buildProxyOnlyConfigData')
 helper_end=s.index('\n    }\n',helper_start)+6

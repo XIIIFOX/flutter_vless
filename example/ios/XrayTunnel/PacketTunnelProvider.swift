@@ -274,6 +274,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func startTunnel(options: [String : NSObject]? = nil) async throws {
+        let startupTiming = NativeDiagnosticTimer()
         guard let configuration = protocolConfiguration as? NETunnelProviderProtocol else {
             throw tunnelError("Missing tunnel provider configuration")
         }
@@ -300,6 +301,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         try NativeRoutingSpec.validateSource(config, intent: routingIntent)
         let options = try VlessNativeOptions(providerConfiguration["options"] as? [String: Any])
         TunnelDebugStore.shared.configure(groupIdentifier: providerConfiguration["groupIdentifier"] as? String, options: options)
+        rememberTunnelLog("Startup timing phase=keychain-setup elapsedMs=\(startupTiming.elapsedMilliseconds())")
+        defer { rememberTunnelLog("Startup timing phase=provider-admission elapsedMs=\(startupTiming.elapsedMilliseconds())") }
         #if FLUTTER_VLESS_ACCEPTANCE_TESTING && FLUTTER_VLESS_ACCEPTANCE_SESSION_DEADLINE
         let epoch = try beginAcceptanceSessionDeadline(configuration: configuration, options: options)
         #else
@@ -314,6 +317,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let source = RuntimeSource(epoch: epoch, config: config, options: options, routingIntent: routingIntent,
             credentials: credentials, geoAssetsDirectory: providerConfiguration["geoAssetsDirectory"] as? String,
             environment: .capture())
+        let physicalTiming = NativeDiagnosticTimer()
         let observer = makePhysicalPathObserver()
         try watchdogQueue.sync {
             guard sessionAdmission.isCurrent(epoch) else { throw CancellationError() }
@@ -325,13 +329,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             self?.watchdogQueue.async { [weak self] in self?.physicalPathChanged(path, epoch: epoch) }
         }
         let snapshot = try await observer.initialSnapshot(deadline: ProcessInfo.processInfo.systemUptime + 5)
+        rememberTunnelLog("Startup timing phase=physical-path elapsedMs=\(physicalTiming.elapsedMilliseconds())")
         guard sessionAdmission.isCurrent(epoch) else { throw CancellationError() }
         try watchdogQueue.sync {
             guard sessionAdmission.isCurrent(epoch), runtimeSource?.epoch == epoch else { throw CancellationError() }
             if !observedPhysicalPath { physicalPath = snapshot }
         }
         let spec: RuntimeSpec
-        do { spec = try await prepareInitialRuntimeSpec(source) }
+        do {
+            let preparationTiming = NativeDiagnosticTimer()
+            defer { rememberTunnelLog("Startup timing phase=initial-preparation elapsedMs=\(preparationTiming.elapsedMilliseconds())") }
+            spec = try await prepareInitialRuntimeSpec(source)
+        }
         catch {
             if error is CancellationError || !sessionAdmission.isCurrent(epoch) { throw CancellationError() }
             switch error {
@@ -348,6 +357,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         rememberTunnelLog("Protected tunnel routes and virtual DNS installed")
 
         // Arm only the fully prepared startup, never an unresolved cold profile.
+        let armingTiming = NativeDiagnosticTimer()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             TunnelOnDemandPolicy.enableForStart(configuration: configuration, armingReceipt: armingReceipt,
                 isCancelled: { !self.sessionAdmission.isCurrent(epoch) || !self.endpointAdmission.isCurrent(token) }) { result in
@@ -361,6 +371,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 }
             }
         }
+        rememberTunnelLog("Startup timing phase=recovery-policy elapsedMs=\(armingTiming.elapsedMilliseconds()) generation=\(token.generation)")
         guard sessionAdmission.isCurrent(epoch), endpointAdmission.isCurrent(token), spec.isFresh(),
               endpointAdmission.commit(token) else { throw CancellationError() }
 
@@ -532,6 +543,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func prepareEndpointConfig(_ source: RuntimeSource, token: TunnelEndpointPlanAdmission.Token,
                                        path: TunnelEndpointPath, attempt: UInt64, deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 25) async throws -> TunnelPreparedConfig {
         let current = { self.sessionAdmission.isCurrent(source.epoch) && self.endpointAdmission.isCurrent(token) }
+        let preparationTiming = NativeDiagnosticTimer()
+        defer { rememberTunnelLog("Startup timing phase=endpoint-plan elapsedMs=\(preparationTiming.elapsedMilliseconds()) generation=\(token.generation) current=\(current())") }
+        rememberTunnelLog("Startup timing phase=endpoint-plan-begin generation=\(token.generation) current=\(current())")
         guard current() else { throw CancellationError() }
         let prepared = try await TunnelXrayConfigPreparer.prepareForStartup(jsonData: source.config,
             credentials: source.credentials, routingIntent: source.routingIntent,
@@ -539,7 +553,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             endpointPath: path, selectedAttempt: attempt, resolveCandidates: { host in
                 guard current() else { throw CancellationError() }
                 let values = try await TunnelEndpointResolver.resolveCandidates(host, on: path, deadline: deadline,
-                    isCurrent: current, event: rememberTunnelLog)
+                    isCurrent: current, event: { message in
+                        rememberTunnelLog("Endpoint DNS generation=\(token.generation) current=\(current()) \(message)")
+                    })
                 guard current() else { throw CancellationError() }
                 return values
             }, isCurrent: current, attempts: 1)
@@ -548,6 +564,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func checkEndpointPreflight(_ spec: RuntimeSpec, prepared: TunnelPreparedConfig, source: RuntimeSource) throws {
+        let preflightTiming = NativeDiagnosticTimer()
+        defer { rememberTunnelLog("Startup timing phase=core-preflight elapsedMs=\(preflightTiming.elapsedMilliseconds()) generation=\(spec.token.generation) current=\(endpointAdmission.isCurrent(spec.token))") }
         guard sessionAdmission.isCurrent(spec.epoch), endpointAdmission.isCurrent(spec.token), spec.isFresh() else { throw CancellationError() }
         try ManagedServiceAssetPolicy.validate(prepared.data, directory: source.geoAssetsDirectory, geodataCapability: FLVlessCoreGeodataLifetimeCapability(), xdriveCapability: FLVlessCoreXdriveLifetimeCapability())
         if (spec.selections.contains(where: { !$0.selected.address.isLoopback }) ||
@@ -592,6 +610,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func installProtectedSettings(_ spec: RuntimeSpec) async throws {
         let key = ProtectedSettingsKey(spec)
         guard installedSettingsKey != key else { return }
+        let settingsTiming = NativeDiagnosticTimer()
+        defer { rememberTunnelLog("Startup timing phase=network-settings elapsedMs=\(settingsTiming.elapsedMilliseconds()) generation=\(spec.token.generation) current=\(endpointAdmission.isCurrent(spec.token))") }
         do {
             try await setTunnelNetworkSettings(protectedNetworkSettings(spec))
             installedSettingsKey = key
@@ -709,6 +729,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func isStartupStopped() -> Bool { sessionAdmission.currentEpoch == nil }
 
     private func startNativeRuntime(_ spec: RuntimeSpec) throws {
+        let nativeTiming = NativeDiagnosticTimer()
+        defer { rememberTunnelLog("Startup timing phase=native-runtime elapsedMs=\(nativeTiming.elapsedMilliseconds()) generation=\(spec.token.generation)") }
         // Commit the attempt at the last pre-Core admission boundary, after
         // the old runtime drained. Sleep-cancelled work consumes no budget.
         let admitted = watchdogQueue.sync {
@@ -971,6 +993,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         }
 
+        let graceTiming = NativeDiagnosticTimer()
+        defer { rememberTunnelLog("Startup timing phase=hev-grace elapsedMs=\(graceTiming.elapsedMilliseconds()) generation=\(token.generation)") }
         switch hevLifecycle.waitForStableStartup(gracePeriod: hevStartupGraceSeconds) {
         case .running:
             rememberTunnelLog("HEV remained running through startup grace period")
@@ -983,6 +1007,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data? = nil) throws {
+        let coreTiming = NativeDiagnosticTimer()
+        defer { rememberTunnelLog("Startup timing phase=core-start elapsedMs=\(coreTiming.elapsedMilliseconds())") }
         try ManagedServiceAssetPolicy.validate(xrayConfig, directory: geoAssetsDirectory, geodataCapability: FLVlessCoreGeodataLifetimeCapability(), xdriveCapability: FLVlessCoreXdriveLifetimeCapability())
         if routingMetadata != nil { try NativeRoutingSpec.requireRuntime(FLVlessCoreRoutingCapability()) }
         // This limits the Go runtime only. HEV session caps and bounded Swift/C
@@ -1162,6 +1188,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         // Share one deadline across loopback connect and every authentication fragment.
         // Stop/sleep revoke admission directly, without waiting for this queue.
+        let readinessTiming = NativeDiagnosticTimer()
         let budget = LocalProxyIOBudget(timeout: 2, isCancelled: { [weak self] in
             self?.sessionAdmission.permitsRuntime(epoch) != true || self?.endpointAdmission.ownsRuntime(token) != true
         })
@@ -1181,6 +1208,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         )
         guard sessionAdmission.permitsRuntime(epoch), endpointAdmission.ownsRuntime(token) else { return false }
         setForwardingReady(success, epoch: epoch)
+        rememberTunnelLog("Startup timing phase=local-readiness elapsedMs=\(readinessTiming.elapsedMilliseconds()) generation=\(token.generation) ready=\(success)")
         if success {
             recoveryFailures = 0
             tunnelLog.info("Tunnel watchdog \(trigger, privacy: .public) passed")

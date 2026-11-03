@@ -60,10 +60,10 @@ public enum TunnelEndpointResolver {
     /// That provenance does not claim which interface a later Core socket uses.
     public static func resolveCandidates(_ host: String, on path: TunnelEndpointPath,
         deadline: TimeInterval, isCurrent: @escaping () -> Bool = { true },
-        event: (NativeDiagnosticMessage) -> Void = { _ in }) async throws -> TunnelEndpointCandidates {
+        event: @escaping (NativeDiagnosticMessage) -> Void = { _ in }) async throws -> TunnelEndpointCandidates {
         try await resolveCandidates(host, on: path, deadline: deadline,
             system: { host, path, deadline in
-                try await TunnelEndpointDNSCollection.collect(host, path: path, deadline: deadline, isCurrent: isCurrent)
+                try await TunnelEndpointDNSCollection.collect(host, path: path, deadline: deadline, isCurrent: isCurrent, event: event)
             }, synthesis: { host, deadline in
                 try await TunnelIPv4SynthesisWorker.shared.resolve(host, deadline: deadline, isCurrent: isCurrent)
             }, fallback: { host, timeout in try await encryptedLookup(host, timeout: timeout) },
@@ -113,6 +113,8 @@ public enum TunnelEndpointResolver {
         // This HTTPS lookup is process-default, not DNSService interface scoped.
         guard path.supportsIPv4, isPublicHostname(host) else { return result([]) }
         event("System endpoint DNS unavailable; trying encrypted endpoint bootstrap")
+        let fallbackTiming = NativeDiagnosticTimer()
+        defer { event("Endpoint DNS encryptedBootstrapMs=\(fallbackTiming.elapsedMilliseconds())") }
         do {
             let raw = try await fallback(host, min(5, deadline - now()))
             try check()
@@ -178,6 +180,8 @@ public enum TunnelEndpointResolver {
         // Never disclose local/single-label names to a public bootstrap resolver.
         guard isPublicHostname(host) else { return nil }
         event("System endpoint DNS unavailable; trying encrypted endpoint bootstrap")
+        let fallbackTiming = NativeDiagnosticTimer()
+        defer { event("Endpoint DNS encryptedBootstrapMs=\(fallbackTiming.elapsedMilliseconds())") }
         do {
             let raw = try await fallback(host)
             try Task.checkCancellation()

@@ -1,6 +1,7 @@
 import Foundation
 import Darwin
 import dnssd
+import flutter_vless_macos_privacy
 
 /// Serial lifetime for one scoped dual-family DNSService query. The short
 /// collection window is inside the caller's absolute deadline, not renewed per RR.
@@ -14,18 +15,26 @@ final class TunnelEndpointDNSCollection: @unchecked Sendable {
     private var accumulator: TunnelEndpointDNSAccumulator
     private let now: () -> TimeInterval
     private let isCurrent: () -> Bool
+    private let event: (NativeDiagnosticMessage) -> Void
+    private var collectionTiming: NativeDiagnosticTimer?
+    private var registrationMs: UInt64 = 0
+    private var firstCallbackMs: UInt64?
+    private var registrationSucceeded = false
 
-    private init(host: String, path: TunnelEndpointPath, now: @escaping () -> TimeInterval, isCurrent: @escaping () -> Bool) {
+    private init(host: String, path: TunnelEndpointPath, now: @escaping () -> TimeInterval, isCurrent: @escaping () -> Bool,
+                 event: @escaping (NativeDiagnosticMessage) -> Void) {
         accumulator = TunnelEndpointDNSAccumulator(host: host, path: path)
         self.now = now
         self.isCurrent = isCurrent
+        self.event = event
     }
 
     static func collect(_ host: String, path: TunnelEndpointPath, deadline: TimeInterval,
                         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
                         isCurrent: @escaping () -> Bool = { true },
+                        event: @escaping (NativeDiagnosticMessage) -> Void = { _ in },
                         query: @escaping Query = TunnelEndpointDNSQuery.start) async throws -> [TunnelEndpointCandidate] {
-        let owner = TunnelEndpointDNSCollection(host: host, path: path, now: now, isCurrent: isCurrent)
+        let owner = TunnelEndpointDNSCollection(host: host, path: path, now: now, isCurrent: isCurrent, event: event)
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
@@ -44,14 +53,20 @@ final class TunnelEndpointDNSCollection: @unchecked Sendable {
         guard remaining.isFinite, remaining > 0 else {
             finish(.failure(TunnelEndpointResolver.CandidateFailure.deadlineExceeded)); return
         }
+        let timing = NativeDiagnosticTimer()
+        collectionTiming = timing
         cancelQuery = query(host, path.interfaceIndex, queue) { [weak self] answer in
+            let receivedAfterMs = timing.elapsedMilliseconds()
             guard let self else { return }
             self.queue.async {
                 guard self.continuation != nil else { return }
                 guard self.isCurrent() else { self.finish(.failure(CancellationError())); return }
+                if self.firstCallbackMs == nil { self.firstCallbackMs = receivedAfterMs }
                 self.accumulator.accept(answer, at: self.now())
             }
         }
+        registrationMs = timing.elapsedMilliseconds()
+        registrationSucceeded = cancelQuery != nil
         guard cancelQuery != nil else { finish(.success([])); return }
         let timeout = DispatchWorkItem { [self] in
             guard isCurrent() else { finish(.failure(CancellationError())); return }
@@ -65,8 +80,20 @@ final class TunnelEndpointDNSCollection: @unchecked Sendable {
         guard let continuation else { return }
         self.continuation = nil
         timer?.cancel(); timer = nil
+        let completedMs = collectionTiming?.elapsedMilliseconds() ?? 0
+        let cleanupTiming = NativeDiagnosticTimer()
         let cancel = cancelQuery; cancelQuery = nil
         cancel?() // always on the DNSService registration queue
+        let cleanupMs = cleanupTiming.elapsedMilliseconds()
+        let totalMs = collectionTiming?.elapsedMilliseconds() ?? 0
+        let waitMs = completedMs >= registrationMs ? completedMs - registrationMs : 0
+        let answerCount: Int
+        let wasCancelled: Bool
+        switch result {
+        case .success(let answers): answerCount = answers.count; wasCancelled = false
+        case .failure(let error): answerCount = 0; wasCancelled = error is CancellationError
+        }
+        event("Endpoint DNS timing registrationMs=\(registrationMs) waitMs=\(waitMs) cleanupMs=\(cleanupMs) totalMs=\(totalMs) callbackSeen=\(firstCallbackMs != nil) firstCallbackMs=\(firstCallbackMs ?? 0) answerCount=\(answerCount) registrationSucceeded=\(registrationSucceeded) cancelled=\(wasCancelled)")
         continuation.resume(with: result)
     }
 }

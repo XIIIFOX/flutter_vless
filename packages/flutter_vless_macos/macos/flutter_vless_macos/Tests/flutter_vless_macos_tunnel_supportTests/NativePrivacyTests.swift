@@ -3,6 +3,26 @@ import XCTest
 @testable import flutter_vless_macos_tunnel_support
 
 final class NativePrivacyTests: XCTestCase {
+    func testDiagnosticTimerUsesExactMonotonicMillisecondsAndSafeBoundaries() {
+        let timer = NativeDiagnosticTimer(now: 10_000_000)
+        XCTAssertEqual(timer.elapsedMilliseconds(now: 10_000_000), 0)
+        XCTAssertEqual(timer.elapsedMilliseconds(now: 10_999_999), 0)
+        XCTAssertEqual(timer.elapsedMilliseconds(now: 11_000_000), 1)
+        XCTAssertEqual(timer.elapsedMilliseconds(now: 12_999_999), 2)
+        XCTAssertEqual(timer.elapsedMilliseconds(now: 9_999_999), 0, "A backwards clock must not underflow")
+        XCTAssertEqual(NativeDiagnosticTimer(now: 0).elapsedMilliseconds(now: .max), UInt64.max / 1_000_000)
+        XCTAssertEqual(NativeDiagnosticTimer(now: .max - 1_000_000).elapsedMilliseconds(now: .max), 1)
+        XCTAssertEqual(NativeDiagnosticTimer(now: .max).elapsedMilliseconds(now: 0), 0)
+    }
+
+    func testDiagnosticTimerScalarRenderingDoesNotExposeDynamicValues() {
+        let elapsed = NativeDiagnosticTimer(now: 100).elapsedMilliseconds(now: 2_000_100)
+        let secret = "private-timing-canary.example.com"
+        let message: NativeDiagnosticMessage = "Endpoint DNS timing registrationMs=\(elapsed) callbackSeen=\(true) value=\(secret)"
+        XCTAssertEqual(message.text, "Endpoint DNS timing registrationMs=2 callbackSeen=true value=<redacted>")
+        XCTAssertFalse(message.text.contains(secret))
+    }
+
     func testCallerAPIStatsAndPolicyArePreservedThroughPrivatePreparation() throws {
         let api: [String: Any] = ["Tag": "caller-management", "Listen": "127.0.0.1:+10809", "Services": ["HandlerService", "StatsService", "RoutingService"]]
         let stats: [String: Any] = ["caller-metadata": ["keep": true]]

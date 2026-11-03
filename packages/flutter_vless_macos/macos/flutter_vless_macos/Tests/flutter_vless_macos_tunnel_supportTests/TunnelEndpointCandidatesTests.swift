@@ -183,6 +183,134 @@ final class TunnelEndpointCandidatesTests: XCTestCase {
         XCTAssertEqual(closes, 1)
     }
 
+    private final class TimingCapture: @unchecked Sendable {
+        private let lock = NSLock()
+        private var messages: [String] = []
+        private var closes = 0
+        private var callback: ((TunnelEndpointDNSAnswer) -> Void)?
+        private var queue: DispatchQueue?
+
+        func didRegister(queue: DispatchQueue, callback: @escaping (TunnelEndpointDNSAnswer) -> Void) {
+            lock.lock(); defer { lock.unlock() }
+            self.queue = queue; self.callback = callback
+        }
+
+        var registration: (callback: ((TunnelEndpointDNSAnswer) -> Void)?, queue: DispatchQueue?) {
+            lock.lock(); defer { lock.unlock() }
+            return (callback, queue)
+        }
+
+        func record(_ message: NativeDiagnosticMessage) {
+            lock.lock(); defer { lock.unlock() }
+            messages.append(message.text)
+        }
+
+        func didClose() {
+            lock.lock(); defer { lock.unlock() }
+            closes += 1
+        }
+
+        var snapshot: (messages: [String], closes: Int) {
+            lock.lock(); defer { lock.unlock() }
+            return (messages, closes)
+        }
+    }
+
+    private func timingField(_ name: String, in message: String) throws -> String {
+        let fields = message.split(separator: " ").map(String.init)
+        let prefix = name + "="
+        let field = try XCTUnwrap(fields.first(where: { $0.hasPrefix(prefix) }), message)
+        return String(field.dropFirst(prefix.count))
+    }
+
+    func testDNSDiagnosticsSeparateBlockedRegistrationFromUnchangedCollectionWindow() async throws {
+        let capture = TimingCapture()
+        let began = NativeDiagnosticTimer()
+        let values = try await TunnelEndpointDNSCollection.collect("private-timing-canary.example.com", path: dual,
+            deadline: now + 5, event: capture.record, query: { _, _, queue, receive in
+                // This backend is deliberately inert. A blocked registration
+                // must remain visible separately from the unchanged two-second
+                // collection window, even when answers are already available.
+                Thread.sleep(forTimeInterval: 0.04)
+                receive(.init(hostname: "private-timing-canary.example.com", text: "192.0.2.197", interfaceIndex: 4, ttl: 30, added: true))
+                queue.asyncAfter(deadline: .now() + 0.02) {
+                    receive(.init(hostname: "private-timing-canary.example.com", text: "2001:db8::197", interfaceIndex: 4, ttl: 30, added: true))
+                }
+                return { Thread.sleep(forTimeInterval: 0.025); capture.didClose() }
+            })
+        XCTAssertEqual(values.map(\.address.family), [.ipv4, .ipv6])
+        let result = capture.snapshot
+        XCTAssertEqual(result.closes, 1)
+        XCTAssertEqual(result.messages.count, 1, "One aggregate event must not grow with callback count")
+        let message = try XCTUnwrap(result.messages.first)
+        let registration = try XCTUnwrap(UInt64(try timingField("registrationMs", in: message)))
+        let wait = try XCTUnwrap(UInt64(try timingField("waitMs", in: message)))
+        let cleanup = try XCTUnwrap(UInt64(try timingField("cleanupMs", in: message)))
+        let total = try XCTUnwrap(UInt64(try timingField("totalMs", in: message)))
+        let firstCallback = try XCTUnwrap(UInt64(try timingField("firstCallbackMs", in: message)))
+        XCTAssertGreaterThanOrEqual(registration, 35)
+        XCTAssertGreaterThanOrEqual(wait, 1_900)
+        XCTAssertGreaterThanOrEqual(cleanup, 20)
+        XCTAssertGreaterThanOrEqual(total, registration + wait + cleanup - 2)
+        XCTAssertLessThanOrEqual(total, registration + wait + cleanup + 3)
+        XCTAssertGreaterThanOrEqual(began.elapsedMilliseconds(), total)
+        XCTAssertLessThanOrEqual(firstCallback, registration)
+        XCTAssertEqual(try timingField("callbackSeen", in: message), "true")
+        XCTAssertEqual(try timingField("answerCount", in: message), "2")
+        XCTAssertEqual(try timingField("registrationSucceeded", in: message), "true")
+        XCTAssertEqual(try timingField("cancelled", in: message), "false")
+        for secret in ["private-timing-canary", "192.0.2.197", "2001:db8::197"] {
+            XCTAssertFalse(message.contains(secret))
+        }
+        XCTAssertLessThan(message.utf8.count, 300)
+    }
+
+    func testDNSDiagnosticsCancellationClosesOnceAndLateAnswersCannotAppendEvents() async throws {
+        let capture = TimingCapture()
+        let entered = expectation(description: "inert query registered")
+        let drained = expectation(description: "late callback drained")
+        let task = Task {
+            try await TunnelEndpointDNSCollection.collect("private-timing-canary.example.com", path: dual,
+                deadline: now + 5, event: capture.record, query: { _, _, queue, receive in
+                    capture.didRegister(queue: queue, callback: receive); entered.fulfill()
+                    return { capture.didClose() }
+                })
+        }
+        await fulfillment(of: [entered], timeout: 1)
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Cancelled collection succeeded") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let beforeLateAnswer = capture.snapshot
+        XCTAssertEqual(beforeLateAnswer.closes, 1)
+        XCTAssertEqual(beforeLateAnswer.messages.count, 1)
+        let message = try XCTUnwrap(beforeLateAnswer.messages.first)
+        XCTAssertEqual(try timingField("cancelled", in: message), "true")
+        XCTAssertEqual(try timingField("callbackSeen", in: message), "false")
+        XCTAssertEqual(try timingField("answerCount", in: message), "0")
+        let registration = capture.registration
+        registration.callback?(.init(hostname: "private-timing-canary.example.com", text: "192.0.2.197", interfaceIndex: 4, ttl: 30, added: true))
+        try XCTUnwrap(registration.queue).async { drained.fulfill() }
+        await fulfillment(of: [drained], timeout: 1)
+        XCTAssertEqual(capture.snapshot.messages, beforeLateAnswer.messages)
+        XCTAssertEqual(capture.snapshot.closes, 1)
+    }
+
+    func testDNSDiagnosticsDistinguishUnavailableRegistrationWithoutInventingAnswers() async throws {
+        let capture = TimingCapture()
+        let values = try await TunnelEndpointDNSCollection.collect("private-timing-canary.example.com", path: dual,
+            deadline: now + 1, event: capture.record, query: { _, _, _, _ in nil })
+        XCTAssertTrue(values.isEmpty)
+        let message = try XCTUnwrap(capture.snapshot.messages.first)
+        XCTAssertEqual(capture.snapshot.messages.count, 1)
+        XCTAssertEqual(capture.snapshot.closes, 0)
+        XCTAssertEqual(try timingField("registrationSucceeded", in: message), "false")
+        XCTAssertEqual(try timingField("callbackSeen", in: message), "false")
+        XCTAssertEqual(try timingField("firstCallbackMs", in: message), "0")
+        XCTAssertEqual(try timingField("answerCount", in: message), "0")
+        XCTAssertEqual(try timingField("cancelled", in: message), "false")
+        XCTAssertFalse(message.contains("private-timing-canary"))
+    }
+
     func testBlockingSynthesisCancellationKeepsOneOutstandingSlotUntilNativeReturns() async throws {
         let entered = expectation(description: "fake blocking backend entered")
         let release = DispatchSemaphore(value: 0)

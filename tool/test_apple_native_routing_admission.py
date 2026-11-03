@@ -102,6 +102,12 @@ def main():
     mutations = {}
     for platform, path in PROVIDERS.items():
         source = path.read_text()
+        timer_path = (ROOT / 'ios/flutter_vless/Sources/flutter_vless_privacy/NativeDiagnostics.swift' if platform == 'ios' else
+                      ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_privacy/NativeDiagnostics.swift')
+        diagnostics = timer_path.read_text()
+        timer_start = diagnostics.index('public struct NativeDiagnosticTimer:')
+        timer = diagnostics[timer_start:diagnostics.index('\n}\n', timer_start) + 3]
+        hashes[str(timer_path.relative_to(ROOT))] = hashlib.sha256(timer_path.read_bytes()).hexdigest()
         hashes[str(path.relative_to(ROOT))] = hashlib.sha256(source.encode()).hexdigest()
         entry, _, _, _, _, native, start_method = check_wiring(source)
         mutations[platform] = mutation_controls(source)
@@ -117,7 +123,7 @@ def main():
         generated = generated.replace('        // SOURCE_RUNTIME_START_PAIR', start_pair[0])
         generated = generated.replace('    // SOURCE_START', start_method.replace('private func', 'func'))
         destination = output / (platform + '.swift')
-        destination.write_text(generated)
+        destination.write_text("import Foundation\n" + timer + "\n" + generated)
         executable = output / (platform + '-probe')
         subprocess.run(['xcrun', 'swiftc', '-O', '-parse-as-library', *map(str, inputs), str(destination), '-o', str(executable)], check=True, timeout=100)
         result = subprocess.run([str(executable)], text=True, capture_output=True, timeout=15)

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/xtls/xray-core/infra/conf/serial"
@@ -122,6 +121,7 @@ func TestProtocolCorpusBuilds(t *testing.T) {
 // File-only native preparation and Core Build. No core.Instance is created,
 // and no fixture socket, DNS resolver or platform network setting is used.
 func TestNativeProtocolPreparation(t *testing.T) {
+	t.Run("Caller-service-roots-contract", TestCallerServiceRootsContract)
 	if os.Getenv("NATIVE_DNS_PREPARER") == "" {
 		t.Fatal("production native preparer required")
 	}
@@ -202,29 +202,4 @@ func testNativeProtocolPreparation(t *testing.T) {
 	testLoopbackChains(t, true)
 	testLogicalAddresses(t, true)
 	testFakeDNSPreparation(t, true)
-}
-
-func foldedRoot(object map[string]any, name string) (any, bool) {
-	for key, value := range object {
-		if strings.EqualFold(key, name) {
-			return value, true
-		}
-	}
-	return nil, false
-}
-
-func assertCallerServiceRoots(t *testing.T, source, effective map[string]any) {
-	t.Helper()
-	for _, name := range []string{"api", "stats", "policy"} {
-		want, present := foldedRoot(source, name)
-		if !present {
-			continue
-		}
-		got, retained := foldedRoot(effective, name)
-		wantJSON, wantErr := json.Marshal(want)
-		gotJSON, gotErr := json.Marshal(got)
-		if !retained || wantErr != nil || gotErr != nil || !bytes.Equal(wantJSON, gotJSON) {
-			t.Fatalf("caller %s subtree changed during VPN preparation", name)
-		}
-	}
 }

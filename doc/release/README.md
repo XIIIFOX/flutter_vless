@@ -31,11 +31,13 @@ Current native release notes:
 
 Earlier native releases and their dated qualification records remain unchanged.
 
-### Registry blockers before publishing the plugin
+### Selected package versions and registry availability
 
-All five local package versions remain `1.1.7`; no package version changes or
-publication are authorized as part of the documentation cleanup. An official
-registry check on **2026-11-03** confirms that `1.1.7` is already occupied for
+The owner selected the build-suffix plan below on **2026-11-03**. Android,
+macOS and Windows package metadata now uses `1.1.7+1`; the main package and
+platform interface remain `1.1.7`. Package publication is not authorized.
+An official registry check on **2026-11-03** confirms that `1.1.7` is already
+occupied for
 [Android](https://pub.dev/api/packages/flutter_vless_android),
 [macOS](https://pub.dev/api/packages/flutter_vless_macos) and
 [Windows](https://pub.dev/api/packages/flutter_vless_windows); it is free for
@@ -43,7 +45,7 @@ registry check on **2026-11-03** confirms that `1.1.7` is already occupied for
 [the interface](https://pub.dev/api/packages/flutter_vless_platform_interface).
 Published versions cannot be overwritten.
 
-### Candidate build-suffix version plan
+### Selected build-suffix version plan
 
 Pub accepts build suffixes such as `1.1.7+1` as distinct package versions and
 includes them in version ordering: `1.1.7 < 1.1.7+1 < 1.1.7+2`.
@@ -55,10 +57,9 @@ not prohibit build suffixes.
 [Pub ordering and constraints](https://pub.dev/packages/pub_semver),
 [Dart versioning guidance](https://dart.dev/tools/pub/versioning).
 
-The following is a candidate for the owner's next release decision, not the
-current package metadata:
+The current package metadata uses the following selected versions:
 
-| Package | Candidate version |
+| Package | Selected version |
 | --- | --- |
 | `flutter_vless_platform_interface` | `1.1.7` |
 | `flutter_vless_android` | `1.1.7+1` |
@@ -68,11 +69,11 @@ current package metadata:
 
 The three implementation `1.1.7+1` version endpoints return HTTP 404 on
 2026-11-03. Recheck availability immediately before any future publication.
-When adopting this plan, set the root's three implementation constraints to
-`^1.1.7+1`; a lower bound of `^1.1.7` also admits the old implementations and
-does not require an existing lockfile to select the new build. Keep the
-interface constraint at `^1.1.7`. Update version-contract checks and each
-implementation changelog heading together with its actual package version.
+The root's three implementation constraints are `^1.1.7+1`; a lower bound of
+`^1.1.7` would also admit the old implementations and would not require an
+existing lockfile to select the new build. The interface constraint remains
+`^1.1.7`. Version-contract checks, implementation changelog headings and the
+example's local implementation lock entries match the selected versions.
 The Dart build suffix does not change native Xray/Maven release tags or an
 example application's Android/iOS build number; keep native metadata valid for
 its own toolchain instead of copying a Pub suffix automatically.

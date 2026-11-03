@@ -180,13 +180,40 @@ class RuntimeVersionPinsTest(unittest.TestCase):
             with self.subTest(source=stale), self.assertRaises(AssertionError):
                 self.assert_preview_commit(stale, current)
 
-    def test_package_versions_remain_1_1_7(self):
-        for path in ['pubspec.yaml', 'packages/flutter_vless_android/pubspec.yaml',
-                     'packages/flutter_vless_macos/pubspec.yaml', 'packages/flutter_vless_windows/pubspec.yaml',
-                     'packages/flutter_vless_platform_interface/pubspec.yaml', 'example/pubspec.yaml']:
+    def test_selected_pub_versions_keep_plugin_and_native_build_numbers_separate(self):
+        expected = {
+            'pubspec.yaml': '1.1.7',
+            'packages/flutter_vless_platform_interface/pubspec.yaml': '1.1.7',
+            'packages/flutter_vless_android/pubspec.yaml': '1.1.7+1',
+            'packages/flutter_vless_macos/pubspec.yaml': '1.1.7+1',
+            'packages/flutter_vless_windows/pubspec.yaml': '1.1.7+1',
+            'example/pubspec.yaml': '1.1.7+117',
+        }
+        for path, version in expected.items():
             with self.subTest(package=path):
-                self.assertEqual(re.findall(r'^version:\s*([^\s]+)\s*$', self.read(path), re.M),
-                                 ['1.1.7+117' if path == 'example/pubspec.yaml' else '1.1.7'])
+                self.assertEqual(re.findall(r'^version:\s*([^\s]+)\s*$', self.read(path), re.M), [version])
+                if path.startswith('packages/'):
+                    changelog = path.replace('pubspec.yaml', 'CHANGELOG.md')
+                    self.assertEqual(self.read(changelog).splitlines()[0], '## ' + version)
+                    if version == '1.1.7+1':
+                        # Keep the actual published predecessor beneath its new build.
+                        headings = re.findall(r'^## ([^\n]+)$', self.read(changelog), re.M)
+                        self.assertEqual(headings[:3], ['1.1.7+1', '1.1.7', '1.1.6'])
+
+    def test_root_requires_new_implementation_builds_without_bumping_interface(self):
+        source = self.read('pubspec.yaml')
+        for implementation in ['android', 'macos', 'windows']:
+            with self.subTest(package=implementation):
+                # ^1.1.7 would still allow the already-published older wrapper.
+                self.assertEqual(re.findall(
+                    rf'^  flutter_vless_{implementation}:\s*([^\s]+)\s*$', source, re.M),
+                    ['^1.1.7+1'])
+                backend = self.read(f'packages/flutter_vless_{implementation}/pubspec.yaml')
+                self.assertEqual(re.findall(
+                    r'^  flutter_vless_platform_interface:\s*([^\s]+)\s*$', backend, re.M),
+                    ['^1.1.7'])
+        self.assertEqual(re.findall(
+            r'^  flutter_vless_platform_interface:\s*([^\s]+)\s*$', source, re.M), ['^1.1.7'])
 
 
 if __name__ == '__main__':

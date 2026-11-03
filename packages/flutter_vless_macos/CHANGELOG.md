@@ -1,7 +1,7 @@
-## 1.1.7
+## 1.1.7+1
 
-Repository development changes; this section does not republish the existing
-pub.dev package numbered 1.1.7.
+Unpublished implementation update for the main plugin 1.1.7 release train.
+The existing pub.dev package numbered 1.1.7 remains unchanged.
 
 * Use the published checksum-pinned `xray-macos-v26.10.31-r2` universal runtime with private startup/assets, native routing, mandatory interface binding and owned Classic DNS/XHTTP/XDRIVE/GeoDAT cleanup.
 * Check VPN readiness using the current packet worker and authenticated local listener, without fixed public connectivity targets. Keep caller-selected network measurements separate and preserve bounded recovery after local failures.
@@ -12,6 +12,12 @@ pub.dev package numbered 1.1.7.
 * Add per-session VPN routing, typed preparation reports and separate data/certificate roots. Preserve caller datasets, validate XDRIVE/GeoDAT capability and writable targets, and freeze relative TLS files through recovery.
 * Bound authenticated listener checks, profile/connected delay and native lifecycle work; preserve strict TLS/authentication and socket cleanup.
 * Verify shared Apple policies, app/SwiftPM builds and published-runtime DNS/routing/packet behavior in Actions. Live owner macOS and IPv6-only/NAT64/handover remain separate acceptance work.
+
+## 1.1.7
+
+* Update the universal arm64/x86_64 Xray runtime to `v26.10.17` (upstream pre-release), pinned to commit `92ccc939aaf4f8965f369cf0b142e005aeaa11d5`.
+* Update SwiftPM and CocoaPods to the matching verified `xray-macos-v26.10.17` XCFramework.
+* Preserve private startup, asset selection, authenticated local proxies and the 128 KiB HTTP/2 upload scratch cap.
 
 ## 1.1.6
 

@@ -1,7 +1,7 @@
-## 1.1.7
+## 1.1.7+1
 
-Repository development changes; this section does not republish the existing
-pub.dev package numbered 1.1.7.
+Unpublished implementation update for the main plugin 1.1.7 release train.
+The existing pub.dev package numbered 1.1.7 remains unchanged.
 
 * Support the verified managed `xray-windows-v26.10.31-r2` companion with native routing, XDRIVE/GeoDAT capability checks and owned service cleanup, including invalid XHTTP `h2Params` listener cleanup. Ordinary compatible external Core builds remain supported for profiles without managed services.
 * Add typed options/capabilities, tray toggle/open-app actions, `.ico` presentation, explicit quick-profile clearing, bounded reconnect and diagnostics. Preserve WFP protection after retry exhaustion.
@@ -13,6 +13,11 @@ pub.dev package numbered 1.1.7.
 * Bound SOCKS startup/authentication, packet checks and statistics commands with cancellable deadlines, output limits and owned process/socket cleanup. Deliver status on the Flutter platform thread.
 * Validate writable scheduled GeoDAT targets and XDRIVE service support on the actual selected executable before persisting or starting a candidate.
 * Verify published runtime bytes, opposite domain routing, packet traffic, tray/options and filter/route/helper cleanup in Windows Actions. IPv6-only/NAT64, additional endpoint transports and a full server matrix remain separate acceptance work.
+
+## 1.1.7
+
+* Update the Windows runtime validation workflow and example runtime to Xray-core `v26.10.17` (upstream pre-release).
+* Pin the setup guide to the matching official Windows release archive.
 
 ## 1.1.6
 

@@ -71,6 +71,9 @@ The `main` worktree uses Xray-core **26.10.31** through the separately published
 native runtimes. The Flutter plugin itself is not released by this runtime
 update. Existing pub.dev implementation packages named `1.1.7` contain older
 wrapper code; use the matching source packages when testing this branch.
+The current Android, macOS and Windows sources are versioned `1.1.7+1`;
+the main package and platform interface remain `1.1.7`. These package updates
+are not yet published.
 The matching published runtime pins are Android `26.10.31-protect2`,
 iOS/macOS `26.10.31-r2`, and the managed Windows `26.10.31-r2` companion.
 They include cleanup of XHTTP listeners after rejected server `h2Params` and
@@ -110,7 +113,7 @@ dependency_overrides:
 
 For a reproducible application build, replace every `main` ref with the same
 reviewed commit. See the [release preparation guide](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/release/README.md)
-for the remaining registry version and publication-order requirements.
+for the selected package versions and remaining publication checks.
 
 ## Try The Example First
 

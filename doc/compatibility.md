@@ -9,6 +9,9 @@ published: Android `26.10.31-protect2`, Apple `26.10.31-r2` and managed Windows
 `26.10.31-r2`. Use [matching source packages](../README.md#unreleased-117-from-github)
 for this checkout's new Dart and native APIs; older pub.dev wrappers numbered
 1.1.7 contain different implementation code.
+The current Android, macOS and Windows implementation sources use `1.1.7+1`;
+the main package and platform interface remain `1.1.7`. No new Flutter package
+versions have been published.
 
 Current adapters preserve imported listeners/API/services and caller DNS/routing
 data. They capture IPv6 payload and delegate private A/AAAA queries to caller

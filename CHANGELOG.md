@@ -2,6 +2,8 @@
 
 Current repository development version; Flutter packages have not been published
 from this revision. Native runtimes are published separately.
+The Android, macOS and Windows implementation updates use `1.1.7+1`;
+the main package and platform interface remain `1.1.7`.
 
 ### Native runtime
 

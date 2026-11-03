@@ -1,7 +1,7 @@
-## 1.1.7
+## 1.1.7+1
 
-Repository development changes; this section does not republish the existing
-pub.dev package numbered 1.1.7.
+Unpublished implementation update for the main plugin 1.1.7 release train.
+The existing pub.dev package numbered 1.1.7 remains unchanged.
 
 * Use the published checksum-pinned Maven runtime `26.10.31-protect2` for all four device/emulator ABIs with 16 KiB alignment, protected sockets, native routing and managed-service cleanup.
 * Close Classic DNS/XHTTP/XDRIVE/GeoDAT resources with the owning runtime, including rejected XHTTP `h2Params` listener cleanup.
@@ -12,6 +12,12 @@ pub.dev package numbered 1.1.7.
 * Add per-session VPN routing, typed preparation reports and separate data/certificate asset roots through preflight, recovery and delay. Preserve caller datasets and validate scheduled GeoDAT targets and XDRIVE capabilities.
 * Bound startup, delay, watchdog and statistics I/O to owned deadlines, preserving strict authentication, packet readiness, cancellation and child/socket cleanup.
 * Add shared preparation/native/TUN regressions and live emulator coverage for full profiles, both routing directions, Quick Tile and Stop recovery. Physical HTTP/3, IPv6-only/NAT64 and broader server coverage remain separate acceptance work.
+
+## 1.1.7
+
+* Update the runtime to `dev.tfox.fluttervless:xray-android:26.10.17-protect1`, based on Xray-core `v26.10.17` (upstream pre-release).
+* Rebuild armeabi-v7a, arm64-v8a, x86 and x86_64 binaries with 16 KiB page alignment.
+* Adapt the socket-protection overlay to upstream dialer changes, preserving protected DNS, fallback sockets and failure propagation.
 
 ## 1.1.6
 

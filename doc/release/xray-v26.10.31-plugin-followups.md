@@ -1,8 +1,9 @@
 # Work after the bounded Core 26.10.31 acceptance
 
-Native Core publication is separate from Flutter package publication. Packages
-stay at 1.1.7 during the present goal. This is a follow-up list, not a claim that
-all configurations or real networks have been qualified.
+Native Core publication is separate from Flutter package publication. The main
+package and platform interface stay at 1.1.7; Android/macOS/Windows implementation
+updates use 1.1.7+1. None of these updates is published. This is a follow-up
+list, not a claim that all configurations or real networks have been qualified.
 
 ## Five Core31 follow-ups
 
@@ -51,14 +52,13 @@ protobuf regeneration do not require a new public Flutter option.
   DNS policy; see [the Apple follow-up](apple-readiness-dns-validation.md).
   This finite result does not qualify every resolver/network combination or
   establish that an older failed public reference had expired credentials.
-* Choose available implementation-package versions, align root dependency
-  constraints and rehearse publication order. A read-only registry check on
-  2026-11-03 confirms Android/macOS/Windows already have 1.1.7, while root
-  1.1.7 and platform-interface 1.1.7 are absent. Pub supports the proposed
-  implementation `1.1.7+1` versions; their endpoints are currently absent.
-  See the [candidate version plan](README.md#candidate-build-suffix-version-plan)
-  for minimum constraints and publication order. All current package versions
-  remain unchanged; no publication is authorized by this plan.
+* Rehearse package contents, clean dependency resolution and publication order
+  using the [selected version plan](README.md#selected-build-suffix-version-plan).
+  Android/macOS/Windows now use `1.1.7+1`, and the root dependency floors are
+  `^1.1.7+1`; the root and platform interface remain `1.1.7`. A read-only registry
+  check on 2026-11-03 found the implementation build-suffix versions, root
+  1.1.7 and interface 1.1.7 absent. Recheck availability before publishing.
+  No publication is authorized by this plan.
   [Android](https://pub.dev/packages/flutter_vless_android/versions),
   [macOS](https://pub.dev/packages/flutter_vless_macos/versions),
   [Windows](https://pub.dev/packages/flutter_vless_windows/versions).

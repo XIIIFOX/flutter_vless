@@ -173,10 +173,15 @@ final class TunnelEndpointCandidatesTests: XCTestCase {
 
     func testDNSCollectionDoesNotCompleteOnFirstIPv4AndReturnsBothAtBound() async throws {
         var closes = 0
-        let values = try await TunnelEndpointDNSCollection.collect("vpn.example.com", path: dual, deadline: now + 0.03,
+        let values = try await TunnelEndpointDNSCollection.collect("vpn.example.com", path: dual, deadline: now + 0.3,
             query: { _, _, _, receive in
                 receive(.init(hostname: "vpn.example.com", text: "192.0.2.7", interfaceIndex: 4, ttl: 10, added: true))
-                receive(.init(hostname: "vpn.example.com", text: "2001:db8::7", interfaceIndex: 4, ttl: 10, added: true))
+                // A later family is separate from the first callback batch.
+                // An inert sleeping worker avoids timer coalescing at the bound.
+                DispatchQueue.global(qos: .userInitiated).async {
+                    Thread.sleep(forTimeInterval: 0.05)
+                    receive(.init(hostname: "vpn.example.com", text: "2001:db8::7", interfaceIndex: 4, ttl: 10, added: true))
+                }
                 return { closes += 1 }
             })
         XCTAssertEqual(values.map(\.address.family), [.ipv4, .ipv6])

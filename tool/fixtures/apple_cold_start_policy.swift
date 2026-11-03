@@ -75,6 +75,7 @@ enum TunnelXrayConfigPreparer {
         resolveCandidates: (String) async throws -> TunnelEndpointCandidates, isCurrent: () -> Bool, attempts: Int) async throws -> TunnelPreparedConfig {
         Kernel.record("prepare")
         Kernel.onPrepare?()
+        try await Kernel.onPrepareAsync?(endpointPath)
         if Kernel.failure == "endpoint" { throw StartupError.endpointUnavailable }
         if Kernel.failure == "config" { throw StartupError.invalidConfiguration }
         return TunnelPreparedConfig(data: Kernel.preparedData, endpointPath: endpointPath,
@@ -89,7 +90,7 @@ final class TunnelDebugStore { static let shared = TunnelDebugStore(); func conf
 func FLVlessCoreRoutingCapability() -> Int64 { 1 }
 func FLVlessCoreDarwinInterfaceBindingCapability() -> Int64 { Kernel.bindingCapability }
 func FLVlessHasCorePreflight() -> Bool { true }
-func FLVlessCheckCorePrivate(_ value: Data) -> Int64 { Kernel.record("check"); return Kernel.failure == "core" ? 3 : 0 }
+func FLVlessCheckCorePrivate(_ value: Data) -> Int64 { Kernel.record("check"); Kernel.onCoreCheck?(); return Kernel.failure == "core" ? 3 : 0 }
 func FLVlessCheckCoreRoutingPrivate(_ data: Data, _ metadata: Data) -> Int64 { 0 }
 func XRaySetAssetLocation(_ value: String, _ error: inout NSError?) -> Bool { Kernel.record("assets"); return true }
 func rememberTunnelLog(_ message: String) {}
@@ -139,6 +140,8 @@ enum Kernel {
         var profile = NETunnelProviderManager()
         var onArm: (() -> Void)?, refreshFailures = 0
         var onPrepare: (() -> Void)?
+        var onPrepareAsync: ((TunnelEndpointPath) async throws -> Void)?
+        var onCoreCheck: (() -> Void)?
         var onSettings: (() async -> Void)?
     }
     private static let state = FixtureState(State())
@@ -176,6 +179,14 @@ enum Kernel {
         get { state.withValue { $0.onPrepare } }
         set { state.withValue { $0.onPrepare = newValue } }
     }
+    static var onPrepareAsync: ((TunnelEndpointPath) async throws -> Void)? {
+        get { state.withValue { $0.onPrepareAsync } }
+        set { state.withValue { $0.onPrepareAsync = newValue } }
+    }
+    static var onCoreCheck: (() -> Void)? {
+        get { state.withValue { $0.onCoreCheck } }
+        set { state.withValue { $0.onCoreCheck = newValue } }
+    }
     static var onSettings: (() async -> Void)? {
         get { state.withValue { $0.onSettings } }
         set { state.withValue { $0.onSettings = newValue } }
@@ -202,7 +213,12 @@ final class Provider {
     let forwardingLock = NSLock()
     var forwardingReady = false, reasserting = false
     var forwardingEpoch: TunnelSessionAdmission.Epoch?
-    var startupPreparation: (epoch: TunnelSessionAdmission.Epoch, task: Task<TunnelPreparedConfig, Error>)?
+    var startupPreparation: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, task: Task<TunnelPreparedConfig, Error>)?
+    func fixtureRegister(_ task: Task<TunnelPreparedConfig, Error>, token: TunnelEndpointPlanAdmission.Token) {
+        setStartupPreparation(task, epoch: token.epoch, token: token)
+    }
+    func fixtureClear(token: TunnelEndpointPlanAdmission.Token) { setStartupPreparation(nil, epoch: token.epoch, token: token) }
+    func fixtureOwns(_ token: TunnelEndpointPlanAdmission.Token) -> Bool { startupPreparation?.token == token }
     var runtimeSpec: RuntimeSpec?
     var protocolConfiguration: NEVPNProtocol? { Kernel.profile.protocolConfiguration }
     let tunnelMTU = 1500, dnsServers = ["10.0.85.53"]
@@ -242,11 +258,193 @@ final class Provider {
     func scheduleNativeRecovery(after delay: Int, epoch: TunnelSessionAdmission.Epoch) {}
     // ACTUAL_START
 }
+// Inert boundary: the actual provider owns tasks/tokens; this gate replaces only
+// the expensive asynchronous preparer, which is not compiled or invoked here.
+enum CancellationCases {
+    static func until(_ body: () -> Bool) async -> Bool {
+        let end = ProcessInfo.processInfo.systemUptime + 1
+        while !body(), ProcessInfo.processInfo.systemUptime < end {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        return body()
+    }
+
+    static func pending() -> Task<TunnelPreparedConfig, Error> {
+        Task {
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+            return TunnelPreparedConfig()
+        }
+    }
+
+    static func run() async -> [(String, Bool)] {
+        var checks: [(String, Bool)] = []
+        func record(_ name: String, _ passed: Bool) { checks.append((name, passed)) }
+
+        // The first query produces no callback. An opaque same-path DNS64 change
+        // must cancel that obsolete preparation, not wait out its 2s boundary.
+        Kernel.reset()
+        let changed = Provider()
+        let state = FixtureState((entries: 0, cancellations: 0))
+        Kernel.onPrepareAsync = { _ in
+            let ordinal = state.withValue { $0.entries += 1; return $0.entries }
+            if ordinal == 1 {
+                do { try await Task.sleep(nanoseconds: 2_000_000_000) }
+                catch {
+                    state.withValue { $0.cancellations += 1 }
+                    throw error
+                }
+            }
+        }
+        let first = Task.detached { try await changed.startTunnel() }
+        let entered = await until { state.withValue { $0.entries == 1 } }
+        let began = ProcessInfo.processInfo.systemUptime
+        let previous = changed.endpointAdmission.currentToken
+        changed.watchdogQueue.sync {
+            if let epoch = changed.sessionAdmission.currentEpoch {
+                changed.physicalPathChanged(TunnelEndpointPath(), epoch: epoch)
+            }
+        }
+        let tokenChanged = previous != changed.endpointAdmission.currentToken
+        var succeeded = false
+        do { try await first.value; succeeded = true } catch {}
+        let milliseconds = (ProcessInfo.processInfo.systemUptime - began) * 1000
+        print("STARTUP_CANCEL_MEASURE=same-path-refresh-to-completion;ms=\(milliseconds)")
+        record("path-refresh-cancels-silent-startup-promptly", entered && succeeded && milliseconds < 500 && state.withValue { $0.cancellations == 1 })
+        record("same-path-opaque-DNS64-refresh-reprepares", tokenChanged && succeeded && state.withValue { $0.entries == 2 } && Kernel.events.filter { $0 == "runtime-admission" }.count == 1)
+
+        // Four ordinary path updates can land after four separate DNS children
+        // register. None of those incomplete plans may consume a preflight slot.
+        Kernel.reset()
+        let bursting = Provider()
+        let burstState = FixtureState((entries: 0, cancellations: 0))
+        Kernel.onPrepareAsync = { _ in
+            let ordinal = burstState.withValue { $0.entries += 1; return $0.entries }
+            if ordinal <= 4 {
+                do { try await Task.sleep(nanoseconds: 2_000_000_000) }
+                catch { burstState.withValue { $0.cancellations += 1 }; throw error }
+            }
+        }
+        let burstStart = Task.detached { try await bursting.startTunnel() }
+        var allRegistered = true
+        for ordinal in 1...4 {
+            guard await until({ burstState.withValue { $0.entries == ordinal } }) else { allRegistered = false; break }
+            bursting.watchdogQueue.sync {
+                if let epoch = bursting.sessionAdmission.currentEpoch {
+                    bursting.physicalPathChanged(TunnelEndpointPath(), epoch: epoch)
+                }
+            }
+        }
+        var burstSucceeded = false
+        do { try await burstStart.value; burstSucceeded = true } catch {}
+        record("four-staggered-path-updates-keep-one-admitted-startup", allRegistered && burstSucceeded &&
+            burstState.withValue { $0.entries == 5 && $0.cancellations == 4 } &&
+            Kernel.events.filter { $0 == "check" }.count == 1 &&
+            Kernel.events.filter { $0 == "settings" }.count == 1 &&
+            Kernel.events.filter { $0 == "runtime-admission" }.count == 1)
+
+        // A completed, current preparation DOES consume its attempt before
+        // preflight/settings. Three later invalidations retain the original cap.
+        Kernel.reset()
+        let preflightChanges = Provider()
+        Kernel.onCoreCheck = {
+            preflightChanges.watchdogQueue.sync {
+                if let epoch = preflightChanges.sessionAdmission.currentEpoch {
+                    preflightChanges.physicalPathChanged(TunnelEndpointPath(), epoch: epoch)
+                }
+            }
+        }
+        var boundedRefusal = false
+        do { try await preflightChanges.startTunnel() }
+        catch { boundedRefusal = !(error is CancellationError) }
+        record("three-admitted-preflight-attempts-still-bounded", boundedRefusal &&
+            Kernel.events.filter { $0 == "prepare" }.count == 3 &&
+            Kernel.events.filter { $0 == "check" }.count == 3 &&
+            !Kernel.events.contains("settings") && !Kernel.events.contains("arm") && !Kernel.events.contains("runtime-admission"))
+
+        // A refresh can win after the old task is created but before registration.
+        // Setter must reject the stale token, even though its epoch is current.
+        Kernel.reset()
+        let beforeRegister = Provider()
+        let epoch = beforeRegister.sessionAdmission.begin()
+        let stale = try! beforeRegister.endpointAdmission.begin(epoch)
+        _ = try! beforeRegister.endpointAdmission.refresh(epoch)
+        let staleTask = pending()
+        beforeRegister.fixtureRegister(staleTask, token: stale)
+        record("refresh-before-registration-rejects-stale-child", staleTask.isCancelled && beforeRegister.startupPreparation == nil)
+        staleTask.cancel(); _ = try? await staleTask.value
+
+        // An old defer must not clear the next task from the SAME session.
+        Kernel.reset()
+        let replacing = Provider()
+        let owner = replacing.sessionAdmission.begin()
+        let oldToken = try! replacing.endpointAdmission.begin(owner)
+        let old = pending()
+        replacing.fixtureRegister(old, token: oldToken)
+        let newToken = try! replacing.endpointAdmission.refresh(owner)
+        let next = pending()
+        replacing.fixtureRegister(next, token: newToken)
+        replacing.fixtureClear(token: oldToken)
+        record("old-token-clear-cannot-clear-new-startup", replacing.fixtureOwns(newToken) && !next.isCancelled)
+        old.cancel(); next.cancel(); _ = try? await old.value; _ = try? await next.value
+
+        // Invalidating an otherwise unreplaced token must still allow its own
+        // defer to release the completed task rather than retaining stale data.
+        Kernel.reset()
+        let clearing = Provider()
+        let clearEpoch = clearing.sessionAdmission.begin()
+        let clearToken = try! clearing.endpointAdmission.begin(clearEpoch)
+        let clearTask = pending()
+        clearing.fixtureRegister(clearTask, token: clearToken)
+        _ = try! clearing.endpointAdmission.refresh(clearEpoch)
+        clearing.fixtureClear(token: clearToken)
+        record("matching-stale-token-defer-releases-own-child", clearing.startupPreparation == nil)
+        clearTask.cancel(); _ = try? await clearTask.value
+
+        // Old-session callbacks/setters must leave a replacement session intact.
+        Kernel.reset()
+        let swapped = Provider()
+        let earlierEpoch = swapped.sessionAdmission.begin()
+        let earlier = try! swapped.endpointAdmission.begin(earlierEpoch)
+        let currentEpoch = swapped.sessionAdmission.begin()
+        let current = try! swapped.endpointAdmission.begin(currentEpoch)
+        let currentTask = pending()
+        swapped.fixtureRegister(currentTask, token: current)
+        let lateTask = pending()
+        swapped.fixtureRegister(lateTask, token: earlier)
+        swapped.fixtureClear(token: earlier)
+        swapped.watchdogQueue.sync { swapped.physicalPathChanged(TunnelEndpointPath(), epoch: earlierEpoch) }
+        record("old-session-work-cannot-clear-cancel-current-child", lateTask.isCancelled && swapped.fixtureOwns(current) && !currentTask.isCancelled)
+        lateTask.cancel(); currentTask.cancel(); _ = try? await lateTask.value; _ = try? await currentTask.value
+
+        // Actual Stop revokes and cancels a waiting startup, after which the same
+        // provider accepts one clean new session. No OnDemand/OS/Core is real.
+        Kernel.reset()
+        let stopped = Provider()
+        let stopState = FixtureState((entries: 0, cancellations: 0))
+        Kernel.onPrepareAsync = { _ in
+            let ordinal = stopState.withValue { $0.entries += 1; return $0.entries }
+            if ordinal == 1 {
+                do { try await Task.sleep(nanoseconds: 2_000_000_000) }
+                catch { stopState.withValue { $0.cancellations += 1 }; throw error }
+            }
+        }
+        let stoppedStart = Task.detached { try await stopped.startTunnel() }
+        let stopEntered = await until { stopState.withValue { $0.entries == 1 } }
+        await withCheckedContinuation { done in stopped.stopTunnel(with: .providerFailed) { done.resume() } }
+        var cancelled = false, restarted = false
+        do { try await stoppedStart.value } catch { cancelled = error is CancellationError }
+        do { try await stopped.startTunnel(); restarted = true } catch {}
+        record("Stop-cancels-startup-and-next-session-starts", stopEntered && cancelled && restarted && stopState.withValue { $0.cancellations == 1 && $0.entries == 2 } && Kernel.events.filter { $0 == "runtime-admission" }.count == 1)
+        return checks
+    }
+}
+
 @main struct Main {
     static func main() async {
         setbuf(stdout, nil)
         var failures = 0, cases = 0
         func check(_ name: String, _ value: Bool) { cases += 1; if !value { failures += 1 }; print("APPLE_COLD_START_CASE=" + name + ";PASS=" + String(value)) }
+        for (name, passed) in await CancellationCases.run() { check(name, passed) }
         for failure in ["endpoint", "config", "core"] {
             Kernel.reset(failure: failure); let provider = Provider()
             do { try await provider.startTunnel(); check("refusal-" + failure, false) }

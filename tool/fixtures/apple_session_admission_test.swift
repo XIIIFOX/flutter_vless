@@ -153,7 +153,7 @@ final class FixtureProvider: @unchecked Sendable {
     let forwardingLock = NSLock()
     var forwardingReady = false, reasserting = false
     var forwardingEpoch: TunnelSessionAdmission.Epoch?
-    var startupPreparation: (epoch: TunnelSessionAdmission.Epoch, task: Task<TunnelPreparedConfig, Error>)?
+    var startupPreparation: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, task: Task<TunnelPreparedConfig, Error>)?
     var protocolConfiguration: NEVPNProtocol?
     var watchdogTimer: DispatchSourceTimer?, pathObserver: TunnelPhysicalPathObserver?
     let endpointAdmission = TunnelEndpointPlanAdmission(), endpointCommitQueue = TunnelEndpointCommitQueue()
@@ -488,12 +488,14 @@ final class FixtureProvider: @unchecked Sendable {
         // Stale preparation completion must not clear the next session's task.
         let preparation = FixtureProvider()
         let oldPreparation = preparation.sessionAdmission.begin()
+        let oldPreparationToken = try! preparation.endpointAdmission.begin(oldPreparation)
         preparation.sessionAdmission.revoke()
         let newPreparation = preparation.sessionAdmission.begin()
+        let newPreparationToken = try! preparation.endpointAdmission.begin(newPreparation)
         let task = Task<TunnelPreparedConfig, Error> { try await Task.sleep(nanoseconds: 10_000_000_000); return TunnelPreparedConfig() }
-        preparation.setStartupPreparation(task, epoch: newPreparation)
-        preparation.setStartupPreparation(nil, epoch: oldPreparation)
-        precondition(preparation.startupPreparation?.epoch == newPreparation)
+        preparation.setStartupPreparation(task, epoch: newPreparation, token: newPreparationToken)
+        preparation.setStartupPreparation(nil, epoch: oldPreparation, token: oldPreparationToken)
+        precondition(preparation.startupPreparation?.epoch == newPreparation && preparation.startupPreparation?.token == newPreparationToken)
         await preparation.stop()
         precondition(task.isCancelled)
         _ = try? await task.value

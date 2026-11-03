@@ -112,7 +112,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     private let runtimeQueue = DispatchQueue(label: "dev.tfox.flutter-vless.macos-runtime")
     private let forwardingLock = NSLock()
     private var forwardingReady = false
-    private var startupPreparation: (epoch: TunnelSessionAdmission.Epoch, task: Task<TunnelPreparedConfig, Error>)?
+    private var startupPreparation: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, task: Task<TunnelPreparedConfig, Error>)?
     private var forwardingEpoch: TunnelSessionAdmission.Epoch?
     private var runtimeSpec: RuntimeSpec?
     private var runtimeRecoveryInFlight = false
@@ -379,13 +379,12 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         teardown.notify(queue: .main, execute: completionHandler)
     }
 
-    private func setStartupPreparation(_ task: Task<TunnelPreparedConfig, Error>?, epoch: TunnelSessionAdmission.Epoch) {
+    private func setStartupPreparation(_ task: Task<TunnelPreparedConfig, Error>?, epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token) {
         forwardingLock.lock()
-        let current = sessionAdmission.isCurrent(epoch)
-        if current {
-            if let task { startupPreparation = (epoch, task) }
-            else if startupPreparation?.epoch == epoch { startupPreparation = nil }
-        }
+        let current = sessionAdmission.isCurrent(epoch) && endpointAdmission.isCurrent(token)
+        if let task {
+            if current { startupPreparation = (epoch, token, task) }
+        } else if startupPreparation?.token == token { startupPreparation = nil }
         forwardingLock.unlock()
         if !current { task?.cancel() }
     }
@@ -411,7 +410,13 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         selectedAttempt = 0
         endpointPreparation?.task.cancel()
         endpointPreparation = nil
+        let revokedToken = endpointAdmission.currentToken
         _ = try? endpointAdmission.refresh(epoch)
+        forwardingLock.lock()
+        let obsolete = startupPreparation?.epoch == epoch && startupPreparation?.token == revokedToken ? startupPreparation?.task : nil
+        if startupPreparation?.epoch == epoch && startupPreparation?.token == revokedToken { startupPreparation = nil }
+        forwardingLock.unlock()
+        obsolete?.cancel()
         runtimeRecoveryInFlight = false
         if runtimeSpec != nil, canonical != nil, sessionAdmission.permitsRuntime(epoch) {
             refreshEndpointPlan(after: 0, epoch: epoch, rotate: false)
@@ -420,11 +425,14 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
 
     /// Before any preference arming attempt, a bounded transaction may discard
     /// a superseded lookup/check/settings result and prepare the original source
-    /// again. Exact successful settings are reused through the FIFO cache.
+    /// again. Incomplete superseded DNS work is canceled without consuming one
+    /// of three admitted preflight/settings attempts; the shared deadline still
+    /// bounds path churn. Exact settings are reused through the FIFO cache.
     private func prepareInitialRuntimeSpec(_ source: RuntimeSource) async throws -> RuntimeSpec {
         let epoch = source.epoch
         let deadline = ProcessInfo.processInfo.systemUptime + 25
-        for _ in 0..<3 {
+        var admittedAttempts = 0
+        while admittedAttempts < 3 {
             try Task.checkCancellation()
             guard sessionAdmission.isCurrent(epoch), ProcessInfo.processInfo.systemUptime < deadline else { throw CancellationError() }
             let (token, path) = try watchdogQueue.sync { () throws -> (TunnelEndpointPlanAdmission.Token, TunnelEndpointPath) in
@@ -436,10 +444,11 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             }
             do {
                 let preparation = Task { try await self.prepareEndpointConfig(source, token: token, path: path, attempt: 0, deadline: deadline) }
-                setStartupPreparation(preparation, epoch: epoch)
-                defer { setStartupPreparation(nil, epoch: epoch) }
+                setStartupPreparation(preparation, epoch: epoch, token: token)
+                defer { setStartupPreparation(nil, epoch: epoch, token: token) }
                 let prepared = try await preparation.value
                 guard sessionAdmission.isCurrent(epoch), endpointAdmission.isCurrent(token), !preparation.isCancelled else { throw CancellationError() }
+                admittedAttempts += 1
                 guard prepared.endpointPath == path, let parsed = parseConfig(jsonData: prepared.data) else {
                     throw TunnelXrayConfigPreparer.StartupError.invalidConfiguration
                 }
@@ -455,7 +464,10 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             } catch {
                 guard sessionAdmission.isCurrent(epoch), !Task.isCancelled else { throw CancellationError() }
                 // Retry only a superseded plan, never a rejected current config.
-                if !endpointAdmission.isCurrent(token), ProcessInfo.processInfo.systemUptime < deadline { continue }
+                if !endpointAdmission.isCurrent(token), ProcessInfo.processInfo.systemUptime < deadline {
+                    await Task.yield()
+                    continue
+                }
                 throw error
             }
         }

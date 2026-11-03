@@ -85,7 +85,7 @@ final class Provider: @unchecked Sendable {
     func tunnelError(_ message: String) -> NSError { NSError(domain: "synthetic", code: 1) }
     func isIPv4Literal(_ text: String) -> Bool { false }
     func parseConfig(jsonData: Data) -> (inboundPort: Int, unused: Bool)? { (10808, false) }
-    func setStartupPreparation(_ task: Task<TunnelPreparedConfig, Error>?, epoch: TunnelSessionAdmission.Epoch) {}
+    func setStartupPreparation(_ task: Task<TunnelPreparedConfig, Error>?, epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token) {}
     func prepareEndpointConfig(_ source: RuntimeSource, token: TunnelEndpointPlanAdmission.Token,
         path: TunnelEndpointPath, attempt: UInt64, deadline: TimeInterval) async throws -> TunnelPreparedConfig {
         var prepared = suppliedPrepared!; prepared.endpointPath = path; return prepared

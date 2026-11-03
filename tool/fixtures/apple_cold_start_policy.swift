@@ -226,11 +226,14 @@ final class Provider {
         await Kernel.onSettings?()
     }
     func startTunnelWatchdog(_ spec: RuntimeSpec) -> Bool {
-        guard sessionAdmission.activate(spec.epoch) else { return false }
-        runtimeSpec = spec; Kernel.record("runtime-admission"); return true
+        watchdogQueue.sync {
+            guard endpointAdmission.ownsRuntime(spec.token), sessionAdmission.activate(spec.epoch) else { return false }
+            runtimeSpec = spec; Kernel.record("runtime-admission"); return true
+        }
     }
     func stopTunnelWatchdog(epoch: TunnelSessionAdmission.Epoch?) {
-        if runtimeSpec?.epoch == epoch || runtimeSource?.epoch == epoch {
+        watchdogQueue.sync {
+            if let current = runtimeSource?.epoch ?? runtimeSpec?.epoch, current != epoch { return }
             pathObserver?.cancel(); pathObserver = nil; runtimeSource = nil; physicalPath = nil; runtimeSpec = nil
         }
     }

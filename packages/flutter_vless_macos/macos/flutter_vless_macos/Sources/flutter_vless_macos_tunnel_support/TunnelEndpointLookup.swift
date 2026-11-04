@@ -93,6 +93,11 @@ final class TunnelEndpointDNSCollection: @unchecked Sendable {
         case .success(let answers): answerCount = answers.count; wasCancelled = false
         case .failure(let error): answerCount = 0; wasCancelled = error is CancellationError
         }
+        let counts = accumulator.outcomes
+        let usable = accumulator.snapshot(at: now())
+        let ipv4 = usable.filter { $0.address.family == .ipv4 }.count
+        let ipv6 = usable.filter { $0.address.family == .ipv6 }.count
+        event("Endpoint DNS outcomes callbacks=\(counts.callbacks) noRecord=\(counts.noRecord) timeout=\(counts.timeout) serviceUnavailable=\(counts.serviceUnavailable) defunct=\(counts.defunct) policyDenied=\(counts.policyDenied) otherError=\(counts.otherError) questionRejected=\(counts.questionRejected) interfaceRejected=\(counts.interfaceRejected) malformed=\(counts.malformed) adds=\(counts.adds) removes=\(counts.removes) capacityRejected=\(counts.capacityRejected) usableIPv4=\(ipv4) usableIPv6=\(ipv6)")
         event("Endpoint DNS timing registrationMs=\(registrationMs) waitMs=\(waitMs) cleanupMs=\(cleanupMs) totalMs=\(totalMs) callbackSeen=\(firstCallbackMs != nil) firstCallbackMs=\(firstCallbackMs ?? 0) answerCount=\(answerCount) registrationSucceeded=\(registrationSucceeded) cancelled=\(wasCancelled)")
         continuation.resume(with: result)
     }
@@ -109,8 +114,24 @@ private final class TunnelEndpointDNSQuery {
         let status = DNSServiceGetAddrInfo(&owner.service, DNSServiceFlags(kDNSServiceFlagsTimeout), index,
             DNSServiceProtocol(kDNSServiceProtocol_IPv4 | kDNSServiceProtocol_IPv6), host,
             { _, flags, interfaceIndex, error, name, address, ttl, context in
-                guard error == kDNSServiceErr_NoError, let context, let name, let address else { return }
+                guard let context else { return }
                 let owner = Unmanaged<TunnelEndpointDNSQuery>.fromOpaque(context).takeUnretainedValue()
+                guard error == kDNSServiceErr_NoError else {
+                    // DNS-SD explicitly leaves every answer parameter undefined
+                    // on failure. Never inspect flags, index, hostname or sockaddr.
+                    let failure: TunnelEndpointDNSAnswer.Failure
+                    switch error {
+                    case DNSServiceErrorType(kDNSServiceErr_NoSuchRecord): failure = .noRecord
+                    case DNSServiceErrorType(kDNSServiceErr_Timeout): failure = .timeout
+                    case DNSServiceErrorType(kDNSServiceErr_ServiceNotRunning): failure = .serviceUnavailable
+                    case DNSServiceErrorType(kDNSServiceErr_DefunctConnection): failure = .defunct
+                    case DNSServiceErrorType(kDNSServiceErr_PolicyDenied): failure = .policyDenied
+                    default: failure = .other
+                    }
+                    owner.receive(.failed(failure))
+                    return
+                }
+                guard let name, let address else { return }
                 var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
                 let text: String
                 if address.pointee.sa_family == sa_family_t(AF_INET) {

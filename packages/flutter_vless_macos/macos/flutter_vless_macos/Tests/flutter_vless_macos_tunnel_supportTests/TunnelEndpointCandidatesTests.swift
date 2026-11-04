@@ -246,8 +246,8 @@ final class TunnelEndpointCandidatesTests: XCTestCase {
         XCTAssertEqual(values.map(\.address.family), [.ipv4, .ipv6])
         let result = capture.snapshot
         XCTAssertEqual(result.closes, 1)
-        XCTAssertEqual(result.messages.count, 1, "One aggregate event must not grow with callback count")
-        let message = try XCTUnwrap(result.messages.first)
+        XCTAssertEqual(result.messages.count, 2, "Two fixed aggregate events must not grow with callback count")
+        let message = try XCTUnwrap(result.messages.first { $0.hasPrefix("Endpoint DNS timing ") })
         let registration = try XCTUnwrap(UInt64(try timingField("registrationMs", in: message)))
         let wait = try XCTUnwrap(UInt64(try timingField("waitMs", in: message)))
         let cleanup = try XCTUnwrap(UInt64(try timingField("cleanupMs", in: message)))
@@ -287,8 +287,8 @@ final class TunnelEndpointCandidatesTests: XCTestCase {
         catch { XCTAssertTrue(error is CancellationError) }
         let beforeLateAnswer = capture.snapshot
         XCTAssertEqual(beforeLateAnswer.closes, 1)
-        XCTAssertEqual(beforeLateAnswer.messages.count, 1)
-        let message = try XCTUnwrap(beforeLateAnswer.messages.first)
+        XCTAssertEqual(beforeLateAnswer.messages.count, 2)
+        let message = try XCTUnwrap(beforeLateAnswer.messages.first { $0.hasPrefix("Endpoint DNS timing ") })
         XCTAssertEqual(try timingField("cancelled", in: message), "true")
         XCTAssertEqual(try timingField("callbackSeen", in: message), "false")
         XCTAssertEqual(try timingField("answerCount", in: message), "0")
@@ -305,8 +305,8 @@ final class TunnelEndpointCandidatesTests: XCTestCase {
         let values = try await TunnelEndpointDNSCollection.collect("private-timing-canary.example.com", path: dual,
             deadline: now + 1, event: capture.record, query: { _, _, _, _ in nil })
         XCTAssertTrue(values.isEmpty)
-        let message = try XCTUnwrap(capture.snapshot.messages.first)
-        XCTAssertEqual(capture.snapshot.messages.count, 1)
+        let message = try XCTUnwrap(capture.snapshot.messages.first { $0.hasPrefix("Endpoint DNS timing ") })
+        XCTAssertEqual(capture.snapshot.messages.count, 2)
         XCTAssertEqual(capture.snapshot.closes, 0)
         XCTAssertEqual(try timingField("registrationSucceeded", in: message), "false")
         XCTAssertEqual(try timingField("callbackSeen", in: message), "false")
@@ -314,6 +314,98 @@ final class TunnelEndpointCandidatesTests: XCTestCase {
         XCTAssertEqual(try timingField("answerCount", in: message), "0")
         XCTAssertEqual(try timingField("cancelled", in: message), "false")
         XCTAssertFalse(message.contains("private-timing-canary"))
+    }
+
+    func testDNSOutcomesDiagnoseRejectionWithoutRelaxingQuestionOrInterface() {
+        var collection = TunnelEndpointDNSAccumulator(host: "private-outcome-canary.example.com", path: dual)
+        collection.accept(.init(hostname: "alias-target.example.net", text: "192.0.2.197", interfaceIndex: 4, ttl: 10, added: true), at: 10)
+        collection.accept(.init(hostname: "private-outcome-canary.example.com", text: "192.0.2.197", interfaceIndex: 0, ttl: 10, added: true), at: 10)
+        collection.accept(.init(hostname: "private-outcome-canary.example.com", text: "malformed", interfaceIndex: 4, ttl: 10, added: true), at: 10)
+        collection.accept(.failed(.noRecord), at: 10)
+        collection.accept(.failed(.timeout), at: 10)
+        collection.accept(.failed(.other), at: 10)
+        collection.accept(.failed(.serviceUnavailable), at: 10)
+        collection.accept(.failed(.defunct), at: 10)
+        collection.accept(.failed(.policyDenied), at: 10)
+        XCTAssertTrue(collection.snapshot(at: 11).isEmpty)
+        let counts = collection.outcomes
+        XCTAssertEqual(counts.callbacks, 9)
+        XCTAssertEqual(counts.questionRejected, 1)
+        XCTAssertEqual(counts.interfaceRejected, 1)
+        XCTAssertEqual(counts.malformed, 1)
+        XCTAssertEqual(counts.noRecord, 1)
+        XCTAssertEqual(counts.timeout, 1)
+        XCTAssertEqual(counts.otherError, 1)
+        XCTAssertEqual(counts.serviceUnavailable, 1)
+        XCTAssertEqual(counts.defunct, 1)
+        XCTAssertEqual(counts.policyDenied, 1)
+        XCTAssertEqual(counts.adds, 0)
+        collection.accept(.init(hostname: "alias-target.example.net", text: "192.0.2.197", interfaceIndex: 0, ttl: 10, added: true), at: 10)
+        XCTAssertEqual(collection.outcomes.callbacks, 10)
+        XCTAssertEqual(collection.outcomes.questionRejected, 2)
+        XCTAssertEqual(collection.outcomes.interfaceRejected, 2, "An alias mismatch must not conceal the interface mismatch")
+        XCTAssertTrue(collection.snapshot(at: 11).isEmpty)
+    }
+
+    func testDNSOutcomesKeepTTLReplacementRemovalAndCapacityUnchanged() {
+        var collection = TunnelEndpointDNSAccumulator(host: "vpn.example.com", path: dual)
+        for index in 1...17 {
+            collection.accept(.init(hostname: "vpn.example.com", text: "192.0.2.\(index)", interfaceIndex: 4, ttl: 5, added: true), at: 10)
+        }
+        collection.accept(.init(hostname: "vpn.example.com", text: "192.0.2.1", interfaceIndex: 4, ttl: 20, added: true), at: 12)
+        collection.accept(.init(hostname: "vpn.example.com", text: "192.0.2.2", interfaceIndex: 4, ttl: 0, added: false), at: 12)
+        XCTAssertEqual(collection.snapshot(at: 14).count, 15)
+        XCTAssertEqual(collection.snapshot(at: 16).map(\.address.text), ["192.0.2.1"])
+        XCTAssertEqual(collection.outcomes.callbacks, 19)
+        XCTAssertEqual(collection.outcomes.adds, 17)
+        XCTAssertEqual(collection.outcomes.removes, 1)
+        XCTAssertEqual(collection.outcomes.capacityRejected, 1)
+    }
+
+    func testDNSOutcomesCountersSaturateWithoutGrowingWithCallbackFlood() {
+        var collection = TunnelEndpointDNSAccumulator(host: "vpn.example.com", path: dual)
+        for _ in 0..<70_000 { collection.accept(.failed(.other), at: 10) }
+        XCTAssertEqual(collection.outcomes.callbacks, 65_535)
+        XCTAssertEqual(collection.outcomes.otherError, 65_535)
+        XCTAssertTrue(collection.snapshot(at: 11).isEmpty)
+    }
+
+    func testDNSOutcomeDiagnosticsRetainLateFamiliesAfterErrorsAndNeverLogAnswers() async throws {
+        let capture = TimingCapture()
+        let values = try await TunnelEndpointDNSCollection.collect("private-outcome-canary.example.com", path: dual,
+            deadline: now + 0.3, event: capture.record, query: { _, _, queue, receive in
+                receive(.failed(.noRecord))
+                receive(.failed(.timeout))
+                receive(.failed(.other))
+                receive(.failed(.serviceUnavailable))
+                receive(.failed(.defunct))
+                receive(.failed(.policyDenied))
+                receive(.init(hostname: "alias-target-canary.example.net", text: "192.0.2.197", interfaceIndex: 4, ttl: 10, added: true))
+                receive(.init(hostname: "private-outcome-canary.example.com", text: "192.0.2.197", interfaceIndex: 0, ttl: 10, added: true))
+                receive(.init(hostname: "private-outcome-canary.example.com", text: "bad-address-canary", interfaceIndex: 4, ttl: 10, added: true))
+                queue.asyncAfter(deadline: .now() + 0.05) {
+                    receive(.init(hostname: "private-outcome-canary.example.com", text: "192.0.2.197", interfaceIndex: 4, ttl: 10, added: true))
+                    receive(.init(hostname: "private-outcome-canary.example.com", text: "2001:db8::197", interfaceIndex: 4, ttl: 10, added: true))
+                }
+                return { capture.didClose() }
+            })
+        XCTAssertEqual(values.map(\.address.family), [.ipv4, .ipv6], "Errors are diagnostic only; the unchanged collection window retains later answers")
+        let result = capture.snapshot
+        XCTAssertEqual(result.closes, 1)
+        XCTAssertEqual(result.messages.count, 2)
+        let outcomes = try XCTUnwrap(result.messages.first { $0.hasPrefix("Endpoint DNS outcomes ") })
+        for (key, expected) in [("callbacks", "11"), ("noRecord", "1"), ("timeout", "1"), ("otherError", "1"),
+            ("serviceUnavailable", "1"), ("defunct", "1"), ("policyDenied", "1"),
+            ("questionRejected", "1"), ("interfaceRejected", "1"), ("malformed", "1"), ("adds", "2"),
+            ("removes", "0"), ("capacityRejected", "0"), ("usableIPv4", "1"), ("usableIPv6", "1")] {
+            XCTAssertEqual(try timingField(key, in: outcomes), expected)
+        }
+        for message in result.messages {
+            XCTAssertLessThan(message.utf8.count, 300)
+            for secret in ["private-outcome-canary", "alias-target-canary", "192.0.2.197", "2001:db8::197", "bad-address-canary"] {
+                XCTAssertFalse(message.contains(secret))
+            }
+        }
     }
 
     func testBlockingSynthesisCancellationKeepsOneOutstandingSlotUntilNativeReturns() async throws {

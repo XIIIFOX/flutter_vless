@@ -29,6 +29,7 @@ on:
         options:
           - macos-latest
           - macos-15-intel
+          - macos-26-intel
       apple_runtime_source:
         description: Build a candidate SDK or test the fixed public Apple SDKs
         type: choice

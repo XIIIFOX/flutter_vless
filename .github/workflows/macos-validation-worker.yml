@@ -55,7 +55,7 @@ jobs:
     name: macOS published runtime
     needs: admission
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -105,6 +105,7 @@ jobs:
           flutter build macos --config-only
           xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner -configuration Debug \
             -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO \
+            ENABLE_DEBUG_DYLIB=NO \
             CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/build/macos-validation/example" build \
             2>&1 | tee "$GITHUB_WORKSPACE/build/macos-validation/example-build.log"
       - name: Test macOS published runtime

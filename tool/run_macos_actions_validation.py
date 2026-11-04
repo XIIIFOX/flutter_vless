@@ -72,10 +72,14 @@ class API:
 class Controller:
     def __init__(self, api, sha, parent, attempt, output, now=time.monotonic,
                  sleep=time.sleep, nonce=lambda: uuid.uuid4().hex,
-                 queue_seconds=900, active_seconds=2100, poll_seconds=10, overall_seconds=6300):
+                 queue_seconds=900, active_seconds=2700, poll_seconds=10, overall_seconds=6300,
+                 first_runner=None):
         if re.fullmatch(r'[0-9a-f]{40}', sha) is None or not str(parent).isdigit() or int(parent) < 1 \
                 or not str(attempt).isdigit() or int(attempt) < 1:
             raise Failure('invalid_parent_identity')
+        if first_runner is not None and first_runner not in RUNNERS:
+            raise Failure('invalid_runner_preference')
+        self.runners = RUNNERS if first_runner is None else (first_runner,) + tuple(r for r in RUNNERS if r != first_runner)
         self.api, self.sha, self.parent, self.attempt = api, sha, str(parent), str(attempt)
         self.output, self.now, self.sleep, self.nonce = Path(output), now, sleep, nonce
         self.queue_seconds, self.active_seconds, self.poll_seconds = queue_seconds, active_seconds, poll_seconds
@@ -292,7 +296,7 @@ class Controller:
 
     def execute(self):
         try:
-            for runner in RUNNERS:
+            for runner in self.runners:
                 nonce = self.nonce()
                 if re.fullmatch(r'[0-9a-f]{32}', nonce) is None: raise Failure('invalid_nonce')
                 title = 'macos-validation ' + '.'.join((self.parent, self.attempt, nonce)) + ' ' + runner
@@ -364,7 +368,8 @@ def main():
     token = os.environ.get('GH_TOKEN')
     if not token: parser.error('Actions token is required; no personal token fallback')
     controller = Controller(API(token), os.environ.get('GITHUB_SHA', ''), os.environ.get('GITHUB_RUN_ID', ''),
-                            os.environ.get('GITHUB_RUN_ATTEMPT', ''), args.output)
+                            os.environ.get('GITHUB_RUN_ATTEMPT', ''), args.output,
+                            first_runner=os.environ.get('MACOS_FIRST_RUNNER') or None)
     def cancelled(_signum, _frame):
         raise Failure('parent_cancelled')
     signal.signal(signal.SIGTERM, cancelled)

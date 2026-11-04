@@ -103,6 +103,23 @@ class Allocation(unittest.TestCase):
         self.assertTrue(result['success']); self.assertEqual(self.api.posts, 2)
         self.assertEqual(result['attempts'][0]['allocation_result'], 'hosted_runner_acquisition_failed')
         self.assertNotEqual(result['attempts'][0]['request_id'], result['attempts'][1]['request_id'])
+    def test_preferred_standard_pool_runs_first_without_changing_source_fences(self):
+        result = self.controller([success()], first_runner='macos-26-intel').execute()
+        self.assertEqual(result['qualified_runner'], 'macos-26-intel')
+        self.assertEqual(self.api.calls[0][2]['inputs']['expected_sha'], SHA)
+        self.assertEqual(self.api.calls[0][2]['ref'], 'main')
+    def test_preference_preserves_finite_fallback_without_duplicate_pools(self):
+        c = self.controller([unavailable() for _ in subject.RUNNERS], first_runner='macos-15-intel')
+        with self.assertRaises(subject.Failure): c.execute()
+        runners = [row['runner'] for row in c.report['attempts']]
+        self.assertEqual(runners[0], 'macos-15-intel')
+        self.assertEqual(len(runners), len(set(runners)))
+        self.assertEqual(set(runners), set(subject.RUNNERS))
+    def test_nonstandard_preference_is_rejected_before_dispatch(self):
+        for choice in ['self-hosted', 'macos-26-large', 'foreign', '']:
+            with self.assertRaisesRegex(subject.Failure, 'invalid_runner_preference'):
+                self.controller([], first_runner=choice)
+            self.assertEqual(self.api.calls, [])
     def test_initial_transient_metadata_must_all_match_before_any_jobs_lookup(self):
         plan = success(); plan['identity_sequence'] = [{'display_title':'macOS validation worker'}, {'run_attempt':None}, {}]
         result = self.controller([plan]).execute()
@@ -282,6 +299,11 @@ class Workflow(unittest.TestCase):
         self.assertIn('--platform macos --verify-installed', worker)
         self.assertIn('if-no-files-found: error', worker)
         self.assertNotIn('simctl', worker)
+        # The qualifier inspects the provider's main Mach-O. Xcode's default
+        # Debug dylib layout would put that implementation behind a stub.
+        self.assertIn('ENABLE_DEBUG_DYLIB=NO', worker)
+        self.assertIn('timeout-minutes: 45', worker)
+        self.assertIn('MACOS_FIRST_RUNNER: ${{ inputs.first_runner }}', parent)
 
 
 if __name__ == '__main__': unittest.main()

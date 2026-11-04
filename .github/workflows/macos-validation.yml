@@ -2,6 +2,12 @@ name: macOS published runtime validation
 
 on:
   workflow_dispatch:
+    inputs:
+      first_runner:
+        description: First standard Mac pool; unavailable pools still fall back
+        type: choice
+        default: macos-15
+        options: [macos-15, macos-26-intel, macos-26, macos-15-intel]
 
 permissions:
   contents: read
@@ -43,6 +49,7 @@ jobs:
       - name: Validate published macOS runtime on an available standard runner
         env:
           GH_TOKEN: ${{ github.token }}
+          MACOS_FIRST_RUNNER: ${{ inputs.first_runner }}
         run: exec python3 tool/run_macos_actions_validation.py
       - name: Preserve allocation results and exact child run links
         if: always()

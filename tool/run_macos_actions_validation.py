@@ -101,9 +101,61 @@ class Controller:
                 or run.get('run_attempt') != 1:
             raise Failure('child_identity_mismatch')
 
+    def record_identity_difference(self, run, row, elapsed):
+        """Persist only the generated/public identity fields, never API bodies."""
+        expected = {'id': row['run_id'], 'head_branch': 'main', 'head_sha': self.sha,
+                    'event': 'workflow_dispatch', 'path': WORKFLOW_PATH, 'display_title': row['title'],
+                    'repository': REPOSITORY, 'run_attempt': 1}
+        repository = run.get('repository')
+        actual = {name: run.get(name) for name in expected}
+        actual['repository'] = repository.get('full_name') if isinstance(repository, dict) else None
+        def safe(value):
+            if isinstance(value, str): return value[:200]
+            if value is None or type(value) in (int, bool): return value
+            return '<' + type(value).__name__ + '>'
+        difference = {name: {'expected': safe(value), 'actual': safe(actual[name])}
+                      for name, value in expected.items() if actual[name] != value}
+        history = row.setdefault('identity_observations', [])
+        if history and history[-1]['mismatches'] == difference:
+            history[-1]['last_elapsed_seconds'] = round(elapsed, 3)
+        elif len(history) < 8:
+            history.append({'elapsed_seconds': round(elapsed, 3), 'mismatches': difference})
+        else:
+            row['additional_identity_observations'] = row.get('additional_identity_observations', 0) + 1
+        self.save()
+
+    def read_bound_run(self, row):
+        """Allow initial API metadata evaluation to settle, with every fence intact.
+
+        Before all fields agree this performs only GET of the already returned
+        run ID. After the first binding, later reads are strict immediately.
+        """
+        began = self.now()
+        end = min(self.deadline, began + 30)
+        observed_mismatch = False
+        while True:
+            if observed_mismatch and self.now() >= end: raise Failure('child_identity_mismatch')
+            previous_timeout = getattr(self.api, 'timeout', 20)
+            self.api.timeout = min(previous_timeout, max(.1, end - self.now()))
+            try:
+                _, run = self.call('GET', BASE + '/actions/runs/' + str(row['run_id']))
+            finally:
+                self.api.timeout = previous_timeout
+            try:
+                self.identity(run, row)
+            except Failure:
+                self.record_identity_difference(run, row, self.now() - began)
+                if row.get('identity_verified') or self.now() >= end: raise
+                observed_mismatch = True
+                self.sleep(min(2, self.poll_seconds, end - self.now()))
+                continue
+            if self.now() > end: raise Failure('child_identity_mismatch')
+            row['identity_verified'] = True
+            self.save()
+            return run
+
     def snapshot(self, row):
-        _, run = self.call('GET', BASE + '/actions/runs/' + str(row['run_id']))
-        self.identity(run, row)
+        run = self.read_bound_run(row)
         _, value = self.call('GET', BASE + '/actions/runs/' + str(row['run_id']) + '/jobs?filter=latest&per_page=100')
         jobs = value.get('jobs', [])
         if any(j.get('name') not in (MAC_JOB, ADMISSION_JOB) for j in jobs) \
@@ -157,7 +209,7 @@ class Controller:
             matches = [r for r in value.get('workflow_runs', []) if r.get('display_title') == row['title']]
             if len(matches) > 1: raise Failure('ambiguous_dispatch')
             if matches:
-                row['run_id'] = matches[0]['id']; self.identity(matches[0], row); return
+                row['run_id'] = matches[0]['id']; self.read_bound_run(row); return
             self.sleep(self.poll_seconds)
         raise Failure('dispatch_untracked_no_redispatch')
 

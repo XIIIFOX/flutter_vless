@@ -68,10 +68,14 @@ class FakeAPI:
         return 200, self.metadata(run_id, record, state['status'], state.get('conclusion'))
     def metadata(self, run_id, record, status, conclusion=None):
         v = record['body']['inputs']; title = 'macos-validation ' + '.'.join((v['parent_run_id'], v['parent_run_attempt'], v['request_id'])) + ' ' + v['runner']
-        return {'id': run_id, 'head_branch': 'main', 'head_sha': 'b'*40 if record['plan'].get('wrong_source') else SHA,
+        result = {'id': run_id, 'head_branch': 'main', 'head_sha': 'b'*40 if record['plan'].get('wrong_source') else SHA,
                 'event': 'workflow_dispatch', 'path': subject.WORKFLOW_PATH, 'display_title': title,
                 'repository': {'full_name': subject.REPOSITORY}, 'run_attempt': 1,
                 'status': 'completed' if status == 'completed' else 'in_progress', 'conclusion': conclusion}
+        sequence = record['plan'].get('identity_sequence', [{}])
+        index = min(record.get('metadata_reads', 0), len(sequence)-1)
+        result.update(sequence[index]); record['metadata_reads'] = record.get('metadata_reads', 0) + 1
+        return result
 
 
 def success(): return {'states': [{'status': 'completed', 'conclusion': 'success'}]}
@@ -99,6 +103,37 @@ class Allocation(unittest.TestCase):
         self.assertTrue(result['success']); self.assertEqual(self.api.posts, 2)
         self.assertEqual(result['attempts'][0]['allocation_result'], 'hosted_runner_acquisition_failed')
         self.assertNotEqual(result['attempts'][0]['request_id'], result['attempts'][1]['request_id'])
+    def test_initial_transient_metadata_must_all_match_before_any_jobs_lookup(self):
+        plan = success(); plan['identity_sequence'] = [{'display_title':'macOS validation worker'}, {'run_attempt':None}, {}]
+        result = self.controller([plan]).execute()
+        self.assertTrue(result['success']); self.assertEqual(self.api.cancelled, [])
+        first_jobs = next(i for i,(_,p,_) in enumerate(self.api.calls) if '/jobs?' in p)
+        self.assertEqual(sum('/actions/runs/' in p and '/jobs?' not in p for _,p,_ in self.api.calls[:first_jobs]),3)
+        observations = result['attempts'][0]['identity_observations']
+        self.assertEqual(set(observations[0]['mismatches']), {'display_title'})
+        self.assertEqual(set(observations[1]['mismatches']), {'run_attempt'})
+    def test_permanent_source_nonce_or_path_mismatch_never_inspects_jobs_or_cancels(self):
+        for override in [{'head_sha':'b'*40}, {'display_title':'foreign nonce'}, {'path':'.github/workflows/foreign.yml'}]:
+            plan = success(); plan['identity_sequence'] = [override]
+            c = self.controller([plan])
+            with self.assertRaisesRegex(subject.Failure, 'child_identity_mismatch'): c.execute()
+            self.assertEqual(self.api.cancelled, [])
+            self.assertFalse(any('/jobs?' in p for _,p,_ in self.api.calls))
+            self.assertFalse(c.report['success'])
+    def test_binding_is_strict_immediately_after_first_verified_snapshot(self):
+        plan = {'states':[{'status':'in_progress'}], 'identity_sequence':[{}, {'head_sha':'b'*40}]}
+        c = self.controller([plan])
+        with self.assertRaisesRegex(subject.Failure, 'child_identity_mismatch'): c.execute()
+        self.assertEqual(self.clock.value, 1)
+        self.assertEqual(sum('/jobs?' in p for _,p,_ in self.api.calls),1)
+        self.assertEqual(self.api.cancelled, [])
+    def test_initial_identity_wait_is_bounded_by_30_seconds(self):
+        plan = success(); plan['identity_sequence'] = [{'run_attempt':None}]
+        c = self.controller([plan]); c.deadline = 100
+        with self.assertRaisesRegex(subject.Failure, 'child_identity_mismatch'): c.execute()
+        self.assertLessEqual(self.clock.value, 30)
+        self.assertFalse(any('/jobs?' in p for _,p,_ in self.api.calls))
+        self.assertEqual(self.api.cancelled, [])
     def test_queue_deadline_cancels_only_the_bound_own_pending_run(self):
         result = self.controller([{'states': [{'status': 'queued'}]}, success()]).execute()
         self.assertTrue(result['success']); self.assertEqual(self.api.cancelled, [1])

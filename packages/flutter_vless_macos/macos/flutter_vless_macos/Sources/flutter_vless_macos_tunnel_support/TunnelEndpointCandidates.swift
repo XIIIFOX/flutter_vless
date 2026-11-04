@@ -182,7 +182,8 @@ struct TunnelEndpointDNSAccumulator {
         self.path = path
     }
 
-    mutating func accept(_ answer: TunnelEndpointDNSAnswer, at now: TimeInterval) {
+    @discardableResult
+    mutating func accept(_ answer: TunnelEndpointDNSAnswer, at now: TimeInterval) -> Bool {
         outcomes.recordCallback()
         if let failure = answer.failure {
             switch failure {
@@ -193,7 +194,7 @@ struct TunnelEndpointDNSAccumulator {
             case .policyDenied: outcomes.record(.policyDenied)
             case .other: outcomes.record(.otherError)
             }
-            return
+            return false
         }
         let questionMatches = Self.name(answer.hostname) == host
         // DNS-SD's reply index describes the record's scope, not an echo of
@@ -207,9 +208,9 @@ struct TunnelEndpointDNSAccumulator {
             outcomes.record(.interfaceRejected)
             outcomes.record(.interfaceOtherRejected)
         }
-        guard questionMatches, interfaceMatches else { return }
+        guard questionMatches, interfaceMatches else { return false }
         guard let address = TunnelEndpointAddress(text: answer.text, source: .systemNameAnswer),
-              now.isFinite, now >= 0 else { outcomes.record(.malformed); return }
+              now.isFinite, now >= 0 else { outcomes.record(.malformed); return false }
         let scope: TunnelEndpointCandidate.LookupScope = path.interfaceIndex == 0 || answer.interfaceIndex == 0
             ? .processDefault : .interface(index: path.interfaceIndex)
         let existing = values.firstIndex { $0.address.text == address.text && $0.lookupScope == scope }
@@ -219,7 +220,7 @@ struct TunnelEndpointDNSAccumulator {
             if !values.contains(where: { $0.address.text == address.text }) {
                 addressOrder.removeAll { $0 == address.text }
             }
-            return
+            return true
         }
         let value = TunnelEndpointCandidate(address: address, origin: .systemNameAnswer,
             receivedAt: now, validUntil: now + Double(answer.ttl), lookupScope: scope)
@@ -229,6 +230,7 @@ struct TunnelEndpointDNSAccumulator {
         } else if addressOrder.count < TunnelEndpointCandidates.maximumCount {
             addressOrder.append(address.text); values.append(value); outcomes.record(.adds)
         } else { outcomes.record(.capacityRejected) }
+        return true
     }
 
     func snapshot(at now: TimeInterval) -> [TunnelEndpointCandidate] {

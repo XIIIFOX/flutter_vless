@@ -6,35 +6,50 @@ import flutter_vless_privacy
 /// Serial lifetime for one scoped dual-family DNSService query. The short
 /// collection window is inside the caller's absolute deadline, not renewed per RR.
 final class TunnelEndpointDNSCollection: @unchecked Sendable {
+    /// Schedules one asynchronous action on the supplied serial queue. The
+    /// returned cancellation closure is called on that queue, at most once.
+    typealias Schedule = (DispatchQueue, TimeInterval, @escaping () -> Void) -> (() -> Void)
+
+    static func scheduleDeadline(queue: DispatchQueue, delay: TimeInterval, action: @escaping () -> Void) -> (() -> Void) {
+        let timer = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
+        timer.setEventHandler(handler: action)
+        timer.schedule(deadline: .now() + max(0, delay), leeway: .milliseconds(1))
+        timer.activate()
+        return { timer.cancel() }
+    }
+
     typealias Query = (String, UInt32, DispatchQueue, @escaping (TunnelEndpointDNSAnswer) -> Void) -> (() -> Void)?
     private let queue = DispatchQueue(label: "dev.tfox.flutter-vless.endpoint-candidates", qos: .userInitiated)
     private var continuation: CheckedContinuation<[TunnelEndpointCandidate], Error>?
     private var cancelQuery: (() -> Void)?
-    private var timer: DispatchSourceTimer?
+    private var cancelTimer: (() -> Void)?
     private var cancelled = false
     private var accumulator: TunnelEndpointDNSAccumulator
     private let now: () -> TimeInterval
     private let isCurrent: () -> Bool
     private let event: (NativeDiagnosticMessage) -> Void
+    private let schedule: Schedule
     private var collectionTiming: NativeDiagnosticTimer?
     private var registrationMs: UInt64 = 0
     private var firstCallbackMs: UInt64?
     private var registrationSucceeded = false
 
     private init(host: String, path: TunnelEndpointPath, now: @escaping () -> TimeInterval, isCurrent: @escaping () -> Bool,
-                 event: @escaping (NativeDiagnosticMessage) -> Void) {
+                 event: @escaping (NativeDiagnosticMessage) -> Void, schedule: @escaping Schedule) {
         accumulator = TunnelEndpointDNSAccumulator(host: host, path: path)
         self.now = now
         self.isCurrent = isCurrent
         self.event = event
+        self.schedule = schedule
     }
 
     static func collect(_ host: String, path: TunnelEndpointPath, deadline: TimeInterval,
                         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
                         isCurrent: @escaping () -> Bool = { true },
                         event: @escaping (NativeDiagnosticMessage) -> Void = { _ in },
+                        schedule: @escaping Schedule = TunnelEndpointDNSCollection.scheduleDeadline,
                         query: @escaping Query = TunnelEndpointDNSQuery.start) async throws -> [TunnelEndpointCandidate] {
-        let owner = TunnelEndpointDNSCollection(host: host, path: path, now: now, isCurrent: isCurrent, event: event)
+        let owner = TunnelEndpointDNSCollection(host: host, path: path, now: now, isCurrent: isCurrent, event: event, schedule: schedule)
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
@@ -71,21 +86,18 @@ final class TunnelEndpointDNSCollection: @unchecked Sendable {
         // One-shot endpoint preparation timer, never recurring background work.
         // Tight leeway avoids an extra system coalescing delay during startup;
         // it does not shorten the DNS collection window or renew its budget.
-        let timeout = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
-        timeout.setEventHandler { [weak self] in
+        cancelTimer = schedule(queue, min(2, remaining)) { [weak self] in
             guard let self else { return }
             guard self.isCurrent() else { self.finish(.failure(CancellationError())); return }
             self.finish(.success(self.accumulator.snapshot(at: self.now())))
         }
-        timeout.schedule(deadline: .now() + min(2, remaining), leeway: .milliseconds(1))
-        timer = timeout
-        timeout.activate()
     }
 
     private func finish(_ result: Result<[TunnelEndpointCandidate], Error>) {
         guard let continuation else { return }
         self.continuation = nil
-        timer?.cancel(); timer = nil
+        let cancelTimer = self.cancelTimer; self.cancelTimer = nil
+        cancelTimer?()
         let completedMs = collectionTiming?.elapsedMilliseconds() ?? 0
         let cleanupTiming = NativeDiagnosticTimer()
         let cancel = cancelQuery; cancelQuery = nil

@@ -111,6 +111,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let forwardingLock = NSLock()
     private var forwardingReady = false
     private var startupPreparation: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, task: Task<TunnelPreparedConfig, Error>)?
+    private var startupDiscovery: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, discovery: TunnelEndpointDiscovery)?
+    // Forwarding-lock-owned arbitration between pre-sleep DNS drain and Wake.
+    private var pendingSleep: PendingSleep?
+    // Watchdog-owned, scoped to completing the original Connect transaction.
+    private var initialDiscoveryCorrection: (epoch: TunnelSessionAdmission.Epoch, id: UUID, deadline: TimeInterval, terminal: Bool, task: Task<Void, Never>)?
     private var forwardingEpoch: TunnelSessionAdmission.Epoch?
     private var runtimeSpec: RuntimeSpec?
     private var runtimeRecoveryInFlight = false
@@ -239,21 +244,28 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let path: TunnelEndpointPath
         let selections: [TunnelEndpointSelection]
         let bootstrapAddresses: [String]
+        let discovery: TunnelEndpointDiscovery?
+        let discoveryDeadline: TimeInterval?
+        let correctionID: UUID?
 
-        init(source: RuntimeSource, prepared: TunnelPreparedConfig, token: TunnelEndpointPlanAdmission.Token, path: TunnelEndpointPath, port: Int) {
+        init(source: RuntimeSource, prepared: TunnelPreparedConfig, token: TunnelEndpointPlanAdmission.Token, path: TunnelEndpointPath, port: Int, discovery: TunnelEndpointDiscovery? = nil, discoveryDeadline: TimeInterval? = nil, correctionID: UUID? = nil) {
             epoch = source.epoch; options = source.options
             config = prepared.routingEnvelope?.configurationData ?? prepared.data
             self.port = port; geoAssetsDirectory = source.geoAssetsDirectory; credentials = source.credentials
             routingMetadata = prepared.routingEnvelope?.metadataData
             self.token = token; self.path = path
             selections = prepared.endpointSelections; bootstrapAddresses = prepared.bootstrapAddresses
+            self.discovery = discovery; self.discoveryDeadline = discoveryDeadline; self.correctionID = correctionID
         }
 
         /// A fresh zero-TTL answer is confined to this single prepared attempt.
         /// Positive TTLs must remain valid at every later admission boundary.
         func isFresh(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
-            selections.allSatisfy { $0.candidates.path == path &&
-                $0.selected.isUsable(on: path, at: now, allowFreshZeroTTL: $0.selected.isSingleAttemptOnly) }
+            guard selections.allSatisfy({ $0.candidates.path == path }) else { return false }
+            // A live lease retains TTL renewals received after early selection.
+            // The legacy collector keeps its original immutable TTL fence.
+            if let discovery { return discovery.isFresh(selections, at: now) }
+            return selections.allSatisfy { $0.selected.isUsable(on: path, at: now, allowFreshZeroTTL: $0.selected.isSingleAttemptOnly) }
         }
     }
 
@@ -335,11 +347,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             guard sessionAdmission.isCurrent(epoch), runtimeSource?.epoch == epoch else { throw CancellationError() }
             if !observedPhysicalPath { physicalPath = snapshot }
         }
-        let spec: RuntimeSpec
+        let preparationDeadline = ProcessInfo.processInfo.systemUptime + 25
+        var spec: RuntimeSpec
         do {
             let preparationTiming = NativeDiagnosticTimer()
             defer { rememberTunnelLog("Startup timing phase=initial-preparation elapsedMs=\(preparationTiming.elapsedMilliseconds())") }
-            spec = try await prepareInitialRuntimeSpec(source)
+            spec = try await prepareInitialRuntimeSpec(source, deadline: preparationDeadline)
         }
         catch {
             if error is CancellationError || !sessionAdmission.isCurrent(epoch) { throw CancellationError() }
@@ -353,14 +366,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             default: throw error
             }
         }
-        let token = spec.token
+        let armingToken = spec.token
+        let fastArming = spec.discovery != nil
         rememberTunnelLog("Protected tunnel routes and virtual DNS installed")
 
         // Arm only the fully prepared startup, never an unresolved cold profile.
         let armingTiming = NativeDiagnosticTimer()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             TunnelOnDemandPolicy.enableForStart(configuration: configuration, armingReceipt: armingReceipt,
-                isCancelled: { !self.sessionAdmission.isCurrent(epoch) || !self.endpointAdmission.isCurrent(token) }) { result in
+                isCancelled: { !self.sessionAdmission.isCurrent(epoch) || (!fastArming && !self.endpointAdmission.isCurrent(armingToken)) }) { result in
                 switch result {
                 case .success:
                     rememberTunnelLog("On-demand recovery policy applied: enabled=\(options.enableOnDemand)")
@@ -371,11 +385,34 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 }
             }
         }
-        rememberTunnelLog("Startup timing phase=recovery-policy elapsedMs=\(armingTiming.elapsedMilliseconds()) generation=\(token.generation)")
-        guard sessionAdmission.isCurrent(epoch), endpointAdmission.isCurrent(token), spec.isFresh(),
+        rememberTunnelLog("Startup timing phase=recovery-policy elapsedMs=\(armingTiming.elapsedMilliseconds()) generation=\(armingToken.generation)")
+        if sessionAdmission.isCurrent(epoch), fastArming,
+           (!endpointAdmission.isCurrent(spec.token) || !self.endpointSpecIsFresh(spec)) {
+            cancelStartupDiscovery(epoch: epoch, token: spec.token)
+            rememberTunnelLog("Initial DNS changed during profile arming; preparing full snapshot")
+            do {
+                spec = try await prepareInitialRuntimeSpec(source, deadline: preparationDeadline, allowFastDiscovery: false)
+            } catch {
+                if error is CancellationError || !sessionAdmission.isCurrent(epoch) { throw CancellationError() }
+                throw tunnelError("Unable to complete VPN endpoint DNS discovery")
+            }
+        }
+        let token = spec.token
+        guard sessionAdmission.isCurrent(epoch), endpointAdmission.isCurrent(token), self.endpointSpecIsFresh(spec),
               endpointAdmission.commit(token) else { throw CancellationError() }
 
-        guard startTunnelWatchdog(spec) else { throw CancellationError() }
+        if !startTunnelWatchdog(spec) {
+            // A DNS callback may revoke the committed fast token just before
+            // watchdog activation. It cannot correct a session not yet active;
+            // reuse the single full-window handoff without repeating arming.
+            guard sessionAdmission.isCurrent(epoch), spec.discovery != nil else { throw CancellationError() }
+            cancelStartupDiscovery(epoch: epoch, token: spec.token)
+            spec = try await prepareInitialRuntimeSpec(source, deadline: preparationDeadline, allowFastDiscovery: false)
+            let fallbackToken = spec.token
+            guard sessionAdmission.isCurrent(epoch), endpointAdmission.isCurrent(fallbackToken), self.endpointSpecIsFresh(spec),
+                  endpointAdmission.commit(fallbackToken) else { throw CancellationError() }
+            guard startTunnelWatchdog(spec) else { throw CancellationError() }
+        }
         runtimeAdmitted = true
         // NE connected only means the routes are installed. The plugin
         // queries forwarding readiness before publishing CONNECTED.
@@ -383,6 +420,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         } catch {
             guard !runtimeAdmitted else { throw error }
             endpointAdmission.revoke(epoch)
+            cancelStartupDiscovery(epoch: epoch)
             watchdogQueue.sync {
                 if runtimeSource?.epoch == epoch {
                     pathObserver?.cancel(); pathObserver = nil
@@ -415,6 +453,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         #else
         let stoppedEpoch = sessionAdmission.revoke()
         #endif
+        cancelPendingSleep(epoch: stoppedEpoch)
         endpointAdmission.revoke(stoppedEpoch)
         forwardingLock.lock()
         let preparation = startupPreparation?.epoch == stoppedEpoch ? startupPreparation?.task : nil
@@ -426,6 +465,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         forwardingLock.unlock()
         preparation?.cancel()
+        cancelStartupDiscovery(epoch: stoppedEpoch)
         rememberTunnelLog("Stopping Xray packet tunnel, reason=\(reason.rawValue)")
         stopTunnelWatchdog(epoch: stoppedEpoch)
         let teardown = DispatchGroup()
@@ -467,6 +507,305 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         if !current { task?.cancel() }
     }
 
+
+    /// The provider retains discovery beyond the first DNS continuation. All
+    /// cancellation runs outside the forwarding lock and is token conditional.
+    private func setStartupDiscovery(_ discovery: TunnelEndpointDiscovery?, epoch: TunnelSessionAdmission.Epoch,
+                                     token: TunnelEndpointPlanAdmission.Token) {
+        forwardingLock.lock()
+        let current = sessionAdmission.isCurrent(epoch) && endpointAdmission.isCurrent(token)
+        var obsolete: TunnelEndpointDiscovery? = nil
+        if let discovery {
+            if current {
+                obsolete = startupDiscovery?.discovery
+                startupDiscovery = (epoch, token, discovery)
+            }
+        } else if startupDiscovery?.epoch == epoch && startupDiscovery?.token == token {
+            obsolete = startupDiscovery?.discovery
+            startupDiscovery = nil
+        }
+        forwardingLock.unlock()
+        if obsolete !== discovery { obsolete?.cancel() }
+        if !current { discovery?.cancel() }
+    }
+
+    private func cancelStartupDiscovery(epoch: TunnelSessionAdmission.Epoch?, token: TunnelEndpointPlanAdmission.Token? = nil) {
+        forwardingLock.lock()
+        let matchesEpoch = startupDiscovery?.epoch == epoch || (epoch == nil && sessionAdmission.currentEpoch == nil)
+        let obsolete: TunnelEndpointDiscovery?
+        if matchesEpoch && (token == nil || startupDiscovery?.token == token) {
+            obsolete = startupDiscovery?.discovery
+            startupDiscovery = nil
+        } else { obsolete = nil }
+        forwardingLock.unlock()
+        obsolete?.cancel()
+    }
+
+    private func makeStartupDiscovery(epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token,
+                                      path: TunnelEndpointPath, deadline: TimeInterval) -> TunnelEndpointDiscovery {
+        TunnelEndpointDiscovery(path: path, deadline: deadline,
+            isCurrent: { [weak self] in
+                guard let self else { return false }
+                return self.sessionAdmission.isCurrent(epoch) && self.endpointAdmission.isCurrent(token)
+            }, event: { [weak self] message in
+                let current = self?.sessionAdmission.isCurrent(epoch) == true && self?.endpointAdmission.isCurrent(token) == true
+                rememberTunnelLog("Endpoint DNS generation=\(token.generation) current=\(current) \(message)")
+            }, onInvalidated: { [weak self] in
+                self?.invalidateStartupDiscovery(epoch: epoch, token: token, deadline: deadline)
+            })
+    }
+
+    /// A selected-record removal/expiry before Core starts may retry only its
+    /// own pending plan. An old DNS callback must never refresh a newer token.
+    private func invalidateStartupDiscovery(epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, deadline: TimeInterval) {
+        guard sessionAdmission.isCurrent(epoch), let replacement = try? endpointAdmission.refresh(ifCurrent: token) else { return }
+        guard setForwardingNotReadyForDNS(epoch: epoch, replacement: replacement) else { return }
+        rememberTunnelLog("Initial DNS selection invalidated generation=\(token.generation)")
+        cancelStartupDiscovery(epoch: epoch, token: token)
+        watchdogQueue.async { [weak self] in
+            guard let self, self.sessionAdmission.isCurrent(epoch), self.endpointAdmission.isCurrent(replacement),
+                  self.runtimeSpec?.token == token, self.sessionAdmission.permitsRuntime(epoch), self.physicalPath != nil else { return }
+            guard let source = self.runtimeSource, source.epoch == epoch else { return }
+            self.beginInitialDiscoveryCorrection(source, deadline: deadline)
+        }
+    }
+
+    private func endpointSpecIsFresh(_ spec: RuntimeSpec) -> Bool {
+        if spec.isFresh() { return true }
+        if let discovery = spec.discovery, let deadline = spec.discoveryDeadline {
+            _ = discovery.claimInitialInvalidationIfNeeded()
+            // The atomic claim distinguishes an incomplete initial snapshot
+            // from normal TTL expiry after collection. A renewed record can
+            // also heal between the first read and this claim.
+            if !discovery.isInvalidated { return spec.isFresh() }
+            invalidateStartupDiscovery(epoch: spec.epoch, token: spec.token, deadline: deadline)
+        }
+        return false
+    }
+
+    /// A superseded DNS callback cannot clear a replacement runtime's ready
+    /// sample. All ready writes share this lock; token admission is checked
+    /// inside it so a later successful runtime always wins publication order.
+    private func setForwardingNotReadyForDNS(epoch: TunnelSessionAdmission.Epoch,
+                                            replacement: TunnelEndpointPlanAdmission.Token) -> Bool {
+        forwardingLock.lock(); defer { forwardingLock.unlock() }
+        guard sessionAdmission.isCurrent(epoch), endpointAdmission.isCurrent(replacement) else { return false }
+        forwardingEpoch = epoch; forwardingReady = false; reasserting = true
+        return true
+    }
+
+    /// Local authentication can outlive a selected DNS record. Its old success
+    /// must not publish ready after the initial DNS transaction was invalidated.
+    private func setForwardingReadyFromHealth(_ ready: Bool, epoch: TunnelSessionAdmission.Epoch,
+                                             discovery: TunnelEndpointDiscovery?) -> Bool {
+        forwardingLock.lock(); defer { forwardingLock.unlock() }
+        guard sessionAdmission.isCurrent(epoch), !ready || discovery?.isInvalidated != true else { return false }
+        forwardingEpoch = epoch; forwardingReady = ready; reasserting = !ready
+        return true
+    }
+
+    /// Runs only on watchdogQueue. This completes the original Connect's DNS
+    /// transaction; its private permit never enables user automatic reconnect.
+    private func beginInitialDiscoveryCorrection(_ source: RuntimeSource, deadline: TimeInterval) {
+        let epoch = source.epoch
+        guard sessionAdmission.permitsRuntime(epoch), runtimeSource?.epoch == epoch, !watchdogSuspended else { return }
+        if initialDiscoveryCorrection?.epoch == epoch { return }
+        let id = UUID()
+        rememberTunnelLog("Initial DNS correction begin")
+        setForwardingReady(false, epoch: epoch)
+        runtimeRecoveryInFlight = true
+        let task = Task {
+            var admitted = 0
+            do {
+                while admitted < 3 {
+                    try Task.checkCancellation()
+                    guard self.sessionAdmission.permitsRuntime(epoch), ProcessInfo.processInfo.systemUptime < deadline else { throw CancellationError() }
+                    let snapshot = try self.watchdogQueue.sync { () throws -> (TunnelEndpointPlanAdmission.Token, TunnelEndpointPath)? in
+                        guard self.initialDiscoveryCorrection?.id == id, self.runtimeSource?.epoch == epoch else { throw CancellationError() }
+                        guard let raw = self.physicalPath, let token = self.endpointAdmission.currentToken else { return nil }
+                        return (token, raw.rebased(generation: token.generation))
+                    }
+                    guard let (token, path) = snapshot else {
+                        try await Task.sleep(nanoseconds: 100_000_000)
+                        continue
+                    }
+                    do {
+                        let child = Task { try await self.prepareEndpointConfig(source, token: token, path: path, attempt: 0, deadline: deadline) }
+                        self.setStartupPreparation(child, epoch: epoch, token: token)
+                        defer { self.setStartupPreparation(nil, epoch: epoch, token: token) }
+                        let prepared = try await child.value
+                        guard self.sessionAdmission.permitsRuntime(epoch), self.endpointAdmission.isCurrent(token), !child.isCancelled else { throw CancellationError() }
+                        admitted += 1
+                        guard let parsed = self.parseConfig(jsonData: prepared.data), prepared.endpointPath == path else {
+                            throw TunnelXrayConfigPreparer.StartupError.invalidConfiguration
+                        }
+                        let spec = RuntimeSpec(source: source, prepared: prepared, token: token, path: path, port: parsed.inboundPort,
+                                               correctionID: id)
+                        try await self.onRuntimeQueue { try self.checkEndpointPreflight(spec, prepared: prepared, source: source) }
+                        try await self.endpointCommitQueue.submit { try await self.commitEndpointPlan(spec) }.value
+                        let completed = self.watchdogQueue.sync {
+                            guard self.initialDiscoveryCorrection?.id == id, self.sessionAdmission.permitsRuntime(epoch),
+                                  self.endpointAdmission.isCurrent(token), self.endpointAdmission.ownsRuntime(token) else { return false }
+                            self.runtimeRecoveryInFlight = false
+                            let healthy = self.performTunnelHealthCheck(trigger: "initial-dns-correction", epoch: epoch)
+                            self.runtimeRecoveryInFlight = !healthy
+                            if healthy {
+                                self.initialDiscoveryCorrection = nil
+                                rememberTunnelLog("Initial DNS correction completed generation=\(token.generation)")
+                            }
+                            return healthy
+                        }
+                        if completed { return }
+                        if self.endpointAdmission.isCurrent(token) {
+                            throw self.tunnelError("VPN endpoint discovery correction did not become ready")
+                        }
+                    } catch {
+                        guard self.sessionAdmission.permitsRuntime(epoch), !Task.isCancelled else { throw CancellationError() }
+                        if !self.endpointAdmission.isCurrent(token), ProcessInfo.processInfo.systemUptime < deadline { continue }
+                        throw error
+                    }
+                }
+            } catch { }
+            self.watchdogQueue.async {
+                guard self.initialDiscoveryCorrection?.id == id, self.initialDiscoveryCorrection?.terminal == false else { return }
+                guard self.sessionAdmission.isCurrent(epoch) else {
+                    self.initialDiscoveryCorrection = nil
+                    return
+                }
+                // Sleep interrupted this still-provisional Connect. Keep its
+                // exact owner so Wake cannot silently enter ordinary recovery
+                // or renew the initial transaction's deadline/admission budget.
+                guard self.sessionAdmission.permitsRuntime(epoch), !self.watchdogSuspended else { return }
+                self.initialDiscoveryCorrection?.terminal = true
+                self.setForwardingReady(false, epoch: epoch)
+                // Hold ordinary recovery until NetworkExtension acknowledges its
+                // terminal stop. Explicit On Demand/Always-on policy is untouched.
+                self.runtimeRecoveryInFlight = true
+                rememberTunnelLog("Initial endpoint DNS correction failed; ending tunnel")
+                self.cancelTunnelWithError(self.tunnelError("Unable to complete VPN endpoint DNS discovery"))
+            }
+        }
+        initialDiscoveryCorrection = (epoch, id, deadline, false, task)
+    }
+
+    /// Watchdog-owned teardown; the registered child is separately cancelled by
+    /// Stop/path admission, and stale parents cannot clear replacement owners.
+    private func cancelInitialDiscoveryCorrection(epoch: TunnelSessionAdmission.Epoch?, keepOwner: Bool = false) {
+        guard let current = initialDiscoveryCorrection,
+              current.epoch == epoch || (epoch == nil && sessionAdmission.currentEpoch == nil) else { return }
+        if !keepOwner { initialDiscoveryCorrection = nil }
+        current.task.cancel()
+        forwardingLock.lock()
+        let child = startupPreparation?.epoch == current.epoch ? startupPreparation?.task : nil
+        if startupPreparation?.epoch == current.epoch { startupPreparation = nil }
+        forwardingLock.unlock()
+        child?.cancel()
+    }
+
+    /// Wake must not strand protected routes behind a canceled provisional
+    /// correction. End only that original transaction; established leases and
+    /// the caller's normal reconnect/On Demand policy retain existing behavior.
+    private func endInterruptedInitialDiscoveryOnWake(epoch: TunnelSessionAdmission.Epoch) -> Bool {
+        guard sessionAdmission.permitsRuntime(epoch), runtimeSpec?.epoch == epoch,
+              runtimeSource?.epoch == epoch else { return false }
+        let owner = initialDiscoveryCorrection?.epoch == epoch
+        guard owner || runtimeSpec?.discovery?.isInvalidated == true else { return false }
+        if owner && initialDiscoveryCorrection?.terminal == true { return true }
+        if owner {
+            cancelInitialDiscoveryCorrection(epoch: epoch, keepOwner: true)
+            initialDiscoveryCorrection?.terminal = true
+        } else {
+            initialDiscoveryCorrection = (epoch, UUID(), runtimeSpec?.discoveryDeadline ?? 0, true, Task {})
+        }
+        runtimeRecoveryInFlight = true
+        setForwardingReady(false, epoch: epoch)
+        rememberTunnelLog("Sleep interrupted initial endpoint DNS discovery; ending tunnel")
+        cancelTunnelWithError(tunnelError("VPN endpoint DNS discovery was interrupted by sleep"))
+        return true
+    }
+
+    /// The OS has announced sleep but is still waiting for its completion.
+    /// Only the existing DNS collection is drained; its deadline is never reset.
+    private final class PendingSleep {
+        let epoch: TunnelSessionAdmission.Epoch
+        let token: TunnelEndpointPlanAdmission.Token
+        let discovery: TunnelEndpointDiscovery
+        var completions: [() -> Void]
+        var task: Task<Void, Never>?
+        init(epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token,
+             discovery: TunnelEndpointDiscovery, completion: @escaping () -> Void) {
+            self.epoch = epoch; self.token = token; self.discovery = discovery; completions = [completion]
+        }
+    }
+
+    private func beginSleepAdmission(_ completion: @escaping () -> Void) {
+        forwardingLock.lock()
+        guard let epoch = sessionAdmission.currentEpoch else {
+            forwardingLock.unlock(); completion(); return
+        }
+        if let pending = pendingSleep, pending.epoch == epoch {
+            pending.completions.append(completion); forwardingLock.unlock(); return
+        }
+        guard sessionAdmission.permitsRuntime(epoch), pendingSleep == nil,
+              let retained = startupDiscovery, retained.epoch == epoch,
+              !retained.discovery.isInvalidated, retained.discovery.hasUnsealedSystemSelections else {
+            finishSleepAdmission(epoch: epoch, completion: completion, lockHeld: true); return
+        }
+        let pending = PendingSleep(epoch: epoch, token: retained.token, discovery: retained.discovery, completion: completion)
+        pendingSleep = pending
+        pending.task = Task { [weak self, weak pending, discovery = retained.discovery] in
+            do { try await discovery.waitForInitialSelectionsToSeal() } catch { }
+            guard let self, let pending else { return }
+            self.finishSleepAdmission(epoch: epoch, pending: pending)
+        }
+        forwardingLock.unlock()
+    }
+
+    /// Detachment and suspension share Wake's lock. Cancel only the captured
+    /// discovery after unlocking, never a newer same-epoch path's discovery.
+    private func finishSleepAdmission(epoch: TunnelSessionAdmission.Epoch, pending: PendingSleep? = nil,
+                                      completion: (() -> Void)? = nil, lockHeld: Bool = false) {
+        if !lockHeld { forwardingLock.lock() }
+        if let pending, pendingSleep !== pending { forwardingLock.unlock(); return }
+        let callbacks = pending?.completions ?? completion.map { [$0] } ?? []
+        if let pending { pendingSleep = nil; pending.completions = []; pending.task = nil }
+        if let pending, !endpointAdmission.isCurrent(pending.token) ||
+            (startupDiscovery != nil && startupDiscovery?.discovery !== pending.discovery) {
+            forwardingLock.unlock(); callbacks.forEach { $0() }; return
+        }
+        let suspended = sessionAdmission.isCurrent(epoch) && sessionAdmission.suspend(epoch)
+        let discovery = suspended && startupDiscovery?.epoch == epoch ? startupDiscovery?.discovery : nil
+        if suspended {
+            _ = try? endpointAdmission.refresh(epoch)
+            if startupDiscovery?.epoch == epoch { startupDiscovery = nil }
+        }
+        forwardingLock.unlock()
+        discovery?.cancel()
+        if suspended {
+            watchdogQueue.async {
+                guard self.sessionAdmission.isCurrent(epoch), !self.sessionAdmission.permitsRuntime(epoch) else { return }
+                self.watchdogSuspended = true
+                self.cancelInitialDiscoveryCorrection(epoch: epoch, keepOwner: true)
+                self.endpointPreparation?.task.cancel(); self.endpointPreparation = nil
+                self.runtimeRecoveryInFlight = false; self.watchdogPolicy.reset()
+            }
+        }
+        callbacks.forEach { $0() }
+    }
+
+    /// Stop removes the exact pending callback owner. Task cancellation only
+    /// removes its seal waiter; it never cancels a discovery retained by Wake.
+    private func cancelPendingSleep(epoch: TunnelSessionAdmission.Epoch?) {
+        forwardingLock.lock()
+        guard let pending = pendingSleep, pending.epoch == epoch else { forwardingLock.unlock(); return }
+        pendingSleep = nil
+        let task = pending.task, callbacks = pending.completions
+        pending.task = nil; pending.completions = []
+        forwardingLock.unlock()
+        task?.cancel(); callbacks.forEach { $0() }
+    }
+
+
     private func makePhysicalPathObserver() -> TunnelPhysicalPathObserver {
         TunnelPhysicalPathObserver(excludedInterfaceIndex: { [weak self] in
             if #available(iOS 18.0, *) {
@@ -495,8 +834,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         if startupPreparation?.epoch == epoch && startupPreparation?.token == revokedToken { startupPreparation = nil }
         forwardingLock.unlock()
         obsolete?.cancel()
-        runtimeRecoveryInFlight = false
-        if runtimeSpec != nil, canonical != nil, sessionAdmission.permitsRuntime(epoch) {
+        cancelStartupDiscovery(epoch: epoch, token: revokedToken)
+        runtimeRecoveryInFlight = initialDiscoveryCorrection?.epoch == epoch
+        if let spec = runtimeSpec, spec.discovery?.isInvalidated == true || spec.discovery?.hasUnsealedSystemSelections == true, let deadline = spec.discoveryDeadline,
+           let source = runtimeSource, sessionAdmission.permitsRuntime(epoch) {
+            setForwardingReady(false, epoch: epoch)
+            beginInitialDiscoveryCorrection(source, deadline: deadline)
+            return
+        }
+        if initialDiscoveryCorrection?.epoch != epoch, runtimeSpec != nil, canonical != nil, sessionAdmission.permitsRuntime(epoch) {
             refreshEndpointPlan(after: 0, epoch: epoch, rotate: false)
         }
     }
@@ -506,11 +852,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     /// again. Incomplete superseded DNS work is canceled without consuming one
     /// of three admitted preflight/settings attempts; the shared deadline still
     /// bounds path churn. Exact settings are reused through the FIFO cache.
-    private func prepareInitialRuntimeSpec(_ source: RuntimeSource) async throws -> RuntimeSpec {
+    private func prepareInitialRuntimeSpec(_ source: RuntimeSource, deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 25,
+                                           allowFastDiscovery: Bool = true) async throws -> RuntimeSpec {
         let epoch = source.epoch
-        let deadline = ProcessInfo.processInfo.systemUptime + 25
-        var admittedAttempts = 0
-        while admittedAttempts < 3 {
+        // Fast completed plans have their own two-slot allowance. If rapid
+        // path updates supersede them, the original full-window algorithm
+        // retains its complete three-slot budget inside the same deadline.
+        var fastAdmissions = 0
+        var legacyAdmissions = 0
+        while legacyAdmissions < 3 {
             try Task.checkCancellation()
             guard sessionAdmission.isCurrent(epoch), ProcessInfo.processInfo.systemUptime < deadline else { throw CancellationError() }
             let (token, path) = try watchdogQueue.sync { () throws -> (TunnelEndpointPlanAdmission.Token, TunnelEndpointPath) in
@@ -520,24 +870,37 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 }
                 return (current, raw.rebased(generation: current.generation))
             }
+            let fast = allowFastDiscovery && fastAdmissions < 2
+            let discovery = fast ? makeStartupDiscovery(epoch: epoch, token: token, path: path, deadline: deadline) : nil
+            setStartupDiscovery(discovery, epoch: epoch, token: token)
+            var retainDiscovery = false
+            defer { if !retainDiscovery { setStartupDiscovery(nil, epoch: epoch, token: token) } }
             do {
-                let preparation = Task { try await self.prepareEndpointConfig(source, token: token, path: path, attempt: 0, deadline: deadline) }
+                let preparation = Task { try await self.prepareEndpointConfig(source, token: token, path: path, attempt: 0,
+                                                                               deadline: deadline, discovery: discovery) }
                 setStartupPreparation(preparation, epoch: epoch, token: token)
                 defer { setStartupPreparation(nil, epoch: epoch, token: token) }
                 let prepared = try await preparation.value
                 guard sessionAdmission.isCurrent(epoch), endpointAdmission.isCurrent(token), !preparation.isCancelled else { throw CancellationError() }
-                admittedAttempts += 1
+                guard discovery?.admitSelections(prepared.endpointSelections) ?? true else {
+                    invalidateStartupDiscovery(epoch: epoch, token: token, deadline: deadline)
+                    throw CancellationError()
+                }
+                if fast { fastAdmissions += 1 } else { legacyAdmissions += 1 }
                 guard prepared.endpointPath == path, let parsed = parseConfig(jsonData: prepared.data) else {
                     throw TunnelXrayConfigPreparer.StartupError.invalidConfiguration
                 }
-                let spec = RuntimeSpec(source: source, prepared: prepared, token: token, path: path, port: parsed.inboundPort)
+                let spec = RuntimeSpec(source: source, prepared: prepared, token: token, path: path, port: parsed.inboundPort,
+                                       discovery: discovery, discoveryDeadline: discovery == nil ? nil : deadline)
                 try await onRuntimeQueue { try self.checkEndpointPreflight(spec, prepared: prepared, source: source) }
-                guard sessionAdmission.isCurrent(epoch), endpointAdmission.isCurrent(token), spec.isFresh() else { throw CancellationError() }
+                guard sessionAdmission.isCurrent(epoch), endpointAdmission.isCurrent(token), self.endpointSpecIsFresh(spec) else { throw CancellationError() }
                 try await endpointCommitQueue.submit {
-                    guard self.sessionAdmission.isCurrent(epoch), self.endpointAdmission.isCurrent(token), spec.isFresh() else { throw CancellationError() }
+                    guard self.sessionAdmission.isCurrent(epoch), self.endpointAdmission.isCurrent(token), self.endpointSpecIsFresh(spec) else { throw CancellationError() }
                     try await self.installProtectedSettings(spec)
-                    guard self.sessionAdmission.isCurrent(epoch), self.endpointAdmission.isCurrent(token), spec.isFresh() else { throw CancellationError() }
+                    guard self.sessionAdmission.isCurrent(epoch), self.endpointAdmission.isCurrent(token), self.endpointSpecIsFresh(spec) else { throw CancellationError() }
+                    discovery?.noteProtectedSettingsInstalled()
                 }.value
+                retainDiscovery = true
                 return spec
             } catch {
                 guard sessionAdmission.isCurrent(epoch), !Task.isCancelled else { throw CancellationError() }
@@ -551,9 +914,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         throw TunnelXrayConfigPreparer.StartupError.endpointUnavailable
     }
-
     private func prepareEndpointConfig(_ source: RuntimeSource, token: TunnelEndpointPlanAdmission.Token,
-                                       path: TunnelEndpointPath, attempt: UInt64, deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 25) async throws -> TunnelPreparedConfig {
+                                       path: TunnelEndpointPath, attempt: UInt64, deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 25,
+                                       discovery: TunnelEndpointDiscovery? = nil) async throws -> TunnelPreparedConfig {
         let current = { self.sessionAdmission.isCurrent(source.epoch) && self.endpointAdmission.isCurrent(token) }
         let preparationTiming = NativeDiagnosticTimer()
         defer { rememberTunnelLog("Startup timing phase=endpoint-plan elapsedMs=\(preparationTiming.elapsedMilliseconds()) generation=\(token.generation) current=\(current())") }
@@ -564,10 +927,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             tcpPortAvailable: LocalProxyAccessPolicy.isTCPPortAvailable, environmentSnapshot: source.environment,
             endpointPath: path, selectedAttempt: attempt, resolveCandidates: { host in
                 guard current() else { throw CancellationError() }
-                let values = try await TunnelEndpointResolver.resolveCandidates(host, on: path, deadline: deadline,
-                    isCurrent: current, event: { message in
-                        rememberTunnelLog("Endpoint DNS generation=\(token.generation) current=\(current()) \(message)")
-                    })
+                let values: TunnelEndpointCandidates
+                if let discovery { values = try await discovery.resolveCandidates(host) }
+                else {
+                    values = try await TunnelEndpointResolver.resolveCandidates(host, on: path, deadline: deadline,
+                        isCurrent: current, event: { message in
+                            rememberTunnelLog("Endpoint DNS generation=\(token.generation) current=\(current()) \(message)")
+                        })
+                }
                 guard current() else { throw CancellationError() }
                 return values
             }, isCurrent: current, attempts: 1)
@@ -578,7 +945,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func checkEndpointPreflight(_ spec: RuntimeSpec, prepared: TunnelPreparedConfig, source: RuntimeSource) throws {
         let preflightTiming = NativeDiagnosticTimer()
         defer { rememberTunnelLog("Startup timing phase=core-preflight elapsedMs=\(preflightTiming.elapsedMilliseconds()) generation=\(spec.token.generation) current=\(endpointAdmission.isCurrent(spec.token))") }
-        guard sessionAdmission.isCurrent(spec.epoch), endpointAdmission.isCurrent(spec.token), spec.isFresh() else { throw CancellationError() }
+        guard sessionAdmission.isCurrent(spec.epoch), endpointAdmission.isCurrent(spec.token), self.endpointSpecIsFresh(spec) else { throw CancellationError() }
         try ManagedServiceAssetPolicy.validate(prepared.data, directory: source.geoAssetsDirectory, geodataCapability: FLVlessCoreGeodataLifetimeCapability(), xdriveCapability: FLVlessCoreXdriveLifetimeCapability())
         if (spec.selections.contains(where: { !$0.selected.address.isLoopback }) ||
             TunnelDNSPolicy.requiresPhysicalInterfaceBinding(in: prepared.data)),
@@ -598,7 +965,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 try NativeRoutingSpec.check(envelope, capability: FLVlessCoreRoutingCapability, check: FLVlessCheckCoreRoutingPrivate)
             } else { try CorePreflightPolicy.validate(prepared.data, check: FLVlessCheckCorePrivate) }
         }
-        guard sessionAdmission.isCurrent(spec.epoch), endpointAdmission.isCurrent(spec.token), spec.isFresh() else { throw CancellationError() }
+        guard sessionAdmission.isCurrent(spec.epoch), endpointAdmission.isCurrent(spec.token), self.endpointSpecIsFresh(spec) else { throw CancellationError() }
     }
 
     private func protectedNetworkSettings(_ spec: RuntimeSpec) -> NEPacketTunnelNetworkSettings {
@@ -647,12 +1014,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func refreshEndpointPlan(after delay: TimeInterval, epoch: TunnelSessionAdmission.Epoch, rotate: Bool) {
         guard sessionAdmission.permitsRuntime(epoch), !watchdogSuspended, !runtimeRecoveryInFlight,
               let source = runtimeSource, source.epoch == epoch, let rawPath = physicalPath else { return }
+        guard runtimeSpec?.discovery?.isInvalidated != true else { return }
         guard !recoveryExhausted, (!initialRuntimeAttempted && recoveryFailures == 0) || nativeOptions.mayRetry(failures: recoveryFailures) else {
             recoveryExhausted = true
             if !hevLifecycle.isRunning { setForwardingReady(false, epoch: epoch) }
             return
         }
         guard let token = try? endpointAdmission.refresh(epoch) else { return }
+        cancelStartupDiscovery(epoch: epoch)
         if rotate {
             guard selectedAttempt < UInt64.max else { recoveryExhausted = true; return }
             selectedAttempt += 1
@@ -675,7 +1044,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 }
                 let spec = RuntimeSpec(source: source, prepared: prepared, token: token, path: path, port: parsed.inboundPort)
                 try await self.onRuntimeQueue { try self.checkEndpointPreflight(spec, prepared: prepared, source: source) }
-                guard self.sessionAdmission.permitsRuntime(epoch), self.endpointAdmission.isCurrent(token), spec.isFresh() else { throw CancellationError() }
+                guard self.sessionAdmission.permitsRuntime(epoch), self.endpointAdmission.isCurrent(token), self.endpointSpecIsFresh(spec) else { throw CancellationError() }
                 try await self.endpointCommitQueue.submit {
                     try await self.commitEndpointPlan(spec)
                 }.value
@@ -708,7 +1077,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func commitEndpointPlan(_ spec: RuntimeSpec) async throws {
         let current = { self.sessionAdmission.permitsRuntime(spec.epoch) &&
-            self.endpointAdmission.isCurrent(spec.token) && spec.isFresh() }
+            self.endpointAdmission.isCurrent(spec.token) && self.endpointSpecIsFresh(spec) }
         guard current() else { throw CancellationError() }
         let oldToken = endpointAdmission.committedToken
         // Readiness changes only after successful candidate preparation/preflight.
@@ -747,20 +1116,29 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // the old runtime drained. Sleep-cancelled work consumes no budget.
         let admitted = watchdogQueue.sync {
             guard sessionAdmission.permitsRuntime(spec.epoch), runtimeSpec?.token == spec.token,
-                  endpointAdmission.mayStart(spec.token), spec.isFresh(), !watchdogSuspended else { return false }
+                  endpointAdmission.mayStart(spec.token), self.endpointSpecIsFresh(spec), !watchdogSuspended else { return false }
             let initial = !initialRuntimeAttempted
-            guard initial || (!recoveryExhausted && nativeOptions.mayRetry(failures: recoveryFailures)) else { return false }
+            let correction = spec.correctionID.map { id in
+                initialDiscoveryCorrection?.id == id && initialDiscoveryCorrection?.epoch == spec.epoch &&
+                    initialDiscoveryCorrection?.terminal == false &&
+                    ProcessInfo.processInfo.systemUptime < (initialDiscoveryCorrection?.deadline ?? 0)
+            } ?? false
+            guard initial || correction || (!recoveryExhausted && nativeOptions.mayRetry(failures: recoveryFailures)) else { return false }
             if initial { initialRuntimeAttempted = true }
-            else { recoveryFailures += 1 }
+            else if !correction { recoveryFailures += 1 }
             return true
         }
         guard admitted else { throw CancellationError() }
         nativeRuntimeEpoch = spec.epoch
         nativeRuntimeToken = spec.token
         try startXRay(xrayConfig: spec.config, geoAssetsDirectory: spec.geoAssetsDirectory, routingMetadata: spec.routingMetadata)
-        guard sessionAdmission.permitsRuntime(spec.epoch), endpointAdmission.mayStart(spec.token), spec.isFresh() else { throw CancellationError() }
+        guard sessionAdmission.permitsRuntime(spec.epoch), endpointAdmission.mayStart(spec.token), self.endpointSpecIsFresh(spec) else { throw CancellationError() }
         try startSocks5Tunnel(serverPort: spec.port, credentials: spec.credentials, epoch: spec.epoch, token: spec.token)
-        guard sessionAdmission.permitsRuntime(spec.epoch), endpointAdmission.mayStart(spec.token), spec.isFresh() else { throw CancellationError() }
+        if let discovery = spec.discovery, !discovery.finishAdmission() {
+            invalidateStartupDiscovery(epoch: spec.epoch, token: spec.token, deadline: spec.discoveryDeadline ?? ProcessInfo.processInfo.systemUptime)
+            throw CancellationError()
+        }
+        guard sessionAdmission.permitsRuntime(spec.epoch), endpointAdmission.mayStart(spec.token), self.endpointSpecIsFresh(spec) else { throw CancellationError() }
     }
 
     /// Runs on runtimeQueue. A blocked native quit must not stall NE teardown.
@@ -797,17 +1175,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             defer {
                 let success = started
                 self.watchdogQueue.async {
-                    guard self.sessionAdmission.isCurrent(epoch), self.runtimeSpec?.token == spec.token else { return }
+                    guard self.sessionAdmission.isCurrent(epoch), self.runtimeSpec?.token == spec.token,
+                          self.initialDiscoveryCorrection?.epoch != epoch, self.runtimeSpec?.discovery?.isInvalidated != true else { return }
                     self.runtimeRecoveryInFlight = false
                     guard self.sessionAdmission.permitsRuntime(epoch), !self.watchdogSuspended else { return }
                     if success { self.performTunnelHealthCheck(trigger: "native-start", epoch: epoch) }
                     else { self.refreshEndpointPlan(after: 3, epoch: epoch, rotate: true) }
                 }
             }
-            guard self.sessionAdmission.permitsRuntime(epoch), self.endpointAdmission.mayStart(spec.token), spec.isFresh() else { return }
+            guard self.sessionAdmission.permitsRuntime(epoch), self.endpointAdmission.mayStart(spec.token), self.endpointSpecIsFresh(spec) else { return }
             // A previous explicit session may still be draining on this queue.
             guard self.stopNativeRuntime() else { return }
-            guard self.sessionAdmission.permitsRuntime(epoch), self.endpointAdmission.mayStart(spec.token), spec.isFresh() else { return }
+            guard self.sessionAdmission.permitsRuntime(epoch), self.endpointAdmission.mayStart(spec.token), self.endpointSpecIsFresh(spec) else { return }
             do { try self.startNativeRuntime(spec); started = true }
             catch is CancellationError { _ = self.stopNativeRuntime(ownedBy: epoch, token: spec.token) }
             catch {
@@ -906,20 +1285,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func sleep(completionHandler: @escaping () -> Void) {
-        rememberTunnelLog("Packet tunnel sleep; suspending watchdog")
+        rememberTunnelLog("Packet tunnel sleep; preparing watchdog suspension")
         tunnelLog.info("Packet tunnel sleep")
-        if let epoch = sessionAdmission.currentEpoch, sessionAdmission.suspend(epoch) {
-            _ = try? endpointAdmission.refresh(epoch)
-            watchdogQueue.async {
-                guard self.sessionAdmission.isCurrent(epoch), !self.sessionAdmission.permitsRuntime(epoch) else { return }
-                self.watchdogSuspended = true
-                self.endpointPreparation?.task.cancel()
-                self.endpointPreparation = nil
-                self.runtimeRecoveryInFlight = false
-                self.watchdogPolicy.reset()
-            }
-        }
-        completionHandler()
+        beginSleepAdmission(completionHandler)
     }
 
     override func wake() {
@@ -927,11 +1295,24 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         tunnelLog.info("Packet tunnel wake")
         // Admission follows callback entry order, independently of a blocked
         // watchdog queue. Queued work only mirrors the latest sleep/wake state.
-        guard let epoch = sessionAdmission.currentEpoch, sessionAdmission.resume(epoch) else { return }
+        forwardingLock.lock()
+        if let pending = pendingSleep, sessionAdmission.isCurrent(pending.epoch) {
+            pendingSleep = nil
+            let task = pending.task, callbacks = pending.completions
+            pending.task = nil; pending.completions = []
+            forwardingLock.unlock()
+            task?.cancel(); callbacks.forEach { $0() }
+            return
+        }
+        guard let epoch = sessionAdmission.currentEpoch, !sessionAdmission.permitsRuntime(epoch), sessionAdmission.resume(epoch) else {
+            forwardingLock.unlock(); return
+        }
         _ = try? endpointAdmission.refresh(epoch)
+        forwardingLock.unlock()
         watchdogQueue.async {
             guard self.sessionAdmission.permitsRuntime(epoch), self.runtimeSpec?.epoch == epoch else { return }
             self.watchdogSuspended = false
+            if self.endInterruptedInitialDiscoveryOnWake(epoch: epoch) { return }
             self.endpointPreparation?.task.cancel()
             self.endpointPreparation = nil
             self.runtimeRecoveryInFlight = false
@@ -1100,7 +1481,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func startTunnelWatchdog(_ spec: RuntimeSpec) -> Bool {
         watchdogQueue.sync {
-            guard endpointAdmission.ownsRuntime(spec.token), sessionAdmission.activate(spec.epoch) else { return false }
+            guard endpointAdmission.mayStart(spec.token), self.endpointSpecIsFresh(spec),
+                  sessionAdmission.activate(spec.epoch) else { return false }
             let epoch = spec.epoch
             runtimeSpec = spec
             nativeOptions = spec.options
@@ -1122,7 +1504,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             )
             timer.setEventHandler { [weak self] in
                 guard let self, self.sessionAdmission.permitsRuntime(epoch), let current = self.runtimeSpec else { return }
-                if !current.isFresh() { self.refreshEndpointPlan(after: 0, epoch: epoch, rotate: false) }
+                if !self.endpointSpecIsFresh(current) { self.refreshEndpointPlan(after: 0, epoch: epoch, rotate: false) }
                 else if Date().timeIntervalSince(self.lastEndpointHealthCheck) >= watchdogIntervalSeconds {
                     self.lastEndpointHealthCheck = Date()
                     self.performTunnelHealthCheck(trigger: "periodic", epoch: epoch)
@@ -1136,7 +1518,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func stopTunnelWatchdog(epoch: TunnelSessionAdmission.Epoch?) {
+        cancelStartupDiscovery(epoch: epoch)
         watchdogQueue.sync {
+            cancelInitialDiscoveryCorrection(epoch: epoch)
             if let current = runtimeSource?.epoch ?? runtimeSpec?.epoch, current != epoch { return }
             runtimeSpec = nil
             runtimeRecoveryInFlight = false
@@ -1219,7 +1603,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             "Watchdog \(trigger): localRuntimeReady=\(success) inbound=[\(inboundResult)]"
         )
         guard sessionAdmission.permitsRuntime(epoch), endpointAdmission.ownsRuntime(token) else { return false }
-        setForwardingReady(success, epoch: epoch)
+        guard setForwardingReadyFromHealth(success, epoch: epoch, discovery: spec.discovery) else { return false }
         rememberTunnelLog("Startup timing phase=local-readiness elapsedMs=\(readinessTiming.elapsedMilliseconds()) generation=\(token.generation) ready=\(success)")
         if success {
             recoveryFailures = 0

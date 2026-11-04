@@ -51,25 +51,34 @@ final class TunnelEndpointCollectionScheduleTests: XCTestCase {
 
     func testFullTwoSecondWindowRetainsAAAAArrivingAt1900Milliseconds() async throws {
         let capture = Capture()
-        let began = now
-        let answers = try await TunnelEndpointDNSCollection.collect("schedule.fixture.invalid", path: path,
-            deadline: now + 4, event: capture.record, query: { host, _, _, receive in
-                receive(.init(hostname: host, text: "192.0.2.197", interfaceIndex: 0, ttl: 30, added: true))
-                // A sleeping inert worker avoids coalescing this late answer
-                // with the timer under test. It completes before collection ends.
-                let workerEntered = DispatchSemaphore(value: 0)
-                DispatchQueue.global(qos: .userInitiated).async {
-                    workerEntered.signal()
-                    Thread.sleep(forTimeInterval: 1.9)
-                    receive(.init(hostname: host, text: "2001:db8::197", interfaceIndex: 0, ttl: 30, added: true))
-                }
-                XCTAssertEqual(workerEntered.wait(timeout: .now() + 1), .success,
-                    "The inert late-answer worker must enter before collection is armed")
-                return { capture.didClose() }
-            })
-        XCTAssertGreaterThanOrEqual(now - began, 1.99, "The timer must retain the original full collection window")
+        let clock = EndpointDeadlineTestScheduler()
+        let registered = expectation(description: "deadline registered")
+        clock.scheduled = { registered.fulfill() }
+        let ready = expectation(description: "collection completed")
+        var receiveAnswer: ((TunnelEndpointDNSAnswer) -> Void)?
+        let task = Task {
+            let answers = try await TunnelEndpointDNSCollection.collect("schedule.fixture.invalid", path: path,
+                deadline: 4, now: clock.now, event: capture.record, schedule: clock.schedule,
+                query: { host, _, _, receive in
+                    receiveAnswer = receive
+                    receive(.init(hostname: host, text: "192.0.2.197", interfaceIndex: 0, ttl: 30, added: true))
+                    return { capture.didClose() }
+                })
+            ready.fulfill()
+            return answers
+        }
+        await fulfillment(of: [registered], timeout: 1)
+        XCTAssertEqual(clock.snapshot.deadlines, [2])
+        clock.advance(to: 1.9)
+        try XCTUnwrap(receiveAnswer)(.init(hostname: "schedule.fixture.invalid", text: "2001:db8::197", interfaceIndex: 0, ttl: 30, added: true))
+        await clock.drain()
+        XCTAssertEqual(capture.snapshot.closes, 0, "A callback before the deadline must remain part of the same query")
+        clock.advance(to: 2)
+        await fulfillment(of: [ready], timeout: 1)
+        let answers = try await task.value
         XCTAssertEqual(answers.map(\.address.family), [.ipv4, .ipv6])
         XCTAssertEqual(capture.snapshot.closes, 1)
+        XCTAssertEqual(clock.snapshot.cancellations, 1)
         XCTAssertEqual(capture.snapshot.messages.count, 2)
     }
 

@@ -200,7 +200,7 @@ public enum TunnelEndpointResolver {
         try await encryptedLookup(host, timeout: 5)
     }
 
-    private static func encryptedLookup(_ host: String, timeout: TimeInterval) async throws -> String? {
+    static func encryptedLookup(_ host: String, timeout: TimeInterval) async throws -> String? {
         guard isPublicHostname(host), timeout.isFinite, timeout > 0 else { return nil }
         // An IP URL avoids recursively asking the unavailable system resolver.
         // Use normal platform certificate validation, no trust overrides.

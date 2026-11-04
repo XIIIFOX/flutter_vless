@@ -45,6 +45,18 @@ public final class TunnelEndpointPlanAdmission: @unchecked Sendable {
         return token
     }
 
+    /// Compare and refresh in one transaction. Asynchronous DNS callbacks
+    /// cannot revoke a plan that replaced their own token between two reads.
+    public func refresh(ifCurrent token: Token) throws -> Token {
+        lock.lock(); defer { lock.unlock() }
+        guard pending == token else { throw Failure.stale }
+        guard sequence < UInt64.max else { throw Failure.exhausted }
+        sequence += 1
+        let next = Token(epoch: token.epoch, generation: sequence)
+        pending = next
+        return next
+    }
+
     public func isCurrent(_ token: Token) -> Bool {
         lock.lock(); defer { lock.unlock() }
         return pending == token

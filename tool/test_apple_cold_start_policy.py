@@ -46,7 +46,16 @@ def main():
             "    private struct RuntimeSource", "    private struct RuntimeSpec", "    private struct ProtectedSettingsKey",
             "    private func prepareInitialRuntimeSpec", "    private func physicalPathChanged", "    private func prepareEndpointConfig", "    private func checkEndpointPreflight",
             "    private func protectedNetworkSettings", "    private func installProtectedSettings", "    private func onRuntimeQueue",
-            "    private func setStartupPreparation"))
+            "    private func setStartupPreparation", "    private func setStartupDiscovery",
+            "    private func cancelStartupDiscovery", "    private func makeStartupDiscovery",
+            "    private func invalidateStartupDiscovery", "    private func endpointSpecIsFresh",
+            "    private func setForwardingNotReadyForDNS", "    private func setForwardingReadyFromHealth",
+            "    private func beginInitialDiscoveryCorrection", "    private func cancelInitialDiscoveryCorrection",
+            "    private func setForwardingReady", "    private func startNativeRuntime", "    private func commitEndpointPlan"))
+        extras += "\n" + actual_block("    private func scheduleNativeRecovery").replace("func scheduleNativeRecovery(", "func fixtureScheduleNativeRecovery(", 1)
+        extras += "\n" + actual_block("    private func refreshEndpointPlan").replace("func refreshEndpointPlan(", "func fixtureRefreshEndpointPlan(", 1).replace("try await Task.sleep(nanoseconds: UInt64(min(wait, 300) * 1_000_000_000))", "await Task.yield(); try Task.checkCancellation()")
+        extras += "\n" + actual_block("    private final class PendingSleep").replace("private final class", "final class")
+        extras += "\n" + actual_block("    private func cancelPendingSleep")
         stop_marker = "    " + ("open override" if platform == "macos" else "override") + " func stopTunnel("
         stop = actual_block(stop_marker).replace("open override func", "func", 1).replace("override func", "func", 1)
         helper_path = support / "TunnelOnDemandPolicy.swift"
@@ -64,7 +73,7 @@ def main():
         field_source = (privacy / "LocalProxyAccessPolicy.swift").read_text()
         field_source = field_source[field_source.index("public enum XrayJSONField {"):]
         generated.write_text("import Foundation\n" + timer + "\n" + (ROOT / "tool/fixtures/apple_cold_start_policy.swift").read_text().replace("// ACTUAL_POLICY", helper).replace("// ACTUAL_START", entry).replace("// ACTUAL_PREPARATION_HELPERS", extras).replace("// ACTUAL_STOP", stop).replace("// ACTUAL_DNS_BINDING_REQUIREMENT", dns_binding) + "\n" + field_source)
-        inputs = [privacy / "VlessNativeOptions.swift", privacy / "CorePreflightPolicy.swift", privacy / "XdriveServicePolicy.swift", privacy / "GeoDatAssetPolicy.swift", support / "TunnelSessionAdmission.swift", support / "TunnelEndpointPlanAdmission.swift", generated]
+        inputs = [privacy / "VlessNativeOptions.swift", privacy / "CorePreflightPolicy.swift", privacy / "XdriveServicePolicy.swift", privacy / "GeoDatAssetPolicy.swift", support / "TunnelSessionAdmission.swift", plan_path, generated]
         binary = output / platform
         command = ["xcrun", "swiftc", "-O", "-parse-as-library"]
         if args.receipts:

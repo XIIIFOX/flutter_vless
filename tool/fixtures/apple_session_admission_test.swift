@@ -28,6 +28,42 @@ struct TunnelPreparedConfig {
     var endpointPath: TunnelEndpointPath? = TunnelEndpointPath()
     var endpointSelections: [TunnelEndpointSelection] = []
 }
+
+final class TunnelEndpointDiscovery: @unchecked Sendable {
+    private let lock = NSLock()
+    private var invalid = false
+    private var unsealed = false
+    private var canceledCount = 0
+    private var waits = 0
+    var onCancel: (() -> Void)?
+    var hasUnsealedSystemSelections: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return unsealed }
+        set { lock.lock(); unsealed = newValue; lock.unlock() }
+    }
+    var sealWaitCalls: Int { lock.lock(); defer { lock.unlock() }; return waits }
+    var cancelCalls: Int { lock.lock(); defer { lock.unlock() }; return canceledCount }
+    var isInvalidated: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return invalid }
+        set { lock.lock(); invalid = newValue; lock.unlock() }
+    }
+    init(path: TunnelEndpointPath, deadline: TimeInterval, isCurrent: @escaping () -> Bool,
+         event: @escaping (String) -> Void, onInvalidated: @escaping () -> Void) {}
+    func resolveCandidates(_ host: String) async throws -> TunnelEndpointCandidates { TunnelEndpointCandidates(path: TunnelEndpointPath()) }
+    func admitSelections(_ values: [TunnelEndpointSelection]) -> Bool { !isInvalidated }
+    func isFresh(_ values: [TunnelEndpointSelection], at: TimeInterval) -> Bool { !isInvalidated }
+    func claimInitialInvalidationIfNeeded() -> Bool { false }
+    func finishAdmission() -> Bool { !isInvalidated }
+    func noteProtectedSettingsInstalled() {}
+    func noteWait() { lock.lock(); waits += 1; lock.unlock() }
+    func waitForInitialSelectionsToSeal() async throws {
+        noteWait()
+        while hasUnsealedSystemSelections && !isInvalidated && cancelCalls == 0 { try await Task.sleep(nanoseconds: 1_000_000) }
+        try Task.checkCancellation()
+        if isInvalidated || cancelCalls != 0 { throw CancellationError() }
+    }
+    func cancel() { lock.lock(); canceledCount += 1; lock.unlock(); onCancel?() }
+}
+
 final class TunnelPhysicalPathObserver {
     var onChange: ((TunnelEndpointPath?) -> Void)?
     func cancel() {}
@@ -167,6 +203,10 @@ final class FixtureProvider: @unchecked Sendable {
     var watchdogSuspended = false, watchdogInboundHealthy = false
     var watchdogInboundPort: Int?, recoveryCheck: DispatchWorkItem?
     var runtimeSpec: RuntimeSpec?
+    var startupDiscovery: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, discovery: TunnelEndpointDiscovery)?
+    var pendingSleep: PendingSleep?
+    var initialDiscoveryCorrection: (epoch: TunnelSessionAdmission.Epoch, id: UUID, deadline: TimeInterval, terminal: Bool, task: Task<Void, Never>)?
+    func cancelTunnelWithError(_ error: Error?) { FixtureLog.shared.append("terminal-cancel") }
     var runtimeRecoveryInFlight = false, recoveryExhausted = false
     var initialRuntimeAttempted = false {
         didSet {
@@ -235,7 +275,7 @@ final class FixtureProvider: @unchecked Sendable {
     var rejectPreparation = false, rejectPreflight = false
     var preparationExpiry: TimeInterval?
     var preparationAddresses = ["192.0.2.1"]
-    func prepareEndpointConfig(_ source: RuntimeSource, token: TunnelEndpointPlanAdmission.Token, path: TunnelEndpointPath, attempt: UInt64) async throws -> TunnelPreparedConfig {
+    func prepareEndpointConfig(_ source: RuntimeSource, token: TunnelEndpointPlanAdmission.Token, path: TunnelEndpointPath, attempt: UInt64, deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 25) async throws -> TunnelPreparedConfig {
         originalPreparationInputs.append(source.config)
         preparationEntered?.signal()
         try await preparationHook?()
@@ -317,9 +357,263 @@ final class FixtureProvider: @unchecked Sendable {
     }
 }
 
+extension Probe {
+    static func lockPublication(_ provider: FixtureProvider) { provider.forwardingLock.lock() }
+    static func unlockPublication(_ provider: FixtureProvider) { provider.forwardingLock.unlock() }
+    static func pendingSleepTask(_ provider: FixtureProvider) -> Task<Void, Never>? {
+        provider.forwardingLock.lock(); defer { provider.forwardingLock.unlock() }
+        return provider.pendingSleep?.task
+    }
+    static func pendingSleepOwner(_ provider: FixtureProvider) -> FixtureProvider.PendingSleep? {
+        provider.forwardingLock.lock(); defer { provider.forwardingLock.unlock() }
+        return provider.pendingSleep
+    }
+    static func leased(_ provider: FixtureProvider, activate: Bool = true) -> (FixtureProvider.RuntimeSpec, TunnelEndpointDiscovery) {
+        let original = activate ? provider.begin(options: FixtureOptions(retries: 3, reconnectEnabled: false)) :
+            provider.spec(provider.sessionAdmission.begin(), options: FixtureOptions(retries: 3, reconnectEnabled: false))
+        let group = TunnelEndpointDiscovery(path: original.path, deadline: ProcessInfo.processInfo.systemUptime + 25,
+            isCurrent: { true }, event: { _ in }, onInvalidated: {})
+        let prepared = TunnelPreparedConfig(data: original.config, bootstrapAddresses: original.bootstrapAddresses,
+            routingEnvelope: FixtureEnvelope(configurationData: original.config, metadataData: original.routingMetadata!),
+            endpointPath: original.path)
+        let spec = FixtureProvider.RuntimeSpec(source: provider.runtimeSource!, prepared: prepared, token: original.token,
+            path: original.path, port: original.port, discovery: group, discoveryDeadline: ProcessInfo.processInfo.systemUptime + 25)
+        provider.watchdogQueue.sync { provider.runtimeSpec = spec }
+        provider.setStartupDiscovery(group, epoch: spec.epoch, token: spec.token)
+        return (spec, group)
+    }
+
+    static func runDNSLeaseCases() async {
+        let beforeActivation = FixtureProvider(), (inactiveSpec, inactiveGroup) = leased(beforeActivation, activate: false)
+        inactiveGroup.isInvalidated = true
+        beforeActivation.invalidateStartupDiscovery(epoch: inactiveSpec.epoch, token: inactiveSpec.token,
+            deadline: inactiveSpec.discoveryDeadline!)
+        beforeActivation.watchdogQueue.sync {}
+        precondition(!beforeActivation.sessionAdmission.permitsRuntime(inactiveSpec.epoch))
+        precondition(!beforeActivation.startTunnelWatchdog(inactiveSpec))
+        precondition(!beforeActivation.sessionAdmission.permitsRuntime(inactiveSpec.epoch) &&
+            beforeActivation.coreStarts == 0 && beforeActivation.initialDiscoveryCorrection == nil)
+        await beforeActivation.stop()
+        print("PASS selected Remove between commit and watchdog activation cannot admit a stale runtime")
+
+        // Pause old DNS FALSE publication behind its real forwarding lock.
+        // A newer T3 publishes healthy first; old T2 must be rejected.
+        let overtaken = FixtureProvider(), (oldSpec, oldGroup) = leased(overtaken)
+        oldGroup.isInvalidated = true
+        lockPublication(overtaken)
+        let oldCallback = Task.detached {
+            overtaken.invalidateStartupDiscovery(epoch: oldSpec.epoch, token: oldSpec.token,
+                deadline: oldSpec.discoveryDeadline!)
+        }
+        overtaken.waitUntil { overtaken.endpointAdmission.currentToken != oldSpec.token }
+        let newerToken = try! overtaken.endpointAdmission.refresh(oldSpec.epoch)
+        precondition(overtaken.endpointAdmission.commit(newerToken))
+        overtaken.forwardingEpoch = oldSpec.epoch; overtaken.forwardingReady = true; overtaken.reasserting = false
+        unlockPublication(overtaken)
+        await oldCallback.value; overtaken.watchdogQueue.sync {}
+        precondition(overtaken.forwardingReady && !overtaken.reasserting &&
+            overtaken.endpointAdmission.currentToken == newerToken && overtaken.initialDiscoveryCorrection == nil)
+        await overtaken.stop()
+        print("PASS stale DNS FALSE publication cannot clear newer token ready sample")
+
+        // Actual synchronous health authentication holds watchdogQueue.
+        // Observe its return before the queued correction can begin.
+        let health = FixtureProvider(), (healthSpec, healthGroup) = leased(health)
+        health.hevLifecycle.beginStart(); health.hevLifecycle.markThreadEntered()
+        let authEntered = DispatchSemaphore(value: 0), authRelease = DispatchSemaphore(value: 0)
+        let healthDone = DispatchSemaphore(value: 0)
+        final class HealthResult: @unchecked Sendable {
+            var ready = true, returned = true
+        }
+        let result = HealthResult()
+        health.inboundHealthHook = { authEntered.signal(); precondition(authRelease.wait(timeout: .now() + 3) == .success) }
+        health.watchdogQueue.async {
+            result.returned = health.performTunnelHealthCheck(trigger: "DNS-invalidates-during-auth", epoch: healthSpec.epoch)
+            result.ready = health.forwardingReady
+            healthDone.signal()
+        }
+        precondition(authEntered.wait(timeout: .now() + 3) == .success)
+        healthGroup.isInvalidated = true
+        health.invalidateStartupDiscovery(epoch: healthSpec.epoch, token: healthSpec.token, deadline: healthSpec.discoveryDeadline!)
+        authRelease.signal()
+        precondition(healthDone.wait(timeout: .now() + 3) == .success)
+        precondition(!result.returned && !result.ready)
+        await health.stop()
+        print("PASS selected DNS invalidation prevents held old health success from publishing ready")
+
+        for wakeOvertakesSleep in [false, true] {
+            let sleeping = FixtureProvider(), (sleepSpec, sleepGroup) = leased(sleeping)
+            sleeping.initialRuntimeAttempted = true
+            let resolving = DispatchSemaphore(value: 0)
+            sleeping.preparationEntered = resolving
+            sleeping.preparationHook = { try await Task.sleep(nanoseconds: 10_000_000_000) }
+            sleepGroup.isInvalidated = true
+            sleeping.invalidateStartupDiscovery(epoch: sleepSpec.epoch, token: sleepSpec.token, deadline: sleepSpec.discoveryDeadline!)
+            precondition(resolving.wait(timeout: .now() + 3) == .success)
+            let owner = sleeping.watchdogQueue.sync { sleeping.initialDiscoveryCorrection!.task }
+            let callbacksEntered = DispatchSemaphore(value: 0), callbacksRelease = DispatchSemaphore(value: 0)
+            if wakeOvertakesSleep {
+                sleeping.watchdogQueue.async {
+                    callbacksEntered.signal(); precondition(callbacksRelease.wait(timeout: .now() + 3) == .success)
+                }
+                precondition(callbacksEntered.wait(timeout: .now() + 3) == .success)
+            }
+            let cancellations = FixtureLog.shared.count("terminal-cancel")
+            sleeping.sleep {}
+            if !wakeOvertakesSleep {
+                sleeping.watchdogQueue.sync {}
+                precondition(!sleeping.sessionAdmission.permitsRuntime(sleepSpec.epoch))
+                precondition(sleeping.originalPreparationInputs.count == 1 && sleeping.coreStarts == 0)
+            }
+            sleeping.wake()
+            if wakeOvertakesSleep { callbacksRelease.signal() }
+            sleeping.watchdogQueue.sync {}
+            await owner.value; sleeping.watchdogQueue.sync {}
+            precondition(sleeping.initialDiscoveryCorrection?.terminal == true && sleeping.runtimeRecoveryInFlight &&
+                sleeping.originalPreparationInputs.count == 1 && sleeping.coreStarts == 0 &&
+                FixtureLog.shared.count("terminal-cancel") == cancellations + 1 &&
+                !sleeping.forwardingReady && !sleeping.nativeOptions.reconnectEnabled)
+            sleeping.wake(); sleeping.watchdogQueue.sync {}
+            precondition(FixtureLog.shared.count("terminal-cancel") == cancellations + 1)
+            await sleeping.stop()
+            print("PASS interrupted initial DNS correction terminates once without renewed budget (wakeOvertakesSleep=\(wakeOvertakesSleep))")
+        }
+
+        let replacement = FixtureProvider(), (replacementOldSpec, replacementGroup) = leased(replacement)
+        replacement.initialRuntimeAttempted = true
+        let replacementEntered = DispatchSemaphore(value: 0)
+        replacement.preparationEntered = replacementEntered
+        replacement.preparationHook = { try await Task.sleep(nanoseconds: 10_000_000_000) }
+        replacementGroup.isInvalidated = true
+        replacement.invalidateStartupDiscovery(epoch: replacementOldSpec.epoch, token: replacementOldSpec.token,
+            deadline: replacementOldSpec.discoveryDeadline!)
+        precondition(replacementEntered.wait(timeout: .now() + 3) == .success)
+        let obsolete = replacement.watchdogQueue.sync { replacement.initialDiscoveryCorrection!.task }
+        replacement.sleep {}; replacement.watchdogQueue.sync {}
+        await replacement.stop()
+        let cancelsBeforeReplacement = FixtureLog.shared.count("terminal-cancel")
+        let newSpec = replacement.begin()
+        await obsolete.value; replacement.watchdogQueue.sync {}
+        precondition(replacement.sessionAdmission.isCurrent(newSpec.epoch) && replacement.initialDiscoveryCorrection == nil &&
+            FixtureLog.shared.count("terminal-cancel") == cancelsBeforeReplacement)
+        await replacement.stop()
+        print("PASS Stop then new Start after interrupted DNS Sleep rejects old owner cleanup")
+
+        for sealed in [false, true] {
+            let incomplete = FixtureProvider(), (incompleteSpec, incompleteGroup) = leased(incomplete)
+            incompleteGroup.hasUnsealedSystemSelections = !sealed
+            incomplete.initialRuntimeAttempted = true
+            incomplete.hevLifecycle.beginStart(); incomplete.hevLifecycle.markThreadEntered()
+            incomplete.setForwardingReady(true, epoch: incompleteSpec.epoch)
+            let canceledBeforeWake = FixtureLog.shared.count("terminal-cancel")
+            let finished = DispatchSemaphore(value: 0)
+            let tokenBefore = incomplete.endpointAdmission.currentToken
+            incomplete.sleep { finished.signal() }
+            if !sealed {
+                incomplete.waitUntil { incompleteGroup.sealWaitCalls == 1 }
+                precondition(incomplete.sessionAdmission.permitsRuntime(incompleteSpec.epoch) &&
+                    incomplete.endpointAdmission.currentToken == tokenBefore && incompleteGroup.cancelCalls == 0)
+                precondition(finished.wait(timeout: .now() + 0.01) == .timedOut)
+                incompleteGroup.hasUnsealedSystemSelections = false
+            }
+            precondition(finished.wait(timeout: .now() + 3) == .success)
+            incomplete.watchdogQueue.sync {}
+            precondition(!incomplete.sessionAdmission.permitsRuntime(incompleteSpec.epoch) &&
+                incompleteGroup.cancelCalls == 1 && incompleteGroup.sealWaitCalls == (sealed ? 0 : 1))
+            incomplete.wake(); incomplete.watchdogQueue.sync {}
+            precondition(incomplete.originalPreparationInputs.isEmpty && incomplete.coreStarts == 0)
+            precondition(incomplete.initialDiscoveryCorrection == nil && incomplete.forwardingReady &&
+                FixtureLog.shared.count("terminal-cancel") == canceledBeforeWake)
+            await incomplete.stop()
+            print("PASS healthy DNS Sleep drains only its existing window then preserves established Wake (sealed=\(sealed))")
+        }
+
+        for stopBeforeSeal in [false, true] {
+            let draining = FixtureProvider(), (drainSpec, drainGroup) = leased(draining)
+            drainGroup.hasUnsealedSystemSelections = true
+            draining.initialRuntimeAttempted = true
+            draining.hevLifecycle.beginStart(); draining.hevLifecycle.markThreadEntered()
+            draining.setForwardingReady(true, epoch: drainSpec.epoch)
+            let completed = DispatchSemaphore(value: 0)
+            let callbackName = "drain-completion-\(stopBeforeSeal)"
+            let completionsBefore = FixtureLog.shared.count(callbackName)
+            let oldToken = draining.endpointAdmission.currentToken
+            draining.sleep { FixtureLog.shared.append(callbackName); completed.signal() }
+            draining.sleep { FixtureLog.shared.append(callbackName); completed.signal() }
+            draining.waitUntil { drainGroup.sealWaitCalls == 1 }
+            let pending = pendingSleepTask(draining)!
+            precondition(draining.sessionAdmission.permitsRuntime(drainSpec.epoch) &&
+                draining.endpointAdmission.currentToken == oldToken && drainGroup.cancelCalls == 0)
+            if stopBeforeSeal { await draining.stop() } else { draining.wake() }
+            precondition(completed.wait(timeout: .now() + 3) == .success)
+            precondition(completed.wait(timeout: .now() + 3) == .success)
+            let replacement = stopBeforeSeal ? draining.begin() : drainSpec
+            let stableToken = draining.endpointAdmission.currentToken
+            drainGroup.hasUnsealedSystemSelections = false
+            await pending.value; draining.watchdogQueue.sync {}
+            precondition(FixtureLog.shared.count(callbackName) == completionsBefore + 2 &&
+                draining.sessionAdmission.permitsRuntime(replacement.epoch) &&
+                draining.endpointAdmission.currentToken == stableToken && pendingSleepTask(draining) == nil &&
+                draining.coreStarts == 0 && draining.originalPreparationInputs.isEmpty &&
+                drainGroup.cancelCalls == (stopBeforeSeal ? 1 : 0))
+            if !stopBeforeSeal { precondition(stableToken == oldToken && draining.forwardingReady) }
+            await draining.stop()
+            print("PASS pre-sleep DNS drain coalesces completions once and rejects late suspension (Stop=\(stopBeforeSeal))")
+        }
+
+        let replacedDrain = FixtureProvider(), (oldDrainSpec, oldDrainGroup) = leased(replacedDrain)
+        oldDrainGroup.hasUnsealedSystemSelections = true
+        let oldCompleted = DispatchSemaphore(value: 0)
+        replacedDrain.sleep { oldCompleted.signal() }
+        replacedDrain.waitUntil { oldDrainGroup.sealWaitCalls == 1 }
+        let oldSleep = pendingSleepOwner(replacedDrain)!, oldWait = pendingSleepTask(replacedDrain)!
+        let replacementToken = try! replacedDrain.endpointAdmission.refresh(oldDrainSpec.epoch)
+        let newGroup = TunnelEndpointDiscovery(path: oldDrainSpec.path.rebased(generation: replacementToken.generation),
+            deadline: ProcessInfo.processInfo.systemUptime + 25, isCurrent: { true }, event: { _ in }, onInvalidated: {})
+        newGroup.hasUnsealedSystemSelections = true
+        replacedDrain.setStartupDiscovery(newGroup, epoch: oldDrainSpec.epoch, token: replacementToken)
+        await oldWait.value
+        precondition(oldCompleted.wait(timeout: .now() + 3) == .success)
+        precondition(replacedDrain.sessionAdmission.permitsRuntime(oldDrainSpec.epoch) &&
+            replacedDrain.endpointAdmission.currentToken == replacementToken && newGroup.cancelCalls == 0 &&
+            replacedDrain.startupDiscovery?.discovery === newGroup && oldDrainGroup.cancelCalls == 1)
+        let newCompleted = DispatchSemaphore(value: 0)
+        replacedDrain.sleep { newCompleted.signal() }
+        replacedDrain.waitUntil { newGroup.sealWaitCalls == 1 }
+        let newSleep = pendingSleepOwner(replacedDrain)!, newWait = pendingSleepTask(replacedDrain)!
+        replacedDrain.finishSleepAdmission(epoch: oldDrainSpec.epoch, pending: oldSleep)
+        precondition(pendingSleepOwner(replacedDrain) === newSleep &&
+            replacedDrain.sessionAdmission.permitsRuntime(oldDrainSpec.epoch) && newGroup.cancelCalls == 0)
+        replacedDrain.wake(); await newWait.value
+        precondition(newCompleted.wait(timeout: .now() + 3) == .success &&
+            replacedDrain.endpointAdmission.currentToken == replacementToken && newGroup.cancelCalls == 0)
+        await replacedDrain.stop()
+        print("PASS obsolete pre-sleep waiter cannot suspend or cancel replacement discovery or clear newer pending Sleep")
+
+        let immediate = FixtureProvider(), (immediateSpec, immediateGroup) = leased(immediate)
+        immediate.initialRuntimeAttempted = true
+        immediate.hevLifecycle.beginStart(); immediate.hevLifecycle.markThreadEntered()
+        immediate.setForwardingReady(true, epoch: immediateSpec.epoch)
+        let cancelEntered = DispatchSemaphore(value: 0), cancelRelease = DispatchSemaphore(value: 0)
+        let immediateCompleted = DispatchSemaphore(value: 0)
+        immediateGroup.onCancel = { cancelEntered.signal(); precondition(cancelRelease.wait(timeout: .now() + 3) == .success) }
+        let oldImmediate = Task.detached { immediate.sleep { immediateCompleted.signal() } }
+        precondition(cancelEntered.wait(timeout: .now() + 3) == .success)
+        immediate.wake(); immediate.watchdogQueue.sync {}
+        cancelRelease.signal(); await oldImmediate.value; immediate.watchdogQueue.sync {}
+        precondition(immediateCompleted.wait(timeout: .now() + 3) == .success &&
+            immediate.sessionAdmission.permitsRuntime(immediateSpec.epoch) && !immediate.watchdogSuspended &&
+            immediate.forwardingReady && immediateGroup.cancelCalls == 1 && immediate.originalPreparationInputs.isEmpty)
+        immediateGroup.onCancel = nil
+        await immediate.stop()
+        print("PASS immediate Sleep commits before newer Wake and late resource cancellation cannot resuspend it")
+    }
+}
+
 @main struct Probe {
     static func main() async {
         setbuf(stdout, nil)
+        await runDNSLeaseCases()
         // Actual recovery code passes its first check, then the fake native
         // drain blocks. Stop must return from revocation without that queue.
         let duringDrain = FixtureProvider(), spec = duringDrain.begin()

@@ -16,6 +16,10 @@ GATES = {
     'macos': ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_tunnel_support/TunnelSessionAdmission.swift',
 }
 METHODS = ['setForwardingReady', 'isForwardingReady', 'stopTunnel', 'setStartupPreparation',
+           'setStartupDiscovery', 'cancelStartupDiscovery', 'makeStartupDiscovery', 'invalidateStartupDiscovery',
+           'endpointSpecIsFresh', 'setForwardingNotReadyForDNS', 'setForwardingReadyFromHealth',
+           'beginInitialDiscoveryCorrection', 'cancelInitialDiscoveryCorrection', 'endInterruptedInitialDiscoveryOnWake',
+           'beginSleepAdmission', 'finishSleepAdmission', 'cancelPendingSleep',
            'startNativeRuntime', 'stopNativeRuntime', 'scheduleNativeRecovery', 'sleep', 'wake',
            'startTunnelWatchdog', 'stopTunnelWatchdog', 'scheduleTunnelHealthCheck',
            'scheduleRecoveryCheck', 'performTunnelHealthCheck', 'reportTerminalFailure',
@@ -37,12 +41,13 @@ def check_wiring(source):
     assert 'jsonData: source.config' in prep and 'environmentSnapshot: source.environment' in prep
     assert 'selectedAttempt: attempt' in prep and 'endpointPath: path' in prep
     assert 'let epoch = sessionAdmission.begin()' in entry
-    assert 'isCancelled: { !self.sessionAdmission.isCurrent(epoch) || !self.endpointAdmission.isCurrent(token) }' in entry
+    assert 'isCancelled: { !self.sessionAdmission.isCurrent(epoch) || (!fastArming && !self.endpointAdmission.isCurrent(armingToken)) }' in entry
     initial = block(source, '    private func prepareInitialRuntimeSpec')
-    assert 'prepareInitialRuntimeSpec(source)' in entry
+    assert 'prepareInitialRuntimeSpec(source, deadline: preparationDeadline)' in entry
+    assert 'prepareInitialRuntimeSpec(source, deadline: preparationDeadline, allowFastDiscovery: false)' in entry
     assert 'try await endpointCommitQueue.submit' in initial
     assert 'try await self.installProtectedSettings(spec)' in initial
-    assert initial.count('self.endpointAdmission.isCurrent(token), spec.isFresh()') >= 2
+    assert initial.count('self.endpointAdmission.isCurrent(token), self.endpointSpecIsFresh(spec)') >= 2
     assert 'endpointAdmission.isCurrent(token), !preparation.isCancelled' in initial
     assert 'guard startTunnelWatchdog(spec) else { throw CancellationError() }' in entry
     hev = block(source, '    private func startSocks5Tunnel')
@@ -56,8 +61,10 @@ def check_wiring(source):
     assert stop.index('sessionAdmission.revoke()') < stop.index('stopTunnelWatchdog') < stop.index('runtimeQueue.async')
     assert 'ownedBy: stoppedEpoch' in stop
     sleep = block(source, '    ' + ('open override' if '    open override func sleep' in source else 'override') + ' func sleep')
-    assert sleep.index('sessionAdmission.suspend(epoch)') < sleep.index('watchdogQueue.async')
-    assert '!self.sessionAdmission.permitsRuntime(epoch)' in sleep
+    suspend = block(source, '    private func finishSleepAdmission')
+    assert 'beginSleepAdmission(completionHandler)' in sleep
+    assert suspend.index('sessionAdmission.suspend(epoch)') < suspend.index('watchdogQueue.async')
+    assert '!self.sessionAdmission.permitsRuntime(epoch)' in suspend
     wake = block(source, '    ' + ('open override' if '    open override func wake' in source else 'override') + ' func wake')
     assert wake.index('sessionAdmission.resume(epoch)') < wake.index('watchdogQueue.async')
     assert 'guard self.sessionAdmission.permitsRuntime(epoch)' in wake
@@ -102,7 +109,7 @@ def main():
     check_wiring(source)
     transitions = [line for line in source.splitlines() if line.startswith('    private enum EndpointTransitionFailure:')]
     assert len(transitions) == 1, 'Missing actual transition failure declaration'
-    parts = [transitions[0], block(source, '    private struct RuntimeSource'), block(source, '    private struct RuntimeSpec'), block(source, '    private struct ProtectedSettingsKey')]
+    parts = [block(source, '    private final class PendingSleep').replace('private final class', 'final class'), transitions[0], block(source, '    private struct RuntimeSource'), block(source, '    private struct RuntimeSpec'), block(source, '    private struct ProtectedSettingsKey')]
     for method in METHODS:
         candidates = [line for line in source.splitlines() if f'func {method}(' in line or f'func {method}<' in line]
         assert len(candidates) == 1, (method, candidates)
@@ -129,14 +136,14 @@ def main():
                ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_privacy')
     budget = privacy / 'LocalProxyIOBudget.swift'
     budget_source = budget.read_bytes()
-    command = ['xcrun', 'swiftc', '-O', '-parse-as-library', str(GATES[args.platform]), str(support), str(GATES[args.platform].with_name('TunnelEndpointPlanAdmission.swift')), str(budget), str(generated), '-o', str(output / 'probe')]
+    command = ['xcrun', 'swiftc', '-O', '-parse-as-library', str(GATES[args.platform]), str(support), str(plan), str(budget), str(generated), '-o', str(output / 'probe')]
     if args.platform == 'macos': command[2:2] = ['-DMACOS_PROVIDER']
     subprocess.run(command, check=True, timeout=120)
     result = subprocess.run([str(output / 'probe')], capture_output=True, text=True, timeout=20)
     (output / 'probe.log').write_text(result.stdout + result.stderr)
     print(result.stdout, end='')
     assert result.returncode == 0, (result.returncode, result.stderr)
-    assert len([line for line in result.stdout.splitlines() if line.startswith('PASS ')]) == (33 if args.platform == 'macos' else 32)
+    assert len([line for line in result.stdout.splitlines() if line.startswith('PASS ')]) == (45 if args.platform == 'macos' else 44)
     assert PROVIDERS[args.platform].read_text() == source and GATES[args.platform].read_bytes() == gate
     assert fixture_path.read_text() == fixture_source, 'Source changed during verification'
     assert budget.read_bytes() == budget_source, 'Budget source changed during verification'

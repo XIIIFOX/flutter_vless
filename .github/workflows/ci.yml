@@ -59,8 +59,8 @@ jobs:
           python3 tool/test_apple_cold_start_policy.py --receipts
           python3 tool/test_apple_readiness_polling.py 2>&1 | tee build/apple-host-policy/readiness.log
           bash tool/test_bounded_native_log_store.sh
-          bash tool/test_ios_tunnel_support.sh --filter 'NativePrivacyTests|TunnelEndpointCandidatesTests|TunnelEndpointResolverTests|TunnelEndpointCollectionScheduleTests'
-          bash tool/test_macos_tunnel_support.sh --filter 'NativePrivacyTests|TunnelEndpointCandidatesTests|TunnelEndpointResolverTests|TunnelEndpointCollectionScheduleTests'
+          bash tool/test_ios_tunnel_support.sh --filter 'NativePrivacyTests|TunnelEndpointCandidatesTests|TunnelEndpointResolverTests|TunnelEndpointCollectionScheduleTests|TunnelEndpointDiscoveryTests'
+          bash tool/test_macos_tunnel_support.sh --filter 'NativePrivacyTests|TunnelEndpointCandidatesTests|TunnelEndpointResolverTests|TunnelEndpointCollectionScheduleTests|TunnelEndpointDiscoveryTests'
       - name: Preserve synthetic host startup evidence
         if: always()
         uses: actions/upload-artifact@v4

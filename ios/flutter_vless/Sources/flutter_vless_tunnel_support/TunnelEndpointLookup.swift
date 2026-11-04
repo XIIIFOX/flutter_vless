@@ -97,7 +97,7 @@ final class TunnelEndpointDNSCollection: @unchecked Sendable {
         let usable = accumulator.snapshot(at: now())
         let ipv4 = usable.filter { $0.address.family == .ipv4 }.count
         let ipv6 = usable.filter { $0.address.family == .ipv6 }.count
-        event("Endpoint DNS outcomes callbacks=\(counts.callbacks) noRecord=\(counts.noRecord) timeout=\(counts.timeout) serviceUnavailable=\(counts.serviceUnavailable) defunct=\(counts.defunct) policyDenied=\(counts.policyDenied) otherError=\(counts.otherError) questionRejected=\(counts.questionRejected) interfaceRejected=\(counts.interfaceRejected) malformed=\(counts.malformed) adds=\(counts.adds) removes=\(counts.removes) capacityRejected=\(counts.capacityRejected) usableIPv4=\(ipv4) usableIPv6=\(ipv6)")
+        event("Endpoint DNS outcomes callbacks=\(counts.callbacks) noRecord=\(counts.noRecord) timeout=\(counts.timeout) serviceUnavailable=\(counts.serviceUnavailable) defunct=\(counts.defunct) policyDenied=\(counts.policyDenied) otherError=\(counts.otherError) questionRejected=\(counts.questionRejected) interfaceRejected=\(counts.interfaceRejected) ifZero=\(counts.interfaceZeroReplies) ifOther=\(counts.interfaceOtherRejected) malformed=\(counts.malformed) adds=\(counts.adds) removes=\(counts.removes) capacityRejected=\(counts.capacityRejected) usableIPv4=\(ipv4) usableIPv6=\(ipv6)")
         event("Endpoint DNS timing registrationMs=\(registrationMs) waitMs=\(waitMs) cleanupMs=\(cleanupMs) totalMs=\(totalMs) callbackSeen=\(firstCallbackMs != nil) firstCallbackMs=\(firstCallbackMs ?? 0) answerCount=\(answerCount) registrationSucceeded=\(registrationSucceeded) cancelled=\(wasCancelled)")
         continuation.resume(with: result)
     }

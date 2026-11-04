@@ -135,12 +135,14 @@ struct TunnelEndpointDNSOutcomes {
     private(set) var otherError = 0
     private(set) var questionRejected = 0
     private(set) var interfaceRejected = 0
+    private(set) var interfaceZeroReplies = 0
+    private(set) var interfaceOtherRejected = 0
     private(set) var malformed = 0
     private(set) var adds = 0
     private(set) var removes = 0
     private(set) var capacityRejected = 0
 
-    enum Outcome { case noRecord, timeout, serviceUnavailable, defunct, policyDenied, otherError, questionRejected, interfaceRejected, malformed, adds, removes, capacityRejected }
+    enum Outcome { case noRecord, timeout, serviceUnavailable, defunct, policyDenied, otherError, questionRejected, interfaceRejected, interfaceZeroReplies, interfaceOtherRejected, malformed, adds, removes, capacityRejected }
 
     mutating func recordCallback() { callbacks = min(callbacks + 1, 65_535) }
 
@@ -155,6 +157,8 @@ struct TunnelEndpointDNSOutcomes {
         case .otherError: otherError = bounded(otherError)
         case .questionRejected: questionRejected = bounded(questionRejected)
         case .interfaceRejected: interfaceRejected = bounded(interfaceRejected)
+        case .interfaceZeroReplies: interfaceZeroReplies = bounded(interfaceZeroReplies)
+        case .interfaceOtherRejected: interfaceOtherRejected = bounded(interfaceOtherRejected)
         case .malformed: malformed = bounded(malformed)
         case .adds: adds = bounded(adds)
         case .removes: removes = bounded(removes)
@@ -167,7 +171,10 @@ struct TunnelEndpointDNSOutcomes {
 struct TunnelEndpointDNSAccumulator {
     private let host: [UInt8]
     private let path: TunnelEndpointPath
+    // Each of 16 distinct addresses has at most a process-default and an
+    // exact-interface record. Their TTLs/removals must never overwrite each other.
     private var values: [TunnelEndpointCandidate] = []
+    private var addressOrder: [String] = []
     private(set) var outcomes = TunnelEndpointDNSOutcomes()
 
     init(host: String, path: TunnelEndpointPath) {
@@ -189,30 +196,48 @@ struct TunnelEndpointDNSAccumulator {
             return
         }
         let questionMatches = Self.name(answer.hostname) == host
-        let interfaceMatches = path.interfaceIndex == 0 || answer.interfaceIndex == path.interfaceIndex
-        // Count both reasons if an alias and interface mismatch coexist. These
-        // counters may overlap; acceptance keeps exactly the original predicate.
+        // DNS-SD's reply index describes the record's scope, not an echo of
+        // the requested query index. Zero is a legitimate unicast result; keep
+        // its honest process-default provenance rather than claiming en0.
+        let interfaceMatches = path.interfaceIndex == 0 || answer.interfaceIndex == 0 || answer.interfaceIndex == path.interfaceIndex
+        if answer.interfaceIndex == 0 { outcomes.record(.interfaceZeroReplies) }
+        // Question and interface counts may overlap for a rejected callback.
         if !questionMatches { outcomes.record(.questionRejected) }
-        if !interfaceMatches { outcomes.record(.interfaceRejected) }
+        if !interfaceMatches {
+            outcomes.record(.interfaceRejected)
+            outcomes.record(.interfaceOtherRejected)
+        }
         guard questionMatches, interfaceMatches else { return }
         guard let address = TunnelEndpointAddress(text: answer.text, source: .systemNameAnswer),
               now.isFinite, now >= 0 else { outcomes.record(.malformed); return }
-        let existing = values.firstIndex { $0.address.text == address.text }
+        let scope: TunnelEndpointCandidate.LookupScope = path.interfaceIndex == 0 || answer.interfaceIndex == 0
+            ? .processDefault : .interface(index: path.interfaceIndex)
+        let existing = values.firstIndex { $0.address.text == address.text && $0.lookupScope == scope }
         if !answer.added {
             outcomes.record(.removes)
             if let existing { values.remove(at: existing) }
+            if !values.contains(where: { $0.address.text == address.text }) {
+                addressOrder.removeAll { $0 == address.text }
+            }
             return
         }
-        let scope: TunnelEndpointCandidate.LookupScope = path.interfaceIndex == 0 ? .processDefault : .interface(index: path.interfaceIndex)
         let value = TunnelEndpointCandidate(address: address, origin: .systemNameAnswer,
             receivedAt: now, validUntil: now + Double(answer.ttl), lookupScope: scope)
         if let existing { values[existing] = value; outcomes.record(.adds) }
-        else if values.count < TunnelEndpointCandidates.maximumCount { values.append(value); outcomes.record(.adds) }
-        else { outcomes.record(.capacityRejected) }
+        else if addressOrder.contains(address.text) {
+            values.append(value); outcomes.record(.adds)
+        } else if addressOrder.count < TunnelEndpointCandidates.maximumCount {
+            addressOrder.append(address.text); values.append(value); outcomes.record(.adds)
+        } else { outcomes.record(.capacityRejected) }
     }
 
     func snapshot(at now: TimeInterval) -> [TunnelEndpointCandidate] {
-        values.filter { $0.isUsable(on: path, at: now, allowFreshZeroTTL: true) }
+        addressOrder.compactMap { text in
+            let usable = values.filter { $0.address.text == text && $0.isUsable(on: path, at: now, allowFreshZeroTTL: true) }
+            // Prefer a live exact-interface witness without hiding a still-live
+            // unicast record when that stronger witness expires or is removed.
+            return usable.first { $0.lookupScope == .interface(index: path.interfaceIndex) } ?? usable.first
+        }
     }
 
     private static func name(_ value: String) -> [UInt8] {

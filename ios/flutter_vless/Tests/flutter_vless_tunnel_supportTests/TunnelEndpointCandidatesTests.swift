@@ -293,7 +293,7 @@ final class TunnelEndpointCandidatesTests: XCTestCase {
         XCTAssertEqual(try timingField("callbackSeen", in: message), "false")
         XCTAssertEqual(try timingField("answerCount", in: message), "0")
         let registration = capture.registration
-        registration.callback?(.init(hostname: "private-timing-canary.example.com", text: "192.0.2.197", interfaceIndex: 4, ttl: 30, added: true))
+        registration.callback?(.init(hostname: "private-timing-canary.example.com", text: "192.0.2.197", interfaceIndex: 0, ttl: 30, added: true))
         try XCTUnwrap(registration.queue).async { drained.fulfill() }
         await fulfillment(of: [drained], timeout: 1)
         XCTAssertEqual(capture.snapshot.messages, beforeLateAnswer.messages)
@@ -316,10 +316,10 @@ final class TunnelEndpointCandidatesTests: XCTestCase {
         XCTAssertFalse(message.contains("private-timing-canary"))
     }
 
-    func testDNSOutcomesDiagnoseRejectionWithoutRelaxingQuestionOrInterface() {
+    func testDNSOutcomesDiagnoseRejectedQuestionAndOtherNonzeroInterface() {
         var collection = TunnelEndpointDNSAccumulator(host: "private-outcome-canary.example.com", path: dual)
         collection.accept(.init(hostname: "alias-target.example.net", text: "192.0.2.197", interfaceIndex: 4, ttl: 10, added: true), at: 10)
-        collection.accept(.init(hostname: "private-outcome-canary.example.com", text: "192.0.2.197", interfaceIndex: 0, ttl: 10, added: true), at: 10)
+        collection.accept(.init(hostname: "private-outcome-canary.example.com", text: "192.0.2.197", interfaceIndex: 5, ttl: 10, added: true), at: 10)
         collection.accept(.init(hostname: "private-outcome-canary.example.com", text: "malformed", interfaceIndex: 4, ttl: 10, added: true), at: 10)
         collection.accept(.failed(.noRecord), at: 10)
         collection.accept(.failed(.timeout), at: 10)
@@ -340,11 +340,107 @@ final class TunnelEndpointCandidatesTests: XCTestCase {
         XCTAssertEqual(counts.defunct, 1)
         XCTAssertEqual(counts.policyDenied, 1)
         XCTAssertEqual(counts.adds, 0)
-        collection.accept(.init(hostname: "alias-target.example.net", text: "192.0.2.197", interfaceIndex: 0, ttl: 10, added: true), at: 10)
+        collection.accept(.init(hostname: "alias-target.example.net", text: "192.0.2.197", interfaceIndex: 5, ttl: 10, added: true), at: 10)
         XCTAssertEqual(collection.outcomes.callbacks, 10)
         XCTAssertEqual(collection.outcomes.questionRejected, 2)
         XCTAssertEqual(collection.outcomes.interfaceRejected, 2, "An alias mismatch must not conceal the interface mismatch")
         XCTAssertTrue(collection.snapshot(at: 11).isEmpty)
+    }
+
+    func testDNSZeroRepliesHaveHonestScopeAndOtherNonzeroInterfacesStayRejected() {
+        var collection = TunnelEndpointDNSAccumulator(host: "vpn.example.com", path: dual)
+        for text in ["192.0.2.197", "2001:db8::197"] {
+            collection.accept(.init(hostname: "VPN.EXAMPLE.COM.", text: text, interfaceIndex: 0, ttl: 10, added: true), at: 10)
+        }
+        collection.accept(.init(hostname: "vpn.example.com", text: "192.0.2.198", interfaceIndex: 5, ttl: 10, added: true), at: 10)
+        let values = collection.snapshot(at: 11)
+        XCTAssertEqual(values.map(\.address.family), [.ipv4, .ipv6])
+        XCTAssertTrue(values.allSatisfy { $0.lookupScope == .processDefault && $0.origin == .systemNameAnswer })
+        XCTAssertEqual(collection.outcomes.interfaceRejected, 1)
+        XCTAssertEqual(collection.outcomes.interfaceZeroReplies, 2)
+        XCTAssertEqual(collection.outcomes.interfaceOtherRejected, 1)
+        collection.accept(.init(hostname: "wrong.example.com", text: "192.0.2.199", interfaceIndex: 0, ttl: 10, added: true), at: 10)
+        XCTAssertEqual(collection.snapshot(at: 11), values, "Index zero does not bypass question validation")
+    }
+
+    func testDNSZeroTTLExpiryUpdateAndRemovalKeepOriginalSingleAttemptRules() {
+        var collection = TunnelEndpointDNSAccumulator(host: "vpn.example.com", path: dual)
+        collection.accept(.init(hostname: "vpn.example.com", text: "192.0.2.197", interfaceIndex: 0, ttl: 0, added: true), at: 10)
+        let zero = collection.snapshot(at: 11).first
+        XCTAssertEqual(zero?.lookupScope, .processDefault)
+        XCTAssertTrue(zero?.isSingleAttemptOnly == true)
+        XCTAssertFalse(zero?.isUsable(on: dual, at: 11) == true)
+        collection.accept(.init(hostname: "vpn.example.com", text: "192.0.2.197", interfaceIndex: 0, ttl: 5, added: true), at: 12)
+        XCTAssertEqual(collection.snapshot(at: 16).first?.validUntil, 17)
+        XCTAssertTrue(collection.snapshot(at: 17).isEmpty)
+        collection.accept(.init(hostname: "vpn.example.com", text: "192.0.2.197", interfaceIndex: 0, ttl: 30, added: true), at: 18)
+        collection.accept(.init(hostname: "vpn.example.com", text: "192.0.2.197", interfaceIndex: 0, ttl: 0, added: false), at: 19)
+        XCTAssertTrue(collection.snapshot(at: 19).isEmpty)
+    }
+
+    func testDNSRecordScopesUpdateRemoveAndExpireIndependently() {
+        var collection = TunnelEndpointDNSAccumulator(host: "vpn.example.com", path: dual)
+        func answer(_ index: UInt32, _ ttl: UInt32, _ added: Bool = true) -> TunnelEndpointDNSAnswer {
+            .init(hostname: "vpn.example.com", text: "192.0.2.197", interfaceIndex: index, ttl: ttl, added: added)
+        }
+        collection.accept(answer(0, 30), at: 10)
+        collection.accept(answer(4, 5), at: 10)
+        XCTAssertEqual(collection.snapshot(at: 11).first?.lookupScope, .interface(index: 4))
+        collection.accept(answer(0, 50), at: 12)
+        XCTAssertEqual(collection.snapshot(at: 13).first?.validUntil, 15, "A zero-scope update cannot replace the exact-interface witness")
+        XCTAssertEqual(collection.snapshot(at: 16).first?.lookupScope, .processDefault)
+        XCTAssertEqual(collection.snapshot(at: 16).first?.validUntil, 62)
+        collection.accept(answer(4, 10), at: 17)
+        collection.accept(answer(0, 0, false), at: 18)
+        XCTAssertEqual(collection.snapshot(at: 19).first?.lookupScope, .interface(index: 4), "Removing zero-scope data cannot remove exact-interface data")
+        collection.accept(answer(0, 20), at: 20)
+        collection.accept(answer(4, 0, false), at: 21)
+        XCTAssertEqual(collection.snapshot(at: 22).first?.lookupScope, .processDefault, "A scoped removal leaves the separate unicast record intact")
+    }
+
+    func testDNSMixedScopesStayBoundedByDistinctAddressAndKeepAddressOrder() {
+        var collection = TunnelEndpointDNSAccumulator(host: "vpn.example.com", path: dual)
+        for index in 1...17 {
+            for scope: UInt32 in [0, 4] {
+                collection.accept(.init(hostname: "vpn.example.com", text: "192.0.2.\(index)", interfaceIndex: scope, ttl: 10, added: true), at: 10)
+            }
+        }
+        let before = collection.snapshot(at: 11)
+        XCTAssertEqual(before.map(\.address.text), (1...16).map { "192.0.2.\($0)" })
+        XCTAssertTrue(before.allSatisfy { $0.lookupScope == .interface(index: 4) })
+        XCTAssertEqual(collection.outcomes.adds, 32)
+        XCTAssertEqual(collection.outcomes.capacityRejected, 2)
+        collection.accept(.init(hostname: "vpn.example.com", text: "192.0.2.1", interfaceIndex: 0, ttl: 0, added: false), at: 12)
+        XCTAssertEqual(collection.snapshot(at: 13).map(\.address.text), before.map(\.address.text), "Removing one scope must not reorder the surviving address")
+        let processDefault = TunnelEndpointPath(generation: 1, interfaceIndex: 0, supportsIPv4: true, supportsIPv6: true, supportsDNS: true)
+        var defaultCollection = TunnelEndpointDNSAccumulator(host: "vpn.example.com", path: processDefault)
+        for index: UInt32 in [0, 4] {
+            defaultCollection.accept(.init(hostname: "vpn.example.com", text: "192.0.2.197", interfaceIndex: index, ttl: 10, added: true), at: 10)
+        }
+        XCTAssertEqual(defaultCollection.snapshot(at: 11).count, 1)
+        XCTAssertEqual(defaultCollection.snapshot(at: 11).first?.lookupScope, .processDefault)
+    }
+
+    func testDNSZeroRepliesRetainLateAAAAAndSuppressUnneededEncryptedFallback() async throws {
+        let capture = TimingCapture()
+        let began = now
+        let values = try await TunnelEndpointResolver.resolveCandidates("vpn.example.com", on: dual, deadline: now + 1,
+            system: { host, path, deadline in
+                try await TunnelEndpointDNSCollection.collect(host, path: path, deadline: min(deadline, self.now + 0.3), event: capture.record,
+                    query: { host, index, queue, receive in
+                        XCTAssertEqual(index, 4, "The query remains bound to the requested physical interface")
+                        receive(.init(hostname: host, text: "192.0.2.197", interfaceIndex: 0, ttl: 30, added: true))
+                        queue.asyncAfter(deadline: .now() + 0.05) {
+                            receive(.init(hostname: host, text: "2001:db8::197", interfaceIndex: 0, ttl: 30, added: true))
+                        }
+                        return { capture.didClose() }
+                    })
+            }, synthesis: { _, _ in XCTFail("Named lookup must not synthesize literals"); return [] },
+            fallback: { _, _ in XCTFail("Valid zero-scope system answers must suppress public fallback"); return nil })
+        XCTAssertEqual(values.candidates.map(\.address.family), [.ipv4, .ipv6])
+        XCTAssertTrue(values.candidates.allSatisfy { $0.lookupScope == .processDefault })
+        XCTAssertGreaterThanOrEqual(now - began, 0.27, "Do not complete on the first A or truncate the existing window")
+        XCTAssertEqual(capture.snapshot.closes, 1)
     }
 
     func testDNSOutcomesKeepTTLReplacementRemovalAndCapacityUnchanged() {
@@ -381,7 +477,7 @@ final class TunnelEndpointCandidatesTests: XCTestCase {
                 receive(.failed(.defunct))
                 receive(.failed(.policyDenied))
                 receive(.init(hostname: "alias-target-canary.example.net", text: "192.0.2.197", interfaceIndex: 4, ttl: 10, added: true))
-                receive(.init(hostname: "private-outcome-canary.example.com", text: "192.0.2.197", interfaceIndex: 0, ttl: 10, added: true))
+                receive(.init(hostname: "private-outcome-canary.example.com", text: "192.0.2.197", interfaceIndex: 5, ttl: 10, added: true))
                 receive(.init(hostname: "private-outcome-canary.example.com", text: "bad-address-canary", interfaceIndex: 4, ttl: 10, added: true))
                 queue.asyncAfter(deadline: .now() + 0.05) {
                     receive(.init(hostname: "private-outcome-canary.example.com", text: "192.0.2.197", interfaceIndex: 4, ttl: 10, added: true))
@@ -396,12 +492,12 @@ final class TunnelEndpointCandidatesTests: XCTestCase {
         let outcomes = try XCTUnwrap(result.messages.first { $0.hasPrefix("Endpoint DNS outcomes ") })
         for (key, expected) in [("callbacks", "11"), ("noRecord", "1"), ("timeout", "1"), ("otherError", "1"),
             ("serviceUnavailable", "1"), ("defunct", "1"), ("policyDenied", "1"),
-            ("questionRejected", "1"), ("interfaceRejected", "1"), ("malformed", "1"), ("adds", "2"),
+            ("questionRejected", "1"), ("interfaceRejected", "1"), ("ifZero", "0"), ("ifOther", "1"), ("malformed", "1"), ("adds", "2"),
             ("removes", "0"), ("capacityRejected", "0"), ("usableIPv4", "1"), ("usableIPv6", "1")] {
             XCTAssertEqual(try timingField(key, in: outcomes), expected)
         }
         for message in result.messages {
-            XCTAssertLessThan(message.utf8.count, 300)
+            XCTAssertLessThan(message.utf8.count, message.hasPrefix("Endpoint DNS outcomes ") ? 350 : 300)
             for secret in ["private-outcome-canary", "alias-target-canary", "192.0.2.197", "2001:db8::197", "bad-address-canary"] {
                 XCTAssertFalse(message.contains(secret))
             }

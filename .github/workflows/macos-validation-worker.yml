@@ -90,6 +90,8 @@ jobs:
           python3 tool/test_apple_cold_start_policy.py --receipts 2>&1 | tee build/macos-validation/cold-start.log
           python3 tool/test_apple_start_owner.py 2>&1 | tee build/macos-validation/start-owner.log
           python3 tool/test_apple_readiness_polling.py 2>&1 | tee build/macos-validation/readiness.log
+          python3 tool/test_macos_startup_timing.py 2>&1 | tee build/macos-validation/startup-timing.log
+          python3 -m unittest discover -s tool -p test_check_macos_example_provider.py -v
           bash tool/test_bounded_native_log_store.sh
           bash tool/test_apple_options.sh
       - name: Build macOS example
@@ -140,3 +142,5 @@ jobs:
             build/apple-cold-start-current/*.log
             build/apple-start-owner-current/*.json
             build/apple-start-owner-current/*.log
+            build/macos-startup-timing-current/*.json
+            build/macos-startup-timing-current/*.log

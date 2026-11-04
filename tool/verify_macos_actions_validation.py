@@ -20,10 +20,26 @@ HEV_MARKERS = ('PASS bulk integrity: 8 MiB download',
 RUNTIME_MARKERS = ('RUNTIME=26.10.31', 'NATIVE_ROUTING_RUNTIME_PASS=0', 'NATIVE_ROUTING_RUNTIME_PASS=1',
                    'NATIVE_ROUTING_RUNTIME_DRAIN_PASS', 'DOMAIN_ROUTING_PASS=0', 'DOMAIN_ROUTING_PASS=1',
                    'MACOS_COUNTERS_MISSING_POLICY_DEFAULTS_PASS=2')
+# These literals are compiled into the provider that implements the early DNS
+# admission path. A fresh host app or a matching marketing version alone does
+# not prove that an older provider was not linked into the bundle.
+PROVIDER_STARTUP_MARKERS = (b'Startup timing phase=keychain-setup',
+                            b'Initial DNS correction begin')
 
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_provider_compilation(root, binary, build_log):
+    expected_source = str(Path(root)/PROVIDER)
+    compiled_current_source = any(line.startswith('SwiftCompile ')
+        and expected_source in line for line in build_log.splitlines())
+    if not compiled_current_source:
+        raise ValueError('Current provider compiler input was not recorded')
+    payload = Path(binary).read_bytes()
+    if any(marker not in payload for marker in PROVIDER_STARTUP_MARKERS):
+        raise ValueError('Compiled provider lacks the current DNS startup implementation')
 
 
 def qualify(root, sha):
@@ -54,6 +70,20 @@ def qualify(root, sha):
     cold = json.loads((root/'build/apple-cold-start-current/result.json').read_text())['results']['macos']
     if cold.get('exit') != 0 or cold.get('provider_sha256') != digest(root/PROVIDER):
         raise ValueError('Cold-start result differs from the current provider')
+    timing_path = root/'build/macos-startup-timing-current/result.json'
+    timing = json.loads(timing_path.read_text())
+    timing_log = root/'build/macos-startup-timing-current/runtime.log'
+    if timing.get('exit') != 0 or timing.get('fixture_only') is not True \
+            or timing.get('Core_Keychain_NetworkExtension_network_or_devices') is not False \
+            or timing.get('log_sha256') != digest(timing_log) \
+            or re.search(r'^MACOS_STARTUP_TIMING checks=[1-9][0-9]* failures=\[\]$', timing_log.read_text(), re.M) is None:
+        raise ValueError('Actual host timing admission checks missing')
+    timing_sources = [MAC_SOURCES+'/flutter_vless_macos/FlutterVlessPlugin.swift',
+        MAC_SOURCES+'/flutter_vless_macos_privacy/NativeDiagnostics.swift',
+        MAC_SOURCES+'/flutter_vless_macos/NativeOperationQueue.swift',
+        'tool/fixtures/macos_startup_timing.swift']
+    if timing.get('source_sha256') != {name: digest(root/name) for name in timing_sources}:
+        raise ValueError('Timing admission result differs from the current host')
     version = re.search(r'^version:\s*([^+\s]+)\+([0-9]+)', (root/'example/pubspec.yaml').read_text(), re.M)
     if version is None: raise ValueError('Example version missing')
     app = output/'example/flutter_vless_example.app'
@@ -69,11 +99,15 @@ def qualify(root, sha):
         if magic not in (b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf'):
             raise ValueError('Actual compiled Mach-O missing')
         executables[name] = {'path': str(binary.relative_to(root)), 'sha256': digest(binary)}
+        if name == 'provider':
+            verify_provider_compilation(root, binary, (output/'example-build.log').read_text())
     proof_paths = [sdk_path, runtime, hev, support, output/'manager.log', output/'readiness.log',
-                   root/'build/apple-cold-start-current/result.json', output/'example-build.log']
+                   root/'build/apple-cold-start-current/result.json', output/'example-build.log',
+                   timing_path, timing_log]
     result = {'success': True, 'source_sha': sha, 'platform': 'macos', 'runtime_source': 'published',
               'runtime_version': '26.10.31', 'SDK_archive_sha256': sdk['archive_sha256'],
               'source_provider_sha256': digest(root/PROVIDER), 'compiled_executables': executables,
+              'compiled_provider_source_and_startup_markers_verified': True,
               'live_NetworkExtension_VPN_or_owner_network_acceptance': False,
               'scope': 'Published Core routing/DNS/counters/stop and HEV packet exchanges with controlled OS boundaries; actual example/provider build',
               'proof_sha256': {str(p.relative_to(root)): digest(p) for p in proof_paths}}

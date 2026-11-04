@@ -11,7 +11,12 @@ import sys
 root,out=map(Path,sys.argv[1:])
 source=(root/'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos/FlutterVlessPlugin.swift').read_text()
 manager=source[source.index('final class PacketTunnelManager:'):source.index('private func configureXrayAssetLocation')]
-(out/'Manager.swift').write_text((root/'tool/fixtures/ios_manager_policy/SDK.swift').read_text()+manager)
+diagnostics=(root/'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_privacy/NativeDiagnostics.swift').read_text()
+begin=diagnostics.index('public struct NativeDiagnosticMessage:')
+end=diagnostics.index('public struct NativePrivacyLogger',begin)
+# Compile actual scalar interpolation and monotonic timers, keeping the sink inert.
+(out/'Manager.swift').write_text((root/'tool/fixtures/ios_manager_policy/SDK.swift').read_text()
+    +diagnostics[begin:end]+'\nprivate func pluginDebug(_ message: NativeDiagnosticMessage) {}\n'+manager)
 PY
 xcrun swiftc -O -parse-as-library \
   "$SOURCE/flutter_vless_macos_privacy/VlessNativeOptions.swift" \

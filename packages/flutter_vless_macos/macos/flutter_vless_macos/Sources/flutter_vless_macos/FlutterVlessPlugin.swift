@@ -1324,6 +1324,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private func startVless(call: FlutterMethodCall, result: @escaping FlutterResult,
                             tcpPortAvailable: @escaping (Int) -> Bool = LocalProxyAccessPolicy.isTCPPortAvailable,
                             captureEnvironment: () -> XrayEnvironmentSnapshot = XrayEnvironmentSnapshot.capture) {
+        let startupTiming = NativeDiagnosticTimer()
         guard let arguments = call.arguments as? [String: Any],
               let remark = arguments["remark"] as? String,
               let config = arguments["config"] as? String,
@@ -1332,6 +1333,9 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return
         }
         let proxyOnly = arguments["proxy_only"] as? Bool ?? false
+        // Absolute monotonic marks correlate this app process with provider
+        // readiness without treating a submitted NE start as a ready tunnel.
+        pluginDebug("Startup timing phase=host-start-request uptimeMs=\(DispatchTime.now().uptimeNanoseconds / 1_000_000) proxyOnly=\(proxyOnly)")
         let vpnRouting: NativeRoutingIntent?
         do {
             vpnRouting = try NativeRoutingIntent.parse(arguments["vpn_routing"])
@@ -1391,6 +1395,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 message: "Unable to prepare the local adapter for this configuration.", details: ["stage": preparationStage]))
             return
         }
+        pluginDebug("Startup timing phase=host-prepare elapsedMs=\(startupTiming.elapsedMilliseconds())")
         let preparationChanges = Array(changes)
         // Initialization may replace the manager while this request waits for
         // preferences. Never apply an older config to that replacement owner.
@@ -1401,12 +1406,14 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return self.packetTunnelManager === startManager && self.controlGroup == startGroup
         }
         let operation = commands.submit {
+            pluginDebug("Startup timing phase=host-command-dequeued elapsedMs=\(startupTiming.elapsedMilliseconds())")
             // Do not replace the app-process singleton or change its asset
             // environment while a proxy-only session is still serving traffic.
             guard ownerIsCurrent() else { throw CancellationError() }
             guard !self.proxyOnlyRunner.isRunning else {
                 throw CorePreflightError.activeProxySession
             }
+            let preflightTiming = NativeDiagnosticTimer()
             try ManagedServiceAssetPolicy.validate(preparedProxyConfig?.data ?? effectiveConfigData, directory: geoAssetsDirectory, geodataCapability: FLVlessCoreGeodataLifetimeCapability(), xdriveCapability: FLVlessCoreXdriveLifetimeCapability())
             var coreCheckPassed = false
             if FLVlessHasCorePreflight() {
@@ -1416,6 +1423,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             } else {
                 pluginLog.warning("Core preflight unavailable in legacy runtime")
             }
+            pluginDebug("Startup timing phase=host-core-preflight elapsedMs=\(preflightTiming.elapsedMilliseconds()) totalMs=\(startupTiming.elapsedMilliseconds())")
             guard ownerIsCurrent() else { throw CancellationError() }
             if let preparedProxyConfig {
                 // Switching modes is an explicit request to release the system VPN.
@@ -1444,6 +1452,7 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         Task {
             do {
                 let report = try await operation.value
+                pluginDebug("Startup timing phase=host-start-accepted elapsedMs=\(startupTiming.elapsedMilliseconds()) uptimeMs=\(DispatchTime.now().uptimeNanoseconds / 1_000_000)")
                 self.refreshRuntimePolling(reason: "startVless-success")
                 result(report.flutterResult)
             } catch let error where error is CancellationError || !ownerIsCurrent() {
@@ -1469,9 +1478,15 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     /// and, on some machines, makes the system briefly lose the manager we are
     /// observing.
     private func requestPermission(result: @escaping FlutterResult) {
-        let operation = commands.submit { await self.packetTunnelManager?.testSaveAndLoadProfile() ?? false }
+        let permissionTiming = NativeDiagnosticTimer()
+        pluginDebug("Startup timing phase=host-permission-request uptimeMs=\(DispatchTime.now().uptimeNanoseconds / 1_000_000)")
+        let operation = commands.submit {
+            pluginDebug("Startup timing phase=host-permission-dequeued elapsedMs=\(permissionTiming.elapsedMilliseconds())")
+            return await self.packetTunnelManager?.testSaveAndLoadProfile() ?? false
+        }
         Task {
             let isGranted = (try? await operation.value) ?? false
+            pluginDebug("Startup timing phase=host-permission-complete elapsedMs=\(permissionTiming.elapsedMilliseconds()) granted=\(isGranted)")
             pluginLog.info("requestPermission result=\(isGranted, privacy: .public)")
             result(isGranted)
         }
@@ -1752,11 +1767,14 @@ final class PacketTunnelManager: ObservableObject {
     private func persist(_ config: Data, metadata: [String: Any], manager: NETunnelProviderManager,
                          activate: Bool, preserveRecoveryPolicy: Bool = false,
                          store: TunnelSecretStore) async throws {
+        let persistTiming = NativeDiagnosticTimer()
+        let keychainTiming = NativeDiagnosticTimer()
         // Fail before any preference/session mutation, including oversized data
         // rejected by Security. There is no truncation or plaintext fallback.
         let reference = try store.insert(config)
         do { guard try store.read(reference) == config else { throw TunnelSecretError.profileVerificationFailed } }
         catch { try? store.remove(reference); throw error }
+        pluginDebug("Startup timing phase=manager-keychain-verified elapsedMs=\(keychainTiming.elapsedMilliseconds())")
         let previousProtocol = manager.protocolConfiguration
         let previousDescription = manager.localizedDescription
         let previousEnabled = manager.isEnabled
@@ -1777,8 +1795,11 @@ final class PacketTunnelManager: ObservableObject {
             manager.onDemandRules = nil
         }
         do {
+            let saveTiming = NativeDiagnosticTimer()
             try await manager.saveToPreferences()
+            pluginDebug("Startup timing phase=manager-preferences-saved elapsedMs=\(saveTiming.elapsedMilliseconds())")
             self.manager = manager
+            let readbackTiming = NativeDiagnosticTimer()
             try await manager.loadFromPreferences()
             let readback = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
             guard try TunnelSecretProfile.reference(in: readback) == reference,
@@ -1789,6 +1810,7 @@ final class PacketTunnelManager: ObservableObject {
                     throw TunnelSecretError.profileVerificationFailed
                 }
             }
+            pluginDebug("Startup timing phase=manager-readback-verified elapsedMs=\(readbackTiming.elapsedMilliseconds())")
         } catch {
             // Roll back the prior reference and its policy together. A fresh
             // failed start stays disarmed; an established prior profile keeps
@@ -1813,7 +1835,10 @@ final class PacketTunnelManager: ObservableObject {
         }
         self.manager = manager
         if activate && !preserveRecoveryPolicy { didSaveQuickProfile?(reference) }
+        let cleanupTiming = NativeDiagnosticTimer()
         try await cleanupUnusedSecrets()
+        pluginDebug("Startup timing phase=manager-secret-cleanup elapsedMs=\(cleanupTiming.elapsedMilliseconds())")
+        pluginDebug("Startup timing phase=manager-persist-complete elapsedMs=\(persistTiming.elapsedMilliseconds())")
         pluginLog.info("VPN preferences saved with Keychain reference active=\(activate, privacy: .public)")
     }
 
@@ -1863,7 +1888,9 @@ final class PacketTunnelManager: ObservableObject {
     }
 
     func start() async throws {
+        let startupTiming = NativeDiagnosticTimer()
         try await preferenceOperations.submit {
+            pluginDebug("Startup timing phase=manager-start-dequeued elapsedMs=\(startupTiming.elapsedMilliseconds())")
             if self.vpnRouting != nil { try NativeRoutingSpec.requireRuntime(FLVlessCoreRoutingCapability()) }
             try self.validateRouting()
             if let active = try await self.loadTunnelProviderManager(),
@@ -1886,7 +1913,10 @@ final class PacketTunnelManager: ObservableObject {
             guard let manager = self.manager else { throw TunnelSecretError.invalidProfile }
             switch manager.connection.status {
             case .connecting, .connected, .reasserting: return
-            default: try manager.connection.startVPNTunnel()
+            default:
+                let submitTiming = NativeDiagnosticTimer()
+                try manager.connection.startVPNTunnel()
+                pluginDebug("Startup timing phase=manager-vpn-submitted elapsedMs=\(submitTiming.elapsedMilliseconds()) totalMs=\(startupTiming.elapsedMilliseconds()) uptimeMs=\(DispatchTime.now().uptimeNanoseconds / 1_000_000)")
             }
         }.value
     }
@@ -1948,7 +1978,11 @@ final class PacketTunnelManager: ObservableObject {
         let response = try? await sendProviderMessage(data: Data("xray_runtime_state".utf8))
         // Ignore replies from an earlier connection, even if its manager is reused.
         guard session === manager, connectedDate == connectionDate, isCurrent() else { return }
+        let wasReady = forwardingReady
         forwardingReady = response == Data("ready".utf8) && status == .connected
+        if !wasReady && forwardingReady {
+            pluginDebug("Startup timing phase=host-forwarding-ready uptimeMs=\(DispatchTime.now().uptimeNanoseconds / 1_000_000)")
+        }
     }
 
     @discardableResult
@@ -2048,8 +2082,10 @@ final class PacketTunnelManager: ObservableObject {
 
 
     private func loadTunnelProviderManager() async throws -> NETunnelProviderManager? {
+        let lookupTiming = NativeDiagnosticTimer()
         do {
             let managers = try await NETunnelProviderManager.loadAllFromPreferences()
+            pluginDebug("Startup timing phase=manager-preferences-listed elapsedMs=\(lookupTiming.elapsedMilliseconds())")
             pluginLog.info("Loaded \(managers.count, privacy: .public) tunnel manager(s) from preferences")
 
 
@@ -2063,7 +2099,9 @@ final class PacketTunnelManager: ObservableObject {
                 return nil
             }
 
+            let matchingTiming = NativeDiagnosticTimer()
             try await reval.loadFromPreferences()
+            pluginDebug("Startup timing phase=manager-preferences-matched elapsedMs=\(matchingTiming.elapsedMilliseconds()) totalMs=\(lookupTiming.elapsedMilliseconds())")
             pluginLog.info("Loaded matching tunnel manager enabled=\(reval.isEnabled, privacy: .public) status=\(reval.connection.status.rawValue, privacy: .public)")
             return reval
         } catch {

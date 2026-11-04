@@ -19,12 +19,18 @@ def fixture(source: str) -> str:
     transaction = source[start:end]
     assert transaction.rstrip().endswith("}")
     transaction = transaction.rstrip()[:-1]  # wrapper below owns the function brace
+    # The extracted span begins after host input preparation. Keep its diagnostic
+    # clock local to this inert transaction; it never represents a live VPN time.
+    diagnostics = (ROOT / "packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_privacy/NativeDiagnostics.swift").read_text()
+    timer_start = diagnostics.index("public struct NativeDiagnosticTimer:")
+    timer = diagnostics[timer_start:diagnostics.index("\n}\n", timer_start) + 3]
+    transaction = "        let startupTiming = NativeDiagnosticTimer()\n" + transaction
     start = source.index("    private func initializeVless(")
     end = source.index("        self.packetTunnelManager?.nativeOptions = parsed", start)
     end = source.index("\n", end)
     initialization = source[start:end].replace("    private func", "    func", 1) + "\n        result(nil)\n    }"
     template = (ROOT / "tool/fixtures/apple_start_owner.swift").read_text()
-    return template.replace("// ACTUAL_START_TRANSACTION", transaction).replace("// ACTUAL_INITIALIZE_ADMISSION", initialization)
+    return "import Foundation\n" + timer + "\n" + template.replace("// ACTUAL_START_TRANSACTION", transaction).replace("// ACTUAL_INITIALIZE_ADMISSION", initialization)
 
 
 def main() -> None:

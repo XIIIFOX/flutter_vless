@@ -42,6 +42,18 @@ If you are adding significant behavior or changing the public API, open an issue
 
 If the project uses additional integration or platform tests, include instructions on how to run them locally.
 
+Maintainer macOS validation runs from `main` with the published, checksum-pinned
+SDK: `gh workflow run macos-validation.yml --ref main`. The dispatcher allocates
+one Mac worker at a time and tries another standard hosted pool only when a
+machine was not allocated. Build or test failures stop the run. Exhausting the
+bounded allocation attempts reports an infrastructure failure.
+
+The worker builds the example and checks DNS/session lifecycle, Core routing,
+counters, authentication, cleanup and HEV packet exchanges on controlled local
+fixtures. Its artifacts include the exact source and SDK proofs. A real macOS
+NetworkExtension VPN connection and the owner's network still require a
+separate live acceptance test. The worker workflow is started by the dispatcher.
+
 ## Pull Request checklist
 Before requesting a review, ensure:
 - [ ] The PR has a descriptive title and summary.

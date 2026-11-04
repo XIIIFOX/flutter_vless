@@ -143,13 +143,28 @@ def finish(root, platform):
     return result
 
 
-if __name__ == '__main__':
+def argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--verify-installed', action='store_true')
+    parser.add_argument('--platform', choices=['all', 'ios', 'macos'], default='all',
+                        help='Select one SDK for a platform-only CI job; default checks both.')
+    return parser
+
+
+def selected_platforms(platform):
+    if platform == 'all':
+        return ['ios', 'macos']
+    if platform in PATHS:
+        return [platform]
+    raise ValueError('Unknown Apple SDK platform')
+
+
+def main():
+    parser = argument_parser()
     args = parser.parse_args()
     if sys.platform != 'darwin' or os.environ.get('GITHUB_ACTIONS') != 'true':
         parser.error('Public SDK installation and runtime qualification run only on macOS CI')
-    for platform in ['ios', 'macos']:
+    for platform in selected_platforms(args.platform):
         output = ROOT/'build/published_apple_runtime'/platform
         if args.verify_installed:
             result = finish(ROOT, platform)
@@ -165,3 +180,7 @@ if __name__ == '__main__':
                         target.write(block)
             result = install(ROOT, platform, output/'XRay.xcframework.zip', output/'manifest.json')
         print(json.dumps(result, indent=2))
+
+
+if __name__ == '__main__':
+    main()

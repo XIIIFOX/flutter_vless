@@ -1,0 +1,142 @@
+name: macOS validation worker
+run-name: macos-validation ${{ inputs.parent_run_id }}.${{ inputs.parent_run_attempt }}.${{ inputs.request_id }} ${{ inputs.runner }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        type: choice
+        required: true
+        options: [macos-15, macos-26, macos-26-intel, macos-15-intel]
+      expected_sha:
+        type: string
+        required: true
+      request_id:
+        type: string
+        required: true
+      parent_run_id:
+        type: string
+        required: true
+      parent_run_attempt:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  admission:
+    name: Validate main request
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Reject foreign refs, source changes and unbounded runner choices
+        env:
+          REF: ${{ github.ref }}
+          SOURCE_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          PARENT_ID: ${{ inputs.parent_run_id }}
+          PARENT_ATTEMPT: ${{ inputs.parent_run_attempt }}
+          MAC_RUNNER: ${{ inputs.runner }}
+        run: |
+          python3 - <<'PY'
+          import os,re
+          assert os.environ['REPOSITORY']=='XIIIFOX/flutter_vless'
+          assert os.environ['REF']=='refs/heads/main'
+          assert re.fullmatch('[0-9a-f]{40}',os.environ['EXPECTED_SHA'])
+          assert os.environ['SOURCE_SHA']==os.environ['EXPECTED_SHA']
+          assert re.fullmatch('[0-9a-f]{32}',os.environ['REQUEST_ID'])
+          assert all(re.fullmatch('[1-9][0-9]*',os.environ[k]) for k in ['PARENT_ID','PARENT_ATTEMPT'])
+          assert os.environ['MAC_RUNNER'] in ['macos-15','macos-26','macos-26-intel','macos-15-intel']
+          PY
+  macos:
+    name: macOS published runtime
+    needs: admission
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          persist-credentials: false
+      - name: Verify exact main source
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          REF: ${{ github.ref }}
+        run: |
+          test "$REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          mkdir -p build/macos-validation
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Install the checksum-pinned published macOS SDK
+        run: |
+          git fetch --no-tags --depth=1 origin 2505694c4001e7d52f06d6a63f29780da8dc7d49
+          python3 tool/test_install_published_apple_runtime.py
+          python3 tool/install_published_apple_runtime.py --platform macos
+      - name: Test macOS host and DNS lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tool/test_macos_tunnel_support.sh 2>&1 | tee build/macos-validation/support.log
+          bash tool/test_macos_manager_policy.sh 2>&1 | tee build/macos-validation/manager.log
+          python3 tool/test_apple_cold_start_policy.py --receipts 2>&1 | tee build/macos-validation/cold-start.log
+          python3 tool/test_apple_start_owner.py 2>&1 | tee build/macos-validation/start-owner.log
+          python3 tool/test_apple_readiness_polling.py 2>&1 | tee build/macos-validation/readiness.log
+          bash tool/test_bounded_native_log_store.sh
+          bash tool/test_apple_options.sh
+      - name: Build macOS example
+        working-directory: example
+        env:
+          FLUTTER_XCODE_CODE_SIGNING_ALLOWED: 'NO'
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter pub get
+          flutter build macos --config-only
+          xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner -configuration Debug \
+            -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO \
+            CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/build/macos-validation/example" build \
+            2>&1 | tee "$GITHUB_WORKSPACE/build/macos-validation/example-build.log"
+      - name: Test macOS published runtime
+        env:
+          REQUIRE_CORE_PREFLIGHT: '1'
+          REQUIRE_VPN_ROUTING: '1'
+          REQUIRE_DARWIN_INTERFACE_BINDING: '1'
+          REQUIRE_MANAGED_SERVICE_LIFETIMES: '1'
+        run: bash tool/test_macos_privacy_runtime.sh
+      - name: Test shipped HEV packets
+        run: |
+          swift package --package-path packages/flutter_vless_macos/macos/flutter_vless_macos resolve
+          HEV=packages/flutter_vless_macos/macos/flutter_vless_macos/.build/artifacts/tun2sockskit/HevSocks5Tunnel/HevSocks5Tunnel.xcframework
+          bash tool/test_macos_packet_bridge.sh "$HEV/macos-arm64_x86_64"
+      - name: Verify unchanged public SDK and actual runtime capabilities
+        run: python3 tool/install_published_apple_runtime.py --platform macos --verify-installed
+      - name: Qualify macOS acceptance evidence
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: python3 tool/verify_macos_actions_validation.py
+      - name: Preserve macOS runtime and build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-validation-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            build/macos-validation/*.json
+            build/macos-validation/*.log
+            build/macos_privacy_runtime_probe/runtime.log
+            build/macos_packet_bridge_probe/runtime.log
+            build/published_apple_runtime/macos/*.json
+            build/apple-cold-start-current/*.json
+            build/apple-cold-start-current/*.log
+            build/apple-start-owner-current/*.json
+            build/apple-start-owner-current/*.log

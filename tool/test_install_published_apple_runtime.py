@@ -3,6 +3,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,6 +14,24 @@ import install_published_apple_runtime as subject
 
 
 class PublishedApple(unittest.TestCase):
+    def test_verify_installed_main_calls_only_the_selected_platform(self):
+        with patch.object(subject.sys, 'argv', ['installer', '--verify-installed', '--platform', 'macos']), \
+                patch.object(subject.sys, 'platform', 'darwin'), \
+                patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}), \
+                patch.object(subject, 'finish', return_value={'success': True}) as finish:
+            subject.main()
+        finish.assert_called_once_with(subject.ROOT, 'macos')
+
+    def test_platform_selection_keeps_both_as_default_and_selects_exact_receipt(self):
+        parser = subject.argument_parser()
+        self.assertEqual(subject.selected_platforms(parser.parse_args([]).platform), ['ios', 'macos'])
+        for platform in ['ios', 'macos']:
+            args = parser.parse_args(['--verify-installed', '--platform', platform])
+            self.assertTrue(args.verify_installed)
+            self.assertEqual(subject.selected_platforms(args.platform), [platform])
+        with self.assertRaises(ValueError): subject.selected_platforms('foreign')
+        with self.assertRaises(SystemExit): parser.parse_args(['--platform', 'foreign'])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)

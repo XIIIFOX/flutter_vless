@@ -1,0 +1,53 @@
+name: macOS published runtime validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-validation-main
+  cancel-in-progress: false
+
+jobs:
+  allocate:
+    name: Allocate one macOS validation worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    permissions:
+      contents: read
+      actions: write
+      checks: read
+    steps:
+      - name: Require main
+        env:
+          REF: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          test "$REF" = refs/heads/main
+          test "$REPOSITORY" = XIIIFOX/flutter_vless
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test bounded allocation controls without a Mac
+        run: |
+          python3 -m unittest discover -s tool -p test_run_macos_actions_validation.py -v
+          python3 -m unittest discover -s tool -p test_verify_macos_actions_validation.py -v
+          python3 tool/test_install_published_apple_runtime.py
+      - name: Validate published macOS runtime on an available standard runner
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: exec python3 tool/run_macos_actions_validation.py
+      - name: Preserve allocation results and exact child run links
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-allocation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/macos-actions-dispatch/result.json
+          if-no-files-found: warn
+          retention-days: 7

@@ -7,10 +7,10 @@ import flutter_vless_macos_privacy
 /// collection window is inside the caller's absolute deadline, not renewed per RR.
 final class TunnelEndpointDNSCollection: @unchecked Sendable {
     typealias Query = (String, UInt32, DispatchQueue, @escaping (TunnelEndpointDNSAnswer) -> Void) -> (() -> Void)?
-    private let queue = DispatchQueue(label: "dev.tfox.flutter-vless.endpoint-candidates")
+    private let queue = DispatchQueue(label: "dev.tfox.flutter-vless.endpoint-candidates", qos: .userInitiated)
     private var continuation: CheckedContinuation<[TunnelEndpointCandidate], Error>?
     private var cancelQuery: (() -> Void)?
-    private var timer: DispatchWorkItem?
+    private var timer: DispatchSourceTimer?
     private var cancelled = false
     private var accumulator: TunnelEndpointDNSAccumulator
     private let now: () -> TimeInterval
@@ -68,12 +68,18 @@ final class TunnelEndpointDNSCollection: @unchecked Sendable {
         registrationMs = timing.elapsedMilliseconds()
         registrationSucceeded = cancelQuery != nil
         guard cancelQuery != nil else { finish(.success([])); return }
-        let timeout = DispatchWorkItem { [self] in
-            guard isCurrent() else { finish(.failure(CancellationError())); return }
-            finish(.success(accumulator.snapshot(at: now())))
+        // One-shot endpoint preparation timer, never recurring background work.
+        // Tight leeway avoids an extra system coalescing delay during startup;
+        // it does not shorten the DNS collection window or renew its budget.
+        let timeout = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
+        timeout.setEventHandler { [weak self] in
+            guard let self else { return }
+            guard self.isCurrent() else { self.finish(.failure(CancellationError())); return }
+            self.finish(.success(self.accumulator.snapshot(at: self.now())))
         }
+        timeout.schedule(deadline: .now() + min(2, remaining), leeway: .milliseconds(1))
         timer = timeout
-        queue.asyncAfter(deadline: .now() + min(2, remaining), execute: timeout)
+        timeout.activate()
     }
 
     private func finish(_ result: Result<[TunnelEndpointCandidate], Error>) {

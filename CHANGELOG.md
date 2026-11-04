@@ -20,6 +20,7 @@ the main package and platform interface remain `1.1.7`.
 * Bound delay, readiness, statistics and diagnostics work; preserve Stop, socket/process cleanup, native reconnect budgets and status delivery on the Flutter platform thread.
 * Report Apple VPN readiness promptly in a bounded startup polling window; retain live worker checks, the normal traffic cadence and rejection of replies from stopped or replaced sessions.
 * Cancel obsolete Apple startup DNS preparation when the physical path changes. Preserve the current plan's A/AAAA collection window, the overall startup deadline and the bounded number of preflight/settings admissions; expose private monotonic phase timings for diagnostics.
+* Accept Apple unicast endpoint DNS replies with their process-default provenance instead of unnecessarily invoking encrypted fallback. Preserve independent interface-scoped TTL/removal records and the full A/AAAA collection window; avoid extra timer coalescing during endpoint preparation.
 * Restore traffic counters for full profiles with caller policy levels and missing inbound statistics defaults. Preserve explicitly disabled counters and caller API settings; prevent stale polling replies from reviving stopped sessions.
 * Document public Dart APIs, options, parsers and typed models for editor hover/signature help; align setup guides and configuration examples with the current API.
 

@@ -99,7 +99,9 @@ def compare(baseline, candidate):
     if statistics.median(before) < 1800 or max(after) >= 900 or gain < 1000:
         raise ValueError('Terminal DNS timing did not improve within the 900ms budget')
     for rows in (baseline, candidate):
-        if times(rows, 'no_record_late_aaaa')[0] < 1700 or times(rows, 'silence_fallback')[0] < 1800:
+        # The real-clock AAAA arrives at 1.5s, leaving scheduling headroom before
+        # the unchanged 2s ceiling. The exact 1.9s edge uses a deterministic clock.
+        if times(rows, 'no_record_late_aaaa')[0] < 1300 or times(rows, 'silence_fallback')[0] < 1800:
             raise ValueError('Late AAAA or silent DNS collection was shortened')
         for case in ('stop_cancel', 'path_cancel'):
             if times(rows, case)[0] >= 500:

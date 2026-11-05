@@ -14,7 +14,7 @@ def rows(mode):
     for case, count in timing.CASES.items():
         for sample in range(count):
             elapsed = {'terminal_unavailable_fallback': 2100 if mode == 'baseline' else 130,
-                       'no_record_late_aaaa': 1900, 'silence_fallback': 2100,
+                       'no_record_late_aaaa': 1500, 'silence_fallback': 2100,
                        'stop_cancel': 20, 'path_cancel': 80}.get(case, 30)
             result.append(dict(schema=1, case=case, sample=sample, elapsed_ms=elapsed,
                 fallback_calls=int(case in ('terminal_unavailable_fallback', 'silence_fallback')),

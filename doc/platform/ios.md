@@ -83,8 +83,8 @@ await flutterVless.startVless(
 );
 ```
 
-The directory must be an existing absolute path. The updated 1.1.7 Core bridge
-validates files referenced by the configuration, including custom `ext:` data;
+The directory must be an existing absolute path. The Core bridge validates
+files referenced by the configuration, including custom `ext:` data;
 unused standard files are optional. The pinned published
 `xray-ios-v26.10.31-r2` SDK supplies this bridge. For Packet Tunnel mode use the App Group shared by `Runner`
 and `XrayTunnel`. Invalid referenced assets fail startup instead of silently
@@ -114,7 +114,7 @@ the requested asset location first; Core checks the files referenced by the prof
 Most application integrators use the prebuilt `XRay.xcframework` and do not
 need this step. It is for maintainers rebuilding the iOS runtime.
 
-The current GitHub source pins `xray-ios-v26.10.31-r2`, including listener cleanup
+The package pins `xray-ios-v26.10.31-r2`, including listener cleanup
 after invalid server `h2Params`. The bundled framework and download checksum
 must come from that same published archive.
 
@@ -141,7 +141,7 @@ overrides, and rationale, see [Build XRay.xcframework](../../ios/XRAY_BUILD.md).
 2. Add the package to your own app.
 3. Create a Packet Tunnel extension named `XrayTunnel`.
 4. Enable App Groups and Network Extensions on both targets. Configure
-   [shared Keychain access](#keychain-profile-migration-116) using the App Group
+   [shared Keychain access](#keychain-profile-migration) using the App Group
    or an optional dedicated Keychain group.
 5. Set `Runner`, `XrayTunnel`, and generated SwiftPM integration to iOS 15.0+.
 6. Pass the base bundle id and App Group from Dart, and set the chosen Keychain
@@ -177,7 +177,7 @@ the `XrayTunnel` target, not the Flutter `Runner` target.
 - using the extension bundle id instead of the base app bundle id
 - expecting simulator behavior to match a real device
 
-## Keychain profile migration (1.1.6)
+## Keychain profile migration
 
 VPN mode requires Runner and XrayTunnel to share access to the profile's Keychain
 item. A **dedicated Keychain access group is optional**. Choose either:

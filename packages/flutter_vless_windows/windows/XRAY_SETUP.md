@@ -1,7 +1,6 @@
 # Xray integration setup for Windows
 
-This guide describes the working 1.1.7 source. Native runtime publication is
-separate from Flutter package publication.
+This guide describes Windows integration for flutter_vless 1.1.7.
 
 Use the [current Windows platform guide](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/platform/windows.md)
 for runtime layout, administrator requirements, DNS/routing behavior and cleanup.

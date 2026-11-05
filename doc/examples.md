@@ -53,7 +53,6 @@ Future<void> startTunnel(String link) async {
   await flutterVless.startVless(
     remark: parsed.remark,
     config: parsed.getFullConfiguration(),
-    bypassSubnets: const ['192.168.0.0/16', '10.0.0.0/8'],
   );
 }
 ```
@@ -62,6 +61,8 @@ Notes:
 
 - Android can use `blockedApps` for per-app VPN exclusions.
 - iOS and macOS require Network Extension and App Group setup.
+- macOS/Windows accept IPv4 `bypassSubnets` as Core direct rules. For iOS, use
+  Xray routing rules; non-empty `bypassSubnets` are rejected.
 - Windows tunnel behavior may require elevated permissions.
 
 ## 3. Import A Subscription
@@ -83,27 +84,32 @@ raw payloads containing supported Xray-compatible protocols.
 
 ## 4. Custom Routing
 
-Use the parsed object's mutable Xray maps when you need to adjust generated
-runtime config before startup.
+Edit and serialize one `fullConfiguration` document before startup. Re-reading
+the getter for a share link generates another document.
 
 ```dart
+import 'dart:convert';
+
 Future<void> startWithCustomRouting(String link) async {
   final parsed = FlutterVless.parse(link);
 
-  parsed.inbound['port'] = 10890;
-  parsed.inbound['listen'] = '127.0.0.1';
-  parsed.routing['domainStrategy'] = 'AsIs';
-  parsed.routing['rules'] = [
+  final document = parsed.fullConfiguration;
+  final inbounds = (document['inbounds'] as List).cast<Map<String, dynamic>>();
+  inbounds.first['port'] = 10890;
+  inbounds.first['listen'] = '127.0.0.1';
+  final routing = document['routing'] as Map<String, dynamic>;
+  routing['domainStrategy'] = 'AsIs';
+  routing['rules'] = [
     {
       'type': 'field',
-      'domain': ['geosite:private'],
+      'domain': ['domain:example.org'],
       'outboundTag': 'direct',
     },
   ];
 
   await flutterVless.startVless(
     remark: parsed.remark,
-    config: parsed.getFullConfiguration(),
+    config: jsonEncode(document),
     proxyOnly: true,
   );
 }

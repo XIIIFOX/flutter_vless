@@ -1,8 +1,7 @@
 # Bounded compatibility acceptance, 2026-11-01
 
-Work stays on `main`, with Flutter packages at `1.1.7`. No pub.dev/plugin
-publication or live macOS VPN session is part of this stage. The owner's Mac
-VPN and unrelated working files/processes must remain untouched.
+Compatibility acceptance record for flutter_vless 1.1.7. Live macOS VPN
+acceptance is outside the scope of this report.
 
 ## Scope amendment: native Core 26.10.31
 
@@ -12,7 +11,7 @@ native releases from the official pinned source; exact source/archive/ABI and
 capability checks; public-byte verification before changing default consumers
 in `main`; then current-version routing/compatibility checks in Actions and
 available mobile devices. Old native releases remain unchanged. The Flutter
-packages stay at `1.1.7` and are not published. Live macOS VPN testing remains
+packages use `1.1.7`. Live macOS VPN testing remains
 outside this goal; the owner's Mac VPN stays on. Finish with a separate list
 of verified upstream features needing further plugin work, clearly separating
 implemented support from remaining external acceptance and wider coverage.
@@ -210,8 +209,8 @@ the final test and documentation commit.
 
 The owner-approved amendment is implemented: native Core **26.10.31** is public
 for Android (Maven and GitHub), iOS, macOS and Windows. All active consumers in
-`main` use those releases. Package sources stay at **1.1.7**, example **1.1.7+117**;
-this stage publishes no Flutter package or plugin tag.
+`main` use those releases. The checks used package version **1.1.7** and
+example build **1.1.7+117**.
 
 | Boundary | Final result and explicit limits |
 | --- | --- |

@@ -1,8 +1,6 @@
 # Xray 26.10.21 validation and remaining work
 
-This update publishes native runtimes only. The Flutter source packages and
-example remain 1.1.7; no pub.dev publication or plugin 1.1.7 GitHub release is
-part of this update.
+Native runtime qualification for flutter_vless 1.1.7.
 
 Follow-up: [fresh-profile validation on 26 October](../validation-2026-10-26.md)
 records newer live profiles and successful standalone/combined Android Flutter
@@ -90,18 +88,10 @@ remains deferred until the owner is ready.
    project retains its existing full GeoDAT files; changing database coverage
    requires an explicit choice and routing regression checks.
 
-The eight broader DNS, IPv6, import, full-configuration and recovery requirements
-in [Compatibility](../compatibility.md) retain their individual partial statuses.
-The three supplied profiles do not replace a protocol/transport matrix.
+These results cover the profiles and platform checks recorded above. See
+[Compatibility](../compatibility.md) for current capabilities and limits.
 
-## Plugin publication remains blocked separately
+## Package versions
 
-Android, macOS and Windows implementation package versions 1.1.7 already exist
-on pub.dev with older sources and cannot be overwritten. The new interface API
-is not in the currently published interface package. Follow the
-[registry publication order](README.md#registry-blockers-before-publishing-the-plugin)
-with free implementation versions and matching root minimum constraints before
-publishing the root plugin. No package versions are changed by this update.
-The follow-up report records the current CI and device acceptance.
-The deferred live macOS VPN check and separate package publication constraints
-remain before declaring the plugin release ready.
+See [Package versions](README.md#package-versions) for Dart dependencies and
+publication order. Native runtime revisions have their own version numbers.

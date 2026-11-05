@@ -11,4 +11,6 @@ This package is not intended to be used directly by end-users. Instead, use the 
 ## Platform Implementations
 
 - Android: [`flutter_vless_android`](https://pub.dev/packages/flutter_vless_android)
-- iOS: Implemented directly in the main package (for now).
+- iOS: Implemented directly in the main package.
+- macOS: [`flutter_vless_macos`](https://pub.dev/packages/flutter_vless_macos)
+- Windows: [`flutter_vless_windows`](https://pub.dev/packages/flutter_vless_windows)

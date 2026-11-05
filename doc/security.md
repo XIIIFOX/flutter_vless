@@ -106,7 +106,7 @@ the current session.
 
 ## iOS Traffic Protection
 
-With the current example Packet Tunnel provider, traffic protection is mandatory
+The example Packet Tunnel provider requires traffic protection
 for VPN sessions. The saved profile enables `includeAllNetworks` and applies the
 configured On Demand policy after successful preflight/network setup. The
 provider keeps its routes and virtual DNS while
@@ -131,7 +131,7 @@ network from inside the provider. They remain compatible with this policy.
 System route exclusions in `bypassSubnets` are incompatible with this policy.
 Non-empty values are rejected before changing the current session; they never
 automatically disable protection. Reconnect from the app to update an older saved
-VPN profile. The current provider rejects profiles without `includeAllNetworks`
+VPN profile. The provider rejects profiles without `includeAllNetworks`
 before endpoint bootstrap or runtime startup.
 
 An explicit `stopVless()` or switch to proxy-only mode disables on-demand
@@ -150,7 +150,7 @@ in system settings also releases its policy. See Apple's
 [VPN routing documentation](https://developer.apple.com/documentation/networkextension/routing-your-vpn-network-traffic)
 and [`includeAllNetworks`](https://developer.apple.com/documentation/networkextension/nevpnprotocol/includeallnetworks).
 
-## Recommended Production Checklist
+## Application integration
 
 - Pin package versions in the app.
 - Verify native binary checksums during release work.
@@ -163,9 +163,9 @@ and [`includeAllNetworks`](https://developer.apple.com/documentation/networkexte
 ## Local access, secret storage and Android recovery
 
 See the platform guides for current contracts and migration notes:
-[iOS](platform/ios.md#keychain-profile-migration-116) and
+[iOS](platform/ios.md#keychain-profile-migration) and
 [Android](platform/android.md#session-protection-and-local-proxy-access).
-In 1.1.7, VPN adapter credentials are native session state; the exported
+VPN adapter credentials are native session state; the exported
 configuration remains deterministic and contains no generated session password.
 Imported listeners keep their own explicit accounts/noauth policy in either
 mode. Private adapter authentication does not change those imported access

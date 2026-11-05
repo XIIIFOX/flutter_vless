@@ -1,6 +1,6 @@
 # Xray Android 26.10.31-protect2
 
-Native Android AAR only. Flutter plugin/packages remain **1.1.7**; this does not publish the plugin.
+Native Android AAR for flutter_vless 1.1.7.
 
 Closes the allocated XHTTP TCP listener when malformed server `h2Params` is rejected. Successful caller configurations, capabilities and Android protection behavior are unchanged. Upstream Core remains `26.10.31` (`a4a3dff5b20c2faae567b742c172c7b95e75c083`).
 

@@ -1,6 +1,6 @@
 # Xray iOS 26.10.31-r2
 
-Native SDK only. Flutter plugin/packages remain **1.1.7**; no plugin publication is included.
+Native iOS SDK for flutter_vless 1.1.7.
 
 Closes the owned XHTTP TCP listener when invalid server `h2Params` is rejected. The successful path and public SDK ABI are unchanged. Upstream Core is still `26.10.31` (`a4a3dff5b20c2faae567b742c172c7b95e75c083`).
 

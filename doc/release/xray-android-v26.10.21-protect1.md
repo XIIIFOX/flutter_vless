@@ -1,6 +1,6 @@
 # XRay Android v26.10.21-protect1
 
-Native runtime only for the unreleased flutter_vless 1.1.7 work. No Flutter package or pub.dev implementation package is published by this release.
+Native runtime for flutter_vless 1.1.7.
 
 - Xray-core [v26.10.21](https://github.com/XTLS/Xray-core/releases/tag/v26.10.21), commit `1b1647cd9ddf0abc34b981d4611fc03bcac1ca74`.
 - Go 1.27.3 and updated fallback RootCAs for the upstream certificate-trust security update.

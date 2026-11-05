@@ -23,6 +23,3 @@ are retained; custom-root and preflight checks pass.
 The release includes the exact archive, producer manifest and checksum file.
 Earlier release assets remain unchanged. Physical-device acceptance is recorded
 separately after publication.
-
-Flutter package versions remain **1.1.7**. This release publishes native runtime
-assets only and does not publish the plugin.

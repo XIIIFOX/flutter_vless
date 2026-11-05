@@ -1,6 +1,6 @@
 # XRay macos v26.9.9
 
-Native runtime for the flutter_vless 1.1.6 release train; Flutter packages remain unreleased.
+Native runtime for flutter_vless 1.1.6.
 
 - Xray-core [v26.9.9](https://github.com/XTLS/Xray-core/releases/tag/v26.9.9), commit `52a412d9e2f5c2a5142b1b4e2ab3771dacb8b120`.
 - macOS 13+, universal arm64/x86_64 static library.

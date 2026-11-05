@@ -1,10 +1,8 @@
 # Xray 26.10.29 validation and remaining work
 
-This update publishes native runtimes only. Flutter source packages and the
-example remain 1.1.7. No pub.dev package or plugin 1.1.7 GitHub release is
-published. The producer and consumer CI checks below pass against this runtime;
-live mobile acceptance is recorded separately. Earlier-version results are not
-carried forward as proof for this runtime.
+Native runtime qualification for flutter_vless 1.1.7. The producer and consumer
+CI checks below apply to this runtime; live mobile acceptance is recorded
+separately. Earlier-version results are not carried forward as proof.
 
 The initial-runtime evidence below is retained as history. The current
 `r3`/`protect3` compatibility follow-up, native release links, capability
@@ -239,12 +237,7 @@ import, file and recovery requirements retain their individual statuses in
 [Compatibility](../compatibility.md). Full Options/protocol matrices and a new
 Linux plugin implementation are outside this runtime update.
 
-## Plugin release is a separate decision
+## Related documentation
 
-Runtime publication does not publish or qualify the Flutter plugin. Before a
-future package release, review the registry/version constraints and publication
-order in [Package Release Preparation](README.md#registry-blockers-before-publishing-the-plugin),
-complete the deferred live macOS check, close the unqualified iPhone 2ip
-direct-default case, and review remaining compatibility coverage.
-Full Options/protocol matrices and long-duration/NAT64 handover
-acceptance are not established by this runtime update.
+See [Compatibility](../compatibility.md) for current capabilities and limits,
+and [Package versions](README.md#package-versions) for package dependencies.

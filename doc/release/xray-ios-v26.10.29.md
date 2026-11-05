@@ -1,7 +1,6 @@
 # XRay iOS v26.10.29
 
-Native runtime only for the unreleased flutter_vless 1.1.7 work. No Flutter
-package, pub.dev package or plugin 1.1.7 GitHub release is published.
+Native runtime for flutter_vless 1.1.7.
 
 - Xray-core [v26.10.29](https://github.com/XTLS/Xray-core/releases/tag/v26.10.29),
   commit `0afec66085a85191e9dd2a4a6646c7c9a94688d1`.
@@ -17,4 +16,4 @@ package, pub.dev package or plugin 1.1.7 GitHub release is published.
 Archive SHA-256: `c6b2070b24e7f150fea5460fd2c42beef3dda92ad94439069e6b933e2cfeee55`.
 
 Signed physical-device VPN acceptance is recorded separately in
-[validation and remaining work](xray-v26.10.29-validation.md).
+[validation and remaining work](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/release/xray-v26.10.29-validation.md).

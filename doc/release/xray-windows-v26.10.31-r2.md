@@ -1,6 +1,6 @@
 # Xray Windows 26.10.31-r2
 
-Native AMD64 runtime only. Flutter plugin/packages remain **1.1.7**.
+Native AMD64 runtime for flutter_vless 1.1.7.
 
 Closes the allocated XHTTP TCP listener on malformed server `h2Params` without changing valid-config behavior or the public capability contract. Upstream Core remains `26.10.31` (`a4a3dff5b20c2faae567b742c172c7b95e75c083`).
 

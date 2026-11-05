@@ -23,5 +23,3 @@ The release includes the exact producer manifest and checksum file. Earlier
 Cloud fixtures use controlled HTTP/TLS endpoints and synthetic credentials;
 they do not certify a live cloud account, complete relay, HTTP/3/ECH, physical
 NAT64 network or a live macOS VPN. Device acceptance is recorded separately.
-
-Flutter plugin packages remain **1.1.7** and are not published by this release.

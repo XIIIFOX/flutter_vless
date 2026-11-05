@@ -22,9 +22,11 @@ Clash YAML and sing-box JSON imports can also produce generated Xray configs
 for supported profile objects such as WireGuard, Hysteria2, and HTTP proxy
 outbounds.
 
-Unsupported or not-yet-mapped protocols are skipped instead of being converted
-into broken Xray output. The next-version protocol inventory is tracked in
-`doc/protocol_support_roadmap.md`.
+Unsupported or unmapped protocols are skipped instead of being converted into
+broken Xray output. The supported import and transport paths are listed in
+[protocol and transport support](protocol_support_roadmap.md). Raw Xray JSON
+retains unknown fields and protocol/transport names for final Core validation;
+it is not restricted to the share-link importer's conversion list.
 
 ## `parse()` Versus `parseMany()`
 

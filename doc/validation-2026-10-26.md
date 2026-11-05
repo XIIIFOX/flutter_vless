@@ -4,7 +4,7 @@ This follow-up uses three fresh owner-supplied VLESS/REALITY JSON profiles
 (Czechia, Cyprus and Israel) and the Israeli share link. Credentials, server
 addresses, original files and device evidence stay in ignored private local
 directories. They are not test fixtures committed to Git or uploaded to Actions.
-The plugin and its implementation packages remain at 1.1.7 and are not published.
+The recorded checks use flutter_vless 1.1.7.
 
 ## Shared import and public API checks
 

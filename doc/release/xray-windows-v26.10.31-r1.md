@@ -23,6 +23,3 @@ Place these files in the application's `xray` directory and retain compatible
 `tun2socks.exe` and `wintun.dll` files for VPN mode. The executed native service
 capability is **7**: GeoDAT plus XDRIVE storage/idle-worker ownership. Physical
 IPv6-only/NAT64 and live cloud accounts remain separate acceptance conditions.
-
-Flutter package versions remain **1.1.7**. This release publishes native runtime
-assets only and does not publish the plugin.

@@ -51,7 +51,7 @@ flutter run -d macos
 
 ## What You Need
 
-- macOS 13 or newer for the validated setup
+- macOS 13 or newer
 - a Packet Tunnel extension target
 - App Groups enabled
 - the setup command from the package
@@ -105,7 +105,7 @@ That note explains the routing, DNS, and packet-tunnel invariants that matter wh
 - the provider captures IPv4 and IPv6, publishes virtual DNS `10.0.85.53`, and excludes only prepared transport endpoint addresses
 - provider readiness combines the current HEV worker state with authentication to the managed local SOCKS listener; check an allowed URL separately for remote reachability
 - routed DoH retains caller hosts and domain policy; bounded `tcp+local`, `https+local` and `h2c+local` use closed, interface-bound branches described in [Apple DNS](../apple-readiness-and-dns.md)
-- live IPv6-only/NAT64/handover and the owner's macOS VPN acceptance remain separate from source and Actions checks
+- validate IPv6-only/NAT64/handover and system-VPN behavior on the target network; compilation and controlled Actions fixtures do not establish those paths
 - use the architecture note before changing packet tunnel logic
 
 ## PacketTunnelProvider.swift

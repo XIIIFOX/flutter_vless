@@ -87,7 +87,7 @@ The AAR contains `libxray.so` and `libtun2socks.so` for `armeabi-v7a`, `arm64-v8
 
 The `flutter_vless_android` Pub.dev package intentionally does not include raw `android/src/main/jniLibs` or geodata files. Runtime updates are made in `android_runtime/xray_android/src/main`, published to Maven Central first, and then consumed by the Android wrapper.
 
-For the strict runtime update and publishing checklist, see `doc/release/android-runtime-maven-central.md`.
+Runtime maintainers can follow the [Maven release guide](../release/android-runtime-maven-central.md).
 
 ## Runtime Notes
 

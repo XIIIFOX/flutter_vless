@@ -1,8 +1,8 @@
 # Xray 26.10.29 compatibility work
 
-The Flutter packages stay at 1.1.7. This work does not publish the plugin or run
-a VPN on the owner's Mac. Native runtime revisions and live-device evidence
-have separate qualification requirements.
+Compatibility results for flutter_vless 1.1.7 and Xray-core 26.10.29.
+Native runtime revisions and live-device evidence have separate qualification
+requirements.
 
 The follow-up [bounded acceptance, 2026-11-01](acceptance-2026-11-01.md)
 records the later deadline fixes, complete controlled S3 relay, literal-IP TLS

@@ -1,6 +1,6 @@
 # Xray macOS 26.10.31-r2
 
-Native runtime only. Flutter plugin and package sources remain **1.1.7**; this is not a plugin release.
+Native runtime for flutter_vless 1.1.7.
 
 This revision closes the allocated XHTTP TCP listener when invalid server `h2Params` is rejected. Successful configurations and the public SDK ABI are unchanged. Upstream Core stays at `26.10.31` (`a4a3dff5b20c2faae567b742c172c7b95e75c083`).
 

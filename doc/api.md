@@ -6,10 +6,8 @@ This document describes the app-facing Dart contract exposed by
 Use this page when you need to know what a method expects, what it returns, and
 which parts are platform-specific.
 
-This page describes the working 1.1.7 source. Use matching source packages as
-shown in the [Git setup](../README.md#unreleased-117-from-github) until the main
-1.1.7 plugin is published. Editor hover documentation is included on exported
-Dart declarations; platform setup remains necessary for VPN mode.
+Exported Dart declarations include editor hover documentation. Complete the
+platform setup before using VPN mode.
 
 ## Import
 
@@ -62,7 +60,7 @@ Parameters:
   when `FlutterVlessKeychainAccessGroup` is set in Runner's Info.plist. VPN mode
   requires a group accessible to both targets: reuse their registered App Group
   or configure an optional dedicated Keychain group. `groupIdentifier` is not an
-  automatic fallback. See [iOS setup](platform/ios.md#keychain-profile-migration-116).
+  automatic fallback. See [iOS setup](platform/ios.md#keychain-profile-migration).
 
 Apple platforms append the Packet Tunnel extension suffix internally. Pass the
 base app bundle id, not the extension bundle id.
@@ -202,18 +200,17 @@ persistence and startup; Apple also retains its safe Decode/Build location.
 Unknown native details are ignored. A later startup failure can occur after
 admission: this report does not promise rollback to the previous session.
 
-The example displays the report and safe error descriptions, and clears a
-superseded report when its configuration changes or another start is attempted.
+Preparation reports are optional API results. The example displays connection
+errors without adding a persistent report panel.
 
 An Apple Core version string alone does not identify the loaded bridge ABI.
 Use capabilities from the actual artifact; the pinned published r2 SDKs include
-the Check/routing interfaces used by the current adapters. A missing
+the Check/routing interfaces used by the adapters. A missing
 Check ABI yields `coreCheck: unavailable`; an explicit native routing request
 still requires native routing capability and fails closed when it is absent.
-An Apple VPN report still covers `host` preparation, not final provider-report
-delivery or a general network guarantee. The separate [current iPhone/Actions
-qualification](release/apple-readiness-dns-validation.md) records actual
-DNS/data/routing checks and their limits.
+An Apple VPN report covers `host` preparation, not final provider-report
+delivery or a network guarantee. See [Apple readiness and DNS](apple-readiness-and-dns.md)
+for the distinction between forwarding readiness and remote reachability.
 
 ## `stopVless()`
 

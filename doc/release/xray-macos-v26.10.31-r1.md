@@ -23,6 +23,3 @@ takes place on disposable Actions runners; the owner's Mac VPN is untouched.
 The release includes the exact archive, producer manifest and checksum file.
 Earlier release assets remain unchanged. Live macOS VPN acceptance remains a
 separately scheduled check.
-
-Flutter package versions remain **1.1.7**. This release publishes native runtime
-assets only and does not publish the plugin.

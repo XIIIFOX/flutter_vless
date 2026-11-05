@@ -2,7 +2,7 @@
 
 ## Account-free local acceptance
 
-The repository includes a temporary S3 API simulator. From the repository root:
+The repository includes a bounded local S3 API simulator. From the repository root:
 
 ```sh
 python3 tool/xdrive_s3_fixture.py --case-dir build/xdrive-local-01 --seconds 180
@@ -29,7 +29,7 @@ cloud service availability, quotas and negotiated cloud TLS remain separate.
 ## Cloud configuration
 
 [s3.json](s3.json) and [google-drive.json](google-drive.json) are complete client
-configuration templates for Xray Core 26.10.29. They contain placeholders, not
+configuration templates for Xray Core 26.10.31. They contain placeholders, not
 working accounts. Both peers need compatible application protocol settings and
 matching storage details. XDRIVE requires VLESS Encryption and client Mux, even
 when the cloud endpoint already uses HTTPS. `encryption: "none"` is invalid for
@@ -73,10 +73,9 @@ your deployment deliberately provides that fronting service.
 
 ## Native runtime requirement
 
-XDRIVE admission requires the managed service lifetime patch as well as Core
-26.10.29. The original public 26.10.29 runtime, the earlier r2 storage-only capability,
-and custom runtimes without worker ownership are refused for active XDRIVE,
-before replacing a running session.
+XDRIVE admission requires the managed-service lifetime capabilities in the pinned
+26.10.31 runtimes. Storage-only or custom runtimes without worker ownership are
+refused for active XDRIVE before replacing a running session.
 Updating only the Flutter package or checking the Core version is insufficient.
 
 | Platform | Required runtime capability |
@@ -86,9 +85,8 @@ Updating only the Flutter package or checking the Core version is insufficient.
 
 The producer builds require both managed lifetime patches. If GeoDAT scheduling
 is also enabled, its separate capability is required too. Use the immutable
-native artifact selected by the plugin's consumer pins; candidate artifact
-publication and device qualification are tracked separately. These examples do
-not announce a plugin release.
+native artifact selected by the plugin's consumer pins, then test the profile on
+the target device and network.
 
 ## Validation scope
 
@@ -102,7 +100,7 @@ tests do not establish a working real cloud account or the whole
 HTTP/3/ECH/redirect matrix. `local` and `template` XDRIVE services remain outside
 the plugin's admitted service set.
 
-Primary sources at the pinned Core revision:
+Primary sources for the transport configuration and storage clients:
 [JSON configuration](https://github.com/XTLS/Xray-core/blob/0afec66085a85191e9dd2a4a6646c7c9a94688d1/infra/conf/transport_method.go),
 [VLESS Encryption and Mux requirements](https://github.com/XTLS/Xray-core/blob/0afec66085a85191e9dd2a4a6646c7c9a94688d1/infra/conf/xray.go),
 [S3](https://github.com/XTLS/Xray-core/blob/0afec66085a85191e9dd2a4a6646c7c9a94688d1/transport/internet/xdrive/s3.go),

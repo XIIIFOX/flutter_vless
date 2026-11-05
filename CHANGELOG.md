@@ -1,51 +1,55 @@
 ## 1.1.7
 
-Current repository development version; Flutter packages have not been published
-from this revision. Native runtimes are published separately.
-The Android, macOS and Windows implementation updates use `1.1.7+1`;
-the main package and platform interface remain `1.1.7`.
+**Control & Compatibility Update**
 
-### Native runtime
+### General
 
-* Use Xray-core **26.10.31** with the published Android `26.10.31-protect2`, iOS/macOS `26.10.31-r2` and managed Windows `26.10.31-r2` runtimes. Verify artifact checksums and required runtime capabilities before startup.
-* Retain Android device/emulator ABIs and 16 KiB alignment, Apple private startup/asset bridges and HTTP/2 memory cap, protected native routing and scoped service ownership.
-* Close Classic DNS, XHTTP HTTP/3, XDRIVE and GeoDAT resources on Stop. Release an allocated XHTTP listener when invalid server `h2Params` rejects startup.
+* Update Xray-core to **26.10.31** with pinned native runtimes and managed resource cleanup.
+* Add typed notification, quick access, reconnect, protection and diagnostics options with capability discovery and example settings persistence. Customize notification buttons, control labels/icons and diagnostic limits.
+* Expose existing Kill Switch protection through explicit policies, with configurable automatic reconnect delays and attempt limits. Keep protection active during recovery and preserve explicit Stop.
+* Add unlock/authentication checks for mobile quick actions and `clearQuickAccessProfile()` to revoke saved quick-control profiles.
+* Add per-session `VpnRoutingOptions`, optional preparation reports and separate data/certificate asset directories.
+* Preserve full Xray profiles with multiple or no imported listeners, caller API/services, DNS/routing, unknown fields and null/empty JSON structures. Accept Core-compatible port lists/ranges and environment-based addresses.
+* Accept Core-style JSON comments and a leading BOM in configuration, subscription and routing imports.
+* Forward IPv4/IPv6 VPN payload through caller DNS/routing policies and support compatible FakeDNS pools without colliding with private adapter addresses.
+* Improve Reality link and subscription import, preserve explicit TLS SNI and avoid decoding credentials twice.
+* Validate final native configurations before replacing an active session; rejected candidates leave the current session intact.
+* Resolve custom GeoDAT files and relative TLS certificate/key paths through independent asset directories, retaining their meaning during recovery and reload.
+* Restore traffic totals and speed when private statistics defaults are missing, while respecting caller APIs and disabled counters.
+* Add XDRIVE S3/Google Drive and scheduled GeoDAT support with runtime capability checks, bounded cancellation and dataset preservation.
+* Support gzip GeoDAT downloads with a 256 MiB decoded-data limit and atomic replacement; preserve existing datasets after corrupt or cancelled updates.
+* Close XHTTP HTTP/3 transports after failed handshakes and release allocated HTTP/2 listeners when invalid `h2Params` rejects startup.
+* Cancel superseded starts and quick actions; prevent stale callbacks from restoring a stopped or replaced session.
+* Add examples for system controls, DNS/routing, managed data updates and `finalmask` migration; verify compatibility with XHTTP OPTIONS/H2, fragmented QUIC SNI routing and HTTP `100-continue`.
 
-### API and system controls
+### iOS
 
-* Add typed Notification, Quick Access, Reconnect, Protection and Diagnostics options, validated settings persistence and native capability discovery.
-* Add Android Quick Settings Tile, macOS menu bar and Windows tray actions, plus optional Apple Control Center extension templates. Keep quick-profile reuse separate from automatic reconnect authorization and respect OS Always-on/lockdown policy.
-* Add per-start `VpnRoutingOptions`, optional preparation reports and `certificateAssetsDirectory`; retain existing startup calls and reject unsupported guarantees explicitly.
-* Cancel superseded starts and quick actions across permission, authentication and options changes. Preserve the current session/listener after rejected candidates, and report `VPN_START_CANCELLED` for an obsolete pending start.
-* Bound delay, readiness, statistics and diagnostics work; preserve Stop, socket/process cleanup, native reconnect budgets and status delivery on the Flutter platform thread.
-* Report Apple VPN readiness promptly in a bounded startup polling window; retain live worker checks, the normal traffic cadence and rejection of replies from stopped or replaced sessions.
-* Cancel obsolete Apple startup DNS preparation when the physical path changes. Preserve the current plan's A/AAAA collection window, the overall startup deadline and the bounded number of preflight/settings admissions; expose private monotonic phase timings for diagnostics.
-* Accept Apple unicast endpoint DNS replies with their process-default provenance instead of unnecessarily invoking encrypted fallback. Preserve independent interface-scoped TTL/removal records and the full A/AAAA collection window; avoid extra timer coalescing during endpoint preparation.
-* Admit Apple startup from complete usable-family DNS batches instead of a fixed two-second delay. Keep bounded A/AAAA subscriptions, TTL/removal validation, fresh path correction, and sleep/wake ownership through the original collection window.
-* Restore traffic counters for full profiles with caller policy levels and missing inbound statistics defaults. Preserve explicitly disabled counters and caller API settings; prevent stale polling replies from reviving stopped sessions.
-* Document public Dart APIs, options, parsers and typed models for editor hover/signature help; align setup guides and configuration examples with the current API.
+* Speed up VPN startup and DNS admission while retaining late A/AAAA updates, TTL checks, path changes and sleep/wake ownership.
+* Keep native forwarding readiness separate from remote-site reachability; allow connected delay checks against a caller-selected URL.
+* Add Control Center extension templates with local authentication and configurable On Demand handling; explicit Stop disarms automatic reconnection.
+* Support `tcp+local`, `https+local` and `h2c+local` DNS for finite numeric/static resolver destinations through interface-bound paths.
+* When upgrading an existing host, update its copied `PacketTunnelProvider.swift` together with the Swift support package.
 
-### Configuration, DNS and routing
+### Android
 
-* Accept full profiles with multiple or no imported listeners. Allocate a separate authenticated VPN adapter without changing caller authentication, sniffing, routing, API/services or disabled statistics.
-* Preserve unknown JSON fields, Core field aliases, caller DNS hosts/tags/domain selection, transport headers and effective XHTTP download settings. Support JSON comments/BOM, listener port lists/ranges and captured port/address environment values.
-* Preserve explicit VMess TLS SNI independently of transport Host; decode Trojan/VLESS URI credentials once and accept missing display names.
-* Import commented plain-link subscriptions without mistaking them for JSON; retain full JSON and first-profile subscription selection, with regressions for Reality links, base64 lists, multiple profiles and unknown fields.
-* Fix Android first-install bundled GeoDAT preparation in the application sandbox without replacing caller updates; distinguish file preparation failures from checks actually run by Core.
-* Delegate system A/AAAA queries to caller Core DNS and capture IPv6 payload. Preserve compatible FakeDNS pools and caller query strategies while preventing collisions with private addresses, ports and service tags.
-* On Apple, report readiness from the live packet worker and authenticated managed listener rather than fixed public websites. Measure a caller-allowed URL separately with `getConnectedServerDelay`.
-* Prepare Apple `tcp+local`, `https+local` and `h2c+local` DNS through closed interface-bound branches for finite numeric/static resolver destinations. Require binding capability for DNS-only profiles before routes or On Demand; retain routed DoH policy.
-* Support bounded Apple IPv4/IPv6 endpoint preparation and reprepare on path/expiry/recovery changes. Admit finite numeric IPv6 TCP proxy endpoints on Windows with exact interface/firewall permissions.
-* Honor caller data and certificate asset roots through preflight, startup, recovery and delay. Preserve custom datasets and freeze relative certificate/key paths without changing global trust roots.
-* Support capability-checked XDRIVE S3/Google Drive endpoints and scheduled GeoDAT updates, including writable-target validation, bounded cancellation and preservation of downloaded datasets.
+* Add Quick Settings Tile and notification customization, including Android 13+ add-tile requests and unlock-before-action support.
+* Report OS Always-on/lockdown state, optionally require Always-on and restore required profiles on cold OS starts without silently changing system settings.
+* Fix first-install GeoDAT preparation without overwriting caller-managed or downloaded datasets.
+* Retain device/emulator ABIs and 16 KiB alignment; carry IPv6 payload and delegate system DNS to caller Core policy.
 
-### Integration and validation
+### macOS
 
-* Existing iOS hosts must update the copied `PacketTunnelProvider.swift` together with the Swift support package. macOS uses the packaged provider implementation.
-* Add examples for options, per-domain DNS/routing, XDRIVE, GeoDAT updates, `fragment`/`noises` migration to `finalmask`, XHTTP and HTTP `100-continue`.
-* Remove the example's automatic Configuration Check panel while retaining configuration errors and the optional report API. Cover existing status displays and controls with regression tests.
-* Add native regressions for GeoDAT gzip corruption/limits/cancellation, XHTTP OPTIONS/H2, fragmented QUIC SNI routing, Windows Core TUN leak rules and HTTP `100-continue`.
-* Qualify published runtimes in Actions and live Android/iPhone acceptance, including fresh configurations, both domain-routing directions, Stop and ordinary-network recovery. Live owner macOS, real IPv6-only/NAT64/handover, external cloud accounts and a complete protocol/server matrix remain separately documented acceptance work.
+* Add menu-bar actions and optional Control Center integration.
+* Speed up VPN startup by avoiding unnecessary DNS collection waits after terminal DNS service failures, while preserving negative-answer and silent-query collection windows.
+* Fix current-session readiness after startup recovery and expose bounded startup diagnostics.
+* Preserve caller DNS/routing, IPv4/IPv6 forwarding and protected recovery with the `26.10.31-r2` runtime; support the same bounded local DNS modes as iOS.
+
+### Windows
+
+* Add tray actions, typed options and bounded reconnect while retaining WFP protection through worker failure.
+* Support the managed `26.10.31-r2` runtime for native routing and XDRIVE/GeoDAT services.
+* Carry IPv6 tunnel payload and admit finite numeric IPv6 TCP proxy endpoints with scoped permissions; retain physical IPv6 protection.
+* Preserve full profiles, private statistics and owned process/socket/route cleanup.
 
 ## 1.1.6
 

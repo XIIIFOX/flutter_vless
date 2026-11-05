@@ -1,4 +1,4 @@
-![flutter_vless — Xray/V2Ray VPN plugin for Flutter](https://raw.githubusercontent.com/XIIIFOX/flutter_vless/main/doc/assets/flutter-vless-hero-1.1.6.png)
+![flutter_vless 1.1.7 — Xray/V2Ray VPN plugin for Flutter](https://raw.githubusercontent.com/XIIIFOX/flutter_vless/main/doc/assets/flutter-vless-hero-1.1.7.png)
 
 # flutter_vless — Xray/V2Ray VPN plugin for Flutter
 [![Pub Publisher](https://img.shields.io/pub/publisher/flutter_vless)](https://pub.dev/publishers/tfox.dev/packages)
@@ -51,8 +51,10 @@ license notices required by the license. See [NOTICE](https://github.com/XIIIFOX
 - Android device and emulator runtime binaries delivered through the main Maven runtime AAR.
 - Share-link, subscription, raw JSON, Clash YAML, and sing-box import paths.
 - Proxy-only mode and VPN/tunnel mode.
-- Runtime delay checks and status tracking.
+- Connection status, traffic counters and delay measurements.
+- Full-profile VPN routing with caller DNS and IPv4/IPv6 payload support.
 - Typed Xray config helpers for more explicit advanced configuration.
+- Typed [notification, quick access, reconnect, protection and diagnostics options](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/options-and-system-controls.md).
 
 ## Recommended Reading
 
@@ -64,56 +66,6 @@ license notices required by the license. See [NOTICE](https://github.com/XIIIFOX
 6. Compatibility and limits: [Compatibility](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/compatibility.md)
 7. Security and runtime boundaries: [Security](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/security.md)
 8. If something fails: [Troubleshooting](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/troubleshooting.md)
-
-## Unreleased 1.1.7 From GitHub
-
-The `main` worktree uses Xray-core **26.10.31** through the separately published
-native runtimes. The Flutter plugin itself is not released by this runtime
-update. Existing pub.dev implementation packages named `1.1.7` contain older
-wrapper code; use the matching source packages when testing this branch.
-The current Android, macOS and Windows sources are versioned `1.1.7+1`;
-the main package and platform interface remain `1.1.7`. These package updates
-are not yet published.
-The matching published runtime pins are Android `26.10.31-protect2`,
-iOS/macOS `26.10.31-r2`, and the managed Windows `26.10.31-r2` companion.
-They include cleanup of XHTTP listeners after rejected server `h2Params` and
-the capabilities required by per-session routing and managed services.
-The bundled example already supplies local overrides. An external Git consumer
-can use:
-
-```yaml
-dependencies:
-  flutter_vless:
-    git:
-      url: https://github.com/XIIIFOX/flutter_vless.git
-      ref: main
-
-dependency_overrides:
-  flutter_vless_platform_interface:
-    git:
-      url: https://github.com/XIIIFOX/flutter_vless.git
-      ref: main
-      path: packages/flutter_vless_platform_interface
-  flutter_vless_android:
-    git:
-      url: https://github.com/XIIIFOX/flutter_vless.git
-      ref: main
-      path: packages/flutter_vless_android
-  flutter_vless_macos:
-    git:
-      url: https://github.com/XIIIFOX/flutter_vless.git
-      ref: main
-      path: packages/flutter_vless_macos
-  flutter_vless_windows:
-    git:
-      url: https://github.com/XIIIFOX/flutter_vless.git
-      ref: main
-      path: packages/flutter_vless_windows
-```
-
-For a reproducible application build, replace every `main` ref with the same
-reviewed commit. See the [release preparation guide](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/release/README.md)
-for the selected package versions and remaining publication checks.
 
 ## Try The Example First
 
@@ -128,18 +80,18 @@ directory name.
 ```bash
 cd example
 flutter pub get
-../tool/prepare_apple_swiftpm.sh
 flutter run -d android
-flutter run -d ios
-flutter run -d windows
+# Or select your iOS device or Windows target.
 ```
 
 iOS needs a signed real device for VPN mode, macOS needs the generated SwiftPM
 metadata prepared for macOS 13.0 plus a valid Apple Team on `Runner` and
 `XrayTunnel`, and Windows needs `example/windows/xray/xray.exe`.
 
-For macOS, open `example/macos/Runner.xcworkspace`, select your Apple Team on
-both macOS targets if signing is not already valid, then run:
+For iOS or macOS, prepare SwiftPM metadata on macOS with
+`../tool/prepare_apple_swiftpm.sh`. For macOS, open
+`example/macos/Runner.xcworkspace`, select your Apple Team on both macOS targets
+if signing is not already valid, then run:
 
 ```bash
 flutter run -d macos
@@ -150,16 +102,14 @@ the workspace.
 
 ## Installation
 
-For the latest published stable plugin:
+Add the dependency to `pubspec.yaml`:
 
-```bash
-flutter pub add flutter_vless
+```yaml
+dependencies:
+  flutter_vless: ^1.1.7
 ```
 
-The 1.1.7 APIs described in this checkout are not yet published as the main
-package. To use them now, follow [the coherent Git source setup](#unreleased-117-from-github)
-above for the main package and all four federated dependencies. Installing the
-older stable package alone does not provide this checkout's new APIs.
+Then run `flutter pub get`.
 
 For a macOS app, prepare the generated Flutter SwiftPM metadata before the first
 build. Proxy-only apps can run only the metadata step:
@@ -266,8 +216,6 @@ The bundled example app shows clipboard import, routing edits, proxy-only mode, 
 - [Compatibility](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/compatibility.md)
 - [Security](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/security.md)
 - [Architecture Notes](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/architecture.md)
-- [Protocol Support Roadmap](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/protocol_support_roadmap.md)
-- [Real-Device VPN Matrix](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/device_matrix.md)
 - [Troubleshooting](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/troubleshooting.md)
 - [Release history](https://github.com/XIIIFOX/flutter_vless/blob/main/CHANGELOG.md)
 
@@ -284,7 +232,3 @@ attribution and brand-use notes.
 ## License
 
 [MIT License](https://github.com/XIIIFOX/flutter_vless/blob/main/LICENSE)
-
-### Options and system controls (1.1.7)
-
-Use typed Notification, Quick Access, Reconnect, Protection and Diagnostics options. Native controls include Android Quick Tile, macOS menu bar, Windows tray and optional Apple Control Center host extensions. See [setup, capability matrix and examples](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/options-and-system-controls.md).

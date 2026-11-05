@@ -115,8 +115,8 @@ other system record types require an explicit Xray DNS server. VPN mode rejects
 `xicmp` and `quic+local://` DNS because those upstream paths bypass controllers.
 Use protected `https+local://` or `tcp+local://` DNS instead.
 
-The repository's Maven pin update is separate from a Pub.dev package release;
-the already-published `flutter_vless_android` `1.1.7` package is unchanged.
+The Android wrapper `1.1.7+1` consumes this runtime through its pinned Maven
+dependency. Native runtime versions and Dart package versions are independent.
 
 ## 6. Troubleshooting
 

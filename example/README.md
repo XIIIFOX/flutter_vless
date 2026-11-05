@@ -11,31 +11,22 @@ directory name.
 
 ## What It Demonstrates
 
-- Clipboard import through `FlutterVless.parse()`
-- Generated Xray config preview and editing
-- Proxy-only startup
-- VPN/tunnel startup
-- Runtime `VlessStatus` updates
-- Upload/download counters
-- Server core version display
-- Android `blockedApps`
-- Route/domain editing helpers in `lib/routing.dart`
-- `Delay` measures the current session when connected; `Profile delay` always
-  measures the editor's profile in an isolated native session. Apple/Android
-  omit imported API/metrics listeners in that temporary measurement to avoid
-  rebinding ports owned by the active VPN. Normal VPN profiles keep those fields.
-  Standalone profile delay on Windows is still unimplemented and returns `-1`.
+- Clipboard import for share links, full JSON and subscription profiles
+- Configuration and domain-routing editors
+- Proxy-only and VPN startup/Stop
+- Connection duration, upload/download totals, speed and Core version
+- Notification, quick access, reconnect, protection and diagnostics options
+- `Delay` for the active session and `Profile delay` for an isolated profile
+  measurement; Windows standalone profile delay returns `-1`
+
+For a normal connection, use **Import (clipboard)** and **Connect**. Leave
+**VPN routing** off and **Certificate files** empty unless the profile needs
+those advanced settings. A subscription imports its first supported profile.
 
 ## Per-session VPN routing
 
-For an ordinary share-link test, use **Import (clipboard)**, then **Connect**.
-Leave **VPN routing** off and **Certificate files** empty unless the profile
-requires those advanced settings. The importer accepts raw JSON/JSONC and plain
-or base64 subscription lists; a list imports its first supported profile.
-Leading subscription comments do not turn a link list into a JSON document.
-
-The **VPN routing** controls choose an original input's inbound-tag context and
-an explicit default outbound without editing the imported JSON. For example:
+Use `VpnRoutingOptions` when VPN traffic should inherit an imported input's
+inbound-tag context or use a particular default outbound:
 
 ```dart
 await flutterVless.startVless(
@@ -48,40 +39,21 @@ await flutterVless.startVless(
 );
 ```
 
-The index refers to the original `inbounds` array, including index zero. Edited
-profiles retain stale selections visibly and reject them on Connect. These
-controls require VPN mode and a factory-capable runtime. The repository's
-published Android `26.10.31-protect2`, Apple `26.10.31-r2` and managed Windows
-`26.10.31-r2` runtimes provide it; the plugin checks the artifact actually loaded.
-An arbitrary external Windows Core may not provide the capability. Turning the
-control off retains ordinary startup.
+The index refers to the original `inbounds` array. These controls require VPN
+mode and native routing capability; an arbitrary external Windows Core may not
+provide it. Turning the control off retains ordinary startup.
 
 ## External data files
 
-Pass an existing absolute directory with `geoAssetsDirectory` when calling
-`startVless`. A routing rule such as `ext:caller-geosite.dat:CALLER` reads that
-file from the selected directory on Android, iOS, macOS and Windows. Only files
-actually referenced by the profile are required; custom-only and asset-free
-directories do not need `geoip.dat` or `geosite.dat`. Omit the argument for the
-platform's existing bundled/default lookup.
+Pass `geoAssetsDirectory` for referenced GeoIP/GeoSite files and
+`certificateAssetsDirectory` for relative TLS certificate/key files. Omit both
+for the platform's default lookup. The two directories have separate purposes;
+selecting a data directory does not relocate certificates.
 
-On Apple VPN sessions place the directory in the configured App Group so the
-extension can read it. Keep the directory and referenced files available until
-Stop has completed, including recovery and quick access. An explicit root does
-not receive copies of bundled data. TLS certificate/key lookup uses Core's
-separate certificate location; this argument does not relocate certificates.
-Android and Apple profile-delay calls accept the same directory. Windows
-standalone profile delay remains unsupported.
-
-For relative TLS `certificateFile` and `keyFile`, use the editor's **Certificate
-files** field, or pass `certificateAssetsDirectory` to `startVless` and
-`getServerDelay`. For example, `certificateFile: "ca.pem"` resolves inside the
-selected directory. It is independent of `geoAssetsDirectory`. Absolute paths,
-inline certificates and reload settings remain intact. The directory is a path
-resolution base, not a sandbox; `..` has Core's normal meaning. Files remain
-caller-owned and must stay readable until Stop, including background recovery
-and reload. Use App Group storage for Apple VPN; no files are copied for you.
-An older native backend rejects this explicit option instead of ignoring it.
+Use existing absolute paths readable by the app and keep the referenced files
+available through Stop, recovery and reload. Apple VPN extensions need shared
+App Group storage. Setting these paths does not copy or replace files. See
+the [API contract](../doc/api.md) for startup and delay lookup rules.
 
 ## Android
 
@@ -119,9 +91,8 @@ flutter pub get
 open ios/Runner.xcworkspace
 ```
 
-Open `Runner.xcworkspace`, not `Runner.xcodeproj`. The example still has
-CocoaPods integration metadata, and opening the project file directly can make
-Xcode miss generated package/framework products.
+Open `Runner.xcworkspace`, not `Runner.xcodeproj`, so Xcode loads the generated
+CocoaPods and Swift package products.
 
 In Xcode:
 
@@ -166,18 +137,8 @@ Flutter Swift package lives under `Flutter/ephemeral/` and is not committed.
 
 ## Windows
 
-Windows needs a local `xray.exe`.
-
-Expected example layout:
-
-```text
-example/
-  windows/
-    xray/
-      xray.exe
-```
-
-Then run:
+Supply the runtime and tunnel helper files described in the
+[Windows setup guide](windows/README.md), then run:
 
 ```bash
 cd example
@@ -185,42 +146,17 @@ flutter pub get
 flutter run -d windows
 ```
 
-The Windows backend does not download Xray automatically.
+VPN mode requires an elevated application. The plugin does not download missing
+runtime files.
 
 ## Common Checks
 
-- The [shared protocol fixtures](../tool/fixtures/compatibility/protocols.json)
-  are synthetic preparation examples. Replace their endpoint and credentials
-  with a server you control before live testing; successful Core Build does
-  not establish a working protocol handshake.
-- The [full configuration fixtures](../tool/fixtures/compatibility/full-config.json)
-  cover API/services, explicit null and disabled statistics. Caller API and
-  policy settings remain authoritative. With an imported API, Android/Windows
-  do not use it for the example's counters; unavailable counters show zero.
-- Imported `inbound.listen` can use `env:NAME`. Native preparation snapshots
-  that address before listener allocation; Apple also freezes it before saving
-  the cross-process profile. The editor retains the original JSON. The
-  [shared address fixtures](../tool/fixtures/compatibility/listen-addresses.json)
-  cover Unix sockets, IP listeners and empty/missing values without starting
-  all ports in their synthetic ranges.
-- For the DNS preservation check, import full Xray JSON with `dns.hosts` and
-  per-domain `dns.servers`, then keep Android's default `config` DNS policy.
-  The explicit `proxy` policy intentionally overrides system DNS. See the
-  [current compatibility summary](../doc/compatibility.md#current-117-source-contract)
-  before testing localhost defaults, IPv6 or FakeDNS. Use a fresh browser
-  connection after changing a DNS or routing rule.
-  HTTPS DoH URLs and caller DNS routing stay in the full JSON. Named resolver
-  bootstrap requires a finite numeric/static `dns.hosts` mapping on
-  Apple/Windows. The controlled TLS test uses a disposable test CA; it does
-  not add a public certificate-installation option.
-- Use proxy-only mode first when you want the smallest runtime path.
-- The [IPv6 payload fixtures](../tool/fixtures/compatibility/ipv6-payload.json)
-  preserve caller `UseIP` or `UseIPv4` DNS strategy. Controlled CI checks cover
-  IPv6 destinations through an IPv4 proxy; IPv6-only transport endpoints,
-  NAT64 and handover remain separate qualification work. Windows still blocks
-  physical IPv6, including Core direct egress.
-- Use VPN/tunnel mode only after platform setup is complete.
-- Import a known-good share link or raw Xray config from the clipboard.
-- Watch `state`, `connectionState`, upload, and download counters after
-  startup.
-- Stop the session from the app before closing the example during testing.
+- Complete platform signing, permissions and runtime setup before VPN testing.
+- Import a known-good share link or full Xray JSON and verify a fresh request.
+- Check duration, totals and speed while uploading/downloading data.
+- Test direct/proxy domain routing in both directions using fresh browser requests.
+- Preserve caller DNS settings; check the [DNS and IPv6 limits](../doc/compatibility.md#dns-and-ipv6)
+  for the target platform rather than adding blanket DNS bypasses.
+- Use [system controls](../doc/options-and-system-controls.md) only after their
+  native setup is complete. The example restores its saved Options on launch.
+- Stop the session from the app and confirm ordinary connectivity returns.

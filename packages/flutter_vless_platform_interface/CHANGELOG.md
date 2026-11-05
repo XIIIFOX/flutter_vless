@@ -1,6 +1,6 @@
 ## 1.1.7
 
-* Add typed Notification, Quick Access, Reconnect, Protection and Diagnostics options, action/protection enums and validated `VlessOptions.fromMap` persistence.
+* Add typed Notification, Quick Access, Reconnect, Protection and Diagnostics options, action/protection enums and validated `VlessOptions.fromMap` restoration.
 * Add native capabilities, add-tile results and clear-quick-profile contracts with backward-compatible optional initialization and explicit rejection of unsupported custom guarantees.
 * Add `VpnRoutingOptions` for original-inbound context and explicit default outbound selection; reject proxy-only use.
 * Add `certificateAssetsDirectory` for startup/profile-delay and immutable optional per-start preparation reports with typed edit codes and safe failure stages.

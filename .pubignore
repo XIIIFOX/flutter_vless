@@ -13,6 +13,15 @@ doc/security-validation-*/
 doc/*security-remediation-*.md
 doc/ios-device-validation-*.md
 doc/android-security-emulator.md
+# Dated engineering journals and acceptance receipts remain in Git history/docs,
+# but are not part of the consumer package documentation.
+doc/acceptance-*.md
+doc/validation-*.md
+doc/xray-*-compatibility.md
+doc/android-emulator-host-vpn.md
+doc/release/*-validation.md
+doc/release/*-plugin-followups.md
+doc/assets/flutter-vless-hero-1.1.6.png
 doc/api/
 
 # IDE / OS

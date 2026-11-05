@@ -1,19 +1,11 @@
 ## 1.1.7+1
 
-Unpublished implementation update for the main plugin 1.1.7 release train.
-The existing pub.dev package numbered 1.1.7 remains unchanged.
-
-* Restore missing owned inbound statistics defaults without replacing caller policy levels or explicit disabled values. Guard traffic replies against Stop/replacement and clamp worker-reset deltas.
-
-* Use the published checksum-pinned `xray-macos-v26.10.31-r2` universal runtime with private startup/assets, native routing, mandatory interface binding and owned Classic DNS/XHTTP/XDRIVE/GeoDAT cleanup.
-* Check VPN readiness using the current packet worker and authenticated local listener, without fixed public connectivity targets. Keep caller-selected network measurements separate and preserve bounded recovery after local failures.
-* Prepare finite `tcp+local`, `https+local` and `h2c+local` DNS through closed physical-interface branches; retain routed DoH policy and require binding capability for DNS-only profiles before startup.
-* Add typed options/capabilities, menu-bar and optional Control Center actions, bounded reconnect and diagnostics. Preserve immutable action/profile ownership across authentication and preference operations; stage On Demand disabled and verify explicit Stop.
-* Preserve caller listeners, API/services/statistics, unknown JSON data, DNS hosts/domain rules, compatible FakeDNS and effective transport/download settings. Allocate authenticated private adapters without rebinding caller ports or acquiring caller selector references.
-* Capture IPv6 payload and prepare bounded IPv4/IPv6 transport candidates with freshness, cancellation and path-aware recovery. Retain finite retry budgets and protected capture while workers recover.
-* Add per-session VPN routing, typed preparation reports and separate data/certificate roots. Preserve caller datasets, validate XDRIVE/GeoDAT capability and writable targets, and freeze relative TLS files through recovery.
-* Bound authenticated listener checks, profile/connected delay and native lifecycle work; preserve strict TLS/authentication and socket cleanup.
-* Verify shared Apple policies, app/SwiftPM builds and published-runtime DNS/routing/packet behavior in Actions. Live owner macOS and IPv6-only/NAT64/handover remain separate acceptance work.
+* Use the pinned universal `xray-macos-v26.10.31-r2` runtime with protected socket binding and managed resource cleanup.
+* Add menu-bar and optional Control Center actions, typed options, capabilities and bounded reconnect/diagnostics.
+* Preserve full profiles, caller DNS/routing, IPv4/IPv6 capture and separate data/certificate roots; restore missing private counter defaults.
+* Improve startup DNS admission and current-session readiness after recovery without using fixed public connectivity targets.
+* Preserve late A/AAAA answers, path/sleep ownership and explicit Stop/On Demand behavior.
+* Add per-session VPN routing and preparation reports with bounded native delay/authentication checks.
 
 ## 1.1.7
 

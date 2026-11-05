@@ -1,7 +1,6 @@
 # XRay Android v26.10.29-protect1
 
-Native runtime only for the unreleased flutter_vless 1.1.7 work. No Flutter
-package, pub.dev package or plugin 1.1.7 GitHub release is published.
+Native runtime for flutter_vless 1.1.7.
 
 - Xray-core [v26.10.29](https://github.com/XTLS/Xray-core/releases/tag/v26.10.29),
   commit `0afec66085a85191e9dd2a4a6646c7c9a94688d1`; Go 1.27.3.
@@ -19,4 +18,4 @@ AAR SHA-256: `ac498513218e640c6524e59eb5bba5431ff51c396f114931ada1837f79561ecb`.
 The attached AAR, POM, sources, javadoc and detached signatures are the exact
 signed candidate. Verify all eight payloads against `SHA256SUMS`.
 Public Maven byte verification and device acceptance are recorded separately in
-[validation and remaining work](xray-v26.10.29-validation.md).
+[validation and remaining work](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/release/xray-v26.10.29-validation.md).

@@ -25,4 +25,3 @@ same Core version alone does not provide these lifetime capabilities.
 
 Cloud tests use controlled endpoints and synthetic credentials; a live cloud
 account, complete relay deployment and HTTP/3/ECH remain separate acceptance.
-Flutter packages remain 1.1.7 and are not published by this native release.

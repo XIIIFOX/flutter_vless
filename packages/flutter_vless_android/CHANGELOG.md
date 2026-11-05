@@ -1,19 +1,11 @@
 ## 1.1.7+1
 
-Unpublished implementation update for the main plugin 1.1.7 release train.
-The existing pub.dev package numbered 1.1.7 remains unchanged.
-
-* Use the published checksum-pinned Maven runtime `26.10.31-protect2` for all four device/emulator ABIs with 16 KiB alignment, protected sockets, native routing and managed-service cleanup.
-* Restore owned input counters when a caller policy omits their flags, including levels-only and empty-system profiles. Preserve explicit disabled values, null and caller API settings; test real byte/speed events in VPN, proxy-only and native-routing modes.
-* Fix first-install bundled GeoDAT preparation under Android app sandbox restrictions, preserving complete files and concurrent caller updates. Report preparation failures separately from Core checks, with real sandbox regression tests in the emulator gate.
-* Close Classic DNS/XHTTP/XDRIVE/GeoDAT resources with the owning runtime, including rejected XHTTP `h2Params` listener cleanup.
-* Add native Quick Tile, Android 13+ add-tile dialog, notification customization, validated options/capabilities, independent quick-profile authorization, bounded reconnect and OS Always-on/lockdown handling.
-* Retain immutable pending actions across unlock, permission and startup; cancel obsolete starts/network callbacks after Stop, replacement or successful options reconfiguration.
-* Preserve complete caller profiles, imported listeners/API/services/statistics, DNS dictionaries, transport headers, effective XHTTP chains and environment-backed port/address values. Allocate collision-safe authenticated adapters and private statistics only when appropriate.
-* Resolve system A/AAAA queries through caller Core DNS, retain explicit proxy-DNS override, capture IPv6 payload and prepare compatible FakeDNS without changing caller pools/query strategy.
-* Add per-session VPN routing, typed preparation reports and separate data/certificate asset roots through preflight, recovery and delay. Preserve caller datasets and validate scheduled GeoDAT targets and XDRIVE capabilities.
-* Bound startup, delay, watchdog and statistics I/O to owned deadlines, preserving strict authentication, packet readiness, cancellation and child/socket cleanup.
-* Add shared preparation/native/TUN regressions and live emulator coverage for full profiles, both routing directions, Quick Tile and Stop recovery. Physical HTTP/3, IPv6-only/NAT64 and broader server coverage remain separate acceptance work.
+* Use the pinned Maven runtime `26.10.31-protect2` for all four device/emulator ABIs with 16 KiB alignment.
+* Add Quick Tile, notification options, capability discovery, bounded reconnect and Android Always-on/lockdown handling.
+* Preserve full profiles, caller DNS/routing, IPv6 payload, imported APIs and explicitly disabled statistics; restore missing private counter defaults.
+* Add per-session VPN routing, preparation reports and separate data/certificate roots.
+* Fix first-install GeoDAT preparation and retain caller datasets through managed updates and recovery.
+* Cancel obsolete starts/actions and bound native I/O and managed-service cleanup, including rejected XHTTP startup.
 
 ## 1.1.7
 

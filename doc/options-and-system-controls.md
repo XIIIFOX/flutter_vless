@@ -1,6 +1,9 @@
-# Options and system controls (1.1.7)
+# Options and system controls
 
-Construct `FlutterVless(options: ...)`, then initialize it. `VlessOptions.fromMap(options.toMap())` restores validated non-secret settings for application-owned persistence. Existing callers remain compatible. Native options require the matching 1.1.7 source packages; older backends reject custom options explicitly. This development revision does not publish Dart packages. Use the repository's local dependency overrides when testing it.
+Construct `FlutterVless(options: ...)`, then initialize it.
+`VlessOptions.fromMap(options.toMap())` restores validated non-secret settings
+for application-owned persistence. Existing initialization calls remain
+compatible; unsupported options fail explicitly on the loaded backend.
 
 ```dart
 final vpn = FlutterVless(
@@ -44,9 +47,9 @@ Bundle any referenced Android resource before using this sample. `NotificationOp
 | --- | --- | --- |
 | Android 7+ | Quick Settings Tile | Native daemon; does not need a Flutter engine. Profile encrypted with Android Keystore in no-backup storage. |
 | Android 13+ | `requestAddQuickTile()` system dialog | Requires an attached foreground Activity and enabled quick access. Earlier versions use the system tile editor. |
-| iOS/iPadOS 18+ | Control Center WidgetKit control | Host extension, App Group and signing required. The current template opens the app to execute the native intent. |
+| iOS/iPadOS 18+ | Control Center WidgetKit control | Host extension, App Group and signing required. The template opens the app to execute the native intent. |
 | macOS 13+ | Menu bar | Default macOS surface; requires the app process. Profile remains in the scoped Keychain/system VPN configuration. |
-| macOS 26+ | Control Center WidgetKit control | Optional `controlCenter` surface, host extension and Xcode 26+ required. Current template opens the app. |
+| macOS 26+ | Control Center WidgetKit control | Optional `controlCenter` surface, host extension and Xcode 26+ required. The template opens the app. |
 | Windows | Notification area/system tray | Requires the app process. Last accepted VPN configuration remains in memory only. |
 
 `getCapabilities()` reports the loaded backend's implementation, available surfaces, extension setup, custom native retry support, On Demand, Kill Switch and Android's current Always-on/lockdown state. Proxy-only sessions do not become quick VPN profiles. Unsupported surfaces and required protection features fail initialization or connection explicitly instead of silently degrading.
@@ -89,18 +92,19 @@ dart run flutter_vless:setup_apple_controls \
 
 Requires macOS and the Ruby `xcodeproj` gem (included with CocoaPods; otherwise `gem install xcodeproj`). The idempotent generator creates `VlessControls`, embeds it in Runner, adds the shared intent source to both targets, and configures App Group/signing metadata and Face ID usage text. Its deployment minimum is iOS 18/macOS 26; the main app may keep its earlier minimum. Enable App Groups and Network Extensions for the controls App ID in your developer signing configuration too. Add the control from the system's Control Center editor; an app cannot silently insert it. `controlCenterExtensionConfigured` reports the generated host declaration, not a successful physical-device signing/install check.
 
-The example uses Flutter 3.44+ and saves all five Options blocks in application preferences and restores them before its first plugin initialization. This matters because a Control Center intent can cold-launch the app. VPN links/configuration are excluded from these preferences.
+The example requires Flutter 3.44+ and restores all five options groups from application preferences before initializing the plugin. This matters because a Control Center intent can cold-launch the app. VPN links/configuration are excluded from these preferences.
 
 The templates are under `templates/apple_controls`; generated examples are in `example/ios/VlessControls` and `example/macos/VlessControls`. Keep both target memberships and the extension's `FLUTTER_VLESS_WIDGET_EXTENSION` compilation condition. The extension never changes VPN preferences itself: the intent executes in Runner, verifies the saved profile identity/reference and confirms On Demand persistence before disconnecting.
 
-## Verification and next device phase
+## Testing native controls
 
-Automated coverage includes Dart validation/wire compatibility, Kotlin/Swift/C++ field parsing and retry policies, protected stop/error paths, native diagnostic bounds, Apple generator idempotency, example UI, and native Android SystemUI tile stop/cold reconnect without Flutter. Windows native tests and application/runtime builds run in GitHub Actions. macOS validation includes compilation, injected-preferences tests and real localhost Core traffic in GitHub Actions. Never activate a second VPN on the development Mac.
+Test quick actions from the system surface as well as from the app. Verify
+cold launch, authentication, cancellation, Stop and recovery on each target OS.
+Use `getCapabilities()` to distinguish an unsupported surface from missing
+extension setup. The [VPN validation matrix](device_matrix.md) covers network
+and lifecycle checks; simulator or compiler results alone do not establish
+physical-device behavior.
 
-The [dated Core 26.10.17 device record](device_matrix.md#iphone-acceptance-2026-10-18-117--core-261017) covers the earlier iPhone Control Center start/stop, owner authentication, diagnostics, On Demand and recovery after loss of the Core worker. The [current Core 26.10.31 follow-up](release/apple-readiness-dns-validation.md) adds nine physical iPhone cases for readiness, DNS, fresh profiles and both routing directions, plus published-SDK Actions validation.
-
-Coverage remains scoped: Android SystemUI checks use an emulator; physical Android Quick Tile/notification behavior across devices, precise device-level retry timing and Windows desktop tray interaction need their own live acceptance. Live VPN testing on the owner's macOS is deferred. Compiler, simulator and controlled runtime results do not establish those device interactions; retain these limits in the release review.
-
-The Android tile work takes the idea of [PR #21](https://github.com/XIIIFOX/flutter_vless/pull/21); that pull request is not merged. The implementation uses the current native lifecycle and protected profile storage.
-
-Platform references: [Android tiles](https://developer.android.com/develop/ui/views/quicksettings-tiles), [Apple controls](https://developer.apple.com/documentation/widgetkit/controls-collection), [Windows notification area](https://learn.microsoft.com/en-us/windows/win32/shell/notification-area).
+Platform references: [Android tiles](https://developer.android.com/develop/ui/views/quicksettings-tiles),
+[Apple controls](https://developer.apple.com/documentation/widgetkit/controls-collection),
+[Windows notification area](https://learn.microsoft.com/en-us/windows/win32/shell/notification-area).

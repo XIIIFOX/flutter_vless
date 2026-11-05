@@ -1,6 +1,6 @@
 # Apple VPN readiness and local DNS
 
-The 1.1.7 Apple adapters distinguish native forwarding readiness from the
+The Apple adapters distinguish native forwarding readiness from the
 reachability of a remote destination. `CONNECTED` requires the current session
 and endpoint plan, a running HEV worker, and successful authentication to its
 managed SOCKS listener within one cancellable two-second deadline. Startup
@@ -47,7 +47,8 @@ HTTPS authority/path/query remain intact. Admission requires a usable selected
 underlay and a numeric resolver or a finite static `dns.hosts` mapping. Unsafe
 or unsupported forms fail preparation rather than falling back to the system
 resolver. Other DNS schemes, OS-resolver modes and IPv6-only/NAT64 environments
-need their own qualification; this change does not claim that coverage.
+require testing on the deployment network; the supported local-DNS forms do
+not establish those paths.
 
 Upstream behavior is pinned to [Xray-core 26.10.31 TCP DNS](https://github.com/XTLS/Xray-core/blob/v26.10.31/app/dns/nameserver_tcp.go)
 and [DoH DNS](https://github.com/XTLS/Xray-core/blob/v26.10.31/app/dns/nameserver_doh.go).

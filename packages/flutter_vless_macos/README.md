@@ -1,18 +1,14 @@
 # flutter_vless_macos
 
 The macOS implementation of the [`flutter_vless`](https://pub.dev/packages/flutter_vless) plugin.
+Use this package through the main `flutter_vless` dependency.
 
-This package is intended to be used through the main `flutter_vless` package. It provides the macOS platform backend for Xray/V2Ray proxy-only and VPN/tunnel flows.
+The pinned `xray-macos-v26.10.31-r2` runtime supports proxy-only mode and a signed
+Packet Tunnel with IPv4/IPv6 capture, caller DNS/routing and protected virtual
+DNS `10.0.85.53`. Native readiness checks the current packet worker and
+managed local listener; test a permitted URL separately for remote reachability.
 
-The working `1.1.7+1` source uses published `xray-macos-v26.10.31-r2`. VPN mode captures IPv4/IPv6 traffic through the Packet Tunnel and uses the
-protected virtual DNS server `10.0.85.53`. DNS requests are handled through
-caller Core DNS policy without a failed-remote-query system fallback. Native
-readiness checks the live packet worker and authenticated local listener; use a
-caller-allowed connected delay URL to check remote reachability. Live IPv6-only,
-NAT64 and handover remain separate qualification work.
-
-The `1.1.7+1` implementation update is not yet published; the existing pub.dev
-`1.1.7` wrapper remains unchanged.
-Use matching source packages through the main package when testing these changes.
-
-For setup details, see the [macOS platform guide](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/platform/macos.md).
+See the [macOS platform guide](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/platform/macos.md)
+for signing, App Groups, menu-bar and optional Control Center setup, and the
+[compatibility guide](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/compatibility.md)
+for network limitations.

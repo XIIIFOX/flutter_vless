@@ -25,4 +25,3 @@ Cloud fixtures use controlled endpoints and synthetic credentials. Live cloud
 accounts, a complete relay deployment, HTTP/3/ECH and physical NAT64 remain
 separate acceptance. No VPN was started on the owner's Mac; a live macOS VPN
 check awaits the owner's availability.
-Flutter packages remain **1.1.7**; this release does not publish the plugin.

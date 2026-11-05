@@ -26,5 +26,4 @@ without these managed services.
 
 Cloud fixtures use controlled endpoints and synthetic credentials. Live cloud
 accounts, complete relay deployment, HTTP/3/ECH and physical NAT64 remain
-separate acceptance. Flutter packages remain **1.1.7**; the plugin is not
-published by this native release.
+separate acceptance.

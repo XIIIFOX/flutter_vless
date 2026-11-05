@@ -132,7 +132,7 @@ Before publishing the Android wrapper to Pub.dev, keep these checks green:
 - The example APK builds without a local Maven override.
 - The example APK contains ARM and emulator runtime files from the Maven AAR.
 - The emulator smoke test prints an Xray version matching the runtime release.
-## Consumer verification (1.1.7)
+## Consumer verification
 
 The current published runtime is `dev.tfox.fluttervless:xray-android:26.10.31-protect2`, based on Core 26.10.31.
 Copy [verification-metadata.xml](../../example/android/gradle/verification-metadata.xml)
@@ -166,7 +166,7 @@ the fresh CI producer, strict provenance checks and one signed Central deploymen
 The current producer source is
 `2505694c4001e7d52f06d6a63f29780da8dc7d49`; the published payload is immutable.
 Do not treat a historical local wrapper run as verification of those bytes.
-See [Core31 validation](core31-five-followups-validation.md) for exact producer,
+See [Core31 validation](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/release/core31-five-followups-validation.md) for exact producer,
 publication and public-artifact evidence.
 
 To update a trusted release: review runtime source changes, reproduce and check

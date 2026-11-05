@@ -1,126 +1,58 @@
-# Protocol Support Roadmap
+# Protocol and transport support
 
-This document tracks the protocol and transport scope for `flutter_vless`
-1.1.7. Capability follows pinned Xray Core 26.10.31, commit
-`a4a3dff5b20c2faae567b742c172c7b95e75c083`, including its
-[protocol inventory](https://github.com/XTLS/Xray-core/blob/a4a3dff5b20c2faae567b742c172c7b95e75c083/infra/conf/xray.go)
-and [transport builder](https://github.com/XTLS/Xray-core/blob/a4a3dff5b20c2faae567b742c172c7b95e75c083/infra/conf/transport_internet.go).
-Concrete implementation and acceptance limits are tracked in
-[compatibility.md](compatibility.md). General configuration references:
+The native runtimes target Xray-core **26.10.31**. Generated configurations must
+match the actual loaded runtime and remote server. See [compatibility](compatibility.md)
+for platform protection, DNS and real-network limits.
 
-- Xray outbounds: https://xtls.github.io/en/config/outbounds/
-- Xray inbounds: https://xtls.github.io/en/config/inbounds/
-- Xray transports: https://xtls.github.io/en/config/transports/
+## Client profiles
 
-## Product Scope
-
-`flutter_vless` is a client runtime wrapper. The default generated config should
-keep using a local SOCKS inbound and a remote proxy outbound. We should support
-importing every client-facing Xray outbound profile that can represent a remote
-server. Service outbounds and inbounds remain raw JSON / advanced-builder scope.
-
-## Xray Outbound Inventory
-
-| Xray outbound | Current support | Next action |
-| --- | --- | --- |
-| `vless` | Supported from share links, Clash YAML, sing-box JSON, raw Xray JSON | Keep; expand transport coverage below. |
-| `vmess` | Supported from share links, Clash YAML, sing-box JSON, raw Xray JSON | Keep; expand transport coverage below. |
-| `trojan` | Supported from share links, Clash YAML, sing-box JSON, raw Xray JSON | Keep; expand transport coverage below. |
-| `shadowsocks` | Supported from `ss://`, Clash YAML, sing-box JSON, raw Xray JSON | Keep; add fixture coverage for all commonly exported ciphers. |
-| `socks` | Supported from `socks://`, Clash YAML, sing-box JSON, raw Xray JSON | Keep. |
-| `wireguard` | Raw Xray JSON plus generated import from Clash YAML and sing-box JSON | Validate Android, iOS, macOS, and Windows artifacts with `xray run -test`; no public `wireguard://` parser until an accepted share-link shape is chosen. |
-| `hysteria` (`version: 2`) | Raw Xray JSON plus `hysteria2://` / `hy2://`, Clash YAML, and sing-box JSON import | Validate Android, iOS, macOS, and Windows artifacts with `xray run -test`; update packaged artifacts where older Xray builds reject `network: hysteria`. |
-| `masque` | Raw Xray JSON; native endpoint preparation and typed header preservation | Qualify actual TLS/QUIC handshakes and device traffic. |
-| `http` | Raw Xray JSON plus generated import from Clash YAML and sing-box JSON | Keep subscription/import-context only. Do not treat arbitrary browser `http://` URLs as proxy profiles. |
-| `freedom` | Internal direct outbound and raw Xray JSON | Keep advanced/raw only. It is routing policy, not a remote server profile. |
-| `blackhole` | Internal block outbound and raw Xray JSON | Keep advanced/raw only. It is routing policy, not a remote server profile. |
-| `dns` | Raw Xray JSON only | Keep advanced/raw only. |
-| `loopback` | Raw Xray JSON only | Keep advanced/raw only. |
-
-## Xray Inbound Inventory
-
-The plugin-owned default inbound remains local SOCKS because packet-tunnel and
-proxy-only paths already depend on it.
-
-| Xray inbound | Product decision |
+| Core outbound | Import paths |
 | --- | --- |
-| `socks` | Supported as the generated local inbound. |
-| `mixed` | Core SOCKS/HTTP inbound alias; advanced/raw only. |
-| `http` | Advanced/raw only unless we add a separate local HTTP proxy mode. |
-| `dokodemo-door` / tunnel | Advanced/raw only. |
-| `vless`, `vmess`, `trojan`, `shadowsocks`, `wireguard`, `hysteria`, `masque`, `tun` | Advanced/raw only for now; these are server/runtime composition features, not default client profile import targets. |
+| `vless`, `vmess`, `trojan` | Share links, Clash YAML, sing-box JSON and raw Xray JSON |
+| `shadowsocks` | `ss://`, Clash YAML, sing-box JSON and raw Xray JSON |
+| `socks` | `socks://`, Clash YAML, sing-box JSON and raw Xray JSON |
+| `wireguard` | Clash YAML, sing-box JSON and raw Xray JSON; no `wireguard://` parser |
+| `hysteria` version 2 | `hysteria2://` / `hy2://`, Clash YAML, sing-box JSON and raw Xray JSON |
+| `http` | Clash YAML, sing-box JSON and raw Xray JSON; arbitrary browser URLs are not proxy profiles |
+| `masque` | Raw Xray JSON with native endpoint preparation and header preservation |
 
-## Transport Inventory
+`freedom`, `blackhole`, `dns` and `loopback` are routing/runtime composition
+features, available through raw JSON rather than remote-server share links.
+Hysteria2 imports use Core's `hysteria` protocol and transport with version 2.
 
-These transports should be importable for `vless`, `vmess`, and `trojan` where
-the protocol supports them.
+## Transports
 
-| Transport | Current support | Next action |
-| --- | --- | --- |
-| `raw` | `type=raw` import emits `rawSettings`; legacy `type=tcp` remains supported | Validate generated configs against the target Xray artifact. |
-| `xhttp` | Supported for VLESS and subscription imports; controlled HTTP/1.1 upload/download and caller-chain traffic passes | Qualify TLS/HTTP2 and HTTP3 handshakes, then additional device paths. |
-| `grpc` | Supported | Keep. |
-| `websocket` / `ws` | Supported | Keep. |
-| `mkcp` / `kcp` | `kcp` and `mkcp` aliases are normalized for subscription import | Validate generated configs against the target Xray artifact. |
-| `httpupgrade` | Supported from share links, Clash YAML, and sing-box JSON; preserves non-Host headers | Validate generated configs against the target Xray artifact. |
-| `hysteria` | Generated by Hysteria2 import paths | Validate native artifacts first. |
-| `masque` | Raw Core transport for MASQUE profiles | Qualify TLS/QUIC handshakes and device traffic. |
-| `quic` | Pinned Core rejects the legacy transport with a removed-feature error | Qualify HTTP3 through XHTTP with TLS and ALPN `h3`; retain version-specific errors. |
-| `xdrive` | Raw Core transport; Android prepares its separate destination, while protected Apple/Windows admission remains closed | Establish fronting/storage socket protection and bootstrap before widening admission. |
+These transports are used where the selected protocol supports them:
 
-Transport security remains `tls`, `reality`, and `none`. `FinalMask` and
-`sockopt` are advanced/raw config features.
+| Transport | Behavior |
+| --- | --- |
+| `raw` / `tcp` | `type=raw` emits `rawSettings`; legacy `type=tcp` remains supported |
+| `xhttp` | VLESS and subscription imports; caller headers, uplink method and independent download settings are preserved |
+| `grpc` | Supported import path |
+| `websocket` / `ws` | Supported import path |
+| `mkcp` / `kcp` | Both aliases are normalized during subscription import |
+| `httpupgrade` | Share links, Clash YAML and sing-box JSON; non-Host headers are preserved |
+| `hysteria` | Used by Hysteria2 import paths |
+| `masque` | Raw Core transport; complete TLS/QUIC and device acceptance depends on the target deployment |
+| `quic` | Legacy transport removed by the pinned Core; HTTP/3 uses XHTTP with TLS/ALPN `h3` |
+| `xdrive` | Raw S3/Google Drive profiles with protected cloud endpoint preparation and required managed-service lifetime capabilities |
 
-## Implementation Order
+TLS, Reality, `FinalMask` and `sockopt` settings remain part of the relevant
+configuration. Typed helpers do not replace full JSON for fields they do not
+model. XDRIVE `local` and `template` services are not admitted; see
+[XDRIVE examples](../example/xdrive/README.md).
 
-1. Runtime artifact audit.
-   Build or update Android, iOS, macOS, and Windows Xray artifacts to the same
-   pinned Xray version. For every artifact, run `xray run -test` fixtures for
-   `wireguard`, `hysteria`, `httpupgrade`, `raw`, `xhttp`, `grpc`, `ws`, `kcp`,
-   and legacy `quic`.
+## Inbounds and VPN context
 
-2. Config model foundation. Done in Dart.
-   Keep raw Xray JSON passthrough unchanged. Add missing typed stream settings:
-   `rawSettings`, `httpupgradeSettings`, and `hysteriaSettings`.
+The plugin generates an authenticated local SOCKS adapter for its VPN path.
+Imported `socks`, `mixed`, `http`, `dokodemo-door` and other Core inbounds remain
+raw configuration. Retaining an imported inbound does not turn a client app
+into a qualified server deployment or copy all of its routing rules onto the
+private VPN adapter. Use [per-session routing](../example/README.md#per-session-vpn-routing)
+when that source context is required.
 
-3. HTTPUpgrade transport. Parser foundation done in Dart.
-   Add `type=httpupgrade` parsing for VLESS, VMess, Trojan, Clash YAML, and
-   sing-box JSON. Generate `streamSettings.network = "httpupgrade"` and
-   `httpupgradeSettings` with `path`, `host`, and optional `headers`.
+## References
 
-4. Modern RAW transport alias. Parser foundation done in Dart.
-   Accept `type=raw` alongside legacy `type=tcp`. Emit `rawSettings` for `raw`
-   and keep existing `tcpSettings` behavior for `tcp`.
-
-5. WireGuard outbound import. Clash YAML and sing-box JSON foundation done in
-   Dart. Public `wireguard://` remains out of scope until an accepted share-link
-   shape is chosen. Minimum fields: `secretKey`, `address[]`,
-   `peers[].endpoint`, `peers[].publicKey`, optional `reserved`, `mtu`,
-   `workers`, `domainStrategy`, `noKernelTun`.
-
-6. Hysteria2 outbound import. Share-link, Clash YAML, and sing-box JSON
-   foundation done in Dart. Generated configs use `protocol: "hysteria"`,
-   `settings.version = 2`, server `address`/`port`,
-   `streamSettings.network = "hysteria"`, `hysteriaSettings.version = 2`, and
-   `hysteriaSettings.auth`.
-
-7. HTTP proxy outbound import. Done for Clash YAML and sing-box JSON.
-   Keep the import scoped to subscription/import context. Do not add
-   `parseFromURL()` support for arbitrary `http://` browser URLs unless the
-   product gets an explicit proxy-link format that cannot be confused with web
-   navigation.
-
-8. Documentation and device matrix.
-   Extend `doc/device_matrix.md` with WireGuard, Hysteria2, HTTPUpgrade, raw,
-   and HTTP proxy cases. Mark platform limitations explicitly, especially UDP
-   behavior in Apple packet tunnels and Windows tunnel mode.
-
-## Definition Of Done
-
-- Parser fixtures cover share links, Clash YAML, sing-box JSON, and raw Xray
-  JSON for each supported profile class.
-- `xray run -test` succeeds for generated JSON on every packaged Xray artifact.
-- At least one real-device tunnel or proxy-only smoke test exists for every new
-  client-facing protocol: WireGuard, Hysteria2, HTTPUpgrade, and HTTP proxy.
-- Unsupported formats are skipped with tests; they must not produce broken Xray
-  JSON silently.
+- [Pinned Core protocol inventory](https://github.com/XTLS/Xray-core/blob/a4a3dff5b20c2faae567b742c172c7b95e75c083/infra/conf/xray.go)
+- [Pinned Core transport builder](https://github.com/XTLS/Xray-core/blob/a4a3dff5b20c2faae567b742c172c7b95e75c083/infra/conf/transport_internet.go)
+- [Configuration guide](configuration.md)

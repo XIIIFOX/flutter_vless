@@ -153,4 +153,4 @@ These are distinct evidence layers: new local-DNS graph/provider unit tests,
 public-SDK runtime DNS/routing tests and physical iPhone VPN cases. The iOS
 simulator HEV artifact is link-only; the physical iPhone cases qualify its real
 packet worker. Live VPN acceptance on the owner's macOS remains deferred.
-The plugin has not been published; package versions remain 1.1.7.
+The checks use flutter_vless 1.1.7.

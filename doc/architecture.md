@@ -1,11 +1,11 @@
-# Architecture Notes
+# Architecture
 
 This package follows a federated plugin layout:
 
 - `flutter_vless` is the app-facing Dart package.
 - `flutter_vless_platform_interface` defines the shared contract.
 - `flutter_vless_android`, `flutter_vless_macos`, and `flutter_vless_windows` provide platform implementations.
-- iOS is implemented in the root package today.
+- iOS is implemented in the root package.
 
 ## Data Flow
 

@@ -1,20 +1,11 @@
 ## 1.1.7+1
 
-Unpublished implementation update for the main plugin 1.1.7 release train.
-The existing pub.dev package numbered 1.1.7 remains unchanged.
-
-* Restore missing owned inbound statistics defaults for full profiles with policy levels or an empty system object; retain caller API settings and explicit disabled counters.
-
-* Support the verified managed `xray-windows-v26.10.31-r2` companion with native routing, XDRIVE/GeoDAT capability checks and owned service cleanup, including invalid XHTTP `h2Params` listener cleanup. Ordinary compatible external Core builds remain supported for profiles without managed services.
-* Add typed options/capabilities, tray toggle/open-app actions, `.ico` presentation, explicit quick-profile clearing, bounded reconnect and diagnostics. Preserve WFP protection after retry exhaustion.
-* Bind tray/pending startup work to immutable session/options owners; reject stale commands and preserve an active session after a candidate fails preflight.
-* Preserve full caller JSON, imported listeners/API/services/disabled statistics, DNS dictionaries, transport headers, compatible FakeDNS and effective XHTTP chains. Allocate private adapters/ports/tags without changing caller selectors.
-* Add per-session VPN routing, preparation reports and separate data/certificate roots, retaining frozen values in recovery/quick profiles and preserving caller files.
-* Capture IPv6 payload on the owned tunnel while retaining physical IPv6 protection. Admit finite numeric IPv6 TCP proxy endpoints with exact selected-interface/address/port permissions.
-* Resolve private system A/AAAA through caller Core DNS, retain explicit remote resolver policy and preserve static hosts aliases. Keep unsupported local DNS paths explicit.
-* Bound SOCKS startup/authentication, packet checks and statistics commands with cancellable deadlines, output limits and owned process/socket cleanup. Deliver status on the Flutter platform thread.
-* Validate writable scheduled GeoDAT targets and XDRIVE service support on the actual selected executable before persisting or starting a candidate.
-* Verify published runtime bytes, opposite domain routing, packet traffic, tray/options and filter/route/helper cleanup in Windows Actions. IPv6-only/NAT64, additional endpoint transports and a full server matrix remain separate acceptance work.
+* Support the managed `xray-windows-v26.10.31-r2` companion for native routing, XDRIVE/GeoDAT services and owned cleanup.
+* Add tray actions, typed options, capability discovery, bounded reconnect and diagnostics while retaining WFP protection.
+* Preserve full profiles, caller DNS/routing, imported APIs and disabled statistics; restore missing private counter defaults.
+* Add per-session VPN routing, preparation reports and separate data/certificate roots.
+* Carry IPv6 tunnel payload and admit finite numeric IPv6 TCP proxy endpoints with exact interface/address/port permissions.
+* Cancel obsolete starts/actions and bound packet checks, statistics and helper/socket cleanup.
 
 ## 1.1.7
 

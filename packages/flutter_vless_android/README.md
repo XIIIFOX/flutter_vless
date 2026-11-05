@@ -1,17 +1,18 @@
 # flutter_vless_android
 
-The Android implementation of the `flutter_vless` plugin.
+The Android implementation of the [`flutter_vless`](https://pub.dev/packages/flutter_vless) plugin.
+Use this package through the main `flutter_vless` dependency.
 
 ## Runtime
 
-Android runtime binaries and geodata are delivered through the Maven Central AAR dependency `dev.tfox.fluttervless:xray-android:26.10.31-protect2`. This keeps the Pub.dev package lightweight while preserving the same packaged Xray files in the final Android app.
-
-The native AAR is already published. The matching wrapper changes in this
-repository are versioned `1.1.7+1` and are not yet published; the existing
-pub.dev wrapper numbered `1.1.7` remains unchanged. Use matching source
-packages through the main package for its new APIs.
+Native libraries and geodata resolve through the pinned Maven Central AAR
+`dev.tfox.fluttervless:xray-android:26.10.31-protect2`, keeping the Dart package
+small while providing the complete runtime in the Android app.
 
 ## Emulator Support
 
-The current Maven runtime AAR includes `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`.
-This covers both physical Android devices and Android emulators.
+The runtime includes `armeabi-v7a`, `arm64-v8a`, `x86` and `x86_64`, with 16 KiB
+page alignment for both device and emulator builds.
+
+See the [Android platform guide](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/platform/android.md)
+for VPN permission, packaging and system-control setup.

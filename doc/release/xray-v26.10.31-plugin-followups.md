@@ -53,12 +53,9 @@ protobuf regeneration do not require a new public Flutter option.
   This finite result does not qualify every resolver/network combination or
   establish that an older failed public reference had expired credentials.
 * Rehearse package contents, clean dependency resolution and publication order
-  using the [selected version plan](README.md#selected-build-suffix-version-plan).
+  using the [package versions](README.md#package-versions).
   Android/macOS/Windows now use `1.1.7+1`, and the root dependency floors are
-  `^1.1.7+1`; the root and platform interface remain `1.1.7`. A read-only registry
-  check on 2026-11-03 found the implementation build-suffix versions, root
-  1.1.7 and interface 1.1.7 absent. Recheck availability before publishing.
-  No publication is authorized by this plan.
+  `^1.1.7+1`; the root and platform interface use `1.1.7`.
   [Android](https://pub.dev/packages/flutter_vless_android/versions),
   [macOS](https://pub.dev/packages/flutter_vless_macos/versions),
   [Windows](https://pub.dev/packages/flutter_vless_windows/versions).

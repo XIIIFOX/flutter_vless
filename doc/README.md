@@ -1,40 +1,27 @@
-# Documentation Index
+# Documentation
 
-This directory is the canonical local documentation set for `flutter_vless`.
+Guides for flutter_vless 1.1.7. Start with installation and the setup for your
+target platform; the root README contains the package overview and quick start.
 
-The package page on pub.dev is driven by the root `README.md`. These guides keep the longer setup, configuration, and troubleshooting material in one place without turning the pub.dev page into a wall of text.
-
-## Read This First
+## Using the plugin
 
 1. [Getting Started](getting-started.md)
 2. [Platform Guides](platform/README.md)
 3. [API Contract](api.md)
 4. [Options and system controls](options-and-system-controls.md)
-5. [Runtime diagnostics](runtime-diagnostics.md)
-6. [Examples](examples.md)
-7. [Configuration Guide](configuration.md)
-8. [Compatibility](compatibility.md)
-9. [Security And Runtime Boundaries](security.md)
-10. [Architecture Notes](architecture.md)
-11. [Real-Device VPN Matrix](device_matrix.md)
-12. [Troubleshooting](troubleshooting.md)
-13. [Apple readiness and local DNS](apple-readiness-and-dns.md)
+5. [Examples](examples.md)
+6. [Configuration Guide](configuration.md)
+7. [Compatibility](compatibility.md)
+8. [Runtime diagnostics](runtime-diagnostics.md)
+9. [Troubleshooting](troubleshooting.md)
 
-## Audience Split
+## Native integration
 
-- New users should start with `getting-started.md`, `examples.md`, and their platform guide.
-- Integrators should read `api.md`, `configuration.md`, and `compatibility.md`.
-- Maintainers should read `architecture.md`, `security.md`, and the macOS packet tunnel note before changing native runtime behavior.
-- Release validation should use `device_matrix.md` when VPN/tunnel behavior changes.
-- Debugging issues should usually begin with `troubleshooting.md`.
+- [Security and runtime boundaries](security.md)
+- [Architecture](architecture.md)
+- [macOS Packet Tunnel architecture](macos_packet_tunnel_architecture.md)
+- [Apple readiness and local DNS](apple-readiness-and-dns.md)
+- [Protocol and transport support](protocol_support_roadmap.md)
 
-## Notes
-
-- Keep this directory as the source of truth for human-written docs.
-- Use `README.md` for the pub.dev-facing summary and quick start.
-- Treat older root-level setup files as legacy during the transition to this docs layout.
-- Current guides describe the working 1.1.7 source. Its native runtimes are
-  published, while the main Flutter 1.1.7 package is not. Follow the root
-  README's coherent Git dependency setup for new APIs. Dated compatibility and
-  release records retain historical observations; use their latest closeout
-  links for current acceptance scope.
+Version history is in the root [CHANGELOG](../CHANGELOG.md). Contributor testing
+and release instructions are in [CONTRIBUTING](../CONTRIBUTING.md#tests-and-ci).

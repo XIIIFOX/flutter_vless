@@ -20,12 +20,13 @@ Common causes:
 - the wrong platform guide was followed
 - a proxy-only example was copied into a VPN flow, or vice versa
 
-On macOS Packet Tunnel, do not treat `Delay` or Xray's internal SOCKS checks as
-complete proof that browser traffic can flow. A healthy macOS VPN run should
-also show app-side raw TCP probes through the selected `utun` route and growing
-download counters. If `raw-http-ip-literal-bound-utun*` fails with
-`No route to host`, inspect the Packet Tunnel route model before changing the
-Xray config.
+Check a destination allowed by the profile with
+`getConnectedServerDelay(url: ...)`, then open it from another application and
+confirm byte counters increase. Local readiness and an operating-system VPN
+icon do not establish remote reachability. On Apple, use caller Xray routing for
+direct destinations and keep the managed virtual DNS and capture routes intact.
+Use the [Apple DNS guide](apple-readiness-and-dns.md) for resolver policy and the
+[runtime snapshot](runtime-diagnostics.md) to inspect startup or recovery stages.
 
 ## `parse()` Fails On A Link
 
@@ -71,10 +72,16 @@ Check:
 - confirm the Packet Tunnel target is signed
 - confirm the App Group is shared between the app and the extension
 - for macOS, read the packet tunnel architecture note before changing routing or DNS
-- for macOS `1.1.6`, keep explicit Packet Tunnel DNS enabled and DNS host-route
-  exclusions disabled unless a real smoke test proves another route model
+- keep the protected virtual DNS and Packet Tunnel route policy intact; use
+  caller Xray routing for intentional direct destinations
 
 ## macOS Build Fails During Xcode Or SwiftPM Resolution
+
+Keep one installed app copy at a stable path during macOS testing. Copies with
+the same app/provider identifiers and bundle version can cause the OS to launch
+an older Packet Tunnel extension. Advance the internal app and extension build
+number when rebuilding, and inspect the running provider identity rather than
+relying only on the host window or Core version.
 
 For the bundled example, run from the repository example directory:
 

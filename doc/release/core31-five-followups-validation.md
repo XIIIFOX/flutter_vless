@@ -3,9 +3,9 @@
 The five feature criteria are qualified on producer commit
 `2505694c4001e7d52f06d6a63f29780da8dc7d49`, upstream Core
 `a4a3dff5b20c2faae567b742c172c7b95e75c083` (26.10.31).
-Flutter packages remain 1.1.7 and example remains 1.1.7+117. No Flutter package
-or plugin release is part of this work. Physical-device acceptance is reported
-separately below; a successful source test is not a public-binary device result.
+The checks use flutter_vless 1.1.7 and example build 1.1.7+117. Physical-device
+acceptance is reported separately below; a successful source test is not a
+public-binary device result.
 
 ## Completed source-runtime criteria
 

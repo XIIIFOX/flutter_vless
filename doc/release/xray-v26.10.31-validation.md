@@ -7,10 +7,8 @@ follow-ups are recorded in the
 publication and device evidence below remains historical; it is not relabelled
 as qualification of the later binaries.
 
-Flutter package sources remain **1.1.7**. This stage publishes only native
-artifacts: no Flutter package or plugin `v1.1.7` release is published by this
-stage. Previously published implementation versions are a separate registry
-constraint. The owner's Mac VPN stays on; live macOS VPN acceptance is excluded.
+This report records the native artifacts used by flutter_vless **1.1.7**.
+Live macOS VPN acceptance is outside its scope.
 
 ## Published native bytes
 

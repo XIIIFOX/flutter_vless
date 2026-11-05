@@ -17,7 +17,9 @@ probe cannot replace failure evidence from the latest connection session.
   provider entries after extension restarts.
 - Normal stop and startup failure preserve the latest snapshot.
 - Reads never clear the snapshot.
-- Output is bounded before it crosses Method Channel and uses UTF-8 text.
+- Output is bounded before it crosses Method Channel and uses valid UTF-8 text.
+  Snapshot retention is controlled by `DiagnosticsOptions`; native backends can
+  impose a smaller returned-snapshot limit.
 - The text is intentionally platform-specific and must not be parsed as a
   stable data format.
 
@@ -28,23 +30,19 @@ pollute a newly started session. Apple Packet Tunnel diagnostics come from the
 provider/App Group fallback; proxy-only Xray callbacks use a bounded app-process
 buffer.
 
-## Regression scenarios
+## Usage
 
-1. Call diagnostics before startup and verify an empty result, not an error.
-2. Start a valid session, wait for native output, and verify the snapshot is
-   non-empty and identifies the native source.
-3. Stop the session and verify the same failure evidence remains readable.
-4. Start with an invalid or unavailable native runtime and verify startup logs
-   remain readable after the failure.
-5. Start a second Android, Windows, or Apple proxy-only session and verify old
-   in-process markers are absent. For an Apple Packet Tunnel, verify the new
-   timestamped session is distinguishable in the persisted bounded tail.
-6. Generate more than 128 KiB of output and verify the returned snapshot stays
-   below 64 KiB while retaining the newest messages.
-7. Split output across arbitrary byte chunks, including UTF-8 text, and verify
-   the returned Method Channel string remains valid.
-8. On iOS/macOS, test both Packet Tunnel and proxy-only modes; on Android and
-   Windows, exercise both Xray and tun2socks output paths.
+Read a snapshot after startup, failure or Stop when collecting a support report:
+
+```dart
+final snapshot = await flutterVless.getProviderDebugSnapshot();
+```
+
+`DiagnosticsOptions` controls collection and retention limits. Collection is
+on by default. Disabling it clears the owned buffers; re-enable it before the
+session you need to investigate. The returned text is for human inspection,
+not connection-state detection. Use status events for connection state and
+`getConnectedServerDelay()` for a permitted destination's reachability.
 
 ## Privacy
 

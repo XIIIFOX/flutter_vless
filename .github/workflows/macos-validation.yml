@@ -46,6 +46,7 @@ jobs:
           python3 -m unittest discover -s tool -p test_verify_macos_actions_validation.py -v
           python3 -m unittest discover -s tool -p test_check_macos_example_provider.py -v
           python3 tool/test_install_published_apple_runtime.py
+          python3 -m unittest discover -s tool -p test_measure_macos_endpoint_startup.py -v
       - name: Validate published macOS runtime on an available standard runner
         env:
           GH_TOKEN: ${{ github.token }}

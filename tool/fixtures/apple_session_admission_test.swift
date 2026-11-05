@@ -190,6 +190,7 @@ final class FixtureProvider: @unchecked Sendable {
     let sessionAdmission = TunnelSessionAdmission()
     let forwardingLock = NSLock()
     var forwardingReady = false, reasserting = false
+    var firstForwardingReadyEpoch: TunnelSessionAdmission.Epoch?
     var forwardingEpoch: TunnelSessionAdmission.Epoch?
     var startupPreparation: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, task: Task<TunnelPreparedConfig, Error>)?
     var protocolConfiguration: NEVPNProtocol?
@@ -380,13 +381,60 @@ extension Probe {
             routingEnvelope: FixtureEnvelope(configurationData: original.config, metadataData: original.routingMetadata!),
             endpointPath: original.path)
         let spec = FixtureProvider.RuntimeSpec(source: provider.runtimeSource!, prepared: prepared, token: original.token,
-            path: original.path, port: original.port, discovery: group, discoveryDeadline: ProcessInfo.processInfo.systemUptime + 25)
+            path: original.path, port: original.port, discovery: group, discoveryDeadline: ProcessInfo.processInfo.systemUptime + 25,
+            initialDeadline: ProcessInfo.processInfo.systemUptime + 25)
         provider.watchdogQueue.sync { provider.runtimeSpec = spec }
         provider.setStartupDiscovery(group, epoch: spec.epoch, token: spec.token)
+        if activate { _ = provider.setForwardingReadyFromHealth(true, epoch: spec.epoch, discovery: group) }
         return (spec, group)
     }
 
     static func runDNSLeaseCases() async {
+        let legacyPublication = FixtureProvider(), legacyInitial = legacyPublication.begin()
+        precondition(legacyPublication.setForwardingReadyFromHealth(true, epoch: legacyInitial.epoch, discovery: nil))
+        let freshEpoch = legacyPublication.firstForwardingReadyEpoch
+        _ = try! legacyPublication.endpointAdmission.refresh(legacyInitial.epoch)
+        // Established traffic may stay ready during ordinary candidate lookup.
+        precondition(legacyPublication.setForwardingReadyFromHealth(true, epoch: legacyInitial.epoch, discovery: nil))
+        legacyPublication.firstForwardingReadyEpoch = nil
+        legacyPublication.setForwardingReady(false, epoch: legacyInitial.epoch)
+        precondition(!legacyPublication.setForwardingReadyFromHealth(true, epoch: legacyInitial.epoch, discovery: nil) &&
+            !legacyPublication.forwardingReady && legacyPublication.firstForwardingReadyEpoch == nil && freshEpoch == legacyInitial.epoch)
+        await legacyPublication.stop()
+        print("PASS first readiness requires current committed token for legacy plans while established health keeps old worker policy")
+
+        // No live system witness is needed to recognize an unfinished first
+        // Connect. Sleep before its first actual health must fail closed once
+        // on Wake, while Stop/new Start revokes that old admission completely.
+        for stopBeforeWake in [false, true] {
+            let provisional = FixtureProvider(), (original, group) = leased(provisional)
+            provisional.firstForwardingReadyEpoch = nil
+            group.hasUnsealedSystemSelections = false
+            provisional.initialRuntimeAttempted = true
+            provisional.setForwardingReady(false, epoch: original.epoch)
+            let completions = DispatchSemaphore(value: 0)
+            provisional.sleep { completions.signal() }
+            precondition(completions.wait(timeout: .now() + 3) == .success)
+            provisional.watchdogQueue.sync {}
+            precondition(!provisional.sessionAdmission.permitsRuntime(original.epoch))
+            let before = FixtureLog.shared.count("terminal-cancel")
+            if stopBeforeWake {
+                await provisional.stop(); let fresh = provisional.begin()
+                provisional.wake(); provisional.watchdogQueue.sync {}
+                precondition(provisional.sessionAdmission.permitsRuntime(fresh.epoch) && provisional.initialDiscoveryCorrection == nil &&
+                    FixtureLog.shared.count("terminal-cancel") == before)
+            } else {
+                provisional.wake(); provisional.watchdogQueue.sync {}
+                precondition(provisional.initialDiscoveryCorrection?.terminal == true && !provisional.forwardingReady &&
+                    provisional.originalPreparationInputs.isEmpty && FixtureLog.shared.count("terminal-cancel") == before + 1)
+                provisional.wake(); provisional.watchdogQueue.sync {}
+                precondition(FixtureLog.shared.count("terminal-cancel") == before + 1)
+            }
+            precondition(completions.wait(timeout: .now() + 0.01) == .timedOut)
+            await provisional.stop()
+            print("PASS sealed/encrypted first Connect Sleep cannot strand readiness or revive after Stop (Stop=\(stopBeforeWake))")
+        }
+
         // Exercise the actual correction factory's new retained lease at two
         // asynchronous boundaries. Sleep must wait on that exact A/AAAA window
         // rather than suspending from the obsolete runtime's cancelled lease.

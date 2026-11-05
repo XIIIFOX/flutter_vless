@@ -9,6 +9,7 @@ import re
 import subprocess
 
 from install_published_apple_runtime import PINS, REVISION
+import measure_macos_endpoint_startup as endpoint_timing
 
 ROOT = Path(__file__).resolve().parents[1]
 MAC_SOURCES = 'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources'
@@ -40,6 +41,65 @@ def verify_provider_compilation(root, binary, build_log):
     payload = Path(binary).read_bytes()
     if any(marker not in payload for marker in PROVIDER_STARTUP_MARKERS):
         raise ValueError('Compiled provider lacks the current DNS startup implementation')
+
+
+
+def verify_endpoint_startup_timing(root, sha):
+    """Bind measured DNS and controlled provider gates to current source/logs."""
+    directory = root/'build/macos-endpoint-startup-timing'
+    result_path = directory/'result.json'
+    try:
+        result = json.loads(result_path.read_text())
+        if type(result.get('schema')) is not int or result['schema'] != 1 \
+                or result.get('success') is not True or result.get('dns_only') is not True \
+                or result.get('live_ne_vpn') is not False or result.get('prepared_only', False) is not False \
+                or result.get('candidate_ref') != sha or result.get('baseline_ref') != endpoint_timing.BASELINE:
+            raise ValueError('Incorrect scope, source refs or incomplete run')
+        test_hash = digest(root/endpoint_timing.TEST)
+        if result.get('test_sha256') != test_hash:
+            raise ValueError('Current XCTest hash differs')
+        expected = {str(p.relative_to(root)): digest(p)
+            for module in ('flutter_vless_macos_privacy', 'flutter_vless_macos_tunnel_support')
+            for p in sorted((root/MAC_SOURCES/module).glob('*.swift'))
+            if p.name != 'FlutterVlessPacketTunnelProvider.swift'}
+        discovery = MAC_SOURCES+'/flutter_vless_macos_tunnel_support/TunnelEndpointDiscovery.swift'
+        production = result.get('production_sha256', {})
+        if discovery not in expected or set(production) != {'baseline', 'candidate'} \
+                or production['candidate'] != expected or set(production['baseline']) != set(expected):
+            raise ValueError('Incomplete or stale production Swift source map')
+        for mode in ('baseline', 'candidate'):
+            for name, checksum in production[mode].items():
+                prepared = directory/mode/'Sources'/name.split('/Sources/', 1)[1]
+                if digest(prepared) != checksum:
+                    raise ValueError('Prepared production source differs')
+            copied_test = directory/mode/'Tests/flutter_vless_macos_tunnel_supportTests'/Path(endpoint_timing.TEST).name
+            if digest(copied_test) != test_hash:
+                raise ValueError('Revisions did not execute the same current XCTest')
+        logs = {mode+'-run.log': directory/(mode+'-run.log') for mode in ('baseline', 'candidate')}
+        if result.get('log_sha256') != {name: digest(path) for name, path in logs.items()}:
+            raise ValueError('Timing log digests differ')
+        metrics = {}
+        for mode in ('baseline', 'candidate'):
+            text = logs[mode+'-run.log'].read_text()
+            if "Test Suite 'TunnelEndpointStartupTimingTests' passed" not in text:
+                raise ValueError('Timing XCTest did not pass')
+            metrics[mode] = endpoint_timing.parse_metrics(text, mode)
+        if result.get('metrics') != metrics or result.get('comparison') != endpoint_timing.compare(metrics['baseline'], metrics['candidate']):
+            raise ValueError('Timing rows or improvement comparison differ')
+        policies = ['example/ios/XrayTunnel/PacketTunnelProvider.swift', PROVIDER]
+        if result.get('provider_policy_source_sha256') != {name: digest(root/name) for name in policies}:
+            raise ValueError('Current provider policy source differs')
+        provider_metrics, provider_logs = {}, []
+        for platform in ('ios', 'macos'):
+            for mode, folder in [('candidate', 'apple-cold-start-current'), ('baseline', 'apple-cold-start-negative')]:
+                path = root/'build'/folder/(platform+'.log')
+                provider_logs.append(path)
+                provider_metrics[platform+'-'+mode] = endpoint_timing.provider_metrics(path.read_text(), ready=mode == 'candidate')
+        if result.get('provider_policy_metrics') != provider_metrics:
+            raise ValueError('Provider readiness timing rows differ')
+        return result, [result_path, *logs.values(), *provider_logs]
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+        raise ValueError('Endpoint startup timing proof invalid: '+str(error)) from error
 
 
 def qualify(root, sha):
@@ -84,6 +144,7 @@ def qualify(root, sha):
         'tool/fixtures/macos_startup_timing.swift']
     if timing.get('source_sha256') != {name: digest(root/name) for name in timing_sources}:
         raise ValueError('Timing admission result differs from the current host')
+    endpoint_result, endpoint_proofs = verify_endpoint_startup_timing(root, sha)
     version = re.search(r'^version:\s*([^+\s]+)\+([0-9]+)', (root/'example/pubspec.yaml').read_text(), re.M)
     if version is None: raise ValueError('Example version missing')
     app = output/'example/flutter_vless_example.app'
@@ -103,11 +164,13 @@ def qualify(root, sha):
             verify_provider_compilation(root, binary, (output/'example-build.log').read_text())
     proof_paths = [sdk_path, runtime, hev, support, output/'manager.log', output/'readiness.log',
                    root/'build/apple-cold-start-current/result.json', output/'example-build.log',
-                   timing_path, timing_log]
+                   timing_path, timing_log, *endpoint_proofs]
     result = {'success': True, 'source_sha': sha, 'platform': 'macos', 'runtime_source': 'published',
               'runtime_version': '26.10.31', 'SDK_archive_sha256': sdk['archive_sha256'],
               'source_provider_sha256': digest(root/PROVIDER), 'compiled_executables': executables,
               'compiled_provider_source_and_startup_markers_verified': True,
+              'endpoint_startup_timing': {'dns_only': True, 'live_ne_vpn': False,
+                  'comparison': endpoint_result['comparison']},
               'live_NetworkExtension_VPN_or_owner_network_acceptance': False,
               'scope': 'Published Core routing/DNS/counters/stop and HEV packet exchanges with controlled OS boundaries; actual example/provider build',
               'proof_sha256': {str(p.relative_to(root)): digest(p) for p in proof_paths}}

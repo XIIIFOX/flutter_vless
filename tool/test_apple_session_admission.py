@@ -15,7 +15,7 @@ GATES = {
     'ios': ROOT / 'ios/flutter_vless/Sources/flutter_vless_tunnel_support/TunnelSessionAdmission.swift',
     'macos': ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_tunnel_support/TunnelSessionAdmission.swift',
 }
-METHODS = ['setForwardingReady', 'isForwardingReady', 'stopTunnel', 'setStartupPreparation',
+METHODS = ['hasPublishedInitialReady', 'setForwardingReady', 'isForwardingReady', 'stopTunnel', 'setStartupPreparation',
            'setStartupDiscovery', 'cancelStartupDiscovery', 'makeStartupDiscovery', 'invalidateStartupDiscovery',
            'endpointSpecIsFresh', 'setForwardingNotReadyForDNS', 'setForwardingReadyFromHealth',
            'beginInitialDiscoveryCorrection', 'cancelInitialDiscoveryCorrection', 'endInterruptedInitialDiscoveryOnWake',
@@ -146,7 +146,7 @@ def main():
     (output / 'probe.log').write_text(result.stdout + result.stderr)
     print(result.stdout, end='')
     assert result.returncode == 0, (result.returncode, result.stderr)
-    assert len([line for line in result.stdout.splitlines() if line.startswith('PASS ')]) == (49 if args.platform == 'macos' else 48)
+    assert len([line for line in result.stdout.splitlines() if line.startswith('PASS ')]) == (52 if args.platform == 'macos' else 51)
     assert PROVIDERS[args.platform].read_text() == source and GATES[args.platform].read_bytes() == gate
     assert fixture_path.read_text() == fixture_source, 'Source changed during verification'
     assert budget.read_bytes() == budget_source, 'Budget source changed during verification'

@@ -110,6 +110,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let runtimeQueue = DispatchQueue(label: "dev.tfox.flutter-vless.ios-runtime")
     private let forwardingLock = NSLock()
     private var forwardingReady = false
+    // Monotonic per explicit session; recovery never renews first-Connect authority.
+    private var firstForwardingReadyEpoch: TunnelSessionAdmission.Epoch?
     private var startupPreparation: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, task: Task<TunnelPreparedConfig, Error>)?
     private var startupDiscovery: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, discovery: TunnelEndpointDiscovery, permit: InitialDiscoveryCorrectionPermit?)?
     // Forwarding-lock-owned arbitration between pre-sleep DNS drain and Wake.
@@ -275,16 +277,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let discovery: TunnelEndpointDiscovery?
         let discoveryDeadline: TimeInterval?
         let correctionID: UUID?
+        let initialDeadline: TimeInterval?
         let correctionPermit: InitialDiscoveryCorrectionPermit?
 
-        init(source: RuntimeSource, prepared: TunnelPreparedConfig, token: TunnelEndpointPlanAdmission.Token, path: TunnelEndpointPath, port: Int, discovery: TunnelEndpointDiscovery? = nil, discoveryDeadline: TimeInterval? = nil, correctionID: UUID? = nil, correctionPermit: InitialDiscoveryCorrectionPermit? = nil) {
+        init(source: RuntimeSource, prepared: TunnelPreparedConfig, token: TunnelEndpointPlanAdmission.Token, path: TunnelEndpointPath, port: Int, discovery: TunnelEndpointDiscovery? = nil, discoveryDeadline: TimeInterval? = nil, correctionID: UUID? = nil, correctionPermit: InitialDiscoveryCorrectionPermit? = nil, initialDeadline: TimeInterval? = nil) {
             epoch = source.epoch; options = source.options
             config = prepared.routingEnvelope?.configurationData ?? prepared.data
             self.port = port; geoAssetsDirectory = source.geoAssetsDirectory; credentials = source.credentials
             routingMetadata = prepared.routingEnvelope?.metadataData
             self.token = token; self.path = path
             selections = prepared.endpointSelections; bootstrapAddresses = prepared.bootstrapAddresses
-            self.discovery = discovery; self.discoveryDeadline = discoveryDeadline; self.correctionID = correctionID; self.correctionPermit = correctionPermit
+            self.discovery = discovery; self.discoveryDeadline = discoveryDeadline; self.correctionID = correctionID; self.correctionPermit = correctionPermit; self.initialDeadline = initialDeadline
         }
 
         /// A fresh zero-TTL answer is confined to this single prepared attempt.
@@ -305,6 +308,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         forwardingEpoch = epoch
         forwardingReady = ready
         reasserting = !ready
+    }
+
+    private func hasPublishedInitialReady(epoch: TunnelSessionAdmission.Epoch) -> Bool {
+        forwardingLock.lock(); defer { forwardingLock.unlock() }
+        return firstForwardingReadyEpoch == epoch
     }
 
     private func isForwardingReady() -> Bool {
@@ -645,7 +653,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                                              discovery: TunnelEndpointDiscovery?) -> Bool {
         forwardingLock.lock(); defer { forwardingLock.unlock() }
         guard sessionAdmission.isCurrent(epoch), !ready || (sessionAdmission.permitsRuntime(epoch) && (discovery?.permitsForwardingReady ?? true)) else { return false }
+        if ready && firstForwardingReadyEpoch != epoch {
+            guard let token = endpointAdmission.committedToken, endpointAdmission.mayStart(token) else { return false }
+        }
         forwardingEpoch = epoch; forwardingReady = ready; reasserting = !ready
+        if ready { firstForwardingReadyEpoch = epoch }
         return true
     }
 
@@ -705,7 +717,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         }
                         let spec = RuntimeSpec(source: source, prepared: prepared, token: token, path: path, port: parsed.inboundPort,
                                                discovery: discovery, discoveryDeadline: discovery == nil ? nil : deadline,
-                                               correctionID: id, correctionPermit: fast ? permit : nil)
+                                               correctionID: id, correctionPermit: permit, initialDeadline: deadline)
                         try await self.onRuntimeQueue { try self.checkEndpointPreflight(spec, prepared: prepared, source: source) }
                         try await self.endpointCommitQueue.submit { try await self.commitEndpointPlan(spec) }.value
                         let completed = self.watchdogQueue.sync {
@@ -774,7 +786,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         guard sessionAdmission.permitsRuntime(epoch), runtimeSpec?.epoch == epoch,
               runtimeSource?.epoch == epoch else { return false }
         let owner = initialDiscoveryCorrection?.epoch == epoch
-        guard owner || runtimeSpec?.discovery?.isInvalidated == true else { return false }
+        let unfinishedInitialStart = !hasPublishedInitialReady(epoch: epoch) && runtimeSpec?.initialDeadline != nil
+        guard owner || runtimeSpec?.discovery?.isInvalidated == true || unfinishedInitialStart else { return false }
         if owner && initialDiscoveryCorrection?.terminal == true { return true }
         if owner {
             cancelInitialDiscoveryCorrection(epoch: epoch, keepOwner: true)
@@ -902,7 +915,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         obsolete?.cancel()
         let revokedDiscovery = cancelStartupDiscovery(epoch: epoch, token: revokedToken)
         runtimeRecoveryInFlight = initialDiscoveryCorrection?.epoch == epoch
-        if let spec = runtimeSpec, spec.discovery?.isInvalidated == true || spec.discovery?.hasUnsealedSystemSelections == true, let deadline = spec.discoveryDeadline,
+        let awaitingInitialReady = !hasPublishedInitialReady(epoch: epoch)
+        if let spec = runtimeSpec,
+           spec.discovery?.isInvalidated == true || spec.discovery?.hasUnsealedSystemSelections == true ||
+            (awaitingInitialReady && spec.initialDeadline != nil),
+           let deadline = spec.discoveryDeadline ?? spec.initialDeadline,
            let source = runtimeSource, sessionAdmission.permitsRuntime(epoch) {
             setForwardingReady(false, epoch: epoch)
             // Classify the actual revoked child after cancellation, not the
@@ -910,7 +927,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let lease = revokedDiscovery ?? spec.discovery
             if lease?.isInvalidated == true { initialDiscoveryCorrection?.permit.requireLegacy(); spec.correctionPermit?.requireLegacy() }
             if initialDiscoveryCorrection?.epoch == epoch { return }
-            let fast = lease?.hasUnsealedSystemSelections == true && lease?.isInvalidated == false
+            let fast = lease?.isInvalidated != true &&
+                (lease?.hasUnsealedSystemSelections == true || awaitingInitialReady)
             beginInitialDiscoveryCorrection(source, deadline: deadline, allowFastDiscovery: fast)
             return
         }
@@ -932,6 +950,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // retains its complete three-slot budget inside the same deadline.
         var fastAdmissions = 0
         var legacyAdmissions = 0
+        let correctionPermit = InitialDiscoveryCorrectionPermit(epoch: epoch, deadline: deadline, allowFast: allowFastDiscovery)
         while legacyAdmissions < 3 {
             try Task.checkCancellation()
             guard sessionAdmission.isCurrent(epoch), ProcessInfo.processInfo.systemUptime < deadline else { throw CancellationError() }
@@ -963,7 +982,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     throw TunnelXrayConfigPreparer.StartupError.invalidConfiguration
                 }
                 let spec = RuntimeSpec(source: source, prepared: prepared, token: token, path: path, port: parsed.inboundPort,
-                                       discovery: discovery, discoveryDeadline: discovery == nil ? nil : deadline)
+                                       discovery: discovery, discoveryDeadline: discovery == nil ? nil : deadline,
+                                       correctionPermit: correctionPermit, initialDeadline: deadline)
                 try await onRuntimeQueue { try self.checkEndpointPreflight(spec, prepared: prepared, source: source) }
                 guard sessionAdmission.isCurrent(epoch), endpointAdmission.isCurrent(token), self.endpointSpecIsFresh(spec) else { throw CancellationError() }
                 try await endpointCommitQueue.submit {

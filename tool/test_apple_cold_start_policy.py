@@ -59,6 +59,8 @@ def main():
             "    private func setForwardingNotReadyForDNS", "    private func setForwardingReadyFromHealth",
             "    private func beginInitialDiscoveryCorrection", "    private func cancelInitialDiscoveryCorrection",
             "    private func setForwardingReady", "    private func startNativeRuntime", "    private func commitEndpointPlan"))
+        if "    private func hasPublishedInitialReady" in text:
+            extras += "\n" + actual_block("    private func hasPublishedInitialReady")
         extras += "\n" + actual_block("    private func scheduleNativeRecovery").replace("func scheduleNativeRecovery(", "func fixtureScheduleNativeRecovery(", 1)
         extras += "\n" + actual_block("    private func refreshEndpointPlan").replace("func refreshEndpointPlan(", "func fixtureRefreshEndpointPlan(", 1).replace("try await Task.sleep(nanoseconds: UInt64(min(wait, 300) * 1_000_000_000))", "await Task.yield(); try Task.checkCancellation()")
         extras += "\n" + actual_block("    private final class PendingSleep").replace("private final class", "final class")

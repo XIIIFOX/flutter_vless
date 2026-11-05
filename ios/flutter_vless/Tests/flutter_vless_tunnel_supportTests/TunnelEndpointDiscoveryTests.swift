@@ -124,6 +124,72 @@ final class TunnelEndpointDiscoveryTests: XCTestCase {
         }
     }
 
+    func testOnlyBothTerminalUsableFamilyFailuresSealBeforeOriginalBound() async throws {
+        for failure in [TunnelEndpointDNSAnswer.Failure.serviceUnavailable, .defunct, .policyDenied] {
+            let backend = Backend(), clock = EndpointDeadlineTestScheduler(), ready = Box(false)
+            let registered = expectation(description: "terminal family registrations")
+            backend.started = { _, count, _ in if count == 2 { registered.fulfill() } }
+            let group = make(backend, clock: clock.now, schedule: clock.schedule)
+            let task = Task { let result = try await group.resolveCandidates("terminal.fixture.invalid"); ready.set(true); return result }
+            await fulfillment(of: [registered], timeout: 1)
+            backend.emit("terminal.fixture.invalid", .ipv4, .failure(failure))
+            await backend.drain()
+            XCTAssertFalse(ready.get(), "One dead family cannot discard a later system AAAA")
+            backend.emit("terminal.fixture.invalid", .ipv6, .failure(failure))
+            let limit = now + 1
+            while !ready.get(), now < limit { await Task.yield() }
+            XCTAssertTrue(ready.get(), "Both dead references require no collection timer")
+            if !ready.get() { group.cancel() }
+            let values = try await task.value
+            XCTAssertTrue(values.candidates.isEmpty)
+            XCTAssertEqual(clock.now(), 0, "No shortened replacement timer is needed")
+            await backend.drain(); XCTAssertEqual(backend.counts.closed, 2)
+            group.cancel()
+        }
+    }
+
+    func testOneFailedRegistrationKeepsOtherFamilyWindowAndLateAAAA() async throws {
+        let backend = Backend(), clock = EndpointDeadlineTestScheduler(), ready = Box(false)
+        let registered = expectation(description: "remaining AAAA reference")
+        backend.started = { _, count, _ in if count == 1 { registered.fulfill() } }
+        let group = TunnelEndpointDiscovery(path: dual, deadline: 5, now: clock.now,
+            isCurrent: { true }, onInvalidated: {}, query: { host, index, family, queue, callback in
+                if family == .ipv4 { return nil }
+                return backend.query(host, index, family, queue, callback)
+            }, schedule: clock.schedule)
+        let task = Task { let values = try await group.resolveCandidates("remaining.fixture.invalid"); ready.set(true); return values }
+        await fulfillment(of: [registered], timeout: 1)
+        clock.advance(to: 1.8); await clock.drain(); await backend.drain()
+        XCTAssertFalse(ready.get())
+        backend.emit("remaining.fixture.invalid", .ipv6, answer("remaining.fixture.invalid", "2001:db8::8"))
+        await backend.drain()
+        clock.advance(to: 2); await clock.drain()
+        let result = try await task.value
+        XCTAssertEqual(result.candidates.map(\.address.text), ["2001:db8::8"])
+        group.cancel(); await backend.drain(); XCTAssertEqual(backend.counts.closed, 1)
+    }
+
+    func testTimeoutAndUnknownFailureKeepOriginalWindowAndAcceptLaterAAAA() async throws {
+        for failure in [TunnelEndpointDNSAnswer.Failure.timeout, .other] {
+            let backend = Backend(), clock = EndpointDeadlineTestScheduler(), ready = Box(false)
+            let registered = expectation(description: "recoverable family outcomes")
+            backend.started = { _, count, _ in if count == 2 { registered.fulfill() } }
+            let group = make(backend, clock: clock.now, schedule: clock.schedule)
+            let task = Task { let value = try await group.resolveCandidates("recoverable.fixture.invalid"); ready.set(true); return value }
+            await fulfillment(of: [registered], timeout: 1)
+            backend.emit("recoverable.fixture.invalid", .ipv4, .failure(failure))
+            backend.emit("recoverable.fixture.invalid", .ipv6, .failure(failure))
+            await backend.drain(); XCTAssertFalse(ready.get())
+            clock.advance(to: 1.9); await clock.drain()
+            backend.emit("recoverable.fixture.invalid", .ipv6, answer("recoverable.fixture.invalid", "2001:db8::9"))
+            await backend.drain(); XCTAssertFalse(ready.get())
+            clock.advance(to: 2); await clock.drain()
+            let result = try await task.value
+            XCTAssertEqual(result.candidates.map(\.address.text), ["2001:db8::9"])
+            group.cancel(); await backend.drain()
+        }
+    }
+
     func testBothInitialFamiliesRequiredAndMoreComingDoesNotReleasePartialBatch() async throws {
         let backend = Backend(), registered = expectation(description: "two family queries")
         backend.started = { _, count, _ in if count == 2 { registered.fulfill() } }

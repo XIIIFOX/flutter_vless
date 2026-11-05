@@ -94,11 +94,11 @@ jobs:
           python3 -m unittest discover -s tool -p test_check_macos_example_provider.py -v
           bash tool/test_bounded_native_log_store.sh
           bash tool/test_apple_options.sh
-      - name: Confirm the DNS correction regressions fail on the previous provider
+      - name: Reproduce missing first readiness on the previous provider
         shell: bash
         run: |
           set -euo pipefail
-          NEGATIVE_PROVIDER_SHA=aae0c0e15363c5bbe780a07824e239293b9f8fdb
+          NEGATIVE_PROVIDER_SHA=9d18a5fa8c894f35ab02a4819751b7640842182e
           git fetch --no-tags --depth=1 origin "$NEGATIVE_PROVIDER_SHA"
           set +e
           python3 tool/test_apple_cold_start_policy.py --receipts --provider-ref "$NEGATIVE_PROVIDER_SHA" \
@@ -112,17 +112,21 @@ jobs:
           output = Path('build/apple-cold-start-negative')
           results = json.loads((output / 'result.json').read_text())['results']
           assert set(results) == {'ios', 'macos'}, 'Both previous providers must compile and execute'
-          cases = ['forced-own-settings-during-HEV-and-second-force-complete-fast-through-final-seal',
-                   'healthy-fast-owners-share-three-admissions-two-fast-then-full-without-reset',
-                   'canceled-DNS-lease-cannot-publish-held-successful-health']
+          cases = ['first-ready-' + profile + '-forced-during-HEV-corrects-with-disabled-reconnect-and-never-reborrows-after-ready'
+                   for profile in ['encrypted', 'literal', 'sealed-system']]
           for platform, result in results.items():
-              assert result['provider_ref'] == 'aae0c0e15363c5bbe780a07824e239293b9f8fdb'
+              assert result['provider_ref'] == '9d18a5fa8c894f35ab02a4819751b7640842182e'
               assert result['exit'] == 7, 'A compiler error or crash is not a regression control'
               log = (output / (platform + '.log')).read_text()
               for case in cases:
                   assert 'APPLE_COLD_START_CASE=' + case + ';PASS=false' in log, (platform, case)
           print('Previous iOS and macOS providers reproduce the targeted regressions')
           PY
+      - name: Measure production DNS and controlled provider readiness with hard budgets
+        timeout-minutes: 12
+        run: |
+          python3 -m unittest discover -s tool -p test_measure_macos_endpoint_startup.py -v
+          python3 tool/measure_macos_endpoint_startup.py
       - name: Build macOS example
         working-directory: example
         env:
@@ -172,6 +176,8 @@ jobs:
             build/apple-cold-start-current/*.log
             build/apple-cold-start-negative/*.json
             build/apple-cold-start-negative/*.log
+            build/macos-endpoint-startup-timing/*.json
+            build/macos-endpoint-startup-timing/*.log
             build/apple-start-owner-current/*.json
             build/apple-start-owner-current/*.log
             build/macos-startup-timing-current/*.json

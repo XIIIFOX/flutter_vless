@@ -24,6 +24,12 @@ public final class TunnelEndpointDiscovery: @unchecked Sendable {
         var visible: TunnelEndpointDNSAccumulator
         var batchOpen = [false, false]
         var answered = [false, false]
+        var terminal = [false, false]
+        var registrationSucceeded = [false, false]
+        var registrationComplete = false
+        var familyCallbacks = [0, 0]
+        var firstCallbackMs: UInt64?
+        var loggedOutcomes = false
         var sealed = false
         var started = false
         var published = false
@@ -301,7 +307,12 @@ public final class TunnelEndpointDiscovery: @unchecked Sendable {
     public func cancel() {
         lock.lock(); cancelled = true; let pending = Array(hosts.values); lock.unlock()
         finishSealWaitersIfReady()
-        queue.async { for host in pending { Self.close(host, failure: CancellationError()) } }
+        queue.async {
+            for host in pending {
+                self.logOutcomes(host, cancelled: true)
+                Self.close(host, failure: CancellationError())
+            }
+        }
     }
 
     private static func key(_ name: String) -> String {
@@ -355,12 +366,17 @@ public final class TunnelEndpointDiscovery: @unchecked Sendable {
         // Candidate preference still follows actual callbacks, without sorting.
         for family in [TunnelEndpointAddress.Family.ipv6, .ipv4] {
             guard owns(), now().isFinite, now() < deadline else { cancel(); return }
+            let index = family == .ipv4 ? 0 : 1
             if let close = query(host.name, path.interfaceIndex, family, queue, { [weak self, weak host] update in
                 guard let self, let host else { return }
                 self.queue.async { self.receive(update, family: family, host: host) }
-            }) { host.closes.append(close) }
+            }) { host.closes.append(close); host.registrationSucceeded[index] = true }
+            else { host.terminal[index] = true }
         }
-        guard !host.closes.isEmpty else { seal(host); return }
+        // Failed creation has no reference from which any later answer can
+        // arrive. Never seal during the loop before both references are stored.
+        host.registrationComplete = true
+        if terminalForUsableFamilies(host) { seal(host); return }
         host.cancelTimer = schedule(queue, max(0, bound - now())) { [weak self, weak host] in
             guard let self, let host else { return }
             self.seal(host)
@@ -372,6 +388,8 @@ public final class TunnelEndpointDiscovery: @unchecked Sendable {
         lock.lock()
         guard !cancelled, !invalidated, !host.sealed else { lock.unlock(); return }
         let index = family == .ipv4 ? 0 : 1
+        host.familyCallbacks[index] = min(host.familyCallbacks[index] + 1, 65_535)
+        if host.firstCallbackMs == nil { host.firstCallbackMs = host.startedTiming?.elapsedMilliseconds() ?? 0 }
         var lateAAAA: (UInt64, Bool)?
         switch update {
         case .answer(let answer, let moreComing):
@@ -389,6 +407,10 @@ public final class TunnelEndpointDiscovery: @unchecked Sendable {
         case .failure(let failure):
             host.accumulator.accept(.failed(failure), at: now())
             if case .noRecord = failure { host.answered[index] = true }
+            switch failure {
+            case .serviceUnavailable, .defunct, .policyDenied: host.terminal[index] = true
+            case .noRecord, .timeout, .other: break
+            }
         }
         if !host.batchOpen.contains(true) { host.visible = host.accumulator }
         lock.unlock()
@@ -396,7 +418,30 @@ public final class TunnelEndpointDiscovery: @unchecked Sendable {
             event("Endpoint DNS discovery lateAAAAAfterSettingsMs=\(elapsed) usable=\(usable) initialReady=true")
         }
         notifyIfInvalidated(host)
-        publishIfReady(host)
+        if terminalForUsableFamilies(host) { seal(host) }
+        else { publishIfReady(host) }
+    }
+
+    // A negative answer, timeout, silence or unknown error is not a dead query:
+    // its original window may still deliver A/AAAA or DNS64 updates.
+    private func terminalForUsableFamilies(_ host: Host) -> Bool {
+        host.registrationComplete && (path.supportsIPv4 || path.supportsIPv6) &&
+            (!path.supportsIPv4 || host.terminal[0]) && (!path.supportsIPv6 || host.terminal[1])
+    }
+
+    private func logOutcomes(_ host: Host, cancelled: Bool) {
+        lock.lock()
+        guard !host.loggedOutcomes else { lock.unlock(); return }
+        host.loggedOutcomes = true
+        let counts = host.accumulator.outcomes
+        let usable = host.accumulator.snapshot(at: now())
+        let ipv4 = usable.filter { $0.address.family == .ipv4 }.count
+        let ipv6 = usable.filter { $0.address.family == .ipv6 }.count
+        let firstCallback = host.firstCallbackMs
+        let families = host.familyCallbacks, terminal = host.terminal, registered = host.registrationSucceeded
+        lock.unlock()
+        event("Endpoint DNS discovery outcomes callbacks=\(counts.callbacks) noRecord=\(counts.noRecord) timeout=\(counts.timeout) serviceUnavailable=\(counts.serviceUnavailable) defunct=\(counts.defunct) policyDenied=\(counts.policyDenied) otherError=\(counts.otherError) questionRejected=\(counts.questionRejected) interfaceRejected=\(counts.interfaceRejected) ifZero=\(counts.interfaceZeroReplies) ifOther=\(counts.interfaceOtherRejected) malformed=\(counts.malformed) adds=\(counts.adds) removes=\(counts.removes) capacityRejected=\(counts.capacityRejected) usableIPv4=\(ipv4) usableIPv6=\(ipv6)")
+        event("Endpoint DNS discovery familyMetrics callbackSeen=\(firstCallback != nil) firstCallbackMs=\(firstCallback ?? 0) family4Callbacks=\(families[0]) family6Callbacks=\(families[1]) terminal4=\(terminal[0]) terminal6=\(terminal[1]) registered4=\(registered[0]) registered6=\(registered[1]) cancelled=\(cancelled)")
     }
 
     private func freshLocked(_ selections: [TunnelEndpointSelection], at time: TimeInterval) -> Bool {
@@ -425,7 +470,12 @@ public final class TunnelEndpointDiscovery: @unchecked Sendable {
         // rejects the stale plan; DNSService ownership stays on our queue.
         onInvalidated()
         finishSealWaitersIfReady()
-        queue.async { for host in pending { Self.close(host, failure: CancellationError()) } }
+        queue.async {
+            for host in pending {
+                self.logOutcomes(host, cancelled: true)
+                Self.close(host, failure: CancellationError())
+            }
+        }
     }
 
     private func notifyIfInvalidated(_ changedHost: Host) {
@@ -471,6 +521,7 @@ public final class TunnelEndpointDiscovery: @unchecked Sendable {
         notifyIfInvalidated(host)
         publishIfReady(host)
         finishSealWaitersIfReady()
+        logOutcomes(host, cancelled: false)
         event("Endpoint DNS discovery finalCollectionMs=\(host.startedTiming?.elapsedMilliseconds() ?? 0) queueDelayMs=\(host.queueDelayMs)")
         while owns(), activeHosts < 4, !queuedHosts.isEmpty {
             let next = queuedHosts.removeFirst()

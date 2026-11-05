@@ -49,6 +49,8 @@ struct TunnelEndpointPath: Equatable {
     }
 }
 struct TunnelEndpointCandidate {
+    enum Origin { case systemNameAnswer, literal, encryptedIPv4Answer }
+    var origin = Origin.systemNameAnswer
     var expiry: TimeInterval? = nil
     struct Address { let isLoopback = false }; let address = Address()
     var isSingleAttemptOnly: Bool { false }
@@ -58,7 +60,7 @@ struct TunnelEndpointCandidates { let path: TunnelEndpointPath }
 struct TunnelEndpointSelection { let candidates: TunnelEndpointCandidates; let selected: TunnelEndpointCandidate }
 
 final class TunnelEndpointDiscovery: @unchecked Sendable {
-    private let state = FixtureState((cancelled: false, invalidated: false, sealed: false, expired: false, admitted: false))
+    private let state = FixtureState((cancelled: false, invalidated: false, sealed: false, expired: false, admitted: false, systemSelections: false))
     private let current: () -> Bool
     private let invalidated: () -> Void
     init(path: TunnelEndpointPath, deadline: TimeInterval, isCurrent: @escaping () -> Bool,
@@ -67,7 +69,7 @@ final class TunnelEndpointDiscovery: @unchecked Sendable {
         Kernel.register(self); Kernel.record("fast-discovery")
     }
     var isInvalidated: Bool { state.withValue { $0.invalidated } }
-    var hasUnsealedSystemSelections: Bool { state.withValue { !$0.sealed } }
+    var hasUnsealedSystemSelections: Bool { state.withValue { $0.admitted && $0.systemSelections && !$0.sealed } }
     var wasCancelled: Bool { state.withValue { $0.cancelled } }
     var permitsForwardingReady: Bool {
         current() && state.withValue { $0.admitted && !$0.cancelled && !$0.invalidated && !$0.expired }
@@ -81,7 +83,7 @@ final class TunnelEndpointDiscovery: @unchecked Sendable {
     }
     func admitSelections(_ selections: [TunnelEndpointSelection]) -> Bool {
         let valid = current() && !wasCancelled && !isInvalidated
-        if valid { state.withValue { $0.admitted = true } }
+        if valid { state.withValue { $0.admitted = true; $0.systemSelections = selections.contains { $0.selected.origin == .systemNameAnswer } } }
         return valid
     }
     func isFresh(_ selections: [TunnelEndpointSelection], at time: TimeInterval) -> Bool {
@@ -139,7 +141,7 @@ enum TunnelXrayConfigPreparer {
         if Kernel.failure == "config" { throw StartupError.invalidConfiguration }
         _ = try await resolveCandidates("fixture.endpoint.invalid")
         return TunnelPreparedConfig(data: Kernel.preparedData, endpointPath: endpointPath,
-            endpointSelections: Kernel.dnsOnly ? [] : [TunnelEndpointSelection(candidates: TunnelEndpointCandidates(path: endpointPath), selected: TunnelEndpointCandidate())])
+            endpointSelections: Kernel.dnsOnly ? [] : [TunnelEndpointSelection(candidates: TunnelEndpointCandidates(path: endpointPath), selected: TunnelEndpointCandidate(origin: Kernel.preparedOrigin))])
     }
 }
 enum TunnelEndpointResolver {
@@ -202,6 +204,8 @@ enum Kernel {
     private struct State {
         var events: [String] = [], failure = ""
         var bindingCapability: Int64 = 1
+        var readyTimes: [TimeInterval] = []
+        var preparedOrigin = TunnelEndpointCandidate.Origin.systemNameAnswer
         var preparedData = Data("{}".utf8), dnsOnly = false
         var profile = NETunnelProviderManager()
         var onArm: (() -> Void)?, refreshFailures = 0
@@ -269,6 +273,12 @@ enum Kernel {
         set { state.withValue { $0.onSettings = newValue } }
     }
     static var discoveries: [TunnelEndpointDiscovery] { state.withValue { $0.discoveries } }
+    static var readyTimes: [TimeInterval] { state.withValue { $0.readyTimes } }
+    static func recordReady() { state.withValue { $0.readyTimes.append(ProcessInfo.processInfo.systemUptime) } }
+    static var preparedOrigin: TunnelEndpointCandidate.Origin {
+        get { state.withValue { $0.preparedOrigin } }
+        set { state.withValue { $0.preparedOrigin = newValue } }
+    }
     static var preparedAddresses: [String] {
         get { state.withValue { $0.preparedAddresses } }
         set { state.withValue { $0.preparedAddresses = newValue } }
@@ -328,6 +338,7 @@ final class Provider {
     let sessionAdmission = TunnelSessionAdmission(), watchdogQueue = FakeQueue(), runtimeQueue = FakeQueue()
     let forwardingLock = NSLock()
     var forwardingReady = false, reasserting = false
+    var firstForwardingReadyEpoch: TunnelSessionAdmission.Epoch?
     var forwardingEpoch: TunnelSessionAdmission.Epoch?
     var startupPreparation: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, task: Task<TunnelPreparedConfig, Error>)?
     func fixtureRegister(_ task: Task<TunnelPreparedConfig, Error>, token: TunnelEndpointPlanAdmission.Token) {
@@ -350,7 +361,9 @@ final class Provider {
     func performTunnelHealthCheck(trigger: String, epoch: TunnelSessionAdmission.Epoch) -> Bool {
         Kernel.record("health-" + trigger)
         guard let spec = runtimeSpec else { return false }
-        return setForwardingReadyFromHealth(!Kernel.rejectHealth, epoch: epoch, discovery: spec.discovery) && !Kernel.rejectHealth
+        let ready = setForwardingReadyFromHealth(!Kernel.rejectHealth, epoch: epoch, discovery: spec.discovery) && !Kernel.rejectHealth
+        if ready { Kernel.recordReady() }
+        return ready
     }
     func cancelTunnelWithError(_ error: Error?) { Kernel.record("terminal-cancel") }
     var protocolConfiguration: NEVPNProtocol? { Kernel.profile.protocolConfiguration }
@@ -591,6 +604,51 @@ enum InitialDiscoveryCases {
         }
         func stop(_ provider: Provider) async {
             await withCheckedContinuation { next in provider.stopTunnel(with: .providerFailed) { next.resume() } }
+        }
+
+        // Actual provider code with inert NE/Core/HEV boundaries: the first
+        // explicit Connect owns its bounded path correction until authenticated
+        // readiness, even when the initial endpoint has no live system lease.
+        for profile in ["encrypted", "literal", "sealed-system"] {
+            Kernel.reset(); disabledOptions(); let firstReady = Provider()
+            Kernel.preparedOrigin = profile == "encrypted" ? .encryptedIPv4Answer : profile == "literal" ? .literal : .systemNameAnswer
+            let startTime = ProcessInfo.processInfo.systemUptime
+            try? await firstReady.startTunnel()
+            if profile == "sealed-system" { Kernel.discoveries.last?.seal() }
+            let hasNoProvisionalSystemLease = firstReady.runtimeSpec?.discovery?.hasUnsealedSystemSelections == false
+            let originalDeadline = firstReady.runtimeSpec?.discoveryDeadline
+            let force = FixtureState((time: 0.0, oldHealthRefused: false))
+            Kernel.onHEVStart = {
+                Kernel.onHEVStart = nil
+                force.withValue { $0.time = ProcessInfo.processInfo.systemUptime }
+                firstReady.watchdogQueue.sync {
+                    firstReady.physicalPathChanged(TunnelEndpointPath(), epoch: firstReady.sessionAdmission.currentEpoch!)
+                    let refused = !firstReady.setForwardingReadyFromHealth(true, epoch: firstReady.sessionAdmission.currentEpoch!, discovery: firstReady.runtimeSpec?.discovery)
+                    force.withValue { $0.oldHealthRefused = refused && !firstReady.forwardingReady }
+                }
+            }
+            try? await startCore(firstReady)
+            let reached = await CancellationCases.until { !Kernel.readyTimes.isEmpty }
+            let readyTime = Kernel.readyTimes.first
+            let forceTime = force.withValue { $0.time }
+            let coreStarts = Kernel.events.filter { $0 == "Core-start" }.count
+            let deadlineRetained = firstReady.runtimeSpec?.discoveryDeadline == originalDeadline
+            Kernel.discoveries.last?.seal()
+            firstReady.watchdogQueue.sync { firstReady.physicalPathChanged(TunnelEndpointPath(), epoch: firstReady.sessionAdmission.currentEpoch!) }
+            firstReady.runtimeQueue.sync {}; firstReady.watchdogQueue.sync {}
+            let validTiming = readyTime.map { $0.isFinite && forceTime.isFinite && forceTime > 0 && $0 >= forceTime && $0 >= startTime && $0 - forceTime < 0.9 } ?? false
+            let correct = reached && hasNoProvisionalSystemLease && validTiming && force.withValue { $0.oldHealthRefused } && firstReady.forwardingReady &&
+                coreStarts == 2 && Kernel.events.filter { $0 == "Core-start" }.count == coreStarts &&
+                firstReady.initialDiscoveryCorrection == nil && deadlineRetained && !Kernel.events.contains("terminal-cancel")
+            record("first-ready-\(profile)-forced-during-HEV-corrects-with-disabled-reconnect-and-never-reborrows-after-ready", correct)
+            let totalMs: Any = readyTime.map { Int(max(0, $0 - startTime) * 1000) as Any } ?? NSNull()
+            let forceMs: Any = readyTime.map { Int(max(0, $0 - forceTime) * 1000) as Any } ?? NSNull()
+            let metric: [String: Any] = ["scenario": "first-ready-" + profile, "startToReadyMs": totalMs,
+                "finalForceToReadyMs": forceMs, "passed": correct, "outcome": readyTime == nil ? "noReady" : "ready",
+                "realNetworkExtension": false, "controlledBoundaries": "NE-Core-HEV-DNS"]
+            let metricBytes = try! JSONSerialization.data(withJSONObject: metric, options: [.sortedKeys])
+            print("APPLE_PROVIDER_STARTUP_METRIC " + String(data: metricBytes, encoding: .utf8)!)
+            await stop(firstReady)
         }
 
         // The measured macOS sequence: own settings produce a forced same-
@@ -914,6 +972,7 @@ enum InitialDiscoveryCases {
         Kernel.reset(); disabledOptions(); let sealedMove = Provider()
         try? await sealedMove.startTunnel(); try? await startCore(sealedMove)
         Kernel.discoveries.last!.seal()
+        _ = sealedMove.setForwardingReadyFromHealth(true, epoch: sealedMove.sessionAdmission.currentEpoch!, discovery: sealedMove.runtimeSpec?.discovery)
         sealedMove.watchdogQueue.sync {
             sealedMove.physicalPathChanged(TunnelEndpointPath(supportsIPv4: false, supportsIPv6: true), epoch: sealedMove.sessionAdmission.currentEpoch!)
         }

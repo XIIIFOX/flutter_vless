@@ -109,7 +109,7 @@ def main():
     check_wiring(source)
     transitions = [line for line in source.splitlines() if line.startswith('    private enum EndpointTransitionFailure:')]
     assert len(transitions) == 1, 'Missing actual transition failure declaration'
-    parts = [block(source, '    private final class PendingSleep').replace('private final class', 'final class'), transitions[0], block(source, '    private struct RuntimeSource'), block(source, '    private struct RuntimeSpec'), block(source, '    private struct ProtectedSettingsKey')]
+    parts = [block(source, '    private final class InitialDiscoveryCorrectionPermit').replace('private final class', 'final class'), block(source, '    private final class PendingSleep').replace('private final class', 'final class'), transitions[0], block(source, '    private struct RuntimeSource'), block(source, '    private struct RuntimeSpec'), block(source, '    private struct ProtectedSettingsKey')]
     for method in METHODS:
         candidates = [line for line in source.splitlines() if f'func {method}(' in line or f'func {method}<' in line]
         assert len(candidates) == 1, (method, candidates)
@@ -121,6 +121,9 @@ def main():
     fixture_path = ROOT / 'tool/fixtures/apple_session_admission_test.swift'
     fixture_source = fixture_path.read_text()
     fixture = fixture_source
+    for placeholder, field in [('// SOURCE_DISCOVERY_STATE', 'startupDiscovery'), ('// SOURCE_CORRECTION_STATE', 'initialDiscoveryCorrection')]:
+        declaration = next(line for line in source.splitlines() if line.startswith('    private var ' + field + ':'))
+        fixture = fixture.replace(placeholder, declaration.strip().replace('private var', 'var', 1))
     assert fixture.count('    // SOURCE_PROVIDER_METHODS') == 1
     fixture = fixture.replace('    // SOURCE_PROVIDER_METHODS', actual)
     timer_path = (ROOT / 'ios/flutter_vless/Sources/flutter_vless_privacy/NativeDiagnostics.swift' if args.platform == 'ios' else
@@ -143,7 +146,7 @@ def main():
     (output / 'probe.log').write_text(result.stdout + result.stderr)
     print(result.stdout, end='')
     assert result.returncode == 0, (result.returncode, result.stderr)
-    assert len([line for line in result.stdout.splitlines() if line.startswith('PASS ')]) == (45 if args.platform == 'macos' else 44)
+    assert len([line for line in result.stdout.splitlines() if line.startswith('PASS ')]) == (49 if args.platform == 'macos' else 48)
     assert PROVIDERS[args.platform].read_text() == source and GATES[args.platform].read_bytes() == gate
     assert fixture_path.read_text() == fixture_source, 'Source changed during verification'
     assert budget.read_bytes() == budget_source, 'Budget source changed during verification'

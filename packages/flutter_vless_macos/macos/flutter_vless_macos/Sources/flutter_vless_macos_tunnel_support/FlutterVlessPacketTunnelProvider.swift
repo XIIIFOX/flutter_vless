@@ -113,11 +113,11 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     private let forwardingLock = NSLock()
     private var forwardingReady = false
     private var startupPreparation: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, task: Task<TunnelPreparedConfig, Error>)?
-    private var startupDiscovery: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, discovery: TunnelEndpointDiscovery)?
+    private var startupDiscovery: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, discovery: TunnelEndpointDiscovery, permit: InitialDiscoveryCorrectionPermit?)?
     // Forwarding-lock-owned arbitration between pre-sleep DNS drain and Wake.
     private var pendingSleep: PendingSleep?
     // Watchdog-owned, scoped to completing the original Connect transaction.
-    private var initialDiscoveryCorrection: (epoch: TunnelSessionAdmission.Epoch, id: UUID, deadline: TimeInterval, terminal: Bool, task: Task<Void, Never>)?
+    private var initialDiscoveryCorrection: (epoch: TunnelSessionAdmission.Epoch, id: UUID, deadline: TimeInterval, permit: InitialDiscoveryCorrectionPermit, terminal: Bool, task: Task<Void, Never>)?
     private var forwardingEpoch: TunnelSessionAdmission.Epoch?
     private var runtimeSpec: RuntimeSpec?
     private var runtimeRecoveryInFlight = false
@@ -135,6 +135,34 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     private var packetBridgeToken: TunnelEndpointPlanAdmission.Token?
 
     private enum EndpointTransitionFailure: Error { case drainPending }
+
+    /// One original initial-DNS transaction, shared across healthy fast owners.
+    /// DNS callbacks may only tighten its mode; neither path churn nor a new
+    /// correction task renews its deadline or three-admission allowance.
+    private final class InitialDiscoveryCorrectionPermit: @unchecked Sendable {
+        let epoch: TunnelSessionAdmission.Epoch
+        let deadline: TimeInterval
+        private let lock = NSLock()
+        private var admitted = 0
+        private var fastAdmitted = 0
+        private var legacyRequired: Bool
+        init(epoch: TunnelSessionAdmission.Epoch, deadline: TimeInterval, allowFast: Bool) {
+            self.epoch = epoch; self.deadline = deadline; legacyRequired = !allowFast
+        }
+        var exhausted: Bool { lock.lock(); defer { lock.unlock() }; return admitted >= 3 }
+        var permitsFast: Bool {
+            lock.lock(); defer { lock.unlock() }
+            return !legacyRequired && admitted < 2 && fastAdmitted < 2
+        }
+        func requireLegacy() { lock.lock(); legacyRequired = true; lock.unlock() }
+        func admit(fast: Bool) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard admitted < 3, !fast || (!legacyRequired && admitted < 2 && fastAdmitted < 2) else { return false }
+            admitted += 1
+            if fast { fastAdmitted += 1 }
+            return true
+        }
+    }
 
     /// Every variable input to protectedNetworkSettings is represented here:
     /// the exact bootstrap address list. Its MTU, tunnel addresses, capture
@@ -177,15 +205,16 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         let discovery: TunnelEndpointDiscovery?
         let discoveryDeadline: TimeInterval?
         let correctionID: UUID?
+        let correctionPermit: InitialDiscoveryCorrectionPermit?
 
-        init(source: RuntimeSource, prepared: TunnelPreparedConfig, token: TunnelEndpointPlanAdmission.Token, path: TunnelEndpointPath, port: Int, discovery: TunnelEndpointDiscovery? = nil, discoveryDeadline: TimeInterval? = nil, correctionID: UUID? = nil) {
+        init(source: RuntimeSource, prepared: TunnelPreparedConfig, token: TunnelEndpointPlanAdmission.Token, path: TunnelEndpointPath, port: Int, discovery: TunnelEndpointDiscovery? = nil, discoveryDeadline: TimeInterval? = nil, correctionID: UUID? = nil, correctionPermit: InitialDiscoveryCorrectionPermit? = nil) {
             epoch = source.epoch; options = source.options
             config = prepared.routingEnvelope?.configurationData ?? prepared.data
             self.port = port; geoAssetsDirectory = source.geoAssetsDirectory; credentials = source.credentials
             routingMetadata = prepared.routingEnvelope?.metadataData
             self.token = token; self.path = path
             selections = prepared.endpointSelections; bootstrapAddresses = prepared.bootstrapAddresses
-            self.discovery = discovery; self.discoveryDeadline = discoveryDeadline; self.correctionID = correctionID
+            self.discovery = discovery; self.discoveryDeadline = discoveryDeadline; self.correctionID = correctionID; self.correctionPermit = correctionPermit
         }
 
         /// A fresh zero-TTL answer is confined to this single prepared attempt.
@@ -433,38 +462,51 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     /// The provider retains discovery beyond the first DNS continuation. All
     /// cancellation runs outside the forwarding lock and is token conditional.
     private func setStartupDiscovery(_ discovery: TunnelEndpointDiscovery?, epoch: TunnelSessionAdmission.Epoch,
-                                     token: TunnelEndpointPlanAdmission.Token) {
+                                     token: TunnelEndpointPlanAdmission.Token, permit: InitialDiscoveryCorrectionPermit? = nil) {
         forwardingLock.lock()
         let current = sessionAdmission.isCurrent(epoch) && endpointAdmission.isCurrent(token)
         var obsolete: TunnelEndpointDiscovery? = nil
+        var obsoletePermit: InitialDiscoveryCorrectionPermit? = nil
         if let discovery {
             if current {
                 obsolete = startupDiscovery?.discovery
-                startupDiscovery = (epoch, token, discovery)
+                obsoletePermit = startupDiscovery?.permit
+                startupDiscovery = (epoch, token, discovery, permit)
             }
         } else if startupDiscovery?.epoch == epoch && startupDiscovery?.token == token {
             obsolete = startupDiscovery?.discovery
+            obsoletePermit = startupDiscovery?.permit
             startupDiscovery = nil
         }
         forwardingLock.unlock()
-        if obsolete !== discovery { obsolete?.cancel() }
+        if obsolete !== discovery {
+            obsolete?.cancel()
+            if obsolete?.isInvalidated == true { obsoletePermit?.requireLegacy() }
+        }
         if !current { discovery?.cancel() }
     }
 
-    private func cancelStartupDiscovery(epoch: TunnelSessionAdmission.Epoch?, token: TunnelEndpointPlanAdmission.Token? = nil) {
+    @discardableResult
+    private func cancelStartupDiscovery(epoch: TunnelSessionAdmission.Epoch?, token: TunnelEndpointPlanAdmission.Token? = nil) -> TunnelEndpointDiscovery? {
         forwardingLock.lock()
         let matchesEpoch = startupDiscovery?.epoch == epoch || (epoch == nil && sessionAdmission.currentEpoch == nil)
         let obsolete: TunnelEndpointDiscovery?
+        let permit: InitialDiscoveryCorrectionPermit?
         if matchesEpoch && (token == nil || startupDiscovery?.token == token) {
             obsolete = startupDiscovery?.discovery
+            permit = startupDiscovery?.permit
             startupDiscovery = nil
-        } else { obsolete = nil }
+        } else { obsolete = nil; permit = nil }
         forwardingLock.unlock()
         obsolete?.cancel()
+        // Cancellation closes the invalidation latch before classification.
+        // A concurrent real Remove/TTL cause must survive a later path event.
+        if obsolete?.isInvalidated == true { permit?.requireLegacy() }
+        return obsolete
     }
 
     private func makeStartupDiscovery(epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token,
-                                      path: TunnelEndpointPath, deadline: TimeInterval) -> TunnelEndpointDiscovery {
+                                      path: TunnelEndpointPath, deadline: TimeInterval, permit: InitialDiscoveryCorrectionPermit? = nil) -> TunnelEndpointDiscovery {
         TunnelEndpointDiscovery(path: path, deadline: deadline,
             isCurrent: { [weak self] in
                 guard let self else { return false }
@@ -473,14 +515,17 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
                 let current = self?.sessionAdmission.isCurrent(epoch) == true && self?.endpointAdmission.isCurrent(token) == true
                 rememberTunnelLog("Endpoint DNS generation=\(token.generation) current=\(current) \(message)")
             }, onInvalidated: { [weak self] in
-                self?.invalidateStartupDiscovery(epoch: epoch, token: token, deadline: deadline)
+                self?.invalidateStartupDiscovery(epoch: epoch, token: token, deadline: deadline, permit: permit)
             })
     }
 
     /// A selected-record removal/expiry before Core starts may retry only its
     /// own pending plan. An old DNS callback must never refresh a newer token.
-    private func invalidateStartupDiscovery(epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, deadline: TimeInterval) {
+    private func invalidateStartupDiscovery(epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, deadline: TimeInterval, permit: InitialDiscoveryCorrectionPermit? = nil) {
         guard sessionAdmission.isCurrent(epoch), let replacement = try? endpointAdmission.refresh(ifCurrent: token) else { return }
+        // Only a revocation that won its exact current token can tighten this
+        // transaction. Do this before later path/owner guards can supersede it.
+        permit?.requireLegacy()
         guard setForwardingNotReadyForDNS(epoch: epoch, replacement: replacement) else { return }
         rememberTunnelLog("Initial DNS selection invalidated generation=\(token.generation)")
         cancelStartupDiscovery(epoch: epoch, token: token)
@@ -500,7 +545,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             // from normal TTL expiry after collection. A renewed record can
             // also heal between the first read and this claim.
             if !discovery.isInvalidated { return spec.isFresh() }
-            invalidateStartupDiscovery(epoch: spec.epoch, token: spec.token, deadline: deadline)
+            invalidateStartupDiscovery(epoch: spec.epoch, token: spec.token, deadline: deadline, permit: spec.correctionPermit)
         }
         return false
     }
@@ -521,25 +566,28 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
     private func setForwardingReadyFromHealth(_ ready: Bool, epoch: TunnelSessionAdmission.Epoch,
                                              discovery: TunnelEndpointDiscovery?) -> Bool {
         forwardingLock.lock(); defer { forwardingLock.unlock() }
-        guard sessionAdmission.isCurrent(epoch), !ready || discovery?.isInvalidated != true else { return false }
+        guard sessionAdmission.isCurrent(epoch), !ready || (sessionAdmission.permitsRuntime(epoch) && (discovery?.permitsForwardingReady ?? true)) else { return false }
         forwardingEpoch = epoch; forwardingReady = ready; reasserting = !ready
         return true
     }
 
     /// Runs only on watchdogQueue. This completes the original Connect's DNS
     /// transaction; its private permit never enables user automatic reconnect.
-    private func beginInitialDiscoveryCorrection(_ source: RuntimeSource, deadline: TimeInterval) {
+    private func beginInitialDiscoveryCorrection(_ source: RuntimeSource, deadline: TimeInterval, allowFastDiscovery: Bool = false) {
         let epoch = source.epoch
         guard sessionAdmission.permitsRuntime(epoch), runtimeSource?.epoch == epoch, !watchdogSuspended else { return }
+        let existingPermit = initialDiscoveryCorrection?.epoch == epoch ? initialDiscoveryCorrection?.permit : runtimeSpec?.correctionPermit
+        let permit = existingPermit.flatMap { $0.epoch == epoch && $0.deadline == deadline ? $0 : nil }
+            ?? InitialDiscoveryCorrectionPermit(epoch: epoch, deadline: deadline, allowFast: allowFastDiscovery)
+        if !allowFastDiscovery { permit.requireLegacy() }
         if initialDiscoveryCorrection?.epoch == epoch { return }
         let id = UUID()
         rememberTunnelLog("Initial DNS correction begin")
         setForwardingReady(false, epoch: epoch)
         runtimeRecoveryInFlight = true
         let task = Task {
-            var admitted = 0
             do {
-                while admitted < 3 {
+                while !permit.exhausted {
                     try Task.checkCancellation()
                     guard self.sessionAdmission.permitsRuntime(epoch), ProcessInfo.processInfo.systemUptime < deadline else { throw CancellationError() }
                     let snapshot = try self.watchdogQueue.sync { () throws -> (TunnelEndpointPlanAdmission.Token, TunnelEndpointPath)? in
@@ -551,18 +599,35 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
                         try await Task.sleep(nanoseconds: 100_000_000)
                         continue
                     }
+                    let fast = permit.permitsFast
+                    let discovery = fast ? self.makeStartupDiscovery(epoch: epoch, token: token, path: path, deadline: deadline, permit: permit) : nil
+                    self.setStartupDiscovery(discovery, epoch: epoch, token: token, permit: fast ? permit : nil)
+                    var retainDiscovery = false
+                    defer { if !retainDiscovery { self.setStartupDiscovery(nil, epoch: epoch, token: token) } }
                     do {
-                        let child = Task { try await self.prepareEndpointConfig(source, token: token, path: path, attempt: 0, deadline: deadline) }
+                        let child = Task { try await self.prepareEndpointConfig(source, token: token, path: path, attempt: 0, deadline: deadline, discovery: discovery) }
                         self.setStartupPreparation(child, epoch: epoch, token: token)
                         defer { self.setStartupPreparation(nil, epoch: epoch, token: token) }
                         let prepared = try await child.value
                         guard self.sessionAdmission.permitsRuntime(epoch), self.endpointAdmission.isCurrent(token), !child.isCancelled else { throw CancellationError() }
-                        admitted += 1
+                        guard discovery?.admitSelections(prepared.endpointSelections) ?? true else {
+                            self.invalidateStartupDiscovery(epoch: epoch, token: token, deadline: deadline, permit: permit)
+                            throw CancellationError()
+                        }
+                        // A winning TTL cause can tighten the mode while this
+                        // fast child awaits DNS. Retry full collection without
+                        // consuming an admission or terminating a valid config.
+                        if fast && !permit.permitsFast { continue }
+                        guard permit.admit(fast: fast) else {
+                            if fast && !permit.exhausted { continue }
+                            throw CancellationError()
+                        }
                         guard let parsed = self.parseConfig(jsonData: prepared.data), prepared.endpointPath == path else {
                             throw TunnelXrayConfigPreparer.StartupError.invalidConfiguration
                         }
                         let spec = RuntimeSpec(source: source, prepared: prepared, token: token, path: path, port: parsed.inboundPort,
-                                               correctionID: id)
+                                               discovery: discovery, discoveryDeadline: discovery == nil ? nil : deadline,
+                                               correctionID: id, correctionPermit: fast ? permit : nil)
                         try await self.onRuntimeQueue { try self.checkEndpointPreflight(spec, prepared: prepared, source: source) }
                         try await self.endpointCommitQueue.submit { try await self.commitEndpointPlan(spec) }.value
                         let completed = self.watchdogQueue.sync {
@@ -577,7 +642,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
                             }
                             return healthy
                         }
-                        if completed { return }
+                        if completed { retainDiscovery = true; return }
                         if self.endpointAdmission.isCurrent(token) {
                             throw self.tunnelError("VPN endpoint discovery correction did not become ready")
                         }
@@ -607,7 +672,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
                 self.cancelTunnelWithError(self.tunnelError("Unable to complete VPN endpoint DNS discovery"))
             }
         }
-        initialDiscoveryCorrection = (epoch, id, deadline, false, task)
+        initialDiscoveryCorrection = (epoch, id, deadline, permit, false, task)
     }
 
     /// Watchdog-owned teardown; the registered child is separately cancelled by
@@ -637,7 +702,8 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             cancelInitialDiscoveryCorrection(epoch: epoch, keepOwner: true)
             initialDiscoveryCorrection?.terminal = true
         } else {
-            initialDiscoveryCorrection = (epoch, UUID(), runtimeSpec?.discoveryDeadline ?? 0, true, Task {})
+            let deadline = runtimeSpec?.discoveryDeadline ?? 0
+            initialDiscoveryCorrection = (epoch, UUID(), deadline, InitialDiscoveryCorrectionPermit(epoch: epoch, deadline: deadline, allowFast: false), true, Task {})
         }
         runtimeRecoveryInFlight = true
         setForwardingReady(false, epoch: epoch)
@@ -756,12 +822,18 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         if startupPreparation?.epoch == epoch && startupPreparation?.token == revokedToken { startupPreparation = nil }
         forwardingLock.unlock()
         obsolete?.cancel()
-        cancelStartupDiscovery(epoch: epoch, token: revokedToken)
+        let revokedDiscovery = cancelStartupDiscovery(epoch: epoch, token: revokedToken)
         runtimeRecoveryInFlight = initialDiscoveryCorrection?.epoch == epoch
         if let spec = runtimeSpec, spec.discovery?.isInvalidated == true || spec.discovery?.hasUnsealedSystemSelections == true, let deadline = spec.discoveryDeadline,
            let source = runtimeSource, sessionAdmission.permitsRuntime(epoch) {
             setForwardingReady(false, epoch: epoch)
-            beginInitialDiscoveryCorrection(source, deadline: deadline)
+            // Classify the actual revoked child after cancellation, not the
+            // possibly older committed runtime's discovery before that latch.
+            let lease = revokedDiscovery ?? spec.discovery
+            if lease?.isInvalidated == true { initialDiscoveryCorrection?.permit.requireLegacy(); spec.correctionPermit?.requireLegacy() }
+            if initialDiscoveryCorrection?.epoch == epoch { return }
+            let fast = lease?.hasUnsealedSystemSelections == true && lease?.isInvalidated == false
+            beginInitialDiscoveryCorrection(source, deadline: deadline, allowFastDiscovery: fast)
             return
         }
         if initialDiscoveryCorrection?.epoch != epoch, runtimeSpec != nil, canonical != nil, sessionAdmission.permitsRuntime(epoch) {
@@ -1014,6 +1086,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         // can install routes, even when this plan was superseded while saving.
         try await installProtectedSettings(spec)
         guard current(), endpointAdmission.commit(spec.token) else { throw CancellationError() }
+        spec.discovery?.noteProtectedSettingsInstalled()
         watchdogQueue.sync {
             runtimeSpec = spec; watchdogInboundPort = spec.port; watchdogInboundHealthy = false
         }
@@ -1057,7 +1130,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         guard sessionAdmission.permitsRuntime(spec.epoch), endpointAdmission.mayStart(spec.token), self.endpointSpecIsFresh(spec) else { throw CancellationError() }
         try startSocks5Tunnel(serverPort: spec.port, credentials: spec.credentials, epoch: spec.epoch, token: spec.token)
         if let discovery = spec.discovery, !discovery.finishAdmission() {
-            invalidateStartupDiscovery(epoch: spec.epoch, token: spec.token, deadline: spec.discoveryDeadline ?? ProcessInfo.processInfo.systemUptime)
+            invalidateStartupDiscovery(epoch: spec.epoch, token: spec.token, deadline: spec.discoveryDeadline ?? ProcessInfo.processInfo.systemUptime, permit: spec.correctionPermit)
             throw CancellationError()
         }
         guard sessionAdmission.permitsRuntime(spec.epoch), endpointAdmission.mayStart(spec.token), self.endpointSpecIsFresh(spec) else { throw CancellationError() }

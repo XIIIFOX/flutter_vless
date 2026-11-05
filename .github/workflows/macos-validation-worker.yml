@@ -94,6 +94,35 @@ jobs:
           python3 -m unittest discover -s tool -p test_check_macos_example_provider.py -v
           bash tool/test_bounded_native_log_store.sh
           bash tool/test_apple_options.sh
+      - name: Confirm the DNS correction regressions fail on the previous provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          NEGATIVE_PROVIDER_SHA=aae0c0e15363c5bbe780a07824e239293b9f8fdb
+          git fetch --no-tags --depth=1 origin "$NEGATIVE_PROVIDER_SHA"
+          set +e
+          python3 tool/test_apple_cold_start_policy.py --receipts --provider-ref "$NEGATIVE_PROVIDER_SHA" \
+            --output-dir build/apple-cold-start-negative > build/macos-validation/cold-start-negative.log 2>&1
+          NEGATIVE_STATUS=$?
+          set -e
+          test "$NEGATIVE_STATUS" -ne 0
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          output = Path('build/apple-cold-start-negative')
+          results = json.loads((output / 'result.json').read_text())['results']
+          assert set(results) == {'ios', 'macos'}, 'Both previous providers must compile and execute'
+          cases = ['forced-own-settings-during-HEV-and-second-force-complete-fast-through-final-seal',
+                   'healthy-fast-owners-share-three-admissions-two-fast-then-full-without-reset',
+                   'canceled-DNS-lease-cannot-publish-held-successful-health']
+          for platform, result in results.items():
+              assert result['provider_ref'] == 'aae0c0e15363c5bbe780a07824e239293b9f8fdb'
+              assert result['exit'] == 7, 'A compiler error or crash is not a regression control'
+              log = (output / (platform + '.log')).read_text()
+              for case in cases:
+                  assert 'APPLE_COLD_START_CASE=' + case + ';PASS=false' in log, (platform, case)
+          print('Previous iOS and macOS providers reproduce the targeted regressions')
+          PY
       - name: Build macOS example
         working-directory: example
         env:
@@ -141,6 +170,8 @@ jobs:
             build/published_apple_runtime/macos/*.json
             build/apple-cold-start-current/*.json
             build/apple-cold-start-current/*.log
+            build/apple-cold-start-negative/*.json
+            build/apple-cold-start-negative/*.log
             build/apple-start-owner-current/*.json
             build/apple-start-owner-current/*.log
             build/macos-startup-timing-current/*.json

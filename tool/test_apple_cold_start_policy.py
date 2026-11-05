@@ -17,6 +17,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", type=Path, default=ROOT / "build/apple-cold-start-current")
     parser.add_argument("--receipts", action="store_true")
+    parser.add_argument("--provider-ref", help="Immutable provider source commit for the inert negative control.")
+    parser.add_argument("--prepare-only", action="store_true", help="Generate sources without executing native tools.")
     args = parser.parse_args()
     output = args.output_dir
     output.mkdir(parents=True, exist_ok=True)
@@ -29,7 +31,12 @@ def main():
         diagnostics = timer_source.decode()
         timer_start = diagnostics.index("public struct NativeDiagnosticTimer:")
         timer = diagnostics[timer_start:diagnostics.index("\n}\n", timer_start) + 3]
-        text = (ROOT / provider).read_text()
+        unchanged_source = (ROOT / provider).read_text()
+        if args.provider_ref:
+            assert len(args.provider_ref) == 40 and all(c in "0123456789abcdef" for c in args.provider_ref)
+            text = subprocess.check_output(["git", "show", args.provider_ref + ":" + provider], cwd=ROOT, text=True)
+        else:
+            text = unchanged_source
         fixture_path = ROOT / "tool/fixtures/apple_cold_start_policy.swift"
         fixture_source = fixture_path.read_bytes()
         plan_path = support / "TunnelEndpointPlanAdmission.swift"
@@ -56,6 +63,8 @@ def main():
         extras += "\n" + actual_block("    private func refreshEndpointPlan").replace("func refreshEndpointPlan(", "func fixtureRefreshEndpointPlan(", 1).replace("try await Task.sleep(nanoseconds: UInt64(min(wait, 300) * 1_000_000_000))", "await Task.yield(); try Task.checkCancellation()")
         extras += "\n" + actual_block("    private final class PendingSleep").replace("private final class", "final class")
         extras += "\n" + actual_block("    private func cancelPendingSleep")
+        if "    private final class InitialDiscoveryCorrectionPermit" in text:
+            extras += "\n" + actual_block("    private final class InitialDiscoveryCorrectionPermit").replace("private final class", "final class")
         stop_marker = "    " + ("open override" if platform == "macos" else "override") + " func stopTunnel("
         stop = actual_block(stop_marker).replace("open override func", "func", 1).replace("override func", "func", 1)
         helper_path = support / "TunnelOnDemandPolicy.swift"
@@ -72,7 +81,14 @@ def main():
         generated = output / (platform + ".swift")
         field_source = (privacy / "LocalProxyAccessPolicy.swift").read_text()
         field_source = field_source[field_source.index("public enum XrayJSONField {"):]
-        generated.write_text("import Foundation\n" + timer + "\n" + (ROOT / "tool/fixtures/apple_cold_start_policy.swift").read_text().replace("// ACTUAL_POLICY", helper).replace("// ACTUAL_START", entry).replace("// ACTUAL_PREPARATION_HELPERS", extras).replace("// ACTUAL_STOP", stop).replace("// ACTUAL_DNS_BINDING_REQUIREMENT", dns_binding) + "\n" + field_source)
+        template = (ROOT / "tool/fixtures/apple_cold_start_policy.swift").read_text()
+        for placeholder, field in [("// ACTUAL_DISCOVERY_STATE", "startupDiscovery"), ("// ACTUAL_CORRECTION_STATE", "initialDiscoveryCorrection")]:
+            declaration = next(line for line in text.splitlines() if line.startswith("    private var " + field + ":"))
+            template = template.replace(placeholder, declaration.strip().replace("private var", "var", 1))
+        generated.write_text("import Foundation\n" + timer + "\n" + template.replace("// ACTUAL_POLICY", helper).replace("// ACTUAL_START", entry).replace("// ACTUAL_PREPARATION_HELPERS", extras).replace("// ACTUAL_STOP", stop).replace("// ACTUAL_DNS_BINDING_REQUIREMENT", dns_binding) + "\n" + field_source)
+        if args.prepare_only:
+            print(platform, "prepared inert source only", flush=True)
+            continue
         inputs = [privacy / "VlessNativeOptions.swift", privacy / "CorePreflightPolicy.swift", privacy / "XdriveServicePolicy.swift", privacy / "GeoDatAssetPolicy.swift", support / "TunnelSessionAdmission.swift", plan_path, generated]
         binary = output / platform
         command = ["xcrun", "swiftc", "-O", "-parse-as-library"]
@@ -84,11 +100,11 @@ def main():
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=25)
         log = output / (platform + ".log")
         log.write_text(run.stdout + run.stderr)
-        assert (ROOT / provider).read_text() == text and helper_path.read_bytes() == helper_source
+        assert (ROOT / provider).read_text() == unchanged_source and helper_path.read_bytes() == helper_source
         assert fixture_path.read_bytes() == fixture_source and plan_path.read_bytes() == plan_source
         assert dns_path.read_bytes() == dns_source
         assert timer_path.read_bytes() == timer_source
-        results[platform] = {"exit": run.returncode, "diagnostic_timer_sha256": hashlib.sha256(timer_source).hexdigest(), "fixture_sha256": hashlib.sha256(fixture_source).hexdigest(), "endpoint_plan_sha256": hashlib.sha256(plan_source).hexdigest(), "provider_sha256": hashlib.sha256((ROOT / provider).read_bytes()).hexdigest(), "policy_sha256": hashlib.sha256(helper_path.read_bytes()).hexdigest(), "dns_policy_sha256": hashlib.sha256(dns_source).hexdigest(), "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()}
+        results[platform] = {"exit": run.returncode, "diagnostic_timer_sha256": hashlib.sha256(timer_source).hexdigest(), "fixture_sha256": hashlib.sha256(fixture_source).hexdigest(), "endpoint_plan_sha256": hashlib.sha256(plan_source).hexdigest(), "provider_sha256": hashlib.sha256(text.encode()).hexdigest(), "provider_ref": args.provider_ref, "policy_sha256": hashlib.sha256(helper_path.read_bytes()).hexdigest(), "dns_policy_sha256": hashlib.sha256(dns_source).hexdigest(), "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()}
         print(platform, run.returncode, run.stdout, flush=True)
     (output / "result.json").write_text(json.dumps({"results": results, "fake_only": True, "real_Core_network_preferences_devices": False}, indent=2) + "\n")
     assert all(value["exit"] == 0 for value in results.values()), results

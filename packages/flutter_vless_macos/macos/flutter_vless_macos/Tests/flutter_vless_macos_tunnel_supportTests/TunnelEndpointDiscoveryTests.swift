@@ -92,6 +92,38 @@ final class TunnelEndpointDiscoveryTests: XCTestCase {
         XCTAssertEqual(group.pendingInitialSealWaiterCount, count)
     }
 
+    func testReadyPublicationRequiresCurrentUncancelledAdmittedLiveWitness() async throws {
+        for boundary in ["cancel", "expiry", "remove", "owner"] {
+            let backend = Backend(), clock = EndpointDeadlineTestScheduler(), current = Box(true)
+            let registered = expectation(description: "publication boundary " + boundary)
+            backend.started = { _, count, _ in if count == 2 { registered.fulfill() } }
+            let group = make(backend, clock: clock.now, current: current.get, schedule: clock.schedule)
+            let task = Task { try await group.resolveCandidates("publication.fixture.invalid") }
+            await fulfillment(of: [registered], timeout: 1)
+            backend.emit("publication.fixture.invalid", .ipv4, answer("publication.fixture.invalid", "192.0.2.1"))
+            backend.emit("publication.fixture.invalid", .ipv6, .failure(.noRecord))
+            let values = try await task.value
+            XCTAssertFalse(group.permitsForwardingReady, "A DNS reply alone is not an admitted witness")
+            XCTAssertTrue(group.admitSelections(selection("publication.fixture.invalid", values)))
+            XCTAssertTrue(group.finishAdmission())
+            XCTAssertTrue(group.permitsForwardingReady)
+            switch boundary {
+            case "cancel": group.cancel()
+            case "expiry":
+                clock.advance(to: 2); await clock.drain(); await backend.drain()
+                clock.advance(to: 31); await clock.drain()
+                XCTAssertFalse(group.isInvalidated, "Ordinary sealed expiry does not borrow initial correction")
+            case "remove":
+                backend.emit("publication.fixture.invalid", .ipv4, answer("publication.fixture.invalid", "192.0.2.1", added: false))
+                await backend.drain()
+            default: current.set(false)
+            }
+            XCTAssertFalse(group.permitsForwardingReady, boundary)
+            group.cancel(); await backend.drain()
+            XCTAssertEqual(backend.counts.closed, 2)
+        }
+    }
+
     func testBothInitialFamiliesRequiredAndMoreComingDoesNotReleasePartialBatch() async throws {
         let backend = Backend(), registered = expectation(description: "two family queries")
         backend.started = { _, count, _ in if count == 2 { registered.fulfill() } }

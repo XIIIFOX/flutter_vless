@@ -275,6 +275,16 @@ public final class TunnelEndpointDiscovery: @unchecked Sendable {
         return freshLocked(selections, at: time)
     }
 
+    /// A successful local health reply may outlive its DNS lease or session.
+    /// Read the admitted live witnesses without changing collection ownership;
+    /// callers may use this under their ready-publication lock.
+    public var permitsForwardingReady: Bool {
+        guard current() else { return false }
+        lock.lock(); defer { lock.unlock() }
+        guard !cancelled, !invalidated, let admitted else { return false }
+        return freshLocked(admitted, at: now())
+    }
+
     /// Call after Core and the packet worker start successfully. Never clears
     /// a prior revocation or stops the bounded selected-address watcher.
     @discardableResult

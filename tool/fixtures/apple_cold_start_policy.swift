@@ -58,7 +58,7 @@ struct TunnelEndpointCandidates { let path: TunnelEndpointPath }
 struct TunnelEndpointSelection { let candidates: TunnelEndpointCandidates; let selected: TunnelEndpointCandidate }
 
 final class TunnelEndpointDiscovery: @unchecked Sendable {
-    private let state = FixtureState((cancelled: false, invalidated: false, sealed: false, expired: false))
+    private let state = FixtureState((cancelled: false, invalidated: false, sealed: false, expired: false, admitted: false))
     private let current: () -> Bool
     private let invalidated: () -> Void
     init(path: TunnelEndpointPath, deadline: TimeInterval, isCurrent: @escaping () -> Bool,
@@ -69,12 +69,21 @@ final class TunnelEndpointDiscovery: @unchecked Sendable {
     var isInvalidated: Bool { state.withValue { $0.invalidated } }
     var hasUnsealedSystemSelections: Bool { state.withValue { !$0.sealed } }
     var wasCancelled: Bool { state.withValue { $0.cancelled } }
+    var permitsForwardingReady: Bool {
+        current() && state.withValue { $0.admitted && !$0.cancelled && !$0.invalidated && !$0.expired }
+    }
     func resolveCandidates(_ host: String) async throws -> TunnelEndpointCandidates {
         guard current(), !wasCancelled else { throw CancellationError() }
         Kernel.record("fast-dns")
+        try await Kernel.onFastResolve?()
+        guard current(), !wasCancelled, !isInvalidated else { throw CancellationError() }
         return TunnelEndpointCandidates(path: TunnelEndpointPath())
     }
-    func admitSelections(_ selections: [TunnelEndpointSelection]) -> Bool { current() && !wasCancelled && !isInvalidated }
+    func admitSelections(_ selections: [TunnelEndpointSelection]) -> Bool {
+        let valid = current() && !wasCancelled && !isInvalidated
+        if valid { state.withValue { $0.admitted = true } }
+        return valid
+    }
     func isFresh(_ selections: [TunnelEndpointSelection], at time: TimeInterval) -> Bool {
         current() && state.withValue { !$0.cancelled && !$0.invalidated && !$0.expired }
     }
@@ -201,6 +210,8 @@ enum Kernel {
         var onCoreCheck: (() -> Void)?
         var onSettings: (() async -> Void)?
         var onLegacyResolve: (() async throws -> Void)?
+        var onFastResolve: (() async throws -> Void)?
+        var onHEVStart: (() -> Void)?
         var onPolicyLoad: (() -> Void)?
         var onWatchdogAdmission: (() -> Void)?
         var onNativeStop: (() -> Void)?
@@ -287,6 +298,14 @@ enum Kernel {
         get { state.withValue { $0.onLegacyResolve } }
         set { state.withValue { $0.onLegacyResolve = newValue } }
     }
+    static var onFastResolve: (() async throws -> Void)? {
+        get { state.withValue { $0.onFastResolve } }
+        set { state.withValue { $0.onFastResolve = newValue } }
+    }
+    static var onHEVStart: (() -> Void)? {
+        get { state.withValue { $0.onHEVStart } }
+        set { state.withValue { $0.onHEVStart = newValue } }
+    }
     static func consumeRefreshFailure() -> Bool {
         state.withValue {
             guard $0.refreshFailures > 0 else { return false }
@@ -317,9 +336,9 @@ final class Provider {
     func fixtureClear(token: TunnelEndpointPlanAdmission.Token) { setStartupPreparation(nil, epoch: token.epoch, token: token) }
     func fixtureOwns(_ token: TunnelEndpointPlanAdmission.Token) -> Bool { startupPreparation?.token == token }
     var runtimeSpec: RuntimeSpec?
-    var startupDiscovery: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, discovery: TunnelEndpointDiscovery)?
+    // ACTUAL_DISCOVERY_STATE
     var pendingSleep: PendingSleep?
-    var initialDiscoveryCorrection: (epoch: TunnelSessionAdmission.Epoch, id: UUID, deadline: TimeInterval, terminal: Bool, task: Task<Void, Never>)?
+    // ACTUAL_CORRECTION_STATE
     var watchdogSuspended = false, recoveryExhausted = false, initialRuntimeAttempted = false
     let hevLifecycle = FixtureHEVLifecycle()
     var watchdogInboundPort: Int?, watchdogInboundHealthy = false
@@ -327,9 +346,11 @@ final class Provider {
     var nativeRuntimeEpoch: TunnelSessionAdmission.Epoch?, nativeRuntimeToken: TunnelEndpointPlanAdmission.Token?
     enum EndpointTransitionFailure: Error { case drainPending }
     func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data?) throws { Kernel.record("Core-start"); Kernel.recordCore(xrayConfig) }
-    func startSocks5Tunnel(serverPort: Int, credentials: LocalProxyCredentials, epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token) throws { Kernel.record("HEV-start") }
+    func startSocks5Tunnel(serverPort: Int, credentials: LocalProxyCredentials, epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token) throws { Kernel.record("HEV-start"); Kernel.onHEVStart?() }
     func performTunnelHealthCheck(trigger: String, epoch: TunnelSessionAdmission.Epoch) -> Bool {
-        Kernel.record("health-" + trigger); setForwardingReady(!Kernel.rejectHealth, epoch: epoch); return !Kernel.rejectHealth
+        Kernel.record("health-" + trigger)
+        guard let spec = runtimeSpec else { return false }
+        return setForwardingReadyFromHealth(!Kernel.rejectHealth, epoch: epoch, discovery: spec.discovery) && !Kernel.rejectHealth
     }
     func cancelTunnelWithError(_ error: Error?) { Kernel.record("terminal-cancel") }
     var protocolConfiguration: NEVPNProtocol? { Kernel.profile.protocolConfiguration }
@@ -572,6 +593,126 @@ enum InitialDiscoveryCases {
             await withCheckedContinuation { next in provider.stopTunnel(with: .providerFailed) { next.resume() } }
         }
 
+        // The measured macOS sequence: own settings produce a forced same-
+        // witness event during HEV grace, then another before DNS sealing.
+        // A healthy per-family snapshot must not enter the held full collector.
+        Kernel.reset(); disabledOptions(); let settingsChurn = Provider()
+        try? await settingsChurn.startTunnel()
+        let originalDeadline = settingsChurn.runtimeSpec?.discoveryDeadline
+        Kernel.onHEVStart = {
+            Kernel.onHEVStart = nil
+            settingsChurn.watchdogQueue.sync {
+                settingsChurn.physicalPathChanged(TunnelEndpointPath(), epoch: settingsChurn.sessionAdmission.currentEpoch!)
+            }
+        }
+        try? await startCore(settingsChurn)
+        let firstFast = await CancellationCases.until { Kernel.events.filter { $0 == "health-initial-dns-correction" }.count == 1 }
+        let firstLease = settingsChurn.runtimeSpec?.discovery
+        Kernel.onFastResolve = {
+            Kernel.onFastResolve = nil
+            // A callback from the cancelled first fast token cannot tighten
+            // the still-current second fast owner's shared permit.
+            firstLease?.removeSelected(includingStaleCallback: true)
+        }
+        settingsChurn.watchdogQueue.sync {
+            settingsChurn.physicalPathChanged(TunnelEndpointPath(), epoch: settingsChurn.sessionAdmission.currentEpoch!)
+        }
+        let secondFast = await CancellationCases.until { Kernel.events.filter { $0 == "health-initial-dns-correction" }.count == 2 }
+        let lastLease = settingsChurn.runtimeSpec?.discovery
+        let lastToken = settingsChurn.endpointAdmission.currentToken
+        lastLease?.addLateAAAA(); lastLease?.seal()
+        settingsChurn.watchdogQueue.sync {}; settingsChurn.runtimeQueue.sync {}
+        record("forced-own-settings-during-HEV-and-second-force-complete-fast-through-final-seal", firstFast && secondFast &&
+            firstLease != nil && firstLease !== lastLease && firstLease?.wasCancelled == true &&
+            lastLease?.wasCancelled == false && lastLease?.hasUnsealedSystemSelections == false &&
+            settingsChurn.startupDiscovery?.discovery === lastLease && settingsChurn.forwardingReady &&
+            settingsChurn.runtimeSpec?.discoveryDeadline == originalDeadline &&
+            settingsChurn.endpointAdmission.currentToken == lastToken &&
+            Kernel.events.filter { $0 == "legacy-dns" }.isEmpty && !Kernel.events.contains("terminal-cancel"))
+        await stop(settingsChurn)
+
+        // Healthy fast owners finish, but their original transaction's budget
+        // cannot reset on every later force. The third admission is full and
+        // leaves no provisional discovery from which to borrow another start.
+        Kernel.reset(); disabledOptions(); let budget = Provider()
+        try? await budget.startTunnel(); try? await startCore(budget)
+        var budgetReady = true
+        for expected in 1...3 {
+            budget.watchdogQueue.sync { budget.physicalPathChanged(TunnelEndpointPath(), epoch: budget.sessionAdmission.currentEpoch!) }
+            budgetReady = await CancellationCases.until { Kernel.events.filter { $0 == "health-initial-dns-correction" }.count == expected } && budgetReady
+        }
+        for _ in 0..<3 {
+            budget.watchdogQueue.sync { budget.physicalPathChanged(TunnelEndpointPath(), epoch: budget.sessionAdmission.currentEpoch!) }
+        }
+        budget.watchdogQueue.sync {}; budget.runtimeQueue.sync {}
+        record("healthy-fast-owners-share-three-admissions-two-fast-then-full-without-reset", budgetReady &&
+            Kernel.discoveries.count == 3 && Kernel.events.filter { $0 == "legacy-dns" }.count == 1 &&
+            Kernel.events.filter { $0 == "Core-start" }.count == 4 && budget.runtimeSpec?.discovery == nil &&
+            budget.initialDiscoveryCorrection == nil && budget.recoveryFailures == 0 && !Kernel.events.contains("terminal-cancel"))
+        await stop(budget)
+
+        // A selected-record removal in a new fast child must downgrade the
+        // active permit even while runtimeSpec still names the previous token.
+        for duringHEV in [false, true] {
+            Kernel.reset(); disabledOptions(); let revoked = Provider()
+            try? await revoked.startTunnel(); try? await startCore(revoked)
+            let revokeNewFast = {
+                if Kernel.discoveries.count == 2 { Kernel.discoveries.last!.removeSelected() }
+            }
+            if duringHEV {
+                Kernel.onHEVStart = { Kernel.onHEVStart = nil; revokeNewFast() }
+            } else {
+                Kernel.onCoreCheck = { Kernel.onCoreCheck = nil; revokeNewFast() }
+            }
+            revoked.watchdogQueue.sync { revoked.physicalPathChanged(TunnelEndpointPath(), epoch: revoked.sessionAdmission.currentEpoch!) }
+            let finished = await CancellationCases.until { Kernel.events.contains("health-initial-dns-correction") }
+            record("fast-child-removal-downgrades-to-full-before-next-commit-HEV-\(duringHEV)", finished &&
+                Kernel.discoveries.count == 2 && Kernel.events.filter { $0 == "legacy-dns" }.count == 1 &&
+                revoked.runtimeSpec?.discovery == nil && revoked.forwardingReady && revoked.recoveryFailures == 0 &&
+                !Kernel.events.contains("terminal-cancel"))
+            await stop(revoked)
+        }
+
+        // A Remove can win on the newly prepared lease before its callback
+        // reaches the watchdog. Classify that exact cancelled child rather
+        // than the older runtimeSpec, then preserve its conservative cause.
+        Kernel.reset(); disabledOptions(); let cancelRace = Provider()
+        try? await cancelRace.startTunnel(); try? await startCore(cancelRace)
+        Kernel.onFastResolve = {
+            Kernel.onFastResolve = nil
+            let child = Kernel.discoveries.last!
+            child.latchRemovalWithoutNotification()
+            cancelRace.watchdogQueue.sync {
+                cancelRace.physicalPathChanged(TunnelEndpointPath(), epoch: cancelRace.sessionAdmission.currentEpoch!)
+            }
+            child.notifyLatchedRemoval()
+        }
+        cancelRace.watchdogQueue.sync { cancelRace.physicalPathChanged(TunnelEndpointPath(), epoch: cancelRace.sessionAdmission.currentEpoch!) }
+        let raceFinished = await CancellationCases.until { Kernel.events.contains("health-initial-dns-correction") }
+        record("fast-child-selected-removal-before-path-cancel-retains-conservative-mode", raceFinished &&
+            Kernel.discoveries.count == 2 && Kernel.events.filter { $0 == "legacy-dns" }.count == 1 &&
+            cancelRace.runtimeSpec?.discovery == nil && cancelRace.forwardingReady && !Kernel.events.contains("terminal-cancel"))
+        await stop(cancelRace)
+
+        // Exercise the actual publication helper, not the fake health setter.
+        // DNS cancellation and Sleep can win after loopback authentication.
+        Kernel.reset(); disabledOptions(); let canceledHealth = Provider()
+        try? await canceledHealth.startTunnel(); try? await startCore(canceledHealth)
+        let canceledLease = canceledHealth.runtimeSpec!.discovery!
+        canceledHealth.setForwardingReady(false, epoch: canceledHealth.sessionAdmission.currentEpoch!)
+        canceledLease.cancel()
+        record("canceled-DNS-lease-cannot-publish-held-successful-health", !canceledHealth.setForwardingReadyFromHealth(true,
+            epoch: canceledHealth.sessionAdmission.currentEpoch!, discovery: canceledLease) && !canceledHealth.forwardingReady)
+        await stop(canceledHealth)
+        Kernel.reset(); disabledOptions(); let sleptHealth = Provider()
+        try? await sleptHealth.startTunnel(); try? await startCore(sleptHealth)
+        let sleepingEpoch = sleptHealth.sessionAdmission.currentEpoch!
+        sleptHealth.setForwardingReady(false, epoch: sleepingEpoch)
+        _ = sleptHealth.sessionAdmission.suspend(sleepingEpoch)
+        record("suspended-session-cannot-publish-held-successful-health", !sleptHealth.setForwardingReadyFromHealth(true,
+            epoch: sleepingEpoch, discovery: sleptHealth.runtimeSpec!.discovery) && !sleptHealth.forwardingReady)
+        await stop(sleptHealth)
+
         // Fast initial preparation can now complete between ordinary path events.
         // Two superseded fast admissions must leave all three legacy slots.
         Kernel.reset(); disabledOptions()
@@ -762,9 +903,9 @@ enum InitialDiscoveryCases {
             moved.physicalPathChanged(TunnelEndpointPath(supportsIPv4: false, supportsIPv6: true), epoch: moved.sessionAdmission.currentEpoch!)
         }
         let movedReady = await CancellationCases.until { Kernel.events.contains("health-initial-dns-correction") }
-        record("healthy-unsealed-path-change-pauses-without-underlay-then-full-resolves-IPv6-with-disabled-reconnect", movedReady &&
+        record("healthy-unsealed-path-change-pauses-without-underlay-then-fast-resolves-IPv6-with-disabled-reconnect", movedReady &&
             nilOwner != nil && noDNSWithoutPath && movingGroup.wasCancelled && !movingGroup.isInvalidated &&
-            Kernel.events.filter { $0 == "legacy-dns" }.count == 1 && Kernel.events.filter { $0 == "Core-start" }.count == 2 &&
+            Kernel.discoveries.count == 2 && !Kernel.events.contains("legacy-dns") && Kernel.events.filter { $0 == "Core-start" }.count == 2 &&
             moved.runtimeSpec?.path.supportsIPv4 == false && moved.runtimeSpec?.path.supportsIPv6 == true &&
             moved.runtimeSpec?.bootstrapAddresses == ["2001:db8::2"] && Kernel.coreInputs.last == movedBytes &&
             moved.recoveryFailures == 0 && !moved.nativeOptions.reconnectEnabled && !Kernel.events.contains("terminal-cancel"))

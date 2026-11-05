@@ -35,6 +35,7 @@ final class TunnelEndpointDiscovery: @unchecked Sendable {
     private var unsealed = false
     private var canceledCount = 0
     private var waits = 0
+    private let current: () -> Bool
     var onCancel: (() -> Void)?
     var hasUnsealedSystemSelections: Bool {
         get { lock.lock(); defer { lock.unlock() }; return unsealed }
@@ -47,7 +48,8 @@ final class TunnelEndpointDiscovery: @unchecked Sendable {
         set { lock.lock(); invalid = newValue; lock.unlock() }
     }
     init(path: TunnelEndpointPath, deadline: TimeInterval, isCurrent: @escaping () -> Bool,
-         event: @escaping (String) -> Void, onInvalidated: @escaping () -> Void) {}
+         event: @escaping (String) -> Void, onInvalidated: @escaping () -> Void) { current = isCurrent }
+    var permitsForwardingReady: Bool { current() && !isInvalidated && cancelCalls == 0 }
     func resolveCandidates(_ host: String) async throws -> TunnelEndpointCandidates { TunnelEndpointCandidates(path: TunnelEndpointPath()) }
     func admitSelections(_ values: [TunnelEndpointSelection]) -> Bool { !isInvalidated }
     func isFresh(_ values: [TunnelEndpointSelection], at: TimeInterval) -> Bool { !isInvalidated }
@@ -203,9 +205,9 @@ final class FixtureProvider: @unchecked Sendable {
     var watchdogSuspended = false, watchdogInboundHealthy = false
     var watchdogInboundPort: Int?, recoveryCheck: DispatchWorkItem?
     var runtimeSpec: RuntimeSpec?
-    var startupDiscovery: (epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token, discovery: TunnelEndpointDiscovery)?
+    // SOURCE_DISCOVERY_STATE
     var pendingSleep: PendingSleep?
-    var initialDiscoveryCorrection: (epoch: TunnelSessionAdmission.Epoch, id: UUID, deadline: TimeInterval, terminal: Bool, task: Task<Void, Never>)?
+    // SOURCE_CORRECTION_STATE
     func cancelTunnelWithError(_ error: Error?) { FixtureLog.shared.append("terminal-cancel") }
     var runtimeRecoveryInFlight = false, recoveryExhausted = false
     var initialRuntimeAttempted = false {
@@ -275,7 +277,8 @@ final class FixtureProvider: @unchecked Sendable {
     var rejectPreparation = false, rejectPreflight = false
     var preparationExpiry: TimeInterval?
     var preparationAddresses = ["192.0.2.1"]
-    func prepareEndpointConfig(_ source: RuntimeSource, token: TunnelEndpointPlanAdmission.Token, path: TunnelEndpointPath, attempt: UInt64, deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 25) async throws -> TunnelPreparedConfig {
+    func prepareEndpointConfig(_ source: RuntimeSource, token: TunnelEndpointPlanAdmission.Token, path: TunnelEndpointPath, attempt: UInt64, deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 25, discovery: TunnelEndpointDiscovery? = nil) async throws -> TunnelPreparedConfig {
+        discovery?.hasUnsealedSystemSelections = true
         originalPreparationInputs.append(source.config)
         preparationEntered?.signal()
         try await preparationHook?()
@@ -384,6 +387,103 @@ extension Probe {
     }
 
     static func runDNSLeaseCases() async {
+        // Exercise the actual correction factory's new retained lease at two
+        // asynchronous boundaries. Sleep must wait on that exact A/AAAA window
+        // rather than suspending from the obsolete runtime's cancelled lease.
+        for duringHEV in [false, true] {
+            let fastSleep = FixtureProvider(), (original, originalGroup) = leased(fastSleep)
+            originalGroup.hasUnsealedSystemSelections = true
+            fastSleep.initialRuntimeAttempted = true
+            fastSleep.hevLifecycle.beginStart(); fastSleep.hevLifecycle.markThreadEntered()
+            fastSleep.setForwardingReady(true, epoch: original.epoch)
+            let preparationGate = FixtureAsyncGate()
+            let workerEntered = DispatchSemaphore(value: 0), workerRelease = DispatchSemaphore(value: 0)
+            if duringHEV {
+                fastSleep.workerHook = { workerEntered.signal(); precondition(workerRelease.wait(timeout: .now() + 3) == .success) }
+            } else {
+                fastSleep.preparationHook = { await preparationGate.wait() }
+            }
+            fastSleep.watchdogQueue.sync { fastSleep.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: original.epoch) }
+            if duringHEV { precondition(workerEntered.wait(timeout: .now() + 3) == .success) }
+            else { precondition(preparationGate.waitUntilEntered(timeout: 3)) }
+            let child = fastSleep.startupDiscovery!.discovery
+            precondition(child !== originalGroup && originalGroup.cancelCalls == 1)
+            let completed = DispatchSemaphore(value: 0)
+            fastSleep.sleep { completed.signal() }; fastSleep.sleep { completed.signal() }
+            fastSleep.waitUntil { child.sealWaitCalls == 1 }
+            let pending = pendingSleepTask(fastSleep)!
+            precondition(fastSleep.sessionAdmission.permitsRuntime(original.epoch) && child.cancelCalls == 0 &&
+                pendingSleepOwner(fastSleep)?.discovery === child &&
+                completed.wait(timeout: .now() + 0.01) == .timedOut)
+            // Wake overtakes only the pending Sleep; it must keep this precise
+            // correction and its original deadline/admission ownership.
+            fastSleep.wake(); await pending.value
+            precondition(completed.wait(timeout: .now() + 3) == .success && completed.wait(timeout: .now() + 3) == .success)
+            if duringHEV { fastSleep.workerHook = nil; workerRelease.signal() }
+            else { fastSleep.preparationHook = nil; preparationGate.release() }
+            await fastSleep.flushAsync(stage: "fast correction Sleep/Wake")
+            child.hasUnsealedSystemSelections = false
+            fastSleep.watchdogQueue.sync {}
+            precondition(fastSleep.forwardingReady && fastSleep.initialDiscoveryCorrection == nil &&
+                fastSleep.runtimeSpec?.discovery === child && fastSleep.runtimeSpec?.discoveryDeadline == original.discoveryDeadline &&
+                fastSleep.startupDiscovery?.discovery === child && child.cancelCalls == 0 &&
+                pendingSleepTask(fastSleep) == nil && completed.wait(timeout: .now() + 0.01) == .timedOut)
+            await fastSleep.stop()
+            print("PASS fast correction retains exact new DNS Sleep window and late Wake completion (HEV=\(duringHEV))")
+        }
+
+        // A path replacement during pending Sleep drains only its captured
+        // child. Its late completion cannot suspend the new correction token.
+        let pathSleep = FixtureProvider(), (pathOriginal, pathGroup) = leased(pathSleep)
+        pathGroup.hasUnsealedSystemSelections = true; pathSleep.initialRuntimeAttempted = true
+        let pathGate = FixtureAsyncGate()
+        pathSleep.preparationHook = { pathSleep.preparationHook = nil; await pathGate.wait() }
+        pathSleep.watchdogQueue.sync { pathSleep.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: pathOriginal.epoch) }
+        precondition(pathGate.waitUntilEntered(timeout: 3))
+        let pathChild = pathSleep.startupDiscovery!.discovery
+        let pathCompleted = DispatchSemaphore(value: 0)
+        pathSleep.sleep { pathCompleted.signal() }
+        pathSleep.waitUntil { pathChild.sealWaitCalls == 1 }
+        let oldPending = pendingSleepTask(pathSleep)!
+        pathSleep.watchdogQueue.sync { pathSleep.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 3), epoch: pathOriginal.epoch) }
+        pathGate.release(); await oldPending.value
+        precondition(pathCompleted.wait(timeout: .now() + 3) == .success)
+        await pathSleep.flushAsync(stage: "fast correction pending Sleep path replacement")
+        precondition(pathSleep.sessionAdmission.permitsRuntime(pathOriginal.epoch) && pathSleep.forwardingReady &&
+            pathSleep.runtimeSpec?.path.interfaceIndex == 3 && pathSleep.runtimeSpec?.discovery !== pathChild &&
+            pathSleep.runtimeSpec?.discoveryDeadline == pathOriginal.discoveryDeadline &&
+            pathSleep.startupDiscovery?.discovery === pathSleep.runtimeSpec?.discovery && pathChild.cancelCalls > 0 &&
+            pendingSleepTask(pathSleep) == nil && pathCompleted.wait(timeout: .now() + 0.01) == .timedOut)
+        await pathSleep.stop()
+        print("PASS pending Sleep from obsolete fast correction cannot suspend forced replacement path")
+
+        // Stop while the fast child is awaiting preparation completes pending
+        // Sleep exactly once; late preparation/seal cannot affect a new Start.
+        let stoppedFast = FixtureProvider(), (stoppedOriginal, stoppedGroup) = leased(stoppedFast)
+        stoppedGroup.hasUnsealedSystemSelections = true; stoppedFast.initialRuntimeAttempted = true
+        let stoppedGate = FixtureAsyncGate()
+        stoppedFast.preparationHook = { await stoppedGate.wait() }
+        stoppedFast.watchdogQueue.sync { stoppedFast.physicalPathChanged(TunnelEndpointPath(interfaceIndex: 2), epoch: stoppedOriginal.epoch) }
+        precondition(stoppedGate.waitUntilEntered(timeout: 3))
+        let stoppedChild = stoppedFast.startupDiscovery!.discovery
+        let stoppedOwner = stoppedFast.watchdogQueue.sync { stoppedFast.initialDiscoveryCorrection!.task }
+        let stoppedCompleted = DispatchSemaphore(value: 0)
+        stoppedFast.sleep { stoppedCompleted.signal() }
+        stoppedFast.waitUntil { stoppedChild.sealWaitCalls == 1 }
+        let stoppedPending = pendingSleepTask(stoppedFast)!
+        await stoppedFast.stop()
+        precondition(stoppedCompleted.wait(timeout: .now() + 3) == .success)
+        let failuresBefore = FixtureLog.shared.count("terminal-cancel")
+        let restarted = stoppedFast.begin()
+        stoppedGate.release(); stoppedChild.hasUnsealedSystemSelections = false
+        await stoppedOwner.value; await stoppedPending.value; stoppedFast.watchdogQueue.sync {}
+        precondition(stoppedFast.sessionAdmission.permitsRuntime(restarted.epoch) &&
+            stoppedFast.endpointAdmission.currentToken == restarted.token && stoppedFast.initialDiscoveryCorrection == nil &&
+            pendingSleepTask(stoppedFast) == nil && FixtureLog.shared.count("terminal-cancel") == failuresBefore &&
+            stoppedCompleted.wait(timeout: .now() + 0.01) == .timedOut)
+        await stoppedFast.stop()
+        print("PASS Stop drains exact fast DNS Sleep once and rejects late old preparation or seal after new Start")
+
         let beforeActivation = FixtureProvider(), (inactiveSpec, inactiveGroup) = leased(beforeActivation, activate: false)
         inactiveGroup.isInvalidated = true
         beforeActivation.invalidateStartupDiscovery(epoch: inactiveSpec.epoch, token: inactiveSpec.token,

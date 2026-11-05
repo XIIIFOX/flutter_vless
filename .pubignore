@@ -23,6 +23,8 @@ doc/release/*-validation.md
 doc/release/*-plugin-followups.md
 doc/assets/flutter-vless-hero-1.1.6.png
 doc/api/
+doc/video_assets/
+doc/video_storyboard_rezero_style.md
 
 # IDE / OS
 .idea/

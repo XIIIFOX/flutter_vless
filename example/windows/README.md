@@ -12,8 +12,7 @@ its AMD64 `xray.exe` SHA-256 is
 
 Ordinary profiles without managed-service requirements can also use the
 [official Xray-core 26.10.31 archive](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31).
-`Xray-windows-64.zip` has SHA-256
-`2e04a9995a6f2ad1b28c0bb25c708ecb2695e43a1c9c7889c4b6ac2b48cf7a6a`.
+Official archive SHA-256: `2e04a9995a6f2ad1b28c0bb25c708ecb2695e43a1c9c7889c4b6ac2b48cf7a6a`.
 This is a different artifact from the managed companion.
 
 Place the Core and compatible helpers in this source staging directory:

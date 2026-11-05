@@ -26,14 +26,21 @@ final class TunnelEndpointStartupTimingTests: XCTestCase {
             var registered = 0; var closed = 0; var active = 0
             var callbackCount = 0; var lateAAAACallbackCount = 0
             var lateAAAACallbackAt: TimeInterval?
+            var pathHeld = 0; var pathReleased = 0
+            var pathReleaseObservedRevoked: Bool?
+            var pathCallbacksBeforeRevocation = 0; var pathCallbacksAfterRevocation = 0
         }
         private let script: Script
+        private let pathIsCurrent: () -> Bool
         private let lock = NSLock()
         private var counts = Counts()
         private var registeredQueue: DispatchQueue?
         private var measurementStart: TimeInterval?
+        private var heldPathCallbacks: [() -> Void] = []
         var onRegistered: (() -> Void)?
-        init(_ script: Script) { self.script = script }
+        init(_ script: Script, isCurrent: @escaping () -> Bool = { true }) {
+            self.script = script; pathIsCurrent = isCurrent
+        }
         var snapshot: Counts { lock.lock(); defer { lock.unlock() }; return counts }
 
         func beginMeasurement(at start: TimeInterval) {
@@ -48,9 +55,28 @@ final class TunnelEndpointStartupTimingTests: XCTestCase {
 
         private func recordDelivery(lateAAAA: Bool) {
             let delivered = ProcessInfo.processInfo.systemUptime
+            let pathWasCurrent: Bool?
+            if case .pathRevocation = script { pathWasCurrent = pathIsCurrent() } else { pathWasCurrent = nil }
             lock.lock(); defer { lock.unlock() }
             counts.callbackCount += 1
+            if let pathWasCurrent {
+                if pathWasCurrent { counts.pathCallbacksBeforeRevocation += 1 }
+                else { counts.pathCallbacksAfterRevocation += 1 }
+            }
             if lateAAAA { counts.lateAAAACallbackCount += 1; counts.lateAAAACallbackAt = delivered }
+        }
+
+        func releasePathCallbacksAfterRevocation() {
+            let revoked = !pathIsCurrent()
+            lock.lock()
+            let callbacks = heldPathCallbacks; heldPathCallbacks.removeAll()
+            counts.pathReleaseObservedRevoked = revoked
+            if revoked { counts.pathReleased = callbacks.count }
+            lock.unlock()
+            XCTAssertTrue(revoked, "The test must revoke the actual current witness before releasing stale events")
+            XCTAssertEqual(callbacks.count, 2)
+            guard revoked else { return }
+            callbacks.forEach { $0() }
         }
 
         func query(_ host: String, _ index: UInt32, _ family: TunnelEndpointAddress.Family,
@@ -69,7 +95,14 @@ final class TunnelEndpointStartupTimingTests: XCTestCase {
                     receive(event)
                 }
                 work.append(item)
-                queue.asyncAfter(deadline: .now() + delay, execute: item)
+                if case .pathRevocation = script {
+                    // Construct and own the work before query returns, but do
+                    // not deliver it until the explicit revocation barrier.
+                    self.lock.lock()
+                    self.heldPathCallbacks.append { queue.async(execute: item) }
+                    self.counts.pathHeld += 1
+                    self.lock.unlock()
+                } else { queue.asyncAfter(deadline: .now() + delay, execute: item) }
             }
             switch script {
             case .unavailable:
@@ -84,7 +117,7 @@ final class TunnelEndpointStartupTimingTests: XCTestCase {
                         interfaceIndex: 0, ttl: 30, added: true), moreComing: false), lateAAAA: true)
                 }
             case .pathRevocation:
-                enqueue(after: 0.080, .failure(.serviceUnavailable))
+                enqueue(after: 0, .failure(.serviceUnavailable))
             case .silence:
                 break
             }
@@ -144,12 +177,17 @@ final class TunnelEndpointStartupTimingTests: XCTestCase {
         // This clock starts before query registration. A false value alone
         // does not establish delivery after the production collection deadline.
         let beforeTwoSeconds: Any = backend.lateAAAACallbackMilliseconds.map { ($0 < 2000) as Any } ?? NSNull()
+        let pathRelease: Any = counts.pathReleaseObservedRevoked.map { $0 as Any } ?? NSNull()
         let row: [String: Any] = ["schema": 1, "case": name, "sample": sample,
             "elapsed_ms": elapsed * 1000, "fallback_calls": fallbackCalls,
             "registered_refs": counts.registered, "closed_refs": counts.closed,
             "callback_count": counts.callbackCount, "late_aaaa_callback_count": counts.lateAAAACallbackCount,
             "late_aaaa_callback_ms": delivered, "late_aaaa_before_measurement_2s": beforeTwoSeconds,
             "production_events": productionEvents,
+            "path_callbacks_held": counts.pathHeld, "path_callbacks_released": counts.pathReleased,
+            "path_release_observed_revoked": pathRelease,
+            "path_callbacks_before_revocation": counts.pathCallbacksBeforeRevocation,
+            "path_callbacks_after_revocation": counts.pathCallbacksAfterRevocation,
             "candidate_families": families.map { $0 == .ipv4 ? "ipv4" : "ipv6" },
             "mode": ProcessInfo.processInfo.environment["FLVLESS_TIMING_MODE"] ?? "unspecified",
             "dns_only": true, "live_ne_vpn": false]
@@ -243,25 +281,35 @@ final class TunnelEndpointStartupTimingTests: XCTestCase {
     func testStopAndPathRevocationPromptlyDrainRealReferences() async throws {
         for changedPath in [false, true] {
             let name = changedPath ? "path_cancel" : "stop_cancel"
-            let backend = Backend(changedPath ? .pathRevocation : .silence)
             let current = Locked(true), calls = Locked(0), synthesis = Locked(0), events = Locked<[String]>([])
+            let backend = Backend(changedPath ? .pathRevocation : .silence, isCurrent: { current.read() })
             let registered = expectation(description: name + " references registered")
             backend.onRegistered = { registered.fulfill() }
             let group = discovery(backend, current: { current.read() }, fallbackCalls: calls, synthesisCalls: synthesis, events: events)
             defer { group.cancel() }
             let task = Task { try await group.resolveCandidates("cancel.example.com") }
             await fulfillment(of: [registered], timeout: 1)
-            try await Task.sleep(nanoseconds: 20_000_000)
             let began = now
             backend.beginMeasurement(at: began)
-            if changedPath { current.change { $0 = false } }
-            else { group.cancel() }
+            if changedPath {
+                XCTAssertEqual(backend.snapshot.pathHeld, 2)
+                XCTAssertEqual(backend.snapshot.callbackCount, 0, "The driver must not race the test with early callbacks")
+                current.change { $0 = false }
+                backend.releasePathCallbacksAfterRevocation()
+            } else { group.cancel() }
             do { _ = try await task.value; XCTFail("Stopped or obsolete discovery returned a candidate") }
             catch { XCTAssertTrue(error is CancellationError) }
             let elapsed = now - began
             await backend.drain()
-            XCTAssertLessThan(elapsed, 0.9)
-            XCTAssertEqual(calls.read(), 0)
+            let trace = "pathHeld=\(backend.snapshot.pathHeld) released=\(backend.snapshot.pathReleased) revokedAtRelease=\(String(describing: backend.snapshot.pathReleaseObservedRevoked)) before=\(backend.snapshot.pathCallbacksBeforeRevocation) after=\(backend.snapshot.pathCallbacksAfterRevocation) production=\(events.read())"
+            XCTAssertLessThan(elapsed, 0.5, trace)
+            XCTAssertEqual(calls.read(), 0, trace)
+            if changedPath {
+                XCTAssertEqual(backend.snapshot.pathReleased, 2, trace)
+                XCTAssertEqual(backend.snapshot.pathReleaseObservedRevoked, true, trace)
+                XCTAssertEqual(backend.snapshot.pathCallbacksBeforeRevocation, 0, trace)
+                XCTAssertGreaterThan(backend.snapshot.pathCallbacksAfterRevocation, 0, trace)
+            }
             XCTAssertEqual(synthesis.read(), 0)
             XCTAssertFalse(group.permitsForwardingReady)
             XCTAssertEqual(backend.snapshot.closed, 2)

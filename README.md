@@ -25,6 +25,14 @@ Redistributions and derived packages must preserve the copyright and MIT
 license notices required by the license. See [NOTICE](https://github.com/XIIIFOX/flutter_vless/blob/main/NOTICE) and
 [TRADEMARKS.md](https://github.com/XIIIFOX/flutter_vless/blob/main/TRADEMARKS.md).
 
+## Contact & Services
+
+Have a question for 13FOX Studio, need help integrating `flutter_vless`, or want
+to discuss a custom Flutter app? Reach us on [Telegram](https://t.me/fast_mano)
+or at [13fox.comp@gmail.com](mailto:13fox.comp@gmail.com).
+
+If `flutter_vless` is useful to you, please give it a like on [pub.dev](https://pub.dev/packages/flutter_vless).
+
 ## At A Glance
 
 | Platform | VPN tunnel | Proxy only | Key setup requirements |

@@ -14,7 +14,7 @@ import (
 const (
 	launcherSchema     = 1
 	launcherCapability = "native-instance-preview-1"
-	coreCommit         = "a4a3dff5b20c2faae567b742c172c7b95e75c083"
+	coreCommit         = "676eaf66f8f05d4d558ee7a74b4736623d3feeb9"
 	maxDocumentBytes   = 4 << 20
 )
 

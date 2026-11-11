@@ -1,0 +1,11 @@
+{
+  "core_commit": "676eaf66f8f05d4d558ee7a74b4736623d3feeb9",
+  "upstream_sha256": {
+    "core/xray.go": "66edf1a9ed6b9683b4f668612e6c6e876830cffb07521517f03a21e630f7ef15",
+    "transport/internet/xdrive/xdrive.go": "5a4f0abb61b9a5388dc200454fae8c5f544ab407031d5542e8fd93537f5876c1",
+    "transport/internet/xdrive/client.go": "190b7a703bdae2d5cd83b2c71c72c49ca7579057004bb4e6a9d7dea6305bf838",
+    "transport/internet/xdrive/drive.go": "bdb7e5608a2d3d933c0d7d8b070203fffcf7f04d144fdbfd06d8c239d76f9014",
+    "transport/internet/xdrive/s3.go": "607e95246f885f784e172551ef70c8645ec775e0d00840f3daac2b852a1f1a18",
+    "transport/internet/xdrive/storage.go": "80873c5b071a2142c761a32cd2b6aed94c4decf42da1685f8a6eb72f4ddd38b7"
+  }
+}

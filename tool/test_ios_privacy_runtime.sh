@@ -10,6 +10,9 @@ esac
 export APPLE_RUNTIME_PROBE_MODE
 : "${SIMULATOR_UDID:?Set SIMULATOR_UDID to an already booted disposable iOS simulator}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FRAMEWORK="${XRAY_RUNTIME_FRAMEWORK:-$ROOT/ios/XRay.xcframework}"
+EXPECTED_XRAY_CORE_VERSION="${EXPECTED_XRAY_CORE_VERSION:-$(sed -nE 's/^let xrayReleaseTag = "xray-ios-v([0-9.]+)-r[0-9]+"$/\1/p' "$ROOT/ios/flutter_vless/Package.swift")}"
+: "${EXPECTED_XRAY_CORE_VERSION:?Expected a pinned ios Core version}"
 OUT="$ROOT/build/ios_privacy_runtime_probe"
 BUNDLE=dev.tfox.security-runtime-probe
 mkdir -p "$OUT/modules" "$OUT/Probe.app"
@@ -71,7 +74,7 @@ xcrun swiftc "${COMMON[@]}" -parse-as-library -I "$OUT/modules" -module-name flu
 COMPAT="$ROOT/ios/flutter_vless/Sources/flutter_vless_core_compat"
 xcrun clang -fobjc-arc -target "$SIMULATOR_ARCH-apple-ios15.0-simulator" -isysroot "$SDK" \
     -c "$COMPAT/FlutterVlessCoreCompat.m" -o "$OUT/modules/compat.o"
-xcrun swiftc "${COMMON[@]}" -I "$OUT/modules" -F "$ROOT/ios/XRay.xcframework/ios-arm64_x86_64-simulator" -framework XRay -framework UIKit -lresolv -import-objc-header "$COMPAT/include/FlutterVlessCoreCompat.h" "$OUT/main.swift" "$ROOT/ios/flutter_vless/Sources/flutter_vless/BoundedNativeLogStore.swift" "$OUT/modules/privacy.o" "$OUT/modules/support.o" "$OUT/modules/compat.o" -o "$OUT/Probe.app/Probe"
+xcrun swiftc "${COMMON[@]}" -I "$OUT/modules" -F "$FRAMEWORK/ios-arm64_x86_64-simulator" -framework XRay -framework UIKit -lresolv -import-objc-header "$COMPAT/include/FlutterVlessCoreCompat.h" "$OUT/main.swift" "$ROOT/ios/flutter_vless/Sources/flutter_vless/BoundedNativeLogStore.swift" "$OUT/modules/privacy.o" "$OUT/modules/support.o" "$OUT/modules/compat.o" -o "$OUT/Probe.app/Probe"
 codesign --force --sign - "$OUT/Probe.app"
 echo 'PROBE_PHASE=ios-compile-complete'
 echo 'PROBE_PHASE=ios-install-begin'
@@ -87,11 +90,11 @@ SIMCTL_CHILD_REQUIRE_DARWIN_INTERFACE_BINDING="${REQUIRE_DARWIN_INTERFACE_BINDIN
     xcrun simctl launch --console "$SIMULATOR_UDID" "$BUNDLE" 2>&1 | tee "$OUT/runtime.log"
 collect_probe_phase
 echo 'PROBE_PHASE=ios-runtime-complete'
-python3 - "$OUT/runtime.log" <<'PY'
+python3 - "$OUT/runtime.log" "$EXPECTED_XRAY_CORE_VERSION" <<'PY'
 import os, sys
 from pathlib import Path
 text=Path(sys.argv[1]).read_text()
-assert text.splitlines().count("RUNTIME=26.10.31") == 1, "Unexpected embedded Xray version"
+assert text.splitlines().count('RUNTIME='+sys.argv[2]) == 1, 'Unexpected embedded Xray version'
 if os.environ.get('REQUIRE_MANAGED_SERVICE_LIFETIMES') == '1':
     for marker in ['APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1', 'APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=2']:
         assert text.splitlines().count(marker) == 1, 'Missing or duplicate managed lifetime capability value'
@@ -101,7 +104,6 @@ if os.environ.get('REQUIRE_DARWIN_INTERFACE_BINDING') == '1':
 assert text.splitlines().count('APPLE_FAKEDNS_SDK_PASS=2') == 1
 assert text.splitlines().count('APPLE_DNS_DATA_MAPS_SDK_PASS=2') == 1, 'Missing or duplicate Apple DNS data maps SDK gate'
 if os.environ.get('APPLE_RUNTIME_PROBE_MODE') == 'fakedns-only':
-    assert text.splitlines().count('RUNTIME=26.10.31') == 1
     for marker in ['privacy-canary.invalid','synthetic-password-canary','d2719f44-f51f-4c35-aeae-246230d21f38','local-user-canary','local-password-canary']:
         assert marker not in text, 'Private marker escaped'
     print('PASS: stock Apple SDK FakeDNS only, 2 generations')

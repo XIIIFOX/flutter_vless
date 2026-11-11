@@ -61,7 +61,7 @@ class ReviewedModuleGraphTest(unittest.TestCase):
         # Exact reviewed upstream bytes keep this file-only check independent
         # of a local module cache or a build that silently resolves its graph.
         pin = json.loads((ROOT / 'third_party/xray-vpn-routing/pin-manifest.json').read_text())
-        core = (ROOT / 'tool/fixtures/xray_core_v26.10.31.go.mod').read_bytes()
+        core = (ROOT / 'tool/fixtures/xray_core_v26.11.9.go.mod').read_bytes()
         self.assertEqual(hashlib.sha256(core).hexdigest(), pin['upstream_sha256']['go.mod'])
         pattern = r'^[ \t]*(\S+)[ \t]+(v\S+)(?:[ \t]+//.*)?$'
         reviewed = dict(re.findall(pattern, core.decode(), re.M))

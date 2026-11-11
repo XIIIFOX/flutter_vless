@@ -106,8 +106,8 @@ class CanonicalPackageTests(unittest.TestCase):
             with self.subTest(platform=platform):
                 result=self.run_package(platform,self.framework(platform))
                 self.assertFalse(result['published'])
-                self.assertEqual(result['release_version'], '26.10.31')
-                self.assertEqual(result['runtime_revision'], 'r2')
+                self.assertEqual(result['release_version'], '26.11.9')
+                self.assertEqual(result['runtime_revision'], 'r1')
                 self.assertEqual(result['go_version'],'go1.27.3')
                 self.assertEqual(len(result['strong_exports']),3 if platform=='ios' else 2)
                 self.assertEqual(result['archive_sha256'],builder.digest(self.root/('packed-'+platform)/'XRay.xcframework.zip'))

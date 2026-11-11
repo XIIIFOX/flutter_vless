@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / 'tool/fixtures/xdrive-v26.10.29'
+FIXTURE = ROOT / 'tool/fixtures/xdrive-v26.11.9'
 spec = importlib.util.spec_from_file_location('xdrive_lifetime_patch', ROOT / 'third_party/xray-native-dns/xdrive_lifetime_patch.py')
 patch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(patch)
@@ -36,7 +36,7 @@ class XdriveLifetimePatchTests(unittest.TestCase):
 
     def test_full_fixture_is_bound_to_reviewed_official_module(self):
         receipt = json.loads((FIXTURE / 'manifest.json').read_text())
-        self.assertEqual(receipt['core_commit'], '0afec66085a85191e9dd2a4a6646c7c9a94688d1')
+        self.assertEqual(receipt['core_commit'], '676eaf66f8f05d4d558ee7a74b4736623d3feeb9')
         self.assertEqual(receipt['upstream_sha256'], patch.UPSTREAM_SHA256)
         for path, expected in receipt['upstream_sha256'].items():
             self.assertEqual(hashlib.sha256((FIXTURE / path).read_bytes()).hexdigest(), expected, path)

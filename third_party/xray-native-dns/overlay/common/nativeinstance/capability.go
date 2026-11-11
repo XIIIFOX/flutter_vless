@@ -10,7 +10,7 @@ import (
 )
 
 const CapabilityID = "native-instance-preview-1"
-const CoreCommit = "a4a3dff5b20c2faae567b742c172c7b95e75c083"
+const CoreCommit = "676eaf66f8f05d4d558ee7a74b4736623d3feeb9"
 const maxDocumentBytes = 4 << 20
 const maxLookupTimeout = 4 * time.Second
 const closeWait = 3 * time.Second

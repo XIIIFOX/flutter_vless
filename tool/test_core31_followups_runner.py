@@ -137,7 +137,7 @@ class Core31SourceOwnership(unittest.TestCase):
         for key in runner.PIN:
             with self.subTest(key=key), self.assertRaises(ValueError):
                 runner.validate_pin(dict(runner.PIN, **{key: 'different'}), module, sums)
-        for bad_module, bad_sums in [(module.replace('a4a3dff5b20c', 'deadbeef0000'), sums), (module, sums+'suffix') , ('// '+module, sums), (module, '')]:
+        for bad_module, bad_sums in [(module.replace('676eaf66f8f0', 'deadbeef0000'), sums), (module, sums+'suffix') , ('// '+module, sums), (module, '')]:
             # A separate appended line cannot change an already valid exact
             # go.sum line; mutate that line itself when testing trailing data.
             if bad_sums == sums+'suffix':

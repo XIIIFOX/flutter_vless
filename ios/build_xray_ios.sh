@@ -5,7 +5,6 @@ export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.3}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 XRAY_MOBILE_DIR="${XRAY_MOBILE_DIR:-$REPO_ROOT/third_party/xray-mobile}"
-XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.10.31}"
 XRAY_CORE_REF="${XRAY_CORE_REF:-$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["core_commit"])' "$REPO_ROOT/third_party/xray-vpn-routing/pin-manifest.json")}"
 IOS_VERSION="${IOS_VERSION:-15.0}"
 BUILD_DIR="${BUILD_DIR:-$SCRIPT_DIR/build_xray_ios}"
@@ -46,7 +45,7 @@ cd "$BUILD_DIR/xray-mobile"
 echo "Using vendored xray-mobile source from $XRAY_MOBILE_DIR"
 
 # Xray-core uses calendar release tags but keeps the original module path.
-# Pin by the release commit so Go resolves it to the matching v1.YYMMDD.0 module version.
+# Pin by the release commit so Go resolves it to the matching module pseudo-version.
 go get "github.com/xtls/xray-core@$XRAY_CORE_REF"
 python3 "$REPO_ROOT/tool/prepare_apple_classic_core.py" \
     --mobile "$PWD" --destination "$PWD/../Core-classic" --go "$(command -v go)" --vpn-routing

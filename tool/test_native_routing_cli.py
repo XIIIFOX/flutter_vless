@@ -101,9 +101,9 @@ def require_status(name, expected):
 
 def require_stock_version(mode):
     # Require the complete release token: accepting a numeric prefix would also
-    # accept a different release such as 26.10.310 or an unreviewed suffix.
+    # accept a different release such as 26.11.90 or an unreviewed suffix.
     output = (EVIDENCE / (mode + '-version.log')).read_text(encoding='utf-8')
-    if not output.startswith('Xray 26.10.31 ('):
+    if not output.startswith('Xray 26.11.9 ('):
         raise ValueError('Stock version does not identify the pinned Core release')
 
 

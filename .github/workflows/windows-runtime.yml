@@ -52,9 +52,9 @@ jobs:
       - name: Download and verify the pinned Windows runtime
         shell: pwsh
         run: |
-          $url = 'https://github.com/XTLS/Xray-core/releases/download/v26.10.31/Xray-windows-64.zip'
+          $url = 'https://github.com/XTLS/Xray-core/releases/download/v26.11.9/Xray-windows-64.zip'
           Invoke-WebRequest $url -OutFile build/xray-windows.zip
-          if ((Get-FileHash build/xray-windows.zip -Algorithm SHA256).Hash.ToLower() -ne '2e04a9995a6f2ad1b28c0bb25c708ecb2695e43a1c9c7889c4b6ac2b48cf7a6a') { throw 'Xray checksum mismatch' }
+          if ((Get-FileHash build/xray-windows.zip -Algorithm SHA256).Hash.ToLower() -ne '1262522266337b824f07beb8e1375786b437683b3890105469088f8e17e0a69d') { throw 'Xray checksum mismatch' }
           Expand-Archive build/xray-windows.zip build/windows-runtime -Force
           # Runtime-only update: retain the project's full GeoDAT, not the upstream lite bundle.
           Copy-Item android_runtime/xray_android/src/main/assets/geoip.dat,android_runtime/xray_android/src/main/assets/geosite.dat build/windows-runtime -Force
@@ -65,7 +65,7 @@ jobs:
           $version = @(& build/windows-runtime/xray.exe version)
           if ($LASTEXITCODE) { throw 'Xray version failed' }
           $version | Tee-Object -FilePath build/windows-runtime/official-version.log
-          if ($version.Count -lt 1 -or $version[0] -notmatch '^Xray 26\.10\.31(?:\s|$)') { throw 'Unexpected pinned Xray version' }
+          if ($version.Count -lt 1 -or $version[0] -notmatch '^Xray 26\.11\.9(?:\s|$)') { throw 'Unexpected pinned Xray version' }
       - name: Install the checksum-pinned published managed runtime
         if: ${{ inputs.runtime_source == 'published' }}
         shell: pwsh

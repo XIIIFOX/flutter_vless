@@ -12,8 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from package_apple_core_preview import digest, git_bindings, require_xhttp_listener_cleanup
 
 ROOT = Path(__file__).resolve().parents[2]
-REVISION = '26.10.31-r2'
-CORE_COMMIT = 'a4a3dff5b20c2faae567b742c172c7b95e75c083'
+CORE_VERSION = '26.11.9'
+REVISION = f'{CORE_VERSION}-r1'
+CORE_COMMIT = '676eaf66f8f05d4d558ee7a74b4736623d3feeb9'
 
 
 def capabilities(executable):
@@ -95,7 +96,7 @@ def package(directory, producer_path, destination, head, repository=ROOT):
     require_xhttp_listener_cleanup(producer, sources, Path(producer['core_source']),
                                    Path(producer['core_replacement']), repository)
     manifest = dict(success=True, head=head, platform='windows-amd64', runtime_revision=REVISION,
-                    core='26.10.31', core_commit=producer['core_commit'], producer_sha256=digest(producer_path),
+                    core=CORE_VERSION, core_commit=producer['core_commit'], producer_sha256=digest(producer_path),
                     acceptance_sha256=digest(directory/'proxy-results.json'),
                     capabilities=actual_capabilities, source_sha256=sources,
                     archive=archive.name, archive_sha256=digest(archive), files_sha256=hashes,

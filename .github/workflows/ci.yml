@@ -605,6 +605,7 @@ jobs:
       - name: Test real iOS Xray in simulator and link HEV fixture
         timeout-minutes: 18
         env:
+          EXPECTED_XRAY_CORE_VERSION: ${{ inputs.apple_runtime_source != 'published' && '26.11.9' || '' }}
           REQUIRE_MANAGED_SERVICE_LIFETIMES: ${{ inputs.apple_runtime_source == 'published' && '1' || '0' }}
         run: |
           SIMULATOR_UDID="$(xcrun simctl create 'Flutter Vless Security' com.apple.CoreSimulator.SimDeviceType.iPhone-16)"
@@ -651,6 +652,7 @@ jobs:
       - name: Test macOS protection policies, runtime and HEV packets
         timeout-minutes: 15
         env:
+          EXPECTED_XRAY_CORE_VERSION: ${{ inputs.apple_runtime_source != 'published' && '26.11.9' || '' }}
           REQUIRE_MANAGED_SERVICE_LIFETIMES: ${{ inputs.apple_runtime_source == 'published' && '1' || '0' }}
         run: |
           bash tool/test_macos_tunnel_support.sh

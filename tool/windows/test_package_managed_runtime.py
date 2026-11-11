@@ -34,7 +34,7 @@ class Packaging(unittest.TestCase):
                            core_copy_unchanged=True, mobile_copy_unchanged=True, xdrive_lifetime_applied=True,
                            geodata_lifetime_applied=True, tags='flutter_vless_vpn_routing_cli,flutter_vless_vpn_routing,flutter_vless_managed_service_lifetimes',
                            goos='windows', goarch='amd64', artifact_sha256=subject.digest(self.runtime/'xray.exe'),
-                           core_commit='a4a3dff5b20c2faae567b742c172c7b95e75c083',
+                           core_commit='676eaf66f8f05d4d558ee7a74b4736623d3feeb9',
                            input_sha256={'fixture.py':'a'*64})
         self.cache, self.copied = self.root/'cache/Core', self.root/'copied/Core'
         bind_xhttp_cleanup(self.root, self.cache, self.copied, self.report,
@@ -56,8 +56,8 @@ class Packaging(unittest.TestCase):
     def test_exact_core_and_full_geodata_archive(self):
         value = self.package()
         self.assertTrue(value['success']); self.assertFalse(value['published'])
-        self.assertEqual(value['runtime_revision'], '26.10.31-r2')
-        self.assertEqual(value['core'], '26.10.31')
+        self.assertEqual(value['runtime_revision'], '26.11.9-r1')
+        self.assertEqual(value['core'], '26.11.9')
         self.assertEqual(value['core_commit'], self.report['core_commit'])
         with zipfile.ZipFile(self.output/value['archive']) as packed:
             self.assertEqual(set(packed.namelist()), {'xray.exe','geoip.dat','geosite.dat','LICENSE.xray-core'})
@@ -69,7 +69,7 @@ class Packaging(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_old_core_producer_cannot_be_relabelled(self):
-        self.report['core_commit'] = '0afec66085a85191e9dd2a4a6646c7c9a94688d1'
+        self.report['core_commit'] = 'a4a3dff5b20c2faae567b742c172c7b95e75c083'
         with self.assertRaisesRegex(ValueError, 'release Core commit'):
             self.package()
         self.assertFalse(self.output.exists())

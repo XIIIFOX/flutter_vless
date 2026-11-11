@@ -14,7 +14,7 @@ from package_apple_core_preview import (EXPORTS, XDRIVE_PATCH, GEODATA_PATCH, XH
                                        require_xhttp_listener_cleanup, safe_name, tree)
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE_COMMIT = 'a4a3dff5b20c2faae567b742c172c7b95e75c083'
+CORE_COMMIT = '676eaf66f8f05d4d558ee7a74b4736623d3feeb9'
 
 
 def output(command, root):
@@ -150,7 +150,7 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
                    [('core_source', 'module_cache_before_sha256'), ('replacement', 'core_copy_sha256')]):
         raise ValueError('Framework changed during packaging')
     git_bindings(repository, head, sources)
-    manifest = {'success': True, 'platform': platform, 'head': head, 'release_version': '26.10.31', 'runtime_revision': 'r2',
+    manifest = {'success': True, 'platform': platform, 'head': head, 'release_version': '26.11.9', 'runtime_revision': 'r1',
                 'core_commit': pin['core_commit'], 'core_version': pin['module_version'], 'core_sum': pin['module_sum'],
                 'archive': archive.name, 'archive_sha256': digest(archive), 'framework_sha256': files,
                 'architectures': architectures, 'strong_exports': symbols, 'source_sha256': sources,

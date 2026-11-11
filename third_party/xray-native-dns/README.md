@@ -1,7 +1,7 @@
 # Unpublished native DNS context capability
 
 Status: **preview source only; not enabled by production builders or releases**.
-Pinned Core commit: `a4a3dff5b20c2faae567b742c172c7b95e75c083`.
+Pinned Core commit: `676eaf66f8f05d4d558ee7a74b4736623d3feeb9`.
 This internal capability is not a public upstream API or full advanced DNS support.
 
 `overlay/` contains a strict instance/handler transport-bootstrap implementation

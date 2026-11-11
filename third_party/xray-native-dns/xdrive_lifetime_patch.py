@@ -12,7 +12,14 @@ PATHS = (
 )
 
 
-UPSTREAM_SHA256 = {'core/xray.go': '66edf1a9ed6b9683b4f668612e6c6e876830cffb07521517f03a21e630f7ef15', 'transport/internet/xdrive/xdrive.go': '5eaaeff1aadf31f7bc391efc078d14d3d87ea284b126a6dfdb5cb4003f58ee3b', 'transport/internet/xdrive/client.go': 'ef4fddfeb400e80c96c739dbaf74825766d349ffe8581e5bc108a2572db3abb1', 'transport/internet/xdrive/drive.go': '6c5ee8bef724e85ee9a022d6d085a2e6ba02d61cba645eeb70a70758196254c1', 'transport/internet/xdrive/s3.go': '607e95246f885f784e172551ef70c8645ec775e0d00840f3daac2b852a1f1a18', 'transport/internet/xdrive/storage.go': 'd412258786f154d3e81fb3f5ca3c913d92011806fc6fbff5b68804865db19c33'}
+UPSTREAM_SHA256 = {
+    'core/xray.go': '66edf1a9ed6b9683b4f668612e6c6e876830cffb07521517f03a21e630f7ef15',
+    'transport/internet/xdrive/xdrive.go': '5a4f0abb61b9a5388dc200454fae8c5f544ab407031d5542e8fd93537f5876c1',
+    'transport/internet/xdrive/client.go': '190b7a703bdae2d5cd83b2c71c72c49ca7579057004bb4e6a9d7dea6305bf838',
+    'transport/internet/xdrive/drive.go': 'bdb7e5608a2d3d933c0d7d8b070203fffcf7f04d144fdbfd06d8c239d76f9014',
+    'transport/internet/xdrive/s3.go': '607e95246f885f784e172551ef70c8645ec775e0d00840f3daac2b852a1f1a18',
+    'transport/internet/xdrive/storage.go': '80873c5b071a2142c761a32cd2b6aed94c4decf42da1685f8a6eb72f4ddd38b7',
+}
 
 
 def replacements():
@@ -25,7 +32,19 @@ def replacements():
 	defer func() { if done { server.nativeXdriveLifetime.Close() } }()'''),
         ('core/xray.go', '\ts.running = false\n', '\ts.running = false\n\ts.nativeXdriveLifetime.Close()\n'),
         (base+'xdrive.go', 'func init() {', 'func NativeLifetimeCapability() int64 { return 2 }\n\nfunc init() {'),
-        (base+'xdrive.go', '\tstorage, err := newStorage(streamSettings)', '\tstorage, err := newNativeStorage(ctx, streamSettings)', 2),
+        (base+'xdrive.go', 'storage, err = newStorage(streamSettings)', 'storage, err = newNativeStorage(ctx, streamSettings)'),
+        (base+'xdrive.go', '\tstorage, err := newStorage(streamSettings)\n\tif err != nil {\n\t\treturn nil, err\n\t}', '\tstorage, err := newNativeStorage(ctx, streamSettings)\n\tif err != nil {\n\t\treturn nil, err\n\t}'),
+        (base+'xdrive.go', '\tspare, warm := takeSpare(config, p)', '''\t// The upstream spare pool is process-wide and schedules detached workers.
+\t// Managed Core instances use cold allocation until spares have a Core owner.
+\t_, owned := internet.NativeServiceLifetimeFromContext(ctx)
+\tvar spare spareRing
+\tvar warm bool
+\tif !owned {
+\t\tspare, warm = takeSpare(config, p)
+\t}'''),
+        (base+'xdrive.go', '\t\twarmSpares(streamSettings, config, p)', '\t\tif !owned {\n\t\t\twarmSpares(streamSettings, config, p)\n\t\t}'),
+        (base+'xdrive.go', 'case <-time.After(25 * time.Millisecond):', 'case <-time.After(25 * time.Millisecond):\n\t\t\tcase <-writer.ctx.Done():\n\t\t\t\treturn'),
+        (base+'xdrive.go', 'storage.Put(context.Background(), announceName(session, time.Now()), announce)', 'storage.Put(writer.ctx, announceName(session, time.Now()), announce)'),
         (base+'xdrive.go', 'newSlotConn(context.Background(), slots,', 'newNativeSlotConn(ctx, slots,'),
         (base+'xdrive.go', 'newConn(context.Background(), storage,', 'newNativeConn(ctx, storage,'),
         (base+'xdrive.go', 'listenerCtx, cancel := context.WithCancel(context.Background())', 'listenerCtx, cancel := nativeWorkerContext(ctx)'),
@@ -36,6 +55,12 @@ def replacements():
         (base+'drive.go', 'driveShared: &driveShared{', 'driveShared: &driveShared{\n\t\t\tnativeContext: ownerContext,'),
         (base+'drive.go', 'func (s *driveStorage) accessToken(ctx context.Context) (string, error) {',
          'func (s *driveStorage) accessToken(ctx context.Context) (string, error) {\n\tctx, release := nativeOperationContext(ctx, s.nativeContext); defer release()\n\tif err := ctx.Err(); err != nil { return "", err }'),
+        (base+'drive.go', 'fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)',
+         '''ownerCtx, releaseFetch := nativeOperationContext(context.WithoutCancel(ctx), s.nativeContext)
+\tdefer releaseFetch()
+\tfetchCtx, cancel := context.WithTimeout(ownerCtx, 30*time.Second)'''),
+        (base+'drive.go', 'ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)',
+         'ctx, cancel := context.WithTimeout(nativeLifetimeContext([]context.Context{s.nativeContext}), 30*time.Second)'),
         (base+'drive.go', 'func (s *driveStorage) do(ctx context.Context, method, target, contentType string, body []byte) (int, []byte, error) {',
          'func (s *driveStorage) do(ctx context.Context, method, target, contentType string, body []byte) (int, []byte, error) {\n\tctx, release := nativeOperationContext(ctx, s.nativeContext); defer release()\n\tif err := ctx.Err(); err != nil { return 0, nil, err }'),
         (base+'drive.go', '''return newServiceClient(connCtx, h1Hosts, streamSettings, driveTimeout, driveMaxInflight)

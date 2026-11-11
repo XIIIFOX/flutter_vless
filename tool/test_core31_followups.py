@@ -26,10 +26,10 @@ CLASSIC = ROOT / 'third_party/xray-native-dns'
 MOBILE = ROOT / 'third_party/xray-mobile'
 TAG = 'flutter_vless_core31_followups'
 PIN = {
-    'core_commit': 'a4a3dff5b20c2faae567b742c172c7b95e75c083',
+    'core_commit': '676eaf66f8f05d4d558ee7a74b4736623d3feeb9',
     'module': 'github.com/xtls/xray-core',
-    'module_version': 'v1.260327.1-0.20261031132019-a4a3dff5b20c',
-    'module_sum': 'h1:XijTasBJ2fImHZo1GoAgSfHuDqloQGYHEADLy9CgrJ8=',
+    'module_version': 'v1.260327.1-0.20261109052709-676eaf66f8f0',
+    'module_sum': 'h1:p2uoadP+ulClbJ9dn+QioF2SfBqRly6VoKJosHqwcRo=',
 }
 
 

@@ -47,9 +47,9 @@ func newNativeConn(ctx context.Context, storage Storage, writePrefix, readPrefix
 	return newConn(worker, storage, writePrefix, readPrefix, p, nativeWorkerClosed(release, onClose))
 }
 
-func newNativeSlotConn(ctx context.Context, storage slotStore, write, read slotTable, p params, onClose func()) *Conn {
+func newNativeSlotConn(ctx context.Context, storage slotStore, write, read slotTable, p params, first []byte, onClose func()) *Conn {
 	worker, release := nativeWorkerContext(ctx)
-	return newSlotConn(worker, storage, write, read, p, nativeWorkerClosed(release, onClose))
+	return newSlotConn(worker, storage, write, read, p, first, nativeWorkerClosed(release, onClose))
 }
 
 func nativeLifetimeContext(contexts []context.Context) context.Context {

@@ -68,7 +68,7 @@ func TestNativeXdriveSlotAndListenerWorkersFollowOwnedLifetime(t *testing.T) {
 		t.Fatal(err)
 	}
 	closed := make(chan struct{})
-	connection := newNativeSlotConn(coreContext, store, ring.Up, ring.Down, p, func() { close(closed) })
+	connection := newNativeSlotConn(coreContext, store, ring.Up, ring.Down, p, nil, func() { close(closed) })
 	defer connection.Close()
 	owner.Close()
 	if parent.Err() != nil || coreContext.Err() != nil {
@@ -184,6 +184,44 @@ func TestNativeXdriveCoreCloseCancelsTokenOrServiceRequestWithoutStallWait(t *te
 	}
 	if _, err := transport.RoundTrip(request); err == nil {
 		t.Fatal("closed transport admitted another request")
+	}
+}
+
+func TestNativeXdriveCoreCloseCancelsSharedOAuthRefresh(t *testing.T) {
+	ownerContext, owner := ContextWithNativeLifetime(context.Background())
+	defer owner.Close()
+	transport := &nativeBlockingTransport{started: make(chan struct{})}
+	storage := &driveStorage{driveShared: &driveShared{
+		nativeContext: ownerContext,
+		tokenClient:   &http.Client{Transport: transport},
+		tokenURL:      "http://no-socket.invalid/token",
+	}}
+	waiter, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := storage.accessToken(waiter)
+		done <- err
+	}()
+	select {
+	case <-transport.started:
+	case <-time.After(time.Second):
+		t.Fatal("shared refresh did not start")
+	}
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("one waiter's cancellation interrupted the shared refresh")
+	default:
+	}
+	owner.Close()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("refresh succeeded after Core.Close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shared refresh survived Core.Close")
 	}
 }
 

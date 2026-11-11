@@ -51,7 +51,7 @@ class AppleCounterRuntimeWiringTest(unittest.TestCase):
 
     def test_ios_qualifier_requires_all_three_fixed_counter_markers(self):
         script = (self.root / 'tool/test_ios_privacy_runtime.sh').read_text()
-        qualifier = script.rsplit('python3 - "$OUT/runtime.log" <<\'PY\'\n', 1)[1]
+        qualifier = script.rsplit('python3 - "$OUT/runtime.log" "$EXPECTED_XRAY_CORE_VERSION" <<\'PY\'\n', 1)[1]
         for suffix in ('AND_API_PASSTHROUGH_PASS', 'UNTAGGED_UNAVAILABLE_PASS', 'DISABLED_UNAVAILABLE_PASS'):
             self.assertIn('IOS_COUNTERS_' + suffix, qualifier)
         self.assertIn('assert text.splitlines().count(marker) == 1', qualifier)
@@ -68,7 +68,7 @@ class AppleFakeDNSRuntimeWiringTest(unittest.TestCase):
         modes = generated[generated.index('func runModes()'):]
         self.assertLess(modes.index('try runAppleFakeDNSRuntimeChecks()'), modes.index('    let markers = ['))
         script = (self.root / ('tool/test_' + platform + '_privacy_runtime.sh')).read_text()
-        qualifier = script.rsplit('python3 - "$OUT/runtime.log" <<\'PY\'\n', 1)[1]
+        qualifier = script.rsplit('python3 - "$OUT/runtime.log" "$EXPECTED_XRAY_CORE_VERSION" <<\'PY\'\n', 1)[1]
         self.assertIn("assert text.splitlines().count('APPLE_FAKEDNS_SDK_PASS=2') == 1", qualifier)
 
     def test_ios_generated_runtime_requires_one_actual_sdk_fakedns_gate(self):
@@ -126,7 +126,7 @@ class AppleFakeDNSOnlyModeTest(unittest.TestCase):
     def test_scoped_qualifier_requires_version_single_marker_and_privacy(self):
         for platform in ('ios', 'macos'):
             script = (self.root / ('tool/test_' + platform + '_privacy_runtime.sh')).read_text()
-            body = script.rsplit('python3 - "$OUT/runtime.log" <<\'PY\'\n', 1)[1].split('\nPY', 1)[0]
+            body = script.rsplit('python3 - "$OUT/runtime.log" "$EXPECTED_XRAY_CORE_VERSION" <<\'PY\'\n', 1)[1].split('\nPY', 1)[0]
             valid = 'RUNTIME=26.10.31\nAPPLE_FAKEDNS_SDK_PASS=2\nAPPLE_DNS_DATA_MAPS_SDK_PASS=2\n'
             cases = [(valid, True), ('APPLE_FAKEDNS_SDK_PASS=2\n', False),
                      (valid.replace('26.10.31', '26.10.18'), False),
@@ -142,7 +142,7 @@ class AppleFakeDNSOnlyModeTest(unittest.TestCase):
                         log.write_text(content)
                         with mock.patch.dict(os.environ, {'APPLE_RUNTIME_PROBE_MODE': 'fakedns-only',
                                                           'REQUIRE_CORE_PREFLIGHT': '1', 'REQUIRE_VPN_ROUTING': '1'}), \
-                                mock.patch.object(sys, 'argv', ['-', str(log)]), contextlib.redirect_stdout(io.StringIO()):
+                                mock.patch.object(sys, 'argv', ['-', str(log), '26.10.31']), contextlib.redirect_stdout(io.StringIO()):
                             if accepted:
                                 with self.assertRaises(SystemExit) as result:
                                     exec(compile(body, 'fakedns-only-qualifier', 'exec'), {})
@@ -153,14 +153,14 @@ class AppleFakeDNSOnlyModeTest(unittest.TestCase):
                 # A scoped log must never qualify the default full gate.
                 log.write_text(valid)
                 with mock.patch.dict(os.environ, {'APPLE_RUNTIME_PROBE_MODE': 'full'}), \
-                        mock.patch.object(sys, 'argv', ['-', str(log)]):
+                        mock.patch.object(sys, 'argv', ['-', str(log), '26.10.31']):
                     with self.assertRaises(AssertionError):
                         exec(compile(body, 'default-full-qualifier', 'exec'), {})
 
     def test_both_qualifier_modes_require_one_data_maps_marker_before_other_gates(self):
         for platform in ('ios', 'macos'):
             script = (self.root / ('tool/test_' + platform + '_privacy_runtime.sh')).read_text()
-            body = script.rsplit('python3 - "$OUT/runtime.log" <<\'PY\'\n', 1)[1].split('\nPY', 1)[0]
+            body = script.rsplit('python3 - "$OUT/runtime.log" "$EXPECTED_XRAY_CORE_VERSION" <<\'PY\'\n', 1)[1].split('\nPY', 1)[0]
             with tempfile.TemporaryDirectory() as folder:
                 log = Path(folder) / 'runtime.log'
                 for mode in ('full', 'fakedns-only'):
@@ -169,7 +169,7 @@ class AppleFakeDNSOnlyModeTest(unittest.TestCase):
                             log.write_text('RUNTIME=26.10.31\nAPPLE_FAKEDNS_SDK_PASS=2\n' + 'APPLE_DNS_DATA_MAPS_SDK_PASS=2\n' * count)
                             failure = None
                             with mock.patch.dict(os.environ, {'APPLE_RUNTIME_PROBE_MODE': mode}), \
-                                    mock.patch.object(sys, 'argv', ['-', str(log)]), contextlib.redirect_stdout(io.StringIO()):
+                                    mock.patch.object(sys, 'argv', ['-', str(log), '26.10.31']), contextlib.redirect_stdout(io.StringIO()):
                                 try:
                                     exec(compile(body, 'data-maps-qualifier', 'exec'), {})
                                 except AssertionError as error:

@@ -11,7 +11,7 @@ android_runtime/xray_android/src/main/assets/
 Maven coordinates:
 
 ```text
-dev.tfox.fluttervless:xray-android:26.10.31-protect2
+dev.tfox.fluttervless:xray-android:26.11.9-protect1
 ```
 
 The AAR includes `libxray.so` and `libtun2socks.so` for `armeabi-v7a`, `arm64-v8a`,

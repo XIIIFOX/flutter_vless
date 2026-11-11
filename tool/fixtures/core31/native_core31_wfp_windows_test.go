@@ -2,11 +2,9 @@
 
 package tun
 
-// This tests the actual Core TUN filter installer in an elevated disposable
-// Windows runner. Loopback stands in for the TUN interface; no adapter, route,
-// DNS or persistent firewall setting is changed. Temporary dynamic WFP filters
-// are installed and removed. The client is a copied executable so it
-// cannot accidentally receive Core's own application-ID exemption.
+// Exercise Core TUN filters in an elevated disposable Windows runner. The
+// client uses a different executable path to avoid Xray's AppID exemption.
+// Only the dynamic test session's filters are installed and removed.
 import (
 	"bytes"
 	"context"
@@ -364,9 +362,9 @@ func core31WFPFilterIDs(t *testing.T, engine windows.Handle) []uint64 {
 	return ids
 }
 
-// All four production ALE layers must contain each exact block/permit pair.
-// This rejects a name-only witness, protocol-wide block or wrong TUN LUID.
-func core31WFPRequirePortFilters(t *testing.T, filters []core31WFPFilter, baseline []uint64, selected []core31WFPProbe, tun winipcfg.LUID) {
+// Check exact protocol/port blocks and the TUN and loopback permits in all four
+// ALE layers. Return the owned loopback permit IDs for the negative control.
+func core31WFPRequirePortFilters(t *testing.T, filters []core31WFPFilter, baseline []uint64, selected []core31WFPProbe, tun winipcfg.LUID) []uint64 {
 	t.Helper()
 	layers := map[windows.GUID]windows.GUID{
 		fwpmLayerALEAuthConnectV4:    fwpmConditionIPNexthopInterface,
@@ -379,10 +377,12 @@ func core31WFPRequirePortFilters(t *testing.T, filters []core31WFPFilter, baseli
 		proto uint64
 		port  uint64
 	}
-	blocks, permits := map[key]int{}, map[key]int{}
-	self := map[windows.GUID]int{}
+	blocks := map[key]int{}
+	permits := map[windows.GUID]map[string]int{}
+	var loopbackIDs []uint64
 	wanted := map[key]bool{}
 	for layer := range layers {
+		permits[layer] = map[string]int{}
 		for _, probe := range selected {
 			_, port, err := net.SplitHostPort(probe.Address)
 			if err != nil {
@@ -399,15 +399,44 @@ func core31WFPRequirePortFilters(t *testing.T, filters []core31WFPFilter, baseli
 			wanted[key{layer, protocol, number}] = true
 		}
 	}
-	installed := 0
 	for _, filter := range filters {
 		if slices.Contains(baseline, filter.id) {
 			continue
 		}
-		installed++
 		via, knownLayer := layers[filter.layer]
 		if !knownLayer {
 			t.Fatal("owned WFP filter on an unexpected layer")
+		}
+		condition := func(field windows.GUID, matchType, valueType uint32, value uint64) bool {
+			return slices.Contains(filter.conditions, core31WFPCondition{field, matchType, valueType, value})
+		}
+		if filter.action == fwpActionPermit {
+			const prefix = "Xray TUN: permit "
+			if !strings.HasPrefix(filter.name, prefix) {
+				t.Fatal("unexpected owned WFP permit name")
+			}
+			name := strings.TrimPrefix(filter.name, prefix)
+			permits[filter.layer][name]++
+			switch name {
+			case "Xray":
+				if len(filter.conditions) != 1 || !condition(fwpmConditionALEAppID, fwpMatchEqual, fwpByteBlobType, 0) {
+					t.Fatal("Core application exemption metadata mismatch")
+				}
+			case "loopback":
+				if len(filter.conditions) != 1 || !condition(fwpmConditionFlags, fwpMatchFlagsAllSet, fwpUint32, fwpConditionFlagIsLoopback) {
+					t.Fatal("Core loopback exemption metadata mismatch")
+				}
+				loopbackIDs = append(loopbackIDs, filter.id)
+			case "through the TUN":
+				if len(filter.conditions) != 2 || !condition(fwpmConditionIPLocalInterface, fwpMatchEqual, fwpUint64, uint64(tun)) ||
+					!condition(via, fwpMatchEqual, fwpUint64, uint64(tun)) {
+					t.Fatal("Core TUN permit does not require the selected LUID twice")
+				}
+			}
+			continue
+		}
+		if filter.action != fwpActionBlock || len(filter.conditions) != 2 {
+			t.Fatal("unexpected owned WFP port-rule action or conditions")
 		}
 		conditions := map[windows.GUID]core31WFPCondition{}
 		for _, condition := range filter.conditions {
@@ -415,16 +444,6 @@ func core31WFPRequirePortFilters(t *testing.T, filters []core31WFPFilter, baseli
 				t.Fatal("owned WFP port filter uses an unexpected comparison")
 			}
 			conditions[condition.field] = condition
-		}
-		if len(conditions) != len(filter.conditions) {
-			t.Fatal("owned WFP filter has duplicate conditions")
-		}
-		if filter.name == "Xray TUN: permit Xray" {
-			if filter.action != fwpActionPermit || len(conditions) != 1 || conditions[fwpmConditionALEAppID].valueType != fwpByteBlobType {
-				t.Fatal("Core application exemption metadata mismatch")
-			}
-			self[filter.layer]++
-			continue
 		}
 		protocol, port := conditions[fwpmConditionIPProtocol], conditions[fwpmConditionIPRemotePort]
 		if protocol.valueType != fwpUint8 || port.valueType != fwpUint16 {
@@ -434,46 +453,43 @@ func core31WFPRequirePortFilters(t *testing.T, filters []core31WFPFilter, baseli
 		if !wanted[entry] {
 			t.Fatal("installed WFP rule targets an unselected protocol/port")
 		}
-		switch filter.action {
-		case fwpActionBlock:
-			if len(conditions) != 2 {
-				t.Fatal("installed WFP block has unexpected extra conditions")
-			}
-			blocks[entry]++
-		case fwpActionPermit:
-			local, next := conditions[fwpmConditionIPLocalInterface], conditions[via]
-			if len(conditions) != 4 || local.valueType != fwpUint64 || next.valueType != fwpUint64 || local.value != uint64(tun) || next.value != uint64(tun) {
-				t.Fatal("installed WFP permit does not require the selected TUN LUID twice")
-			}
-			permits[entry]++
-		default:
-			t.Fatal("unexpected WFP port-rule action")
-		}
-	}
-	if installed != len(layers)*(2*len(selected)+1) {
-		t.Fatalf("owned Core WFP filter count mismatch: %d", installed)
+		blocks[entry]++
 	}
 	for entry := range wanted {
-		if blocks[entry] != 1 || permits[entry] != 1 {
-			t.Fatal("missing or duplicated installed protocol/port block-permit pair")
+		if blocks[entry] != 1 {
+			t.Fatal("missing or duplicated installed protocol/port block")
 		}
 	}
 	for layer := range layers {
-		if self[layer] != 1 {
-			t.Fatal("missing or duplicated Core AppID exemption")
+		want := map[string]int{"Xray": 1, "loopback": 1, "through the TUN": 1}
+		if layer == fwpmLayerALEAuthConnectV6 || layer == fwpmLayerALEAuthRecvAcceptV6 {
+			want["IPv6 neighbor and multicast listener discovery"] = 1
+			want["DHCPv6"] = 1
+		} else {
+			want["DHCP"] = 1
+		}
+		if !reflect.DeepEqual(permits[layer], want) {
+			t.Fatalf("unexpected owned Core WFP permits: %v", permits[layer])
 		}
 	}
+	return loopbackIDs
 }
 
 func TestNativeCore31WFPPortsAndCleanup(t *testing.T) {
 	if !strings.EqualFold(os.Getenv("CI"), "true") || !strings.EqualFold(os.Getenv("GITHUB_ACTIONS"), "true") || runtime.GOOS != "windows" {
 		t.Fatal("Core WFP runtime is Windows Actions-only")
 	}
-	wantDNS := []string{"udp/53", "tcp/53", "windnsclient", "tcp/853", "udp/853"}
+	wantDNS := []string{"53", "853", "windnsclient", "tcp/853", "udp/853"}
 	got, err := ExpandWfpBlockLeak([]string{"DNS", "TCP/0853", "udp/853"})
 	if err != nil || !reflect.DeepEqual(got, wantDNS) {
 		t.Fatal("DNS expansion/dedup failed", got, err)
 	}
+	got, err = ExpandWfpBlockLeak([]string{"ALL", "allexceptlan", "tcp/1-65535", "udp/1000-2000", "[2001:db8::123/64]:icmp"})
+	want := []string{"all", "allexceptlan", "53", "853", "windnsclient", "tcp", "udp/1000-2000", "[2001:db8::/64]:icmp"}
+	if err != nil || !reflect.DeepEqual(got, want) || !BlocksSystemDNS(got) {
+		t.Fatal("extended WFP syntax or system DNS detection differs", got, err)
+	}
+	t.Log("CORE31_WFP_EXTENDED_VALUES_PASS")
 	for _, value := range []string{"tcp/0", "udp/65536", "tcp/-1", "icmp/853", "tcp/notaport"} {
 		if _, err := ExpandWfpBlockLeak([]string{value}); err == nil {
 			t.Fatal("invalid port accepted", value)
@@ -620,8 +636,18 @@ func TestNativeCore31WFPPortsAndCleanup(t *testing.T) {
 			closeWFPEngine(engine)
 		}
 	}()
-	core31WFPRequirePortFilters(t, core31WFPFilters(t, observer), before, selected, outside)
-	expect("outside-TUN-blocked", true)
+	loopbackIDs := core31WFPRequirePortFilters(t, core31WFPFilters(t, observer), before, selected, outside)
+	expect("outside-TUN-loopback-permitted", false)
+	// Fault control: remove just the four verified permits of this dynamic test
+	// session to exercise the real port blocks without a physical network peer.
+	// Production always keeps these loopback permits.
+	deleteFilter := modfwpuclnt.NewProc("FwpmFilterDeleteById0")
+	for _, id := range loopbackIDs {
+		if err := fwpmResult(deleteFilter.Call(uintptr(engine), uintptr(id))); err != nil {
+			t.Fatal("remove fixture-owned loopback permit", err)
+		}
+	}
+	expect("without-test-loopback-permits-blocked", true)
 	nonce := newNonce()
 	register(nonce, false)
 	for _, p := range probes {
@@ -650,10 +676,10 @@ func TestNativeCore31WFPPortsAndCleanup(t *testing.T) {
 		t.Fatal("through-TUN dynamic Core filters remained")
 	}
 	expect("final-recovery", false)
-	if receiptPhases != 6 {
+	if receiptPhases != 7 {
 		t.Fatal("missing nonce-bound origin receipt phase")
 	}
-	t.Log("CORE31_WFP_FILTERS_PASS stages=2 blocks=16 permits=16")
-	t.Log("CORE31_WFP_RECEIPTS_PASS phases=6 selected_zero=true permitted_exact=true")
+	t.Log("CORE31_WFP_FILTERS_PASS stages=2 blocks=16 tun_permits=4 loopback_permits=4")
+	t.Log("CORE31_WFP_RECEIPTS_PASS phases=7 fault_control_selected_zero=true permitted_exact=true")
 	t.Log("CORE31_WFP_CLEANUP_PASS filters_delta=0 ports=4")
 }

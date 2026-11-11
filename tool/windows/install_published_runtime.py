@@ -13,13 +13,13 @@ import zipfile
 
 from package_managed_runtime import capabilities
 
-TAG = 'xray-windows-v26.10.31-r2'
+TAG = 'xray-windows-v26.11.9-r1'
 ARCHIVE = 'Xray-windows-managed-64.zip'
-ZIP_SHA256 = 'dfdf80c45268719d047cb14560fca11b6815b98961916c9b5dc68ad2a547f824'
-CORE_SHA256 = '78268f751286f3e02f460dffbb2d7be6be8d2d870f3879a1d872c1eeb086d030'
-MANIFEST_SHA256 = 'dfa575451499e028dd42108a8835eaca883d4b3c89c6bbc750c1b275750942f6'
-PRODUCER_HEAD = '2505694c4001e7d52f06d6a63f29780da8dc7d49'
-CORE_COMMIT = 'a4a3dff5b20c2faae567b742c172c7b95e75c083'
+ZIP_SHA256 = '81df36b77068fa7cf49f07311879a02d23e5d6bde9606c7d6cd024a5a01b6264'
+CORE_SHA256 = '8385a665b77fbe2c0ce31972668e520f36cd453d895f98689ba3435ecca1699e'
+MANIFEST_SHA256 = '3dd40bdef1383d9accb60c2082f53d5e82a48f337e9b63598e6d95830b356c30'
+PRODUCER_HEAD = 'a56429a73d0229ffd5ac5223bfabdcd6a7c19724'
+CORE_COMMIT = '676eaf66f8f05d4d558ee7a74b4736623d3feeb9'
 LIFETIME_PATCH_SCOPE = ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup']
 XHTTP_PATCH = 'third_party/xray-native-dns/xhttp_listener_lifetime_patch.py'
 XHTTP_PATCH_SHA256 = '7ec0ea9b256b7373b0d068211350b7cd0b6dc6126b99e5ce9d4269f3a004a674'
@@ -35,8 +35,8 @@ def verify(archive, manifest):
     if sha(archive) != ZIP_SHA256 or sha(manifest) != MANIFEST_SHA256:
         raise ValueError('Published archive or manifest checksum differs')
     document = json.loads(manifest)
-    expected = dict(success=True, head=PRODUCER_HEAD, platform='windows-amd64', core='26.10.31',
-                    core_commit=CORE_COMMIT, runtime_revision='26.10.31-r2',
+    expected = dict(success=True, head=PRODUCER_HEAD, platform='windows-amd64', core='26.11.9',
+                    core_commit=CORE_COMMIT, runtime_revision='26.11.9-r1',
                     archive=ARCHIVE, archive_sha256=ZIP_SHA256)
     capability = document.get('capabilities', {})
     if any(document.get(k) != v for k, v in expected.items()) or document.get('success') is not True \
@@ -76,7 +76,7 @@ def install(directory, archive, manifest):
     (directory/'published-runtime-manifest-results.json').write_bytes(manifest)
     executable = directory/'xray.exe'
     child = subprocess.run([str(executable), 'version'], capture_output=True, timeout=10, check=True)
-    if len(child.stdout) > 4096 or child.stderr or not re.match(rb'^Xray 26\.10\.31 \(', child.stdout):
+    if len(child.stdout) > 4096 or child.stderr or not re.match(rb'^Xray 26\.11\.9 \(', child.stdout):
         raise ValueError('Published runtime version differs')
     actual = capabilities(executable)
     if any(sha((directory/name).read_bytes()) != sha(data) for name, data in files.items()):

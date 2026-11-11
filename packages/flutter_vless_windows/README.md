@@ -3,7 +3,7 @@
 The Windows implementation of the [`flutter_vless`](https://pub.dev/packages/flutter_vless) plugin.
 Use this package through the main `flutter_vless` dependency.
 
-Supply the managed `xray-windows-v26.10.31-r2` runtime for native routing and
+Supply the managed `xray-windows-v26.11.9-r1` runtime for native routing and
 XDRIVE/GeoDAT services, plus compatible tunnel helpers. Ordinary compatible
 external Core builds support profiles that do not require those capabilities.
 VPN mode requires administrator privileges; the plugin does not download

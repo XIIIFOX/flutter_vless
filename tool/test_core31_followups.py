@@ -207,10 +207,12 @@ def marker_patterns(name):
             ('native_core31_continue_test.go', 'CORE31_HTTP_CONTINUE_PASS mode=cancelled_origin body_sent=false deadline=true')]
     if name == 'windows-core-tun-wfp':
         return [('native_core31_wfp_windows_test.go', 'CORE31_WFP_PHASE_PASS mode='+mode+' cases=8')
-                for mode in ['before', 'outside-TUN-blocked', 'after-close', 'through-TUN-interface-permitted', 'final-recovery']] + [
+                for mode in ['before', 'outside-TUN-loopback-permitted', 'without-test-loopback-permits-blocked',
+                             'after-close', 'through-TUN-interface-permitted', 'final-recovery']] + [
+            ('native_core31_wfp_windows_test.go', 'CORE31_WFP_EXTENDED_VALUES_PASS'),
             ('native_core31_wfp_windows_test.go', 'CORE31_WFP_SELF_EXEMPT_PASS'),
-            ('native_core31_wfp_windows_test.go', 'CORE31_WFP_FILTERS_PASS stages=2 blocks=16 permits=16'),
-            ('native_core31_wfp_windows_test.go', 'CORE31_WFP_RECEIPTS_PASS phases=6 selected_zero=true permitted_exact=true'),
+            ('native_core31_wfp_windows_test.go', 'CORE31_WFP_FILTERS_PASS stages=2 blocks=16 tun_permits=4 loopback_permits=4'),
+            ('native_core31_wfp_windows_test.go', 'CORE31_WFP_RECEIPTS_PASS phases=7 fault_control_selected_zero=true permitted_exact=true'),
             ('native_core31_wfp_windows_test.go', 'CORE31_WFP_CLEANUP_PASS filters_delta=0 ports=4')]
     raise ValueError('Unknown group')
 

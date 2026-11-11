@@ -1,6 +1,6 @@
 # Protocol and transport support
 
-The native runtimes target Xray-core **26.10.31**. Generated configurations must
+The native previews in this repository target Xray-core **26.11.9**. Generated configurations must
 match the actual loaded runtime and remote server. See [compatibility](compatibility.md)
 for platform protection, DNS and real-network limits.
 
@@ -53,6 +53,6 @@ when that source context is required.
 
 ## References
 
-- [Pinned Core protocol inventory](https://github.com/XTLS/Xray-core/blob/a4a3dff5b20c2faae567b742c172c7b95e75c083/infra/conf/xray.go)
-- [Pinned Core transport builder](https://github.com/XTLS/Xray-core/blob/a4a3dff5b20c2faae567b742c172c7b95e75c083/infra/conf/transport_internet.go)
+- [Pinned Core protocol inventory](https://github.com/XTLS/Xray-core/blob/676eaf66f8f05d4d558ee7a74b4736623d3feeb9/infra/conf/xray.go)
+- [Pinned Core transport builder](https://github.com/XTLS/Xray-core/blob/676eaf66f8f05d4d558ee7a74b4736623d3feeb9/infra/conf/transport_internet.go)
 - [Configuration guide](configuration.md)

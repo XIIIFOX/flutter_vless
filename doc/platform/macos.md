@@ -25,7 +25,7 @@ both targets must have the corresponding entitlement. Legacy plaintext profiles
 are migrated when loaded.
 
 Update the plugin and the Packet Tunnel support product together. Runtime
-revision `xray-macos-v26.10.31-r2` supplies the private startup and asset
+revision `xray-macos-v26.11.9-r1` supplies the private startup and asset
 location bridges and closes listeners after invalid server `h2Params`.
 Repository builds use the bundled XCFramework; the hosted fallback uses the
 same published, checksum-pinned archive.

@@ -454,7 +454,7 @@ jobs:
               text = (root / package).read_text()
               tag = re.search(r'let xrayReleaseTag = "([^"]+)"', text).group(1)
               expected = re.search(r'let xrayChecksum = "([0-9a-f]{64})"', text).group(1)
-              assert tag == f'xray-{platform}-v26.10.31-r2'
+              assert tag == f'xray-{platform}-v26.11.9-r1'
               url = f'https://github.com/XIIIFOX/flutter_vless/releases/download/{tag}/XRay.xcframework.zip'
               archive = output / f'{platform}.zip'
               with urllib.request.urlopen(url, timeout=90) as response, archive.open('wb') as target:
@@ -543,7 +543,7 @@ jobs:
       - name: Install the checksum-pinned published Apple SDKs
         if: ${{ inputs.apple_runtime_source == 'published' }}
         run: |
-          git fetch --no-tags --depth=1 origin 2505694c4001e7d52f06d6a63f29780da8dc7d49
+          git fetch --no-tags --depth=1 origin a56429a73d0229ffd5ac5223bfabdcd6a7c19724
           python3 tool/install_published_apple_runtime.py
       - name: Test PacketTunnel Swift helper
         run: |

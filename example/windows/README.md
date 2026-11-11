@@ -4,18 +4,20 @@ This directory contains the Windows-specific files for the flutter_vless example
 
 ## Xray Setup
 
-Use the [managed Core 26.10.31-r2](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-windows-v26.10.31-r2)
+Use the [managed Core 26.11.9-r1 pre-release](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-windows-v26.11.9-r1)
 for native routing and XDRIVE/GeoDAT services. The archive SHA-256 is
-`dfdf80c45268719d047cb14560fca11b6815b98961916c9b5dc68ad2a547f824`;
-its AMD64 `xray.exe` SHA-256 is
-`78268f751286f3e02f460dffbb2d7be6be8d2d870f3879a1d872c1eeb086d030`.
+`81df36b77068fa7cf49f07311879a02d23e5d6bde9606c7d6cd024a5a01b6264`.
+Its AMD64 `xray.exe` SHA-256 is
+`8385a665b77fbe2c0ce31972668e520f36cd453d895f98689ba3435ecca1699e`.
 
 Ordinary profiles without managed-service requirements can also use the
 [official Xray-core 26.11.9 archive](https://github.com/XTLS/Xray-core/releases/tag/v26.11.9).
 Official archive SHA-256: `1262522266337b824f07beb8e1375786b437683b3890105469088f8e17e0a69d`.
 This is a different artifact from the managed companion.
 
-Place the Core and compatible helpers in this source staging directory:
+From the repository root on Windows, install the checksum-pinned managed
+Core with `py -3 tool/windows/install_published_runtime.py --directory example/windows/xray`.
+Keep the Core and compatible helpers in this source staging directory:
 
 ```text
 example/windows/xray/

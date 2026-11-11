@@ -155,6 +155,7 @@ func runAppleFakeDNSRuntimeChecks() throws {
                               ["type": "field", "network": "tcp,udp", "outboundTag": "fake-block"]]]]
     let source = try JSONSerialization.data(withJSONObject: raw, options: [.sortedKeys])
     guard let prepared = TunnelXrayConfigPreparer.prepare(jsonData: source, credentials: credentials,
+        tcpPortAvailable: LocalProxyAccessPolicy.isTCPPortAvailable,
         resolveIPv4: { _ in preconditionFailure("Numeric FakeDNS proxy must not bootstrap") }) else { preconditionFailure("FakeDNS SDK preparation failed") }
     let effective = try JSONSerialization.jsonObject(with: prepared.data) as! [String: Any]
     precondition(effective["dns"] as! NSDictionary == dns as NSDictionary && effective["fakedns"] == nil)

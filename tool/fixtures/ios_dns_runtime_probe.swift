@@ -214,7 +214,8 @@ func runDNSRuntimeChecks() throws {
                 ["tag": "block", "protocol": "blackhole"]],
             "routing": ["rules": [["type": "field", "inboundTag": ["in_proxy"], "outboundTag": "block"],
                 ["type": "field", "network": "udp", "outboundTag": "direct"]]]]
-        guard let prepared = TunnelXrayConfigPreparer.prepare(jsonData: try JSONSerialization.data(withJSONObject: raw), credentials: credentials) else {
+        guard let prepared = TunnelXrayConfigPreparer.prepare(jsonData: try JSONSerialization.data(withJSONObject: raw), credentials: credentials,
+            tcpPortAvailable: LocalProxyAccessPolicy.isTCPPortAvailable) else {
             preconditionFailure("DNS fixture preparation failed")
         }
         var nullTagSource = raw
@@ -222,7 +223,8 @@ func runDNSRuntimeChecks() throws {
         nullTagDNS["servers"] = [["address": "localhost", "tag": NSNull()]]
         nullTagSource["dns"] = nullTagDNS
         let nullTagInput = try JSONSerialization.data(withJSONObject: nullTagSource, options: [.sortedKeys])
-        guard let nullTagPrepared = TunnelXrayConfigPreparer.prepare(jsonData: nullTagInput, credentials: credentials) else {
+        guard let nullTagPrepared = TunnelXrayConfigPreparer.prepare(jsonData: nullTagInput, credentials: credentials,
+            tcpPortAvailable: LocalProxyAccessPolicy.isTCPPortAvailable) else {
             preconditionFailure("Null-tag DNS fixture preparation failed")
         }
         let nullTagEffective = try JSONSerialization.jsonObject(with: nullTagPrepared.data) as! NSDictionary

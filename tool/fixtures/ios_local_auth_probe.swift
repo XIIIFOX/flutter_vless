@@ -123,14 +123,23 @@ func runLocalAuthRuntimeChecks() async throws {
     defer { origin.stop() }
     let credentials = try LocalProxyCredentials(username: "local-user-canary", password: "local-password-canary")
     let wrong = try LocalProxyCredentials(username: credentials.username, password: "wrong-password")
+    // A simulator shares host loopback ports. Find an unused range so a
+    // running VPN cannot stand in for the fixture's API or metrics listener.
+    guard let apiPort = (10808...10837).first(where: { start in
+        (start...(start + 2)).allSatisfy(LocalProxyAccessPolicy.isTCPPortAvailable)
+    }) else { preconditionFailure("No free range for the management fixture") }
+    let metricsPort = apiPort + 1
+    func testPortAvailable(_ port: Int) -> Bool {
+        port >= apiPort && LocalProxyAccessPolicy.isTCPPortAvailable(port)
+    }
     // Redirect is confined to this fixture: a direct request to probe.invalid
     // cannot reach the origin. The only working path is through local Xray.
     let raw: [String: Any] = [
         "inbounds": [["tag": "in_proxy", "liſten": "127.0.0.1", "port": 18095,
                       "protocol": "socks", "ſettings": ["auth": "noauth", "udp": true,
                           "accountſ": [["uſer": "old", "paſſ": "old"]]]]],
-        "api": ["tag": "fixture-api", "listen": "127.0.0.1:+10808", "services": ["StatsService"]],
-        "Metricſ": ["tag": "fixture-metrics", "Liſten": "127.0.0.1:+10809"],
+        "api": ["tag": "fixture-api", "listen": "127.0.0.1:+\(apiPort)", "services": ["StatsService"]],
+        "Metricſ": ["tag": "fixture-metrics", "Liſten": "127.0.0.1:+\(metricsPort)"],
         "stats": [String: Any](),
         "outbounds": [["tag": "direct", "protocol": "freedom", "settings": ["redirect": "127.0.0.1:18096"]],
                       ["tag": "fixture-blocked", "protocol": "blackhole"]],
@@ -139,8 +148,8 @@ func runLocalAuthRuntimeChecks() async throws {
     ]
     let source = try JSONSerialization.data(withJSONObject: raw)
     var protected = raw
-    let managedPort = try LocalProxyAccessPolicy.applyVPN(to: &protected, credentials: credentials)
-    precondition(managedPort == 10810, "Managed adapter must reserve imported API and metrics ports")
+    let managedPort = try LocalProxyAccessPolicy.applyVPN(to: &protected, credentials: credentials, tcpPortAvailable: testPortAvailable)
+    precondition(managedPort == metricsPort + 1, "Managed adapter must reserve imported API and metrics ports")
     precondition((protected["inbounds"] as? [[String: Any]])?.first?["tag"] as? String == "flutter-vless-tun-1")
     precondition(XrayPrivacyConfig.apply(to: &protected))
     let prepared = try JSONSerialization.data(withJSONObject: protected)
@@ -153,12 +162,12 @@ func runLocalAuthRuntimeChecks() async throws {
         defer { XRayStop() }
         // An HTTP/2 SETTINGS frame proves that the imported API really bound
         // its original socket, rather than accidentally reaching our SOCKS input.
-        let api = openLoopback(10808)
+        let api = openLoopback(apiPort)
         _ = LocalSOCKS5Client.sendAll(fd: api, bytes: Array("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".utf8) + [0, 0, 0, 4, 0, 0, 0, 0, 0])
         let frame = LocalSOCKS5Client.receiveExactly(fd: api, count: 9) ?? []
         close(api)
         precondition(frame.count == 9 && frame[3] == 4 && frame.suffix(4).allSatisfy { $0 == 0 })
-        let metrics = openLoopback(10809)
+        let metrics = openLoopback(metricsPort)
         precondition(LocalSOCKS5Client.sendAll(fd: metrics, bytes: Array("GET /debug/vars HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".utf8)))
         let metricsResponse = LocalSOCKS5Client.receiveExactly(fd: metrics, count: 12) ?? []
         close(metrics)
@@ -214,7 +223,7 @@ func runLocalAuthRuntimeChecks() async throws {
     var occupiedAddress = sockaddr_in()
     occupiedAddress.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
     occupiedAddress.sin_family = sa_family_t(AF_INET)
-    occupiedAddress.sin_port = UInt16(10808).bigEndian
+    occupiedAddress.sin_port = UInt16(apiPort).bigEndian
     inet_pton(AF_INET, "127.0.0.1", &occupiedAddress.sin_addr)
     precondition(withUnsafePointer(to: &occupiedAddress) {
         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(occupiedAPI, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
@@ -223,7 +232,7 @@ func runLocalAuthRuntimeChecks() async throws {
     let occupiedMetrics = socket(AF_INET, SOCK_STREAM, 0)
     precondition(occupiedMetrics >= 0)
     setsockopt(occupiedMetrics, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
-    occupiedAddress.sin_port = UInt16(10809).bigEndian
+    occupiedAddress.sin_port = UInt16(metricsPort).bigEndian
     precondition(withUnsafePointer(to: &occupiedAddress) {
         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(occupiedMetrics, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
     } == 0)
@@ -239,7 +248,11 @@ func runLocalAuthRuntimeChecks() async throws {
     print("DELAY_API_ISOLATION_PASS")
     var rotated = raw
     let nextCredentials = try LocalProxyCredentials.generate()
-    try LocalProxyAccessPolicy.applyVPN(to: &rotated, credentials: nextCredentials)
+    // Rebind the fixture's own prior port so the next connection proves that
+    // credential rotation works on the same listener address.
+    let rotatedPort = try LocalProxyAccessPolicy.applyVPN(to: &rotated, credentials: nextCredentials,
+        tcpPortAvailable: { $0 == managedPort })
+    precondition(rotatedPort == managedPort)
     precondition(XrayPrivacyConfig.apply(to: &rotated))
     var rotationError: NSError?
     let rotatedData = try JSONSerialization.data(withJSONObject: rotated)
@@ -292,7 +305,8 @@ func runDomainRoutingChecks() throws {
             ["type": "field", "domain": ["full:direct-site.invalid"], "outboundTag": "direct"],
             ["type": "field", "domain": ["full:proxy-site.invalid"], "outboundTag": "proxy"]]]
     ]
-    let managedPort = try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: credentials)
+    let managedPort = try LocalProxyAccessPolicy.applyVPN(to: &config, credentials: credentials,
+        tcpPortAvailable: LocalProxyAccessPolicy.isTCPPortAvailable)
     precondition(XrayPrivacyConfig.apply(to: &config))
     let data = try JSONSerialization.data(withJSONObject: config)
     let logger = ProbeLogger()
@@ -394,6 +408,9 @@ func runDirectOnlyRuntimeChecks() throws {
     defer { XRayStop(); origin.stop(); trap.stop() }
     let credentials = try LocalProxyCredentials.generate()
     let expected = Array("HTTP/1.1 204 ".utf8)
+    guard let apiPort = (10808...10839).first(where: LocalProxyAccessPolicy.isTCPPortAvailable) else {
+        preconditionFailure("No free port for the direct-only management fixture")
+    }
     for (index, item) in cases.enumerated() {
         var raw = item
         // Keep both allowed and blocked targets on the controlled origin. A
@@ -404,13 +421,14 @@ func runDirectOnlyRuntimeChecks() throws {
         hosts["dns-proof.invalid"] = "192.0.2.14"
         dns["hosts"] = hosts; dns["servers"] = ["tcp://127.0.0.1:18104"]
         raw["dns"] = dns
-        raw["api"] = ["tag": "caller-direct-api", "listen": "127.0.0.1:10808", "services": ["StatsService"]]
+        raw["api"] = ["tag": "caller-direct-api", "listen": "127.0.0.1:\(apiPort)", "services": ["StatsService"]]
         raw["stats"] = [String: Any]()
         raw["policy"] = ["system": ["statsInboundUplink": false, "statsInboundDownlink": false,
             "statsOutboundUplink": false, "statsOutboundDownlink": false]]
         let sourceOutbounds = raw["outbounds"] as! [[String: Any]]
         let source = try JSONSerialization.data(withJSONObject: raw)
-        guard let prepared = TunnelXrayConfigPreparer.prepare(jsonData: source, credentials: credentials, resolveIPv4: { _ in
+        guard let prepared = TunnelXrayConfigPreparer.prepare(jsonData: source, credentials: credentials,
+            tcpPortAvailable: LocalProxyAccessPolicy.isTCPPortAvailable, resolveIPv4: { _ in
             preconditionFailure("Direct-only runtime must not bootstrap a proxy endpoint")
         }) else { preconditionFailure("Direct-only runtime preparation failed") }
         let effective = try JSONSerialization.jsonObject(with: prepared.data) as! [String: Any]
@@ -426,7 +444,7 @@ func runDirectOnlyRuntimeChecks() throws {
         precondition(XRayStartPrivate(prepared.data, ProbeLogger(), &error))
         defer { XRayStop() }
         func checkAPI() {
-            let fd = openLoopback(10808); defer { close(fd) }
+            let fd = openLoopback(apiPort); defer { close(fd) }
             precondition(LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".utf8) + [0, 0, 0, 4, 0, 0, 0, 0, 0]))
             let frame = LocalSOCKS5Client.receiveExactly(fd: fd, count: 9) ?? []
             precondition(frame.count == 9 && frame[3] == 4 && frame.suffix(4).allSatisfy { $0 == 0 })

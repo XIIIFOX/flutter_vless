@@ -4,7 +4,7 @@ This guide explains how to build the native libraries (`libxray.so` and `libtun2
 
 Android runtime files are stored in `android_runtime/xray_android/src/main` and published as the Maven Central AAR `dev.tfox.fluttervless:xray-android`. They are not stored in the `flutter_vless_android` Pub.dev package.
 
-The current revision is `26.10.31-protect2`. The same AAR and its SHA-256 checksum are also available in [GitHub Releases](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.10.31-protect2).
+The current revision is `26.11.9-protect1`. The same AAR and its SHA-256 checksum are also available in [GitHub Releases](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.11.9-protect1).
 
 **Key Features:**
 - ✅ **Android 15+ Support**: Builds with 16KB page size alignment.
@@ -65,11 +65,11 @@ If you see `0x1000`, it is **NOT** compatible with 16KB devices.
 The `flutter_vless_android` Pub.dev package consumes the Android device runtime through the Maven artifact:
 
 ```text
-dev.tfox.fluttervless:xray-android:26.10.31-protect2
+dev.tfox.fluttervless:xray-android:26.11.9-protect1
 ```
 
 Final releases use the manual **Publish Android Runtime AAR** workflow with
-`xray_runtime_version=26.10.31-protect2`. Use `publishing_type=USER_MANAGED`
+`xray_runtime_version=26.11.9-protect1`. Use `publishing_type=USER_MANAGED`
 to qualify the signed candidate first, then publish the same
 `existing_deployment_id` without rebuilding or uploading another bundle.
 It compiles all four routing-capable Core ABIs from pinned source in GitHub
@@ -97,8 +97,8 @@ tool/publish_android_runtime_maven.sh
 
 ## Protected VPN runtime
 
-`26.10.31-protect2` retains protected socket integration, native routing and the
-reviewed Classic DNS, XHTTP, XDRIVE and GeoDAT lifecycle fixes on Xray `v26.10.31`.
+`26.11.9-protect1` retains protected socket integration, native routing and the
+reviewed Classic DNS, XHTTP, XDRIVE and GeoDAT lifecycle fixes on Xray `v26.11.9`.
 It also closes the allocated XHTTP listener when malformed server `h2Params`
 is rejected; successful configuration behavior and capability values remain unchanged.
 The upstream MPTCP default and explicit caller opt-in remain intact.
@@ -115,7 +115,7 @@ other system record types require an explicit Xray DNS server. VPN mode rejects
 `xicmp` and `quic+local://` DNS because those upstream paths bypass controllers.
 Use protected `https+local://` or `tcp+local://` DNS instead.
 
-The Android wrapper `1.1.7+1` consumes this runtime through its pinned Maven
+The Android wrapper on `main` consumes this runtime through its pinned Maven
 dependency. Native runtime versions and Dart package versions are independent.
 
 ## 6. Troubleshooting

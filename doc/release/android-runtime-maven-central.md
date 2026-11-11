@@ -134,7 +134,7 @@ Before publishing the Android wrapper to Pub.dev, keep these checks green:
 - The emulator smoke test prints an Xray version matching the runtime release.
 ## Consumer verification
 
-The current published runtime is `dev.tfox.fluttervless:xray-android:26.10.31-protect2`, based on Core 26.10.31.
+The current published runtime is `dev.tfox.fluttervless:xray-android:26.11.9-protect1`, based on Core 26.11.9.
 Copy [verification-metadata.xml](../../example/android/gradle/verification-metadata.xml)
 into **your application's root** `android/gradle/` directory, and run Gradle with
 `--dependency-verification=strict`. Merge the component pins into any broader
@@ -144,13 +144,13 @@ version in `dev.tfox.fluttervless`. Library publication alone cannot enable a
 consumer's root Gradle verification.
 
 The AAR's pinned SHA-256 is
-`3280118949aa5fa05fa58d233642af5ebd3b7eb484bb3d30fffa29271cddcc12`,
-from [the release asset](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.10.31-protect2)
+`bd3aaa2015e4afe4b7e8b4ac0f03cd71a0d6cce2091ef95fee35fac7a5ec6a1d`,
+from [the release asset](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-android-v26.11.9-protect1)
 and Maven Central. The GitHub AAR is the same published file; every AAR entry
 and all native binaries/geodata were independently matched to
 the repository inputs. The POM was reviewed against the committed publication
 definition (no dependencies or repositories), then pinned to
-`7b5a26e33ed27725fe38301a36268e7cc549085167027a39794762aea1ae5107`.
+`327efc52105efee1be9fec5169f263f21bf0aafd400e9bfda3e77633df9a92e0`.
 The empty sources/javadoc JARs are also pinned for IDE dependency resolution.
 No Gradle module metadata is published for this revision; a later unexpected
 module file is not trusted. These pins are intentionally not generated in CI.
@@ -164,10 +164,10 @@ For new native development, use the manual unpublished Android runtime preview
 workflow and its isolated, source-bound output. Canonical release candidates use
 the fresh CI producer, strict provenance checks and one signed Central deployment.
 The current producer source is
-`2505694c4001e7d52f06d6a63f29780da8dc7d49`; the published payload is immutable.
+`a56429a73d0229ffd5ac5223bfabdcd6a7c19724`; the published payload is immutable.
 Do not treat a historical local wrapper run as verification of those bytes.
-See [Core31 validation](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/release/core31-five-followups-validation.md) for exact producer,
-publication and public-artifact evidence.
+See the [26.11.9 Android runtime notes](xray-android-v26.11.9-protect1.md)
+for the producer and emulator evidence.
 
 To update a trusted release: review runtime source changes, reproduce and check
 all ABIs, publish the intended immutable artifact, compare the release-pipeline

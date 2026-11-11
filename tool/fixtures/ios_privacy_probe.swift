@@ -118,7 +118,8 @@ func runModes() async {
             "remarks":markers.joined(separator:" ")]
         do {
             let data = try JSONSerialization.data(withJSONObject: raw)
-            guard let tunnel = TunnelXrayConfigPreparer.prepare(jsonData:data, credentials: try LocalProxyCredentials.generate())?.data else { print("TUNNEL_PREPARE_FAILED");exit(1) }
+            guard let tunnel = TunnelXrayConfigPreparer.prepare(jsonData:data, credentials: try LocalProxyCredentials.generate(),
+                tcpPortAvailable: LocalProxyAccessPolicy.isTCPPortAvailable)?.data else { print("TUNNEL_PREPARE_FAILED");exit(1) }
             for (mode, prepared) in [("tunnel",tunnel),("proxy-only",try ProxyOnlyRunner.prepared(data)),("delay",try ServerDelayRunner.prepared(data))] {
                 let decoded = try JSONSerialization.jsonObject(with:prepared) as! [String:Any]
                 let log = decoded["log"] as! [String:Any]

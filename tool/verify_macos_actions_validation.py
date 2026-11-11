@@ -8,7 +8,7 @@ import plistlib
 import re
 import subprocess
 
-from install_published_apple_runtime import PINS, REVISION
+from install_published_apple_runtime import CORE_VERSION, PINS, REVISION
 import measure_macos_endpoint_startup as endpoint_timing
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,7 +18,7 @@ HEV_MARKERS = ('PASS bulk integrity: 8 MiB download',
     'PASS shipped HEV: IPv6 TCP exact target and nonce through IPv4 SOCKS and AF_INET6 packetFlow',
     'PASS shipped HEV: IPv6 UDP exact target and nonce through IPv4 SOCKS and AF_INET6 packetFlow',
     'PASS shipped HEV: packetFlow -> owned datagram bridge -> HEV TCP -> loopback SOCKS -> packetFlow; clean shutdown')
-RUNTIME_MARKERS = ('RUNTIME=26.10.31', 'NATIVE_ROUTING_RUNTIME_PASS=0', 'NATIVE_ROUTING_RUNTIME_PASS=1',
+RUNTIME_MARKERS = ('RUNTIME='+CORE_VERSION, 'NATIVE_ROUTING_RUNTIME_PASS=0', 'NATIVE_ROUTING_RUNTIME_PASS=1',
                    'NATIVE_ROUTING_RUNTIME_DRAIN_PASS', 'DOMAIN_ROUTING_PASS=0', 'DOMAIN_ROUTING_PASS=1',
                    'MACOS_COUNTERS_MISSING_POLICY_DEFAULTS_PASS=2')
 # These literals are compiled into the provider that implements the early DNS
@@ -109,9 +109,9 @@ def qualify(root, sha):
     sdk_path = root/'build/published_apple_runtime/macos/result.json'
     sdk = json.loads(sdk_path.read_text())
     expected = {'success': True, 'platform': 'macos', 'runtime_source': 'published',
-                'tag': 'xray-macos-v26.10.31-' + REVISION, 'archive_sha256': PINS['macos']['zip'],
+                'tag': 'xray-macos-v'+CORE_VERSION+'-'+REVISION, 'archive_sha256': PINS['macos']['zip'],
                 'runtime_checks_pending': False, 'post_test_framework_unchanged': True,
-                'actual_version': '26.10.31'}
+                'actual_version': CORE_VERSION}
     if any(sdk.get(k) != v for k, v in expected.items()): raise ValueError('Published macOS SDK proof missing or stale')
     runtime = root/'build/macos_privacy_runtime_probe/runtime.log'
     if sdk.get('runtime_log_sha256') != digest(runtime): raise ValueError('Runtime proof hash differs')
@@ -166,7 +166,7 @@ def qualify(root, sha):
                    root/'build/apple-cold-start-current/result.json', output/'example-build.log',
                    timing_path, timing_log, *endpoint_proofs]
     result = {'success': True, 'source_sha': sha, 'platform': 'macos', 'runtime_source': 'published',
-              'runtime_version': '26.10.31', 'SDK_archive_sha256': sdk['archive_sha256'],
+              'runtime_version': CORE_VERSION, 'SDK_archive_sha256': sdk['archive_sha256'],
               'source_provider_sha256': digest(root/PROVIDER), 'compiled_executables': executables,
               'compiled_provider_source_and_startup_markers_verified': True,
               'endpoint_startup_timing': {'dns_only': True, 'live_ne_vpn': False,

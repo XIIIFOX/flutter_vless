@@ -8,7 +8,7 @@ for runtime layout, administrator requirements, DNS/routing behavior and cleanup
 ## Runtime selection
 
 The repository's managed runtime is
-[`xray-windows-v26.10.31-r2`](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-windows-v26.10.31-r2).
+[`xray-windows-v26.11.9-r1`](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-windows-v26.11.9-r1).
 It supplies native routing and XDRIVE/GeoDAT service capabilities. The plugin
 checks the actual selected executable; a version string alone does not prove
 those capabilities. Compatible external stock Core builds remain usable for

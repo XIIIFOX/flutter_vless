@@ -6,15 +6,16 @@ accepting a profile does not guarantee that its remote server is reachable.
 ## Versions and platforms
 
 The main package and platform interface use `1.1.7`. Android, macOS and Windows
-implementations use `1.1.7+1`. All four native backends target Xray-core
-**26.10.31** with these runtime pins:
+implementations use `1.1.7+1`. The published packages shipped Xray-core
+**26.10.31**. Builds from the repository, including the example with local
+package overrides, use the **26.11.9** native previews below.
 
 | Platform | Modes | Requirements | Runtime |
 | --- | --- | --- | --- |
-| Android | VPN, proxy-only | Android 6 / API 23+, VPN permission | Maven `26.10.31-protect2`; device and emulator ABIs |
-| iOS | VPN, proxy-only | iOS 15+, signed Packet Tunnel extension and App Group | `26.10.31-r2` SDK |
-| macOS | VPN, proxy-only | macOS 13+, signed Packet Tunnel extension and App Group | `26.10.31-r2` SDK |
-| Windows | VPN, proxy-only | Supported Flutter Windows toolchain; administrator privileges for VPN; local runtime/helpers | Managed `26.10.31-r2` companion |
+| Android | VPN, proxy-only | Android 6 / API 23+, VPN permission | Maven `26.11.9-protect1`; device and emulator ABIs |
+| iOS | VPN, proxy-only | iOS 15+, signed Packet Tunnel extension and App Group | `26.11.9-r1` SDK |
+| macOS | VPN, proxy-only | macOS 13+, signed Packet Tunnel extension and App Group | `26.11.9-r1` SDK |
+| Windows | VPN, proxy-only | Supported Flutter Windows toolchain; administrator privileges for VPN; local runtime/helpers | Managed `26.11.9-r1` companion |
 
 There is no Linux or web Flutter implementation. Linux CI validates shared Core
 behavior; it does not add a Linux platform backend. See the

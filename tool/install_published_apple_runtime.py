@@ -15,9 +15,10 @@ import zipfile
 from package_apple_core_preview import digest, git_bindings, safe_name, tree
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = '2505694c4001e7d52f06d6a63f29780da8dc7d49'
-CORE_COMMIT = 'a4a3dff5b20c2faae567b742c172c7b95e75c083'
-REVISION = 'r2'
+HEAD = 'a56429a73d0229ffd5ac5223bfabdcd6a7c19724'
+CORE_COMMIT = '676eaf66f8f05d4d558ee7a74b4736623d3feeb9'
+CORE_VERSION = '26.11.9'
+REVISION = 'r1'
 XHTTP_LISTENER_PATCH = 'third_party/xray-native-dns/xhttp_listener_lifetime_patch.py'
 XHTTP_LISTENER_SOURCE_SHA256 = 'cca83bacf332240835197de5532cc022e3870063e62880e1302a7defa263cf1e'
 LIFETIME_SOURCE_SCOPES = {
@@ -29,10 +30,10 @@ LIFETIME_SOURCE_SCOPES = {
 }
 DARWIN_BINDING_PATCH = 'third_party/xray-native-dns/darwin_interface_bind_patch.py'
 PINS = {
-    'ios': {'zip': '8d693bc767b8f292f0ec0459850287f752c40499fa6542caef5b749c8bdc5f00',
-            'manifest': 'db3947bbff4540a738d5c15983d036d433a0643f7c709424ab694fb9458e5073'},
-    'macos': {'zip': '59f41c9f8d6bafce3b15741adb0aefe37634737ff1b22075fa4ec9b56fdc2687',
-              'manifest': '86108dfa72e69d8e0d437d3bd32e243064d716e8e1d3879770c1473c5bee1b44'},
+    'ios': {'zip': 'd4c700415f3f61de9b7c6fa83cf5df10b48253eb36a5e6e16f09510a9829a837',
+            'manifest': '668c4df5fef1436e768d7ba15c06c6ce76d1c70443144ee8a057cb28c95bfe7e'},
+    'macos': {'zip': '3a9c5b3c18a9706539d44c74cc176ba6232f663cf662d1cf2ce13ac40f3096c7',
+              'manifest': '43c7b9170115fcbc1124b9dd4d750b5fafa03f6e8ba7c71910c73b82e4395153'},
 }
 PATHS = {
     'ios': {'package': 'ios/flutter_vless/Package.swift', 'framework': 'ios/XRay.xcframework'},
@@ -45,7 +46,7 @@ def verify_archive(platform, archive, manifest):
     if digest(archive) != PINS[platform]['zip'] or digest(manifest) != PINS[platform]['manifest']:
         raise ValueError('Published Apple archive or manifest checksum differs')
     document = json.loads(manifest.read_text())
-    expected = dict(success=True, platform=platform, head=HEAD, release_version='26.10.31', runtime_revision=REVISION,
+    expected = dict(success=True, platform=platform, head=HEAD, release_version=CORE_VERSION, runtime_revision=REVISION,
                     core_commit=CORE_COMMIT, archive='XRay.xcframework.zip', archive_sha256=PINS[platform]['zip'])
     if any(document.get(k) != v for k, v in expected.items()) or document.get('success') is not True \
             or any(type(document.get(k)) is not int or document[k] != 1 for k in
@@ -95,7 +96,7 @@ def verify_installed(root, platform, document):
 def install(root, platform, archive, manifest):
     document = verify_archive(platform, archive, manifest)
     package = (root/PATHS[platform]['package']).read_text()
-    if re.findall(r'let xrayReleaseTag = "([^"]+)"', package) != [f'xray-{platform}-v26.10.31-{REVISION}'] \
+    if re.findall(r'let xrayReleaseTag = "([^"]+)"', package) != [f'xray-{platform}-v{CORE_VERSION}-{REVISION}'] \
             or re.findall(r'let xrayChecksum = "([0-9a-f]{64})"', package) != [PINS[platform]['zip']]:
         raise ValueError('SwiftPM public SDK pins differ')
     git_bindings(root, HEAD, document['source_sha256'])
@@ -110,7 +111,7 @@ def install(root, platform, archive, manifest):
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(extracted, destination)
     verify_installed(root, platform, document)
-    result = dict(success=True, platform=platform, runtime_source='published', tag=f'xray-{platform}-v26.10.31-{REVISION}',
+    result = dict(success=True, platform=platform, runtime_source='published', tag=f'xray-{platform}-v{CORE_VERSION}-{REVISION}',
                   producer_head=HEAD, core_commit=CORE_COMMIT, archive_sha256=PINS[platform]['zip'],
                   manifest_sha256=PINS[platform]['manifest'], framework_sha256=document['framework_sha256'],
                   xhttp_listener_cleanup_applied=True,
@@ -129,14 +130,14 @@ def finish(root, platform):
     git_bindings(root, HEAD, document['source_sha256'])
     verify_installed(root, platform, document)
     log_path = root/f'build/{platform}_privacy_runtime_probe/runtime.log'; log = log_path.read_text()
-    markers = ['RUNTIME=26.10.31', 'APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1', 'APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=2',
+    markers = ['RUNTIME='+CORE_VERSION, 'APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1', 'APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=2',
                'APPLE_DARWIN_INTERFACE_BIND_CAPABILITY_PASS=1', 'APPLE_FAKEDNS_SDK_PASS=2', 'APPLE_DNS_DATA_MAPS_SDK_PASS=2',
                'NATIVE_ROUTING_RUNTIME_PASS=0', 'NATIVE_ROUTING_RUNTIME_PASS=1', 'NATIVE_ROUTING_RUNTIME_DRAIN_PASS']
     if any(log.splitlines().count(marker) != 1 for marker in markers):
         raise ValueError('Published Apple runtime capability or routing proof is incomplete')
     result = json.loads((output/'result.json').read_text())
     result.update(runtime_checks_pending=False, post_test_framework_unchanged=True,
-                  actual_version='26.10.31', actual_capabilities={'geodata': 1, 'xdrive': 2, 'darwin_binding': 1},
+                  actual_version=CORE_VERSION, actual_capabilities={'geodata': 1, 'xdrive': 2, 'darwin_binding': 1},
                   runtime_log_sha256=digest(log_path), runtime_markers=markers,
                   optional_skip_lines=[line for line in log.splitlines() if 'SKIP' in line])
     (output/'result.json').write_text(json.dumps(result, indent=2)+'\n')
@@ -171,7 +172,7 @@ def main():
         else:
             output.mkdir(parents=True, exist_ok=False)
             for name, limit in [('XRay.xcframework.zip', 512*1024*1024), ('manifest.json', 2*1024*1024)]:
-                url = f'https://github.com/XIIIFOX/flutter_vless/releases/download/xray-{platform}-v26.10.31-{REVISION}/{name}'
+                url = f'https://github.com/XIIIFOX/flutter_vless/releases/download/xray-{platform}-v{CORE_VERSION}-{REVISION}/{name}'
                 with urllib.request.urlopen(url, timeout=45) as response, (output/name).open('xb') as target:
                     count = 0
                     while block := response.read(1024*1024):

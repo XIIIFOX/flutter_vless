@@ -40,9 +40,9 @@ class WorkerProof(unittest.TestCase):
             'source_sha256': {name: subject.digest(self.root/name) for name in timing_sources}}
         self.timing_path = self.write('build/macos-startup-timing-current/result.json', json.dumps(self.timing))
         self.sdk = {'success': True, 'platform': 'macos', 'runtime_source': 'published',
-                    'tag': 'xray-macos-v26.10.31-'+subject.REVISION,
+                    'tag': 'xray-macos-v'+subject.CORE_VERSION+'-'+subject.REVISION,
                     'archive_sha256': subject.PINS['macos']['zip'], 'runtime_checks_pending': False,
-                    'post_test_framework_unchanged': True, 'actual_version': '26.10.31',
+                    'post_test_framework_unchanged': True, 'actual_version': subject.CORE_VERSION,
                     'runtime_log_sha256': subject.digest(runtime)}
         self.sdk_path = self.write('build/published_apple_runtime/macos/result.json', json.dumps(self.sdk))
         self.app = self.output/'example/flutter_vless_example.app'

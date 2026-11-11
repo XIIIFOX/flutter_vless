@@ -16,7 +16,7 @@ The source is based on `EbrahimTahernejad/xray-mobile` `1.8.1`, with local
 changes needed by `flutter_vless`:
 
 - Xray-core dependency updated to the 26.x release line used by this package.
-- Xray-core pinned to release `v26.10.31` commit `a4a3dff5b20c2faae567b742c172c7b95e75c083` for the `1.1.7` release train.
+- The current native preview pins Xray-core `v26.11.9` at commit `676eaf66f8f05d4d558ee7a74b4736623d3feeb9`.
 - `GetVersion`, `MeasureDelay`, and `MeasureOutboundDelay` exported for the
   Flutter platform layer.
 - `QueryStats` exported for macOS traffic counters.

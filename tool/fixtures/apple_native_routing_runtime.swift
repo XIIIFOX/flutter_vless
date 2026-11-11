@@ -7,7 +7,10 @@ func runNativeRoutingRuntimeChecks() throws {
     // attempted connection without answering DNS; static hosts must avoid it.
     let trap = LocalProbeOrigin(port: 18104)
     // This owned TCP listener remains occupied across both source variants.
-    let occupied = LocalProbeOrigin(port: 10808)
+    guard let occupiedPort = (10808...10839).first(where: LocalProxyAccessPolicy.isTCPPortAvailable) else {
+        preconditionFailure("No free port for the occupied listener fixture")
+    }
+    let occupied = LocalProbeOrigin(port: occupiedPort)
     defer { XRayStop(); aliased.stop(); fallback.stop(); trap.stop(); occupied.stop() }
     var assetError: NSError?
     precondition(XRaySetAssetLocation("", &assetError))
@@ -38,7 +41,7 @@ func runNativeRoutingRuntimeChecks() throws {
         let metadata = try JSONSerialization.jsonObject(with: envelope.metadataData) as! [String: Any]
         precondition(metadata["source_inbound_index"] as? Int == 1 && metadata["default_outbound_tag"] as? String == "selected-default")
         let port = TunnelXrayConfigPreparer.parseConfig(jsonData: prepared.data)!.inboundPort
-        precondition(port != 10808)
+        precondition(port != occupiedPort)
         func start() throws {
             try NativeRoutingSpec.check(envelope, capability: FLVlessCoreRoutingCapability, check: FLVlessCheckCoreRoutingPrivate)
             var error: NSError?

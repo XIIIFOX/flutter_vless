@@ -78,7 +78,7 @@ jobs:
           cache: true
       - name: Install the checksum-pinned published macOS SDK
         run: |
-          git fetch --no-tags --depth=1 origin 2505694c4001e7d52f06d6a63f29780da8dc7d49
+          git fetch --no-tags --depth=1 origin a56429a73d0229ffd5ac5223bfabdcd6a7c19724
           python3 tool/test_install_published_apple_runtime.py
           python3 tool/install_published_apple_runtime.py --platform macos
       - name: Test macOS host and DNS lifecycle

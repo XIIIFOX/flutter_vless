@@ -139,7 +139,8 @@ Optional parameters:
   requires the routing factory. Proxy-only requests and unsupported runtimes
   fail before replacing the current session. The pinned published Android
   `26.10.31-protect2`, Apple `26.10.31-r2` and managed Windows `26.10.31-r2`
-  runtimes supply the factory; the actual loaded artifact is checked. Update
+  runtimes and their repository previews based on 26.11.9 supply the factory.
+  The actual loaded artifact is checked. Update
   the copied iOS provider together with the plugin.
 
 Traffic events use bytes for `upload`/`download` and bytes per second for

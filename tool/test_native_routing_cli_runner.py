@@ -88,12 +88,12 @@ class RoutingCLIRunnerTest(unittest.TestCase):
                 for mode in ['ordinary', 'optional']:
                     for newline in ['\n', '\r\n']:
                         (evidence / (mode + '-version.log')).write_bytes(
-                            ('Xray 26.10.31 (Xray, Penetrates Everything.) Custom (go1.27.3 fixture/fixture)' +
+                            ('Xray 26.11.9 (Xray, Penetrates Everything.) Custom (go1.27.3 fixture/fixture)' +
                              newline + 'A unified platform for anti-censorship.' + newline).encode())
                         runner.require_stock_version(mode)
                     for output in ['Xray 26.10.29 (old)', 'Xray 26.10.32 (future)',
-                                   'Xray 26.10.310 (prefix)', 'Xray 26.10.31-custom (suffix)',
-                                   'warning\nXray 26.10.31 (not first)', 'Xray 26.10.31']:
+                                   'Xray 26.11.90 (prefix)', 'Xray 26.11.9-custom (suffix)',
+                                   'warning\nXray 26.11.9 (not first)', 'Xray 26.11.9']:
                         with self.subTest(mode=mode, output=output):
                             (evidence / (mode + '-version.log')).write_text(output + '\n')
                             with self.assertRaises(ValueError):

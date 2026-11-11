@@ -86,7 +86,7 @@ await flutterVless.startVless(
 The directory must be an existing absolute path. The Core bridge validates
 files referenced by the configuration, including custom `ext:` data;
 unused standard files are optional. The pinned published
-`xray-ios-v26.10.31-r2` SDK supplies this bridge. For Packet Tunnel mode use the App Group shared by `Runner`
+`xray-ios-v26.11.9-r1` SDK supplies this bridge. For Packet Tunnel mode use the App Group shared by `Runner`
 and `XrayTunnel`. Invalid referenced assets fail startup instead of silently
 falling back to bundle files. Certificate/key lookup has a separate Core root.
 
@@ -114,7 +114,7 @@ the requested asset location first; Core checks the files referenced by the prof
 Most application integrators use the prebuilt `XRay.xcframework` and do not
 need this step. It is for maintainers rebuilding the iOS runtime.
 
-The package pins `xray-ios-v26.10.31-r2`, including listener cleanup
+The package pins `xray-ios-v26.11.9-r1`, including listener cleanup
 after invalid server `h2Params`. The bundled framework and download checksum
 must come from that same published archive.
 

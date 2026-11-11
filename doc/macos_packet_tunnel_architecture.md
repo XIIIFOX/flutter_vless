@@ -112,7 +112,7 @@ group used for profile references. Legacy plaintext profile migration is
 transactional. Dynamic geo assets must be readable by the extension.
 
 The private startup and asset-location APIs use the pinned macOS runtime revision
-`xray-macos-v26.10.31-r2`, which also closes listeners after invalid server
+`xray-macos-v26.11.9-r1`, which also closes listeners after invalid server
 `h2Params`. SwiftPM/CocoaPods use the bundled XCFramework when
 available, otherwise the same checksum-pinned published release archive.
 

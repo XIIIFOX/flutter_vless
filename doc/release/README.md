@@ -23,15 +23,16 @@ build suffix into a Maven version or native application build number.
 
 ## Native runtimes
 
-All targets use Xray-core **26.10.31**, pinned to
-`a4a3dff5b20c2faae567b742c172c7b95e75c083` and built with Go 1.27.3.
+The repository uses Xray-core **26.11.9**, pinned to
+`676eaf66f8f05d4d558ee7a74b4736623d3feeb9` and built with Go 1.27.3.
+The published 1.1.7 packages shipped Core 26.10.31.
 
 | Platform | Runtime notes |
 | --- | --- |
-| Android | [26.10.31-protect2](xray-android-v26.10.31-protect2.md) |
-| iOS | [26.10.31-r2](xray-ios-v26.10.31-r2.md) |
-| macOS | [26.10.31-r2](xray-macos-v26.10.31-r2.md) |
-| Windows | [26.10.31-r2](xray-windows-v26.10.31-r2.md) |
+| Android | [26.11.9-protect1](xray-android-v26.11.9-protect1.md) |
+| iOS | [26.11.9-r1](xray-ios-v26.11.9-r1.md) |
+| macOS | [26.11.9-r1](xray-macos-v26.11.9-r1.md) |
+| Windows | [26.11.9-r1](xray-windows-v26.11.9-r1.md) |
 
 Verify public archive/AAR checksums and loaded capabilities before updating
 consumer pins. Update Apple SwiftPM and CocoaPods references together. Keep

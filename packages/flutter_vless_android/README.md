@@ -6,7 +6,7 @@ Use this package through the main `flutter_vless` dependency.
 ## Runtime
 
 Native libraries and geodata resolve through the pinned Maven Central AAR
-`dev.tfox.fluttervless:xray-android:26.10.31-protect2`, keeping the Dart package
+`dev.tfox.fluttervless:xray-android:26.11.9-protect1`, keeping the Dart package
 small while providing the complete runtime in the Android app.
 
 ## Emulator Support

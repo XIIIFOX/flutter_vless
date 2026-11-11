@@ -40,7 +40,7 @@ class PublishedApple(unittest.TestCase):
         self.archive = self.root/'sdk.zip'
         with zipfile.ZipFile(self.archive, 'w') as packed:
             for name, data in self.files.items(): packed.writestr('XRay.xcframework/'+name, data)
-        self.document = dict(success=True, platform='ios', head=subject.HEAD, release_version='26.10.31', runtime_revision=subject.REVISION,
+        self.document = dict(success=True, platform='ios', head=subject.HEAD, release_version=subject.CORE_VERSION, runtime_revision=subject.REVISION,
                              core_commit=subject.CORE_COMMIT, archive='XRay.xcframework.zip', archive_sha256=subject.digest(self.archive),
                              routing_capability_expected=1, darwin_interface_binding_capability_expected=1,
                              framework_sha256={name: hashlib.sha256(data).hexdigest() for name, data in self.files.items()},
@@ -54,7 +54,7 @@ class PublishedApple(unittest.TestCase):
         self.pins = {'zip': subject.digest(self.archive), 'manifest': subject.digest(self.manifest)}
         pins = patch.dict(subject.PINS, {'ios': self.pins}); pins.start(); self.addCleanup(pins.stop)
         package = self.root/subject.PATHS['ios']['package']; package.parent.mkdir(parents=True)
-        package.write_text('let xrayReleaseTag = "xray-ios-v26.10.31-'+subject.REVISION+'"\nlet xrayChecksum = "'+self.pins['zip']+'"\n')
+        package.write_text('let xrayReleaseTag = "xray-ios-v'+subject.CORE_VERSION+'-'+subject.REVISION+'"\nlet xrayChecksum = "'+self.pins['zip']+'"\n')
 
     def test_archive_and_full_file_set_are_verified_without_execution(self):
         result = subject.verify_archive('ios', self.archive, self.manifest)
@@ -66,7 +66,7 @@ class PublishedApple(unittest.TestCase):
 
     def test_signed_metadata_identity_and_binary_map_remain_required(self):
         for change in [{'head': 'b'*40}, {'platform': 'macos'}, {'release_version': '26.10.29'},
-                       {'runtime_revision': 'r1'}, {'framework_sha256': {}}, {'routing_capability_expected': True},
+                       {'runtime_revision': 'r2'}, {'framework_sha256': {}}, {'routing_capability_expected': True},
                        {'xhttp_listener_cleanup_applied': False}, {'xhttp_listener_cleanup_applied': 1},
                        {'xhttp_listener_cleanup_patch_sha256': 'b'*64},
                        {'xhttp_listener_cleanup_source_sha256': 'a651b04643dde70653955a55501f4607d7ed6bb647ea3d39596fb63f7d734aaa'},
@@ -106,7 +106,7 @@ class PublishedApple(unittest.TestCase):
         self.assertTrue((destination/'retained').exists())
 
     def test_spm_pin_mismatch_refuses_before_install(self):
-        package = self.root/subject.PATHS['ios']['package']; package.write_text(package.read_text().replace('26.10.31', '26.10.29'))
+        package = self.root/subject.PATHS['ios']['package']; package.write_text(package.read_text().replace(subject.CORE_VERSION, '26.10.29'))
         with patch.object(subject, 'git_bindings'), self.assertRaises(ValueError):
             subject.install(self.root, 'ios', self.archive, self.manifest)
         self.assertFalse((self.root/subject.PATHS['ios']['framework']).exists())
@@ -126,11 +126,11 @@ class PublishedApple(unittest.TestCase):
         output = self.root/'build/published_apple_runtime/ios'
         shutil.copyfile(self.archive, output/'XRay.xcframework.zip'); shutil.copyfile(self.manifest, output/'manifest.json')
         log = self.root/'build/ios_privacy_runtime_probe/runtime.log'; log.parent.mkdir()
-        valid = '\n'.join(['RUNTIME=26.10.31', 'APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1', 'APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=2',
+        valid = '\n'.join(['RUNTIME='+subject.CORE_VERSION, 'APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1', 'APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=2',
                            'APPLE_DARWIN_INTERFACE_BIND_CAPABILITY_PASS=1', 'APPLE_FAKEDNS_SDK_PASS=2', 'APPLE_DNS_DATA_MAPS_SDK_PASS=2',
                            'NATIVE_ROUTING_RUNTIME_PASS=0', 'NATIVE_ROUTING_RUNTIME_PASS=1', 'NATIVE_ROUTING_RUNTIME_DRAIN_PASS'])+'\n'
-        for wrong in ['', valid.replace('26.10.31', '26.10.29'), valid.replace('CAPABILITY_PASS=2', 'CAPABILITY_PASS=1'),
-                      valid+'RUNTIME=26.10.31\n']:
+        for wrong in ['', valid.replace(subject.CORE_VERSION, '26.10.29'), valid.replace('CAPABILITY_PASS=2', 'CAPABILITY_PASS=1'),
+                      valid+'RUNTIME='+subject.CORE_VERSION+'\n']:
             log.write_text(wrong)
             with patch.object(subject, 'git_bindings'), self.assertRaises(ValueError): subject.finish(self.root, 'ios')
         log.write_text(valid)

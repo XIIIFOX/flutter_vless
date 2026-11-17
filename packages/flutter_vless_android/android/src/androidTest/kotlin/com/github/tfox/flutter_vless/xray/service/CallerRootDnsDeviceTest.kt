@@ -404,6 +404,103 @@ class CallerRootDnsDeviceTest {
         }
     }
 
+    @Test fun typedBalancerRouteAndUncachedDnsFailOverTogether() {
+        val ipv6 = InetAddress.getByName("2001:db8:41::42").address
+        val directHost = name("balance-direct")
+        val groupedHost = name("balance-group")
+        DnsFixture(httpMarker = "balance-direct-$run").use { direct ->
+            DnsFixture(ipv6, "balance-primary-$run").use { primary ->
+                DnsFixture(ipv6, "balance-alternate-$run", probeDelayMs = 200).use { alternate ->
+                    val first = "fv-profile-node-1!"
+                    val second = "fv-profile-node-2!"
+                    val group = "fv-profile-group-3!"
+                    val blocked = "fv-profile-node-4!"
+                    val bypass = "fv-profile-node-5!"
+                    val dnsTag = "caller-balanced-dns"
+                    fun outbound(tag: String, fixture: DnsFixture) =
+                        JSONObject().put("tag", tag).put("protocol", "freedom")
+                            .put("settings", JSONObject().put("redirect", "127.0.0.1:${fixture.port}"))
+                    fun rule() = JSONObject().put("type", "field")
+                    val selectors = JSONArray().put(first).put(second)
+                    // The first outbound is a reachable direct path. All-down
+                    // must not accidentally select it as the implicit default.
+                    val source = JSONObject().put("inbounds", JSONArray())
+                        .put("outbounds", JSONArray().put(outbound(bypass, direct))
+                            .put(outbound(first, primary)).put(outbound(second, alternate))
+                            .put(JSONObject().put("tag", blocked).put("protocol", "blackhole")))
+                        .put("dns", JSONObject().put("tag", dnsTag).put("queryStrategy", "UseIP")
+                            .put("disableCache", true).put("disableFallback", true)
+                            .put("hosts", JSONObject().put("full:$directHost", "192.0.2.80")
+                                .put("full:$groupedHost", "192.0.2.80"))
+                            .put("servers", JSONArray().put("tcp://192.0.2.53:5353")))
+                        .put("routing", JSONObject().put("rules", JSONArray()
+                            .put(rule().put("domain", JSONArray().put("full:$directHost")).put("outboundTag", bypass))
+                            .put(rule().put("inboundTag", JSONArray().put(dnsTag)).put("balancerTag", group))
+                            .put(rule().put("port", "1-18082,18084-65535").put("outboundTag", blocked))
+                            .put(rule().put("network", "tcp,udp").put("balancerTag", group)))
+                            .put("balancers", JSONArray().put(JSONObject().put("tag", group)
+                                .put("selector", selectors).put("strategy", JSONObject().put("type", "leastPing"))
+                                .put("fallbackTag", blocked))))
+                        .put("observatory", JSONObject().put("subjectSelector", selectors)
+                            .put("probeURL", "http://192.0.2.99:18083/balance-health")
+                            .put("probeInterval", "250ms").put("enableConcurrency", true))
+                    val original = source.toString()
+                    fun waitForRoute(label: String, predicate: (String) -> Boolean) {
+                        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(12)
+                        do {
+                            val response = try { httpResponse(groupedHost) }
+                                catch (_: SocketException) { "" }
+                                catch (_: SocketTimeoutException) { "" }
+                            if (predicate(response)) return
+                            assertFalse("Grouped domain escaped to the direct outbound", response.contains(direct.httpMarker!!))
+                            Thread.sleep(100)
+                        } while (System.nanoTime() < deadline)
+                        fail("Grouped request did not reach $label")
+                    }
+                    try {
+                        val runtime = start(source)
+                        val preparedRouting = runtime.getJSONObject("routing")
+                        assertEquals(source.getJSONObject("routing").getJSONArray("balancers").toString(),
+                            preparedRouting.getJSONArray("balancers").toString())
+                        val runtimeOutbounds = runtime.getJSONArray("outbounds")
+                        val selectedTags = (0 until runtimeOutbounds.length()).map {
+                            runtimeOutbounds.getJSONObject(it).getString("tag")
+                        }.filter { it.startsWith(first) || it.startsWith(second) }
+                        assertEquals(listOf(first, second), selectedTags)
+                        assertEquals(source.getJSONObject("observatory").toString(), runtime.getJSONObject("observatory").toString())
+                        assertTrue("Specific direct domain did not bypass the group", httpResponse(directHost).contains(direct.httpMarker!!))
+                        waitForRoute("the primary member") { it.contains(primary.httpMarker!!) }
+                        val before = name("balance-primary-a")
+                        assertA(query(before, true))
+                        assertTrue("Warm DNS did not use the primary member", before to 1 in primary.observations())
+                        primary.close()
+                        waitForRoute("the alternate member") { it.contains(alternate.httpMarker!!) }
+                        val afterA = name("balance-alternate-a")
+                        val afterAaaa = name("balance-alternate-aaaa")
+                        assertA(query(afterA, false))
+                        val aaaa = query(afterAaaa, true, 28)
+                        assertEquals("AAAA response status", 0, aaaa[3].toInt() and 15)
+                        assertTrue("DNS returned no AAAA answer", aaaa[6].toInt() != 0 || aaaa[7].toInt() != 0)
+                        assertArrayEquals(ipv6, aaaa.takeLast(16).toByteArray())
+                        assertTrue("Fresh A/AAAA did not traverse the alternate member",
+                            alternate.observations().containsAll(listOf(afterA to 1, afterAaaa to 28)))
+                        assertTrue("Direct outbound received grouped DNS", direct.observations().isEmpty())
+                        // Keep the alternate HTTP listener available after
+                        // making its probe fail. This distinguishes an actual
+                        // Blackhole selection from dialing a closed port.
+                        alternate.failHealthProbe.set(true)
+                        waitForRoute("the blocking fallback") { it.isEmpty() }
+                        assertTrue("Direct domain stopped working after both members closed",
+                            httpResponse(directHost).contains(direct.httpMarker!!))
+                        assertEquals(original, source.toString())
+                    } finally { stop() }
+                    assertFalse("Stop retained the prepared Xray configuration",
+                        context.noBackupFilesDir.listFiles().orEmpty().any { it.name.startsWith("xray-") })
+                }
+            }
+        }
+    }
+
     @Test fun callerAaaaAndIpv6TcpUdpTraverseAnIpv4Proxy() {
         // A documentation address can only reach this owned fixture through
         // the caller's IPv4 SOCKS proxy. No physical IPv6 origin is required.
@@ -666,7 +763,12 @@ class CallerRootDnsDeviceTest {
         }
     }
 
-    private inner class DnsFixture(private val ipv6Answer: ByteArray? = null) : Closeable {
+    private inner class DnsFixture(
+        private val ipv6Answer: ByteArray? = null,
+        val httpMarker: String? = null,
+        private val probeDelayMs: Long = 0,
+    ) : Closeable {
+        val failHealthProbe = AtomicBoolean(false)
         private val listener = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val port = listener.localPort
         private val lock = Any()
@@ -699,8 +801,13 @@ class CallerRootDnsDeviceTest {
 
         private fun answer(socket: Socket) {
             socket.soTimeout = 2000
-            val input = DataInputStream(socket.getInputStream())
-            val size = input.readUnsignedShort(); require(size in 17..4096)
+            val input = DataInputStream(socket.getInputStream().buffered())
+            val size = input.readUnsignedShort()
+            if (httpMarker != null && size == 0x4745) {
+                answerHttp(input, socket)
+                return
+            }
+            require(size in 17..4096) { "DNS fixture observed an invalid frame length: $size" }
             val question = ByteArray(size).also(input::readFully)
             var offset = 12; val labels = mutableListOf<String>()
             while (true) {
@@ -731,6 +838,24 @@ class CallerRootDnsDeviceTest {
                 }
             }
             DataOutputStream(socket.getOutputStream()).apply { writeShort(reply.size()); write(reply.toByteArray()); flush() }
+        }
+
+        private fun answerHttp(input: DataInputStream, socket: Socket) {
+            val request = StringBuilder("GE")
+            while (!request.endsWith("\r\n\r\n")) {
+                require(request.length < 4096)
+                val value = input.read(); require(value >= 0)
+                request.append(value.toChar())
+            }
+            val probe = request.startsWith("GET /balance-health ")
+            if (probe && failHealthProbe.get()) return
+            if (probe && probeDelayMs > 0) Thread.sleep(probeDelayMs)
+            val body = if (probe) ByteArray(0) else requireNotNull(httpMarker).toByteArray(Charsets.US_ASCII)
+            val status = if (probe) "204 No Content" else "200 OK"
+            val output = socket.getOutputStream()
+            output.write("HTTP/1.1 $status\r\nConnection: close\r\nContent-Length: ${body.size}\r\n\r\n".toByteArray())
+            output.write(body)
+            output.flush()
         }
 
         fun observations(): List<Pair<String, Int>> = synchronized(lock) { seen.toList() }

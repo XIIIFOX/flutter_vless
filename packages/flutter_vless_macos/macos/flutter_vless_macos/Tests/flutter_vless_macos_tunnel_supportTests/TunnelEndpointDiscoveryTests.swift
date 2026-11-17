@@ -373,31 +373,67 @@ final class TunnelEndpointDiscoveryTests: XCTestCase {
         XCTAssertEqual(result.candidates.map(\.address.text), ["192.0.2.1"])
     }
 
-    func testActiveQueriesBoundedAtEightAndFifthHostStartsAfterAFullClose() async throws {
-        let backend = Backend(), firstFour = expectation(description: "eight references"), fifth = expectation(description: "fifth starts after slot release")
-        backend.started = { _, count, active in
-            if count == 8 { firstFour.fulfill() }
-            if count == 9 { XCTAssertLessThanOrEqual(active, 7); fifth.fulfill() }
+    func testThirtyFourHostsPublishDualStackAnswersInThreeBoundedWaves() async throws {
+        let backend = Backend(), clock = EndpointDeadlineTestScheduler()
+        let first = expectation(description: "first twelve hosts ready")
+        let second = expectation(description: "second twelve hosts ready")
+        let third = expectation(description: "final ten hosts ready")
+        let published = Box(0)
+        backend.started = { [weak backend] host, count, active in
+            if !count.isMultiple(of: 2) {
+                XCTAssertLessThanOrEqual(active, 23, "A new host needs two slots")
+                return
+            }
+            backend?.emit(host, .ipv4, self.answer(host, "192.0.2.1"))
+            backend?.emit(host, .ipv6, self.answer(host, "2001:db8::1"))
         }
-        let group = make(backend, window: 0.2); defer { group.cancel() }
-        // Sequentially release each initial result while retaining its query.
-        var tasks: [Task<TunnelEndpointCandidates, Error>] = []
-        for index in 1...5 { tasks.append(Task { try await group.resolveCandidates("h\(index).fixture.invalid") }) }
-        await fulfillment(of: [firstFour], timeout: 1)
-        XCTAssertEqual(backend.counts.registered, 8)
-        await fulfillment(of: [fifth], timeout: 1)
-        // Empty snapshots finish at the ceiling without any public lookup.
-        for task in tasks { _ = try await task.value }
-        XCTAssertEqual(backend.counts.registered, 10)
-        XCTAssertLessThanOrEqual(backend.counts.peak, 8)
-        XCTAssertEqual(backend.counts.closed, 10)
+        let group = make(backend, clock: clock.now, event: { message in
+            guard message.text.hasPrefix("Endpoint DNS discovery initialReadyMs=") else { return }
+            published.update { count in
+                count += 1
+                switch count {
+                case 12: first.fulfill()
+                case 24: second.fulfill()
+                case 34: third.fulfill()
+                default: break
+                }
+            }
+        }, schedule: clock.schedule)
+        defer { group.cancel() }
+        let tasks = (1...34).map { index in Task { try await group.resolveCandidates("h\(index).fixture.invalid") } }
+
+        await fulfillment(of: [first], timeout: 1)
+        XCTAssertEqual(backend.counts.registered, 24)
+        XCTAssertEqual(backend.counts.closed, 0, "Early results keep their leases open")
+        XCTAssertEqual(clock.snapshot.deadlines, Array(repeating: 2, count: 12))
+
+        clock.advance(to: 2)
+        await fulfillment(of: [second], timeout: 1)
+        XCTAssertEqual(backend.counts.registered, 48)
+        XCTAssertEqual(backend.counts.closed, 24)
+        XCTAssertEqual(Array(clock.snapshot.deadlines.suffix(12)), Array(repeating: 4, count: 12))
+
+        clock.advance(to: 4)
+        await fulfillment(of: [third], timeout: 1)
+        XCTAssertEqual(backend.counts.registered, 68)
+        XCTAssertEqual(backend.counts.closed, 48)
+        XCTAssertEqual(backend.counts.peak, 24)
+        guard published.get() == 34 else { return }
+        for task in tasks {
+            let result = try await task.value
+            XCTAssertEqual(Set(result.candidates.map(\.address.text)), ["192.0.2.1", "2001:db8::1"])
+        }
+        group.cancel()
+        await backend.drain()
+        XCTAssertEqual(backend.counts.closed, 68)
+        XCTAssertEqual(backend.counts.active, 0)
     }
 
     func testCancelClosesActiveAndQueuedWaitersAndIgnoresLateReplies() async throws {
-        let backend = Backend(), registered = expectation(description: "eight references")
-        backend.started = { _, count, _ in if count == 8 { registered.fulfill() } }
+        let backend = Backend(), registered = expectation(description: "twenty-four references")
+        backend.started = { _, count, _ in if count == 24 { registered.fulfill() } }
         let group = make(backend)
-        let tasks = (1...5).map { index in Task { try await group.resolveCandidates("c\(index).fixture.invalid") } }
+        let tasks = (1...13).map { index in Task { try await group.resolveCandidates("c\(index).fixture.invalid") } }
         await fulfillment(of: [registered], timeout: 1)
         group.cancel()
         for task in tasks {
@@ -405,8 +441,8 @@ final class TunnelEndpointDiscoveryTests: XCTestCase {
             catch { XCTAssertTrue(error is CancellationError) }
         }
         await backend.drain()
-        XCTAssertEqual(backend.counts.registered, 8)
-        XCTAssertEqual(backend.counts.closed, 8)
+        XCTAssertEqual(backend.counts.registered, 24)
+        XCTAssertEqual(backend.counts.closed, 24)
         XCTAssertEqual(backend.counts.active, 0)
     }
 
@@ -519,9 +555,9 @@ final class TunnelEndpointDiscoveryTests: XCTestCase {
         for task in tasks { await task.value }
         await backend.drain()
         XCTAssertEqual(invalidConfigurations.get(), 1)
-        XCTAssertEqual(backend.counts.registered, 8)
-        XCTAssertEqual(backend.counts.closed, 8)
-        XCTAssertEqual(backend.counts.peak, 8)
+        XCTAssertEqual(backend.counts.registered, 24)
+        XCTAssertEqual(backend.counts.closed, 24)
+        XCTAssertEqual(backend.counts.peak, 24)
     }
 
     func testDeadlineRecheckedBeforeStartingTheSecondFamily() async throws {

@@ -96,7 +96,8 @@ public final class TunnelEndpointDiscovery: @unchecked Sendable {
     private var admitted: [TunnelEndpointSelection]?
     private var sealWaiters: [UUID: SealWaiter] = [:]
     private var committed = false
-    // Queue-owned resource admission: at most eight DNSService references.
+    // Each active host owns at most two references until its collection seals.
+    private static let activeHostLimit = 12
     private var activeHosts = 0
     private var queuedHosts: [Host] = []
     private let timing = NativeDiagnosticTimer()
@@ -349,7 +350,7 @@ public final class TunnelEndpointDiscovery: @unchecked Sendable {
         host.started = true
         lock.unlock()
         if start {
-            if activeHosts < 4 { startQueries(host) }
+            if activeHosts < Self.activeHostLimit { startQueries(host) }
             else { queuedHosts.append(host) }
         }
         else { publishIfReady(host) }
@@ -523,7 +524,7 @@ public final class TunnelEndpointDiscovery: @unchecked Sendable {
         finishSealWaitersIfReady()
         logOutcomes(host, cancelled: false)
         event("Endpoint DNS discovery finalCollectionMs=\(host.startedTiming?.elapsedMilliseconds() ?? 0) queueDelayMs=\(host.queueDelayMs)")
-        while owns(), activeHosts < 4, !queuedHosts.isEmpty {
+        while owns(), activeHosts < Self.activeHostLimit, !queuedHosts.isEmpty {
             let next = queuedHosts.removeFirst()
             startQueries(next)
         }

@@ -17,6 +17,7 @@ on:
           - compatibility
           - native-config
           - native-listeners
+          - balancer-smoke
           - preparation-report
           - apple-windows
           - apple-android
@@ -42,6 +43,82 @@ on:
       - master
 
 jobs:
+  balancer-smoke:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.validation == 'balancer-smoke'
+    name: 34-node balancer smoke (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, '${{ inputs.apple_runner }}']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Use local federated package overrides
+        shell: bash
+        run: |
+          cat > pubspec_overrides.yaml <<'YAML'
+          dependency_overrides:
+            flutter_vless_platform_interface:
+              path: packages/flutter_vless_platform_interface
+            flutter_vless_android:
+              path: packages/flutter_vless_android
+            flutter_vless_macos:
+              path: packages/flutter_vless_macos
+            flutter_vless_windows:
+              path: packages/flutter_vless_windows
+          YAML
+      - name: Install checksum-pinned Xray Core 26.11.9
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import os
+          import urllib.request
+          import zipfile
+          from pathlib import Path
+
+          releases = {
+              ('Windows', 'X64'): ('Xray-windows-64.zip', '1262522266337b824f07beb8e1375786b437683b3890105469088f8e17e0a69d', 'xray.exe'),
+              ('macOS', 'X64'): ('Xray-macos-64.zip', '488963e676e06f5e48547f9dd38116aaca8de4234959b4272ae8f284e658dfd0', 'xray'),
+              ('macOS', 'ARM64'): ('Xray-macos-arm64-v8a.zip', '233f0c66681cd0726f81a6b2b6ed6a5710869e312047b522e46ed53035bebd26', 'xray'),
+          }
+          asset, digest, binary = releases[os.environ['RUNNER_OS'], os.environ['RUNNER_ARCH']]
+          directory = Path(os.environ['RUNNER_TEMP']) / 'balancer-core-26.11.9'
+          directory.mkdir()
+          archive = directory / asset
+          url = f'https://github.com/XTLS/Xray-core/releases/download/v26.11.9/{asset}'
+          checksum = hashlib.sha256()
+          with urllib.request.urlopen(url, timeout=60) as response, archive.open('wb') as output:
+              while chunk := response.read(1024 * 1024):
+                  checksum.update(chunk)
+                  output.write(chunk)
+          if checksum.hexdigest() != digest:
+              raise SystemExit(f'Xray checksum mismatch for {asset}')
+          with zipfile.ZipFile(archive) as source:
+              source.extractall(directory)
+          executable = directory / binary
+          executable.chmod(0o755)
+          with Path(os.environ['GITHUB_ENV']).open('a', encoding='utf-8') as env:
+              env.write(f'XRAY_PROFILE_TEST_NEW_CORE={executable}\n')
+          PY
+      - name: Test 34-node round-robin routes with Core
+        run: flutter test test/xray_profile_core_integration_test.dart --plain-name '34-node round-robin routes'
+      - name: Test macOS endpoint discovery and DNS lifecycle
+        if: runner.os == 'macOS'
+        run: bash tool/test_macos_tunnel_support.sh --filter TunnelEndpointDiscoveryTests
+
   apple-host-policy:
     if: github.event_name == 'workflow_dispatch' && inputs.validation == 'apple-host-policy'
     name: Apple host startup policy

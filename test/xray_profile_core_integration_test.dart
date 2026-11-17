@@ -159,6 +159,65 @@ void main() {
         skip: executable == null
             ? 'Set $variable to run Core traffic tests'
             : false);
+
+    if (version == '26.11.9') {
+      test('34-node round-robin routes on Core $version', () async {
+        final peers = <_Peer>[];
+        for (var index = 0; index < 34; index++) {
+          final peer = await _Peer.start('node-$index', Duration.zero,
+              address: index.isEven
+                  ? InternetAddress.loopbackIPv4
+                  : InternetAddress.loopbackIPv6);
+          peers.add(peer);
+          addTearDown(peer.close);
+        }
+        final direct = await _Peer.start('direct', Duration.zero);
+        addTearDown(direct.close);
+        final first = Uri.http('first.example.invalid', '/traffic');
+        final second = Uri.http('second.example.invalid', '/traffic');
+        final labels = peers.map((peer) => peer.label).toSet();
+
+        for (final bypass in <Uri?>[null, first, second]) {
+          final port = await _unusedPort();
+          final profile = XrayProfile.build((draft) {
+            final group = draft.addGroup(
+              nodes:
+                  peers.map((peer) => draft.addNode(peer.outbound())).toList(),
+              strategy: const BalanceStrategy.roundRobin(),
+            );
+            if (bypass != null) {
+              final directNode = draft.addNode(direct.outbound());
+              draft.addRule(RouteRule.domains(
+                ['full:${bypass.host}'],
+                to: RouteTarget.node(directNode),
+              ));
+            }
+            draft.setDefaultRoute(RouteTarget.group(group));
+            draft.setRaw(CorePath.root.key('inbounds'), [
+              {'listen': '127.0.0.1', 'port': port, 'protocol': 'http'},
+            ]);
+          });
+          await _withCore(executable!, port, profile, (client) async {
+            if (bypass == null) {
+              final exits = <String?>{
+                for (var index = 0; index < peers.length; index++)
+                  await _query(client, index.isEven ? first : second),
+              };
+              expect(exits, labels);
+            } else {
+              final grouped = bypass == first ? second : first;
+              for (var index = 0; index < 3; index++) {
+                expect(await _query(client, bypass), direct.label);
+                expect(await _query(client, grouped), isIn(labels));
+              }
+            }
+          });
+        }
+      },
+          skip: executable == null
+              ? 'Set $variable to run the 34-node traffic test'
+              : false);
+    }
   }
 }
 
@@ -237,8 +296,10 @@ Future<void> _until(HttpClient client, Uri uri, String? expected) async {
 final class _Peer {
   _Peer(this.server, this.label, this.latency);
 
-  static Future<_Peer> start(String label, Duration latency) async {
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  static Future<_Peer> start(String label, Duration latency,
+      {InternetAddress? address}) async {
+    final server =
+        await HttpServer.bind(address ?? InternetAddress.loopbackIPv4, 0);
     final peer = _Peer(server, label, latency);
     server.listen(peer.respond);
     return peer;
@@ -250,10 +311,13 @@ final class _Peer {
   bool healthy = false;
   int get port => server.port;
 
-  ProxyNode outbound() => ProxyNode.fromMap({
-        'protocol': 'freedom',
-        'settings': {'redirect': '127.0.0.1:$port'},
-      });
+  ProxyNode outbound() {
+    final redirect = Uri(host: server.address.address, port: port).authority;
+    return ProxyNode.fromMap({
+      'protocol': 'freedom',
+      'settings': {'redirect': redirect},
+    });
+  }
 
   Future<void> respond(HttpRequest request) async {
     if (request.uri.path == '/probe') {

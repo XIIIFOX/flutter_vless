@@ -2,6 +2,7 @@ import CryptoKit
 
 // Localhost origin + the actual bundled Xray. No VPN routes or host DNS changes.
 final class LocalProbeOrigin: @unchecked Sendable {
+    let port: Int
     private let fd: Int32
     private let lock = NSLock()
     private var requests = 0
@@ -11,8 +12,8 @@ final class LocalProbeOrigin: @unchecked Sendable {
     private var accepted = 0
     private var clients = Set<Int32>()
     private let workers = DispatchGroup()
-    init(port: Int) {
-        fd = socket(AF_INET, SOCK_STREAM, 0)
+    init(port: Int, handler: (@Sendable (Int32) -> Void)? = nil) {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
         precondition(fd >= 0)
         var reuse: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
@@ -26,6 +27,12 @@ final class LocalProbeOrigin: @unchecked Sendable {
                 bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         } == 0)
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        precondition(withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
+        } == 0)
+        self.port = Int(UInt16(bigEndian: address.sin_port))
+        self.fd = fd
         precondition(listen(fd, 16) == 0)
         let flags = fcntl(fd, F_GETFL, 0)
         precondition(flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0)
@@ -58,7 +65,8 @@ final class LocalProbeOrigin: @unchecked Sendable {
                         lock.lock(); clients.remove(client); close(client); lock.unlock()
                         workers.leave()
                     }
-                    serve(client)
+                    if let handler { handler(client) }
+                    else { serve(client) }
                 }
             }
         }

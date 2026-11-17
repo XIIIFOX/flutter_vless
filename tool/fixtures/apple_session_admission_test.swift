@@ -574,7 +574,13 @@ extension Probe {
             var ready = true, returned = true
         }
         let result = HealthResult()
-        health.inboundHealthHook = { authEntered.signal(); precondition(authRelease.wait(timeout: .now() + 3) == .success) }
+        health.inboundHealthHook = {
+            // The queued corrective worker can authenticate again. Hold only
+            // the old committed worker's first call; it owns these semaphores.
+            health.inboundHealthHook = nil
+            authEntered.signal()
+            precondition(authRelease.wait(timeout: .now() + 3) == .success)
+        }
         health.watchdogQueue.async {
             result.returned = health.performTunnelHealthCheck(trigger: "DNS-invalidates-during-auth", epoch: healthSpec.epoch)
             result.ready = health.forwardingReady

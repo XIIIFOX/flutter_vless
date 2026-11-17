@@ -117,23 +117,28 @@ private final class DNSControlledProxy: @unchecked Sendable {
         }
         guard let length = LocalSOCKS5Client.receiveExactly(fd: client, count: 2) else { return fail("Missing TCP DNS frame") }
         let size = Int(length[0]) * 256 + Int(length[1])
-        guard (12...4096).contains(size), var query = LocalSOCKS5Client.receiveExactly(fd: client, count: size) else {
+        guard (12...4096).contains(size), let query = LocalSOCKS5Client.receiveExactly(fd: client, count: size) else {
             return fail("Invalid TCP DNS query")
         }
         lock.lock(); queries += 1; lock.unlock()
-        query[2] = 0x81
-        query[3] = mode == .servfail ? 0x82 : 0x80
-        query[6] = 0; query[7] = mode == .servfail ? 0 : 1
-        query[8] = 0; query[9] = 0; query[10] = 0; query[11] = 0
-        if mode == .answer {
-            let type = Array(query.suffix(4).prefix(2))
-            let data: [UInt8] = type == [0, 28]
-                ? [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 73]
-                : [198, 51, 100, 73]
-            query += [0xc0, 0x0c] + type + [0, 1, 0, 0, 0, 60, 0, UInt8(data.count)] + data
-        }
-        _ = LocalSOCKS5Client.sendAll(fd: client, bytes: [UInt8(query.count >> 8), UInt8(query.count & 255)] + query)
+        dnsProbeReply(client, query: query, marker: 73, servfail: mode == .servfail)
     }
+}
+
+private func dnsProbeReply(_ client: Int32, query: [UInt8], marker: UInt8, servfail: Bool = false) {
+    var response = query
+    response[2] = 0x81
+    response[3] = servfail ? 0x82 : 0x80
+    response[6] = 0; response[7] = servfail ? 0 : 1
+    response[8] = 0; response[9] = 0; response[10] = 0; response[11] = 0
+    if !servfail {
+        let type = Array(query.suffix(4).prefix(2))
+        let data: [UInt8] = type == [0, 28]
+            ? [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, marker]
+            : [198, 51, 100, marker]
+        response += [0xc0, 0x0c] + type + [0, 1, 0, 0, 0, 60, 0, UInt8(data.count)] + data
+    }
+    _ = LocalSOCKS5Client.sendAll(fd: client, bytes: [UInt8(response.count >> 8), UInt8(response.count & 255)] + response)
 }
 
 private func dnsProbeQuery(id: UInt16, type: UInt16 = 1, name: String = "dns-proof.invalid") -> [UInt8] {

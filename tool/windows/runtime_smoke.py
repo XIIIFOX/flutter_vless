@@ -9,6 +9,7 @@ from contextlib import contextmanager, ExitStack
 import base64
 import hashlib
 import http.client
+import ipaddress
 import json
 import ntpath
 import os
@@ -37,6 +38,12 @@ IPV6_TUN_SOURCE = "fd00:198:18::2"
 IPV6_PAYLOAD_PORT = 45678
 FAKEDNS_NAME = "fakedns-payload.invalid"
 FAKEDNS_PORT = 45679
+PROFILE_GROUP_HOST = "profile-group.invalid"
+PROFILE_DIRECT_HOST = "profile-direct.invalid"
+PROFILE_DNS_DOMAIN = "profile-dns.invalid"
+PROFILE_DNS_ENDPOINT = "192.0.2.53"
+PROFILE_PROBE_ENDPOINT = "192.0.2.88"
+PROFILE_TUN_TARGET = "203.0.113.10"
 
 
 class IPv6PayloadState:
@@ -523,6 +530,143 @@ class DirectDns(socketserver.BaseRequestHandler):
             pass
 
 
+def profile_dns_answer(query, node):
+    name, end = dns_question(query)
+    if not name.endswith("." + PROFILE_DNS_DOMAIN):
+        raise ValueError("Unexpected typed-profile DNS name")
+    qtype, qclass = struct.unpack("!HH", query[end - 4:end])
+    if qclass != 1 or qtype not in (1, 28):
+        raise ValueError("Unexpected typed-profile DNS question type")
+    family, address = ((socket.AF_INET, f"198.51.100.{node}") if qtype == 1
+                       else (socket.AF_INET6, f"2001:db8:85::{node}"))
+    data = socket.inet_pton(family, address)
+    answer = b"\xc0\x0c" + struct.pack("!HHIH", qtype, qclass, 0, len(data)) + data
+    return query[:2] + b"\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00" + query[12:end] + answer, query[12:end]
+
+
+class ProfilePeer(socketserver.BaseRequestHandler):
+    """Bounded SOCKS stand-in for one specific generated balancer member."""
+    def handle(self):
+        sock = self.request
+        owner = self.server
+        sock.settimeout(3)
+        try:
+            version, count = exact(sock, 2)
+            if version != 5 or 0 not in exact(sock, count):
+                return
+            sock.sendall(b"\x05\x00")
+            command = exact(sock, 4)
+            if command != b"\x05\x01\x00\x01":
+                return
+            address = socket.inet_ntoa(exact(sock, 4))
+            port = int.from_bytes(exact(sock, 2), "big")
+            sock.sendall(b"\x05\x00\x00\x01\x7f\x00\x00\x01\x00\x00")
+            if address == PROFILE_DNS_ENDPOINT and port == 53:
+                size = int.from_bytes(exact(sock, 2), "big")
+                if not 12 <= size <= 4096:
+                    return
+                response, question = profile_dns_answer(exact(sock, size), owner.node)
+                with owner.profile_lock:
+                    owner.dns_questions.append(question)
+                    healthy = owner.healthy
+                if healthy:
+                    sock.sendall(len(response).to_bytes(2, "big") + response)
+                return
+            headers = bytearray()
+            while b"\r\n\r\n" not in headers and len(headers) < 4096:
+                data = sock.recv(1024)
+                if not data:
+                    return
+                headers.extend(data)
+            first = headers.split(b"\r\n", 1)[0]
+            if address == PROFILE_PROBE_ENDPOINT and port == 80 and first == b"GET /profile-observe HTTP/1.1":
+                with owner.profile_lock:
+                    healthy = owner.healthy
+                    if not healthy:
+                        owner.failed_probes += 1
+                if healthy:
+                    time.sleep(owner.latency)
+                    sock.sendall(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+            elif address == PROFILE_TUN_TARGET and port == PORTS["direct"] and first == b"GET / HTTP/1.1":
+                expected = b"host: " + PROFILE_GROUP_HOST.encode()
+                if expected in headers.lower().split(b"\r\n"):
+                    with owner.profile_lock:
+                        owner.group_requests += 1
+                        healthy = owner.healthy
+                    if healthy:
+                        body = f"GROUP-{owner.node}".encode()
+                        sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: " + str(len(body)).encode()
+                                     + b"\r\nConnection: close\r\n\r\n" + body)
+        except (OSError, EOFError, ValueError):
+            pass
+
+
+def profile_peer(address, node, latency):
+    server = Server((address, 0), ProfilePeer)
+    server.daemon_threads = False
+    server.node, server.latency = node, latency
+    server.profile_lock = threading.Lock()
+    server.healthy, server.failed_probes, server.group_requests = False, 0, 0
+    server.dns_questions = []
+    return server
+
+
+def profile_balancer_config(address, dns_port, peers):
+    fixture = Path(__file__).resolve().parents[2] / "tool/fixtures/compatibility/typed-profile-balancer.json"
+    profile = json.loads(fixture.read_text(encoding="utf-8"))
+    socket.inet_aton(address)
+    assert len(peers) == 2 and len(set(peers)) == 2 and all(0 < port <= 65535 for port in (*peers, dns_port))
+    profile["inbounds"][0]["port"] = PORTS["inbound"]
+    nodes = profile["outbounds"]
+    for node, port in zip(nodes[:2], peers):
+        node["settings"]["servers"] = [{"address": address, "port": port}]
+    nodes[3]["settings"] = {"redirect": f"{address}:{PORTS['direct']}"}
+    nodes.append({"protocol": "freedom", "tag": "runner-direct"})
+    profile["dns"] = {
+        "tag": "runner-dns",
+        "disableCache": True,
+        "disableFallbackIfMatch": True,
+        "servers": [
+            {"address": f"tcp://{PROFILE_DNS_ENDPOINT}", "tag": "group-dns",
+             "domains": ["domain:" + PROFILE_DNS_DOMAIN], "skipFallback": True},
+            f"tcp://{address}:{dns_port}",
+        ],
+    }
+    outside_target = ipaddress.ip_network("0.0.0.0/0").address_exclude(
+        ipaddress.ip_network(PROFILE_TUN_TARGET + "/32"))
+    # The CI runner retains connectivity via its usual scoped DoH fixture.
+    # The final generated rule is still reached by ordinary test data, and
+    # the caller opts the dedicated DNS names into the very same group.
+    rules = profile["routing"]["rules"]
+    rules[1:1] = [
+        {"type": "field", "inboundTag": ["group-dns"], "network": "tcp", "port": "53",
+         "ip": [PROFILE_DNS_ENDPOINT + "/32"], "balancerTag": rules[-1]["balancerTag"]},
+        {"type": "field", "inboundTag": ["runner-dns"], "outboundTag": "runner-direct"},
+        {"type": "field", "ip": [str(cidr) for cidr in outside_target] + ["::/0"],
+         "outboundTag": "runner-direct"},
+    ]
+    return profile
+
+
+def profile_dns_request(qtype, node, peers):
+    labels = [uuid.uuid4().hex, *PROFILE_DNS_DOMAIN.split(".")]
+    question = b"".join(bytes([len(part)]) + part.encode() for part in labels) + b"\0" + struct.pack("!HH", qtype, 1)
+    query = b"\x12\x34\x01\x00\x00\x01" + bytes(6) + question
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(5)
+        sock.connect(("10.0.85.53", 53))
+        assert sock.getsockname()[0] == "10.0.85.2", "Typed-profile DNS bypassed Wintun"
+        sock.sendall(query)
+        answer = sock.recv(4096)
+    expected, _ = profile_dns_answer(query, node)
+    assert answer[:2] == query[:2] and answer[3] & 15 == 0 and answer[4:8] == b"\0\1\0\1" \
+        and answer[12:12 + len(question)] == question and answer[-(4 if qtype == 1 else 16):] == expected[-(4 if qtype == 1 else 16):], \
+        "Typed-profile DNS answer did not identify the selected member"
+    for peer in peers:
+        with peer.profile_lock:
+            assert (question in peer.dns_questions) == (peer.node == node), "Fresh DNS question reached the wrong member"
+
+
 def direct_only_config(index, address, dns_port):
     fixtures = Path(__file__).resolve().parents[2] / "tool/fixtures/compatibility"
     assert index in (0, 1, 2) and 1 <= dns_port <= 65535
@@ -560,7 +704,7 @@ def request(host, vpn, loopback=False, proxy_port=None, diagnostic=None):
     data = b""
     read_end = "not_read"
     try:
-        destination = ("127.0.0.1", PORTS["direct"]) if loopback else (("203.0.113.10", PORTS["direct"]) if vpn else ("127.0.0.1", proxy_port or PORTS["inbound"]))
+        destination = ("127.0.0.1", PORTS["direct"]) if loopback else ((PROFILE_TUN_TARGET, PORTS["direct"]) if vpn else ("127.0.0.1", proxy_port or PORTS["inbound"]))
         with socket.create_connection(destination, timeout=4) as sock:
             sock.settimeout(4)
             if vpn:
@@ -1329,6 +1473,112 @@ def native_routing_gate(probe, directory, address, dns, origin, results):
     print("WINDOWS_NATIVE_ROUTING_TRAFFIC_PASS=2", flush=True)
 
 
+def profile_balancer_gate(probe, directory, address, dns, origin, results):
+    label = "vpn-typed-profile"
+    profile, stop, state, guard_stop = [directory / (label + suffix) for suffix in (".json", ".stop", ".state.json", ".guard-stop")]
+    assert not any(path.exists() for path in (profile, stop, state, guard_stop)), "Typed-profile test requires fresh outputs"
+    with origin.direct_only_lock:
+        origin.direct_only_active = None
+    with ExitStack() as owned:
+        peers = [owned.enter_context(profile_peer(address, node, latency))
+                 for node, latency in ((7, 0.015), (8, 0.2))]
+        for peer in peers:
+            worker = threading.Thread(target=peer.serve_forever, daemon=True)
+            worker.start()
+            owned.callback(worker.join, 5)
+            owned.callback(peer.shutdown)
+        source = json.dumps(profile_balancer_config(address, dns.server_address[1],
+                            [peer.server_address[1] for peer in peers])).encode()
+        profile.write_bytes(source)
+        log_path = directory / (label + ".log")
+        with log_path.open("w") as log:
+            process = subprocess.Popen([str(probe), "run-vpn", str(profile), "120", str(stop), str(state)],
+                                       cwd=directory, stdout=log, stderr=log)
+            guard = None
+            primary_error = None
+            try:
+                guard = subprocess.Popen([str(probe), "guard", str(process.pid), "120", str(guard_stop)],
+                                         cwd=directory, stdout=log, stderr=log)
+                deadline = time.monotonic() + 65
+                while "START_RETURN=1" not in log_path.read_text(errors="replace"):
+                    assert process.poll() is None and time.monotonic() < deadline, "Typed-profile VPN did not become ready"
+                    time.sleep(0.1)
+                assert await_state(state, True, timeout=5)["protecting"], "Typed-profile catch-all displaced readiness"
+
+                def wait_group(expected):
+                    deadline = time.monotonic() + 8
+                    while time.monotonic() < deadline:
+                        try:
+                            reply = request(PROFILE_GROUP_HOST, True)
+                        except (EOFError, OSError, RuntimeError):
+                            reply = None
+                        assert reply in (None, "GROUP-7", "GROUP-8"), "Grouped traffic escaped through direct"
+                        if reply == expected:
+                            return
+                        time.sleep(0.1)
+                    raise AssertionError("Typed-profile traffic did not select the expected group member")
+
+                assert request(PROFILE_DIRECT_HOST, True) == "DIRECT-FIXTURE"
+                wait_group(None)
+                for peer in peers:
+                    with peer.profile_lock:
+                        assert peer.group_requests == 0, "Cold group sent payload to an unqualified member"
+                        peer.healthy = True
+                wait_group("GROUP-7")
+                for qtype in (1, 28):
+                    profile_dns_request(qtype, 7, peers)
+                results.append(dict(mode=label, check="direct rule, healthy group and initial uncached A and AAAA", passed=True))
+
+                with peers[0].profile_lock:
+                    peers[0].healthy = False
+                wait_group("GROUP-8")
+                for qtype in (1, 28):
+                    profile_dns_request(qtype, 8, peers)
+                with peers[0].profile_lock:
+                    assert peers[0].failed_probes > 0, "Failover lacked a failed primary observation"
+                assert request(PROFILE_DIRECT_HOST, True) == "DIRECT-FIXTURE"
+                results.append(dict(mode=label, check="primary loss reroutes data and fresh A and AAAA", passed=True))
+
+                assert profile.read_bytes() == source, "Typed-profile preparation changed its authored JSON"
+                stop.touch()
+                assert process.wait(timeout=25) == 0, "Typed-profile VPN Stop failed"
+                assert native(probe, "policy-count") == "0", "Typed-profile Stop retained WFP filters"
+                inventory = json.loads(subprocess.check_output(["powershell", "-NoProfile", "-Command",
+                    "[pscustomobject]@{Routes=@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1','::/1','8000::/1') }).Count; "
+                    "IPv6Addresses=@(Get-NetIPAddress -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -eq 'flutter_vless_tun' -and $_.IPAddress -eq 'fd00:198:18::2' }).Count} | ConvertTo-Json -Compress"], text=True, timeout=25))
+                assert inventory == {"Routes": 0, "IPv6Addresses": 0}, "Typed-profile Stop retained routes/address"
+                results.append(dict(mode=label, check="typed-profile Stop releases WFP and Wintun policy", passed=True))
+            except BaseException as error:
+                primary_error = error
+                raise
+            finally:
+                cleanup_error = None
+                def cleanup(callback):
+                    nonlocal cleanup_error
+                    try:
+                        callback()
+                    except BaseException as error:
+                        if cleanup_error is None:
+                            cleanup_error = error
+                def stop_child(child, signal, timeout):
+                    signal.touch()
+                    if child is not None and child.poll() is None:
+                        try:
+                            child.wait(timeout=timeout)
+                        except subprocess.TimeoutExpired:
+                            child.kill()
+                            child.wait(timeout=5)
+                cleanup(lambda: stop_child(process, stop, 15))
+                cleanup(lambda: native(probe, "release-protection"))
+                cleanup(lambda: stop_child(guard, guard_stop, 10))
+                if cleanup_error is not None:
+                    if primary_error is None:
+                        raise cleanup_error
+                    if hasattr(primary_error, "add_note"):
+                        primary_error.add_note("TYPED_PROFILE_CLEANUP_FAILED")
+    print("WINDOWS_TYPED_PROFILE_RUNTIME_PASS=3", flush=True)
+
+
 
 
 def numeric_ipv6_packets(text):
@@ -2080,6 +2330,8 @@ def main():
                 print("WINDOWS_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2", flush=True)
             fake_dns_cycles = fakedns_gate(probe, directory, direct_address, fake_proxy.server_address[1],
                                           direct_dns.server_address[1], fake_dns_payload, results)
+            if args.native_routing:
+                profile_balancer_gate(probe, directory, direct_address, direct_dns, servers[0], results)
     finally:
         primary = sys.exc_info()[1]
         server_cleanup_error = None

@@ -10,6 +10,57 @@ using namespace flutter_vless::xray_config;
 void Check(bool ok, const char* message) {
   if (!ok) throw std::runtime_error(message);
 }
+void TypedProfileCases() {
+  std::ifstream input("tool/fixtures/compatibility/typed-profile-balancer.json");
+  Check(input.good(), "shared typed-profile fixture required");
+  Json source; input >> source;
+  source["dns"] = {{"servers", Json::array({"tcp://192.0.2.53"})}, {"tag", "group-dns"}};
+  const auto group = source["routing"]["balancers"][0]["tag"];
+  source["routing"]["rules"].insert(source["routing"]["rules"].begin(), Json{
+      {"type", "field"}, {"inboundTag", Json::array({"group-dns"})},
+      {"ip", Json::array({"192.0.2.53/32"})}, {"port", "53"}, {"network", "tcp"},
+      {"balancerTag", group}});
+  const auto original = source.dump();
+  auto proxy = original;
+  Check(PrepareProxy(proxy, [](uint16_t) { return true; }, [] { return uint16_t{19000}; }),
+      "typed profile rejected in proxy mode");
+  Check(Parse(proxy)["routing"] == source["routing"], "proxy preparation changed typed rules or group");
+
+  unsigned lookups = 0;
+  VpnRoutingProvenance provenance;
+  const auto prepared = PrepareProtectedVpn(original, "fixture-user", "fixture-password", "Ethernet",
+      [&](const std::string&) { ++lookups; return std::string(); }, &provenance,
+      [](uint16_t) { return true; });
+  Check(prepared.has_value() && lookups == 0, "typed VPN profile rejected or tried native DNS");
+  const auto effective = Parse(*prepared);
+  Check(effective["dns"] == source["dns"] && effective["observatory"] == source["observatory"],
+      "VPN changed explicit group DNS or observer");
+  Check(effective["routing"]["balancers"] == source["routing"]["balancers"], "VPN changed caller balancers");
+  const auto& rules = effective["routing"]["rules"];
+  const auto& authored = source["routing"]["rules"];
+  Check(provenance.guard_rule_indices == std::vector<int64_t>{0} && rules.size() == authored.size() + 1,
+      "expected the private DNS guard ahead of all caller rules");
+  Check(rules[0]["inboundTag"] == Json::array({provenance.managed_tag}) &&
+      rules[0]["ip"] == Json::array({"10.0.85.53/32"}) && rules[0]["port"] == "53",
+      "typed profile lost its private virtual-DNS route");
+  for (size_t index = 0; index < authored.size(); ++index) {
+    Check(rules[index + 1] == authored[index], "VPN changed caller group/default route order");
+  }
+  for (const auto& selectors : {effective["routing"]["balancers"][0]["selector"],
+                               effective["observatory"]["subjectSelector"]}) {
+    std::set<std::string> selected;
+    for (const auto& outbound : effective["outbounds"]) {
+      const auto tag = outbound["tag"].get<std::string>();
+      for (const auto& selector : selectors) {
+        if (tag.rfind(selector.get<std::string>(), 0) == 0) selected.insert(tag);
+      }
+    }
+    Check(selected == std::set<std::string>{"fv-profile-node-1!", "fv-profile-node-2!"},
+        "Core prefix selectors reach a generated private or nonmember outbound");
+  }
+  std::cout << "WINDOWS_TYPED_PROFILE_PREPARATION_PASS=1\n";
+}
+
 void StaticDnsAliasCases() {
   std::ifstream input("tool/fixtures/compatibility/dns-static-aliases.json");
   Check(input.good(), "shared static DNS alias corpus required");
@@ -595,6 +646,7 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::string(argv[1]) == "--listen-addresses") { ListenAddressCases(); return 0; }
   if (argc == 2 && std::string(argv[1]) == "--asset-location") { AssetLocationCases(); return 0; }
   XdriveServiceCases();
+  TypedProfileCases();
   StaticDnsAliasCases();
   MissingInboundCounterDefaultCases();
   CallerServicePreservationCases();

@@ -98,6 +98,7 @@ assert 'METRICS_PASSTHROUGH_PASS=0' in text and 'METRICS_PASSTHROUGH_PASS=1' in 
 if os.environ.get('REQUIRE_VPN_ROUTING') == '1':
     for marker in ['NATIVE_ROUTING_RUNTIME_PASS=0','NATIVE_ROUTING_RUNTIME_PASS=1','NATIVE_ROUTING_RUNTIME_DRAIN_PASS','APPLE_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2']:
         assert marker in text, marker
+    assert text.splitlines().count('APPLE_PROFILE_BALANCER_DNS_FAILOVER_PASS=2') == 1
 if os.environ.get('REQUIRE_CORE_PREFLIGHT') == '1':
     for generation in [0,1]:
         assert f'PREFLIGHT_RUNNING_SESSION_PASS={generation}' in text

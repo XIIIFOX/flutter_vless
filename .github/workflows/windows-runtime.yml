@@ -100,6 +100,7 @@ jobs:
           $log = Get-Content build/windows-runtime/native-tests.log -Raw
           if ($log -match 'SKIP') { throw 'A required native Windows test was skipped' }
           if ([regex]::Matches($log, '(?m)^WINDOWS_STATIC_DNS_ALIAS_PASS=4\r?$').Count -ne 1) { throw 'Static DNS alias preparation controls missing or duplicated' }
+          if ([regex]::Matches($log, '(?m)^WINDOWS_TYPED_PROFILE_PREPARATION_PASS=1\r?$').Count -ne 1) { throw 'Typed profile preparation evidence missing or duplicated' }
           if ($log -notmatch 'deny filtered same-user') { throw 'Filtered-token boundary was not tested' }
           if ($log -notmatch 'PASS pinned Core preflight') { throw 'Pinned Core preflight was not tested' }
           if ($log -notmatch 'PASS administrator-only Core preflight') { throw 'Administrator-only Core preflight was not tested' }
@@ -279,6 +280,7 @@ jobs:
           if ($log -notmatch 'WINDOWS_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2') { throw 'VPN traffic with occupied preferred TCP ports was not tested' }
           if ([regex]::Matches($log, '(?m)^WINDOWS_TRAFFIC_COUNTER_RUNTIME_PASS=4\r?$').Count -ne 1) { throw 'VPN owned-counter acceptance is incomplete' }
           if ([regex]::Matches($log, '(?m)^WINDOWS_FAKEDNS_RUNTIME_PASS=2\r?$').Count -ne 1) { throw 'FakeDNS TCP/UDP and restart acceptance is incomplete' }
+          if ([regex]::Matches($log, '(?m)^WINDOWS_TYPED_PROFILE_RUNTIME_PASS=3\r?$').Count -ne 1) { throw 'Typed profile routing, DNS failover or cleanup acceptance is incomplete' }
       - name: Exercise numeric IPv6 routing runtime
         if: ${{ inputs.validation == 'numeric-ipv6' }}
         shell: pwsh

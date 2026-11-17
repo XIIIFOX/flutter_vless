@@ -105,6 +105,9 @@ func runModes() async {
     do { try runDirectOnlyRuntimeChecks() } catch { print("DIRECT_ONLY_RUNTIME_FAILED"); exit(1) }
     if ProcessInfo.processInfo.environment["REQUIRE_VPN_ROUTING"] == "1" {
         do { try runNativeRoutingRuntimeChecks() } catch { print("NATIVE_ROUTING_RUNTIME_FAILED"); exit(1) }
+        do { try runAppleProfileBalancerChecks() } catch {
+            print("APPLE_PROFILE_BALANCER_DNS_FAILOVER_FAILED: \(error.localizedDescription)"); exit(1)
+        }
     }
     let markers = ["privacy-canary.invalid", "d2719f44-f51f-4c35-aeae-246230d21f38", "synthetic-password-canary"]
     let logger = ProbeLogger()

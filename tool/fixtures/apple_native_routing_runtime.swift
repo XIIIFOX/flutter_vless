@@ -92,3 +92,197 @@ func runNativeRoutingRuntimeChecks() throws {
     print("NATIVE_ROUTING_RUNTIME_DRAIN_PASS")
     print("APPLE_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2")
 }
+
+private final class ProfileRoutingPeer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var healthy = true
+    private var dnsQueries: [UInt8] = []
+    let marker: UInt8
+    let probeLatency: TimeInterval
+
+    init(marker: UInt8, probeLatency: TimeInterval) {
+        self.marker = marker
+        self.probeLatency = probeLatency
+    }
+
+    func setHealthy(_ value: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        healthy = value
+    }
+
+    func queries() -> [UInt8] {
+        lock.lock(); defer { lock.unlock() }
+        return dnsQueries
+    }
+
+    private func requestLine(_ fd: Int32) -> String? {
+        var bytes: [UInt8] = []
+        while bytes.count < 8192, !bytes.suffix(4).elementsEqual([13, 10, 13, 10]) {
+            guard let next = LocalSOCKS5Client.receiveExactly(fd: fd, count: 1) else { return nil }
+            bytes += next
+        }
+        return String(decoding: bytes, as: UTF8.self).components(separatedBy: "\r\n").first
+    }
+
+    func serve(_ fd: Int32, dnsPort: Int) {
+        dnsProbeTimeout(fd, seconds: 2)
+        guard let request = requestLine(fd), request.hasPrefix("CONNECT ") else { return }
+        lock.lock(); let active = healthy; lock.unlock()
+        guard active else {
+            _ = LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("HTTP/1.1 502 Bad Gateway\r\n\r\n".utf8))
+            return
+        }
+        guard LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("HTTP/1.1 200 Connection Established\r\n\r\n".utf8)) else { return }
+        if request.hasPrefix("CONNECT 127.0.0.1:\(dnsPort) ") {
+            guard let length = LocalSOCKS5Client.receiveExactly(fd: fd, count: 2) else { return }
+            let size = Int(length[0]) * 256 + Int(length[1])
+            guard (17...4096).contains(size), let query = LocalSOCKS5Client.receiveExactly(fd: fd, count: size) else { return }
+            lock.lock(); dnsQueries.append(query[size - 3]); lock.unlock()
+            dnsProbeReply(fd, query: query, marker: marker)
+        } else if let tunneledRequest = requestLine(fd) {
+            if tunneledRequest.hasPrefix("GET /health ") {
+                Thread.sleep(forTimeInterval: probeLatency)
+                _ = LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".utf8))
+            } else if tunneledRequest.hasPrefix("GET /profile ") {
+                let body = String(UnicodeScalar(marker))
+                _ = LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\n\(body)".utf8))
+            }
+        }
+    }
+}
+
+// Actual Core routing through the private packet ingress and virtual DNS relay.
+// Synthetic endpoints are owned loopback listeners, without an OS VPN session.
+func runAppleProfileBalancerChecks() throws {
+    func require(_ condition: @autoclosure () -> Bool, _ reason: String) throws {
+        guard condition() else {
+            throw NSError(domain: "AppleProfileBalancer", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
+        }
+    }
+    let trap = LocalProbeOrigin(port: 0)
+    let direct = LocalProbeOrigin(port: 0)
+    let primary = ProfileRoutingPeer(marker: 65, probeLatency: 0.01)
+    let alternate = ProfileRoutingPeer(marker: 66, probeLatency: 0.2)
+    let first = LocalProbeOrigin(port: 0) { primary.serve($0, dnsPort: trap.port) }
+    let second = LocalProbeOrigin(port: 0) { alternate.serve($0, dnsPort: trap.port) }
+    defer { XRayStop(); first.stop(); second.stop(); trap.stop(); direct.stop() }
+    let credentials = try LocalProxyCredentials.generate()
+    let members = ["fv-profile-node-1!", "fv-profile-node-2!"]
+    let group = "fv-profile-group-3!"
+    let authoredRules: [[String: Any]] = [
+        ["type": "field", "inboundTag": ["group-dns"], "ip": ["127.0.0.1/32"],
+         "port": String(trap.port), "network": "tcp", "balancerTag": group],
+        ["type": "field", "domain": ["full:direct.invalid"], "outboundTag": "direct"],
+        ["type": "field", "network": "tcp,udp", "balancerTag": group],
+    ]
+    let proxyNodes: [[String: Any]] = zip(members, [first.port, second.port]).map { tag, port in
+        ["tag": tag, "protocol": "http", "settings": ["servers": [["address": "127.0.0.1", "port": port]]]]
+    }
+    let outbounds: [[String: Any]] = [
+        ["tag": "trap", "protocol": "freedom", "settings": ["redirect": "127.0.0.1:\(trap.port)"]],
+        ["tag": "direct", "protocol": "freedom", "settings": ["redirect": "127.0.0.1:\(direct.port)"]],
+    ] + proxyNodes + [["tag": "deny", "protocol": "blackhole"]]
+    let raw: [String: Any] = [
+        "inbounds": [[
+            "tag": "in_proxy", "listen": "127.0.0.1", "port": 18095, "protocol": "socks",
+            "settings": ["auth": "noauth", "udp": true],
+        ]],
+        "outbounds": outbounds,
+        "dns": [
+            "tag": "group-dns", "queryStrategy": "UseIP", "disableCache": true,
+            "disableFallback": true, "servers": ["tcp://127.0.0.1:\(trap.port)"],
+        ],
+        "observatory": [
+            "subjectSelector": members, "probeURL": "http://127.0.0.1:\(direct.port)/health",
+            "probeInterval": "250ms", "enableConcurrency": true,
+        ],
+        "routing": ["rules": authoredRules, "balancers": [[
+            "tag": group, "selector": members, "strategy": ["type": "leastPing"], "fallbackTag": "deny",
+        ]]],
+    ]
+    let source = try JSONSerialization.data(withJSONObject: raw)
+    guard let prepared = TunnelXrayConfigPreparer.prepare(
+        jsonData: source, credentials: credentials, tcpPortAvailable: LocalProxyAccessPolicy.isTCPPortAvailable
+    ), let managed = TunnelXrayConfigPreparer.parseConfig(jsonData: prepared.data) else {
+          try require(false, "Profile balancer preparation failed")
+          return
+    }
+    let effective = try JSONSerialization.jsonObject(with: prepared.data) as! [String: Any]
+    let routing = effective["routing"] as! [String: Any]
+    let rules = routing["rules"] as! [[String: Any]]
+    let guardTag = rules.first?["outboundTag"] as? String
+    try require(rules.suffix(authoredRules.count).map { $0 as NSDictionary } == authoredRules.map { $0 as NSDictionary },
+                "Apple preparation changed authored routing order")
+    try require(rules.first?["ip"] as? [String] == [TunnelDNSPolicy.virtualServer + "/32"], "Virtual DNS guard is not first")
+    let tags = (effective["outbounds"] as! [[String: Any]]).compactMap { $0["tag"] as? String }
+    let selectors = (routing["balancers"] as! [[String: Any]])[0]["selector"] as! [String]
+    try require(tags.filter { tag in selectors.contains(where: { tag.hasPrefix($0) }) } == members, "Prepared group membership differs")
+    try require(guardTag != nil && !members.contains(guardTag!), "Virtual DNS guard points at a group member")
+    var error: NSError?
+    try require(XRayStartPrivate(prepared.data, ProbeLogger(), &error), "Profile balancer startup failed")
+    let port = managed.inboundPort
+
+    func traffic(_ host: String, expected: [UInt8]) -> Bool {
+        guard let fd = try? LocalSOCKS5Client.openConnection(proxyPort: port, credentials: credentials, host: host, port: 80, timeout: 1) else { return false }
+        defer { close(fd) }
+        let request = Array("GET /profile HTTP/1.1\r\nHost: \(host)\r\nConnection: close\r\n\r\n".utf8)
+        return LocalSOCKS5Client.sendAll(fd: fd, bytes: request)
+            && LocalSOCKS5Client.receiveExactly(fd: fd, count: expected.count) == expected
+    }
+    func waitForMember(_ marker: UInt8) -> Bool {
+        let start = ProcessInfo.processInfo.systemUptime
+        let response = Array("HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\n".utf8) + [marker]
+        repeat {
+            if traffic("grouped.invalid", expected: response) { return true }
+            Thread.sleep(forTimeInterval: 0.06)
+        } while ProcessInfo.processInfo.systemUptime - start < 5
+        return false
+    }
+    func dns(_ peer: ProfileRoutingPeer, generation: Int) throws {
+        for (index, type) in [UInt16(1), 28].enumerated() {
+            let id = UInt16(0x6900 + generation * 2 + index)
+            let name = "fresh-\(generation)-\(type).invalid"
+            guard let answer = try queryVirtualDNS(proxyPort: port, credentials: credentials, udp: index == 1, id: id, type: type, name: name) else {
+                try require(false, "Missing grouped DNS answer for QTYPE \(type) generation \(generation)")
+                return
+            }
+            let expected: [UInt8] = type == 1
+                ? [198, 51, 100, peer.marker]
+                : [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, peer.marker]
+            try require(answer.count >= 12 && answer[3] & 15 == 0 && answer[6...7].elementsEqual([0, 1])
+                         && answer.prefix(2).elementsEqual([UInt8(id >> 8), UInt8(id & 255)])
+                         && answer.suffix(expected.count).elementsEqual(expected), "Grouped DNS used wrong peer")
+        }
+        try require(peer.queries() == [1, 28], "Grouped resolver received unexpected queries")
+    }
+    let directResponse = Array("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
+    try require(waitForMember(primary.marker), "Fastest member was not selected")
+    try require(traffic("direct.invalid", expected: directResponse), "Direct route did not reach its peer")
+    try dns(primary, generation: 0)
+    primary.setHealthy(false)
+    try require(waitForMember(alternate.marker), "Group did not switch after probe failure")
+    try require(traffic("direct.invalid", expected: directResponse), "Failover changed the direct route")
+    try dns(alternate, generation: 1)
+    XRayStop()
+    // A closed TCP listener can leave TIME_WAIT connections. Probe whether
+    // it still accepts instead of requiring immediate rebind of its address.
+    let listenerProbe = socket(AF_INET, SOCK_STREAM, 0)
+    try require(listenerProbe >= 0, "Could not create the listener cleanup probe")
+    defer { close(listenerProbe) }
+    dnsProbeTimeout(listenerProbe, seconds: 1)
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = UInt16(port).bigEndian
+    inet_pton(AF_INET, "127.0.0.1", &address.sin_addr)
+    let connected = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            connect(listenerProbe, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    try require(connected == -1 && errno == ECONNREFUSED, "Managed SOCKS did not close")
+    first.stop(); second.stop(); trap.stop(); direct.stop()
+    try require(primary.queries() == [1, 28] && alternate.queries() == [1, 28], "Grouped resolver leaked a query")
+    try require(trap.connections() == 0 && direct.state().0 == 2, "Unexpected local fallback connection")
+    print("APPLE_PROFILE_BALANCER_DNS_FAILOVER_PASS=2")
+}

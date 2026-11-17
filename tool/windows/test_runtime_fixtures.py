@@ -22,6 +22,40 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    def test_typed_profile_fixture_preserves_a_catch_all_after_scoped_controls(self):
+        profile = runtime.profile_balancer_config("192.0.2.10", 15353, [24007, 24008])
+        rules = profile["routing"]["rules"]
+        group = profile["routing"]["balancers"][0]
+        self.assertEqual({"type": "field", "network": "tcp,udp", "balancerTag": group["tag"]}, rules[-1])
+        self.assertEqual(["full:" + runtime.PROFILE_DIRECT_HOST], rules[0]["domain"])
+        self.assertEqual({"type": "field", "inboundTag": ["group-dns"], "network": "tcp", "port": "53",
+                          "ip": [runtime.PROFILE_DNS_ENDPOINT + "/32"], "balancerTag": group["tag"]}, rules[1])
+        self.assertEqual(["runner-dns"], rules[2]["inboundTag"])
+        for cidr in rules[3]["ip"]:
+            self.assertNotIn(runtime.ipaddress.ip_address(runtime.PROFILE_TUN_TARGET), runtime.ipaddress.ip_network(cidr))
+        self.assertEqual(group["selector"], profile["observatory"]["subjectSelector"])
+        self.assertEqual(group["selector"], [node["tag"] for node in profile["outbounds"][:2]])
+        self.assertEqual(["blackhole"], [node["protocol"] for node in profile["outbounds"] if node["tag"] == group["fallbackTag"]])
+        self.assertTrue(profile["dns"]["disableCache"])
+        self.assertTrue(profile["dns"]["disableFallbackIfMatch"])
+        self.assertTrue(profile["dns"]["servers"][0]["skipFallback"])
+
+    def test_typed_profile_dns_preserves_question_and_distinguishes_node_and_type(self):
+        for qtype, family, base in ((1, runtime.socket.AF_INET, "198.51.100."),
+                                    (28, runtime.socket.AF_INET6, "2001:db8:85::")):
+            query = question("fresh." + runtime.PROFILE_DNS_DOMAIN)[:-4] + runtime.struct.pack("!HH", qtype, 1)
+            for node in (7, 8):
+                with self.subTest(qtype=qtype, node=node):
+                    answer, observed = runtime.profile_dns_answer(query, node)
+                    self.assertEqual(query[12:], observed)
+                    self.assertEqual(query[:2], answer[:2])
+                    self.assertEqual(query[12:], answer[12:len(query)])
+                    self.assertTrue(answer.endswith(runtime.socket.inet_pton(family, base + str(node))))
+        for bad in (question("unselected.invalid"), query[:-4] + b"\0\x0f\0\x01",
+                    query[:-1] + b"\x02"):
+            with self.assertRaises(ValueError):
+                runtime.profile_dns_answer(bad, 7)
+
     @staticmethod
     def core_process(pid=77, parent=70, mode='"run" "-config"', image=None):
         executable = image or (r"C:\Windows\Temp\flutter-vless-protected-" + "a" * 64 + r"\xray.exe")

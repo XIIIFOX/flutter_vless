@@ -9,6 +9,7 @@ privacy_paths={'ios':root/'ios/flutter_vless/Sources/flutter_vless_privacy',
 fixture='''
 struct FlutterError { let code:String; let message:String; let details:Any? }
 func FLVlessCoreRoutingCapability() -> Int64 { 1 }
+func pluginDebug(_ message: NativeDiagnosticMessage) {}
 enum Kernel {
  static var busy=Set<Int>(), exhausted=false, attempts:[Int]=[], entries:[Data]=[], captures=0
  static func available(_ port:Int) -> Bool { attempts.append(port); entries=[]; return !exhausted && !busy.contains(port) }
@@ -82,16 +83,21 @@ results={}
 source_hashes={}
 for platform,path in paths.items():
  privacy=privacy_paths[platform]
- inputs=[privacy/p for p in ['VlessNativeOptions.swift','NativeRoutingSpec.swift','LocalProxyAccessPolicy.swift','XrayAddressEnvironment.swift','XrayCertificatePaths.swift','XrayConfigKeys.swift','XrayServiceTags.swift','XrayPrivacyConfig.swift','CorePreflightPolicy.swift']]
+ inputs=[privacy/p for p in ['VlessNativeOptions.swift','NativeRoutingSpec.swift','LocalProxyAccessPolicy.swift','XrayAddressEnvironment.swift','XrayCertificatePaths.swift','XrayConfigKeys.swift','XrayServiceTags.swift','XrayPrivacyConfig.swift','CorePreflightPolicy.swift','NativeDiagnostics.swift']]
  if platform=='macos':inputs.append(privacy/'DesktopBypassPolicy.swift')
  s=path.read_text();assert 'manager.xrayConfig = effectiveConfigData' in s
  a=s.index('        let proxyOnly = arguments["proxy_only"]');b=s.index('        // Initialization may replace the manager',a)
+ prefix=s[a:b]
+ if 'startupTiming' in prefix:
+  declaration='        let startupTiming = NativeDiagnosticTimer()\n'
+  assert declaration in s[s.index('    private func startVless('):a]
+  prefix=declaration+prefix
  runner=s.index('private final class ProxyOnlyRunner {')
  helper_start=s.index('    fileprivate static func buildProxyOnlyConfigData',runner);helper_end=s.index('\n    }\n',helper_start)+6
  delay_start=s.index('    private static func findDelayEndpoint',runner);delay_end=s.index('\n    }\n',delay_start)+6
  prepared_start=s.index('    struct Prepared {',runner);prepared_end=s.index('    // Direct callers share the host admission order:',prepared_start)
  helper='enum ProxyOnlyRunner {\n'+s[prepared_start:prepared_end]+'\n'+s[delay_start:delay_end]+'\n'+s[helper_start:helper_end]+'\n}\n'
- p=out/(platform+'.swift');p.write_text('import Foundation\n'+helper+fixture.replace(' // ACTUAL_PREFIX',s[a:b]))
+ p=out/(platform+'.swift');p.write_text('import Foundation\n'+helper+fixture.replace(' // ACTUAL_PREFIX',prefix))
  with (out/(platform+'-compile.log')).open('wb') as f:r=subprocess.run(['xcrun','swiftc','-O','-parse-as-library',*map(str,inputs),str(p),'-o',str(out/platform)],stdout=f,stderr=subprocess.STDOUT,timeout=100)
  assert r.returncode==0,(out/(platform+'-compile.log')).read_text()[-4000:]
  r=subprocess.run([str(out/platform)],capture_output=True,text=True,timeout=10);(out/(platform+'.log')).write_text(r.stdout+r.stderr)

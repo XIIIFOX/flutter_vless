@@ -29,8 +29,9 @@ def check_wiring(source):
     start = block(source, '    private func startXRay(')
     # Follow the actual call graph, rather than demanding a moved operation be
     # textually present in the entry method. Direct entry writes bypass this gate.
-    assert entry.index('NativeRoutingSpec.requireRuntime') < entry.index('sessionAdmission.begin()') < entry.index('prepareInitialRuntimeSpec(source)')
-    assert entry.index('prepareInitialRuntimeSpec(source)') < entry.index('TunnelOnDemandPolicy.enableForStart') < entry.index('endpointAdmission.commit(token)') < entry.index('startTunnelWatchdog(spec)')
+    prepare = 'prepareInitialRuntimeSpec(source, deadline: preparationDeadline)'
+    assert entry.index('NativeRoutingSpec.requireRuntime') < entry.index('sessionAdmission.begin()') < entry.index(prepare)
+    assert entry.index(prepare) < entry.index('TunnelOnDemandPolicy.enableForStart') < entry.index('endpointAdmission.commit(token)') < entry.index('startTunnelWatchdog(spec)')
     assert 'routingIntent: routingIntent' in entry and 'setTunnelNetworkSettings(' not in entry
     assert initial.index('prepareEndpointConfig(') < initial.index('RuntimeSpec(source: source, prepared: prepared,') < initial.index('checkEndpointPreflight(') < initial.index('endpointCommitQueue.submit') < initial.index('installProtectedSettings(spec)') < initial.index('return spec')
     assert 'prepared.endpointPath == path' in initial
@@ -111,9 +112,10 @@ def main():
         hashes[str(path.relative_to(ROOT))] = hashlib.sha256(source.encode()).hexdigest()
         entry, _, _, _, _, native, start_method = check_wiring(source)
         mutations[platform] = mutation_controls(source)
-        parts = [block(source, '    private struct ' + name) for name in ['RuntimeSource', 'RuntimeSpec', 'ProtectedSettingsKey']]
-        parts += [block(source, '    private func ' + name) for name in ['prepareInitialRuntimeSpec(', 'checkEndpointPreflight(', 'installProtectedSettings(', 'onRuntimeQueue<']]
-        actual = '\n'.join(parts).replace('private struct', 'struct').replace('private func', 'func')
+        parts = [block(source, '    private final class InitialDiscoveryCorrectionPermit')]
+        parts += [block(source, '    private struct ' + name) for name in ['RuntimeSource', 'RuntimeSpec', 'ProtectedSettingsKey']]
+        parts += [block(source, '    private func ' + name) for name in ['prepareInitialRuntimeSpec(', 'endpointSpecIsFresh(', 'checkEndpointPreflight(', 'installProtectedSettings(', 'onRuntimeQueue<']]
+        actual = '\n'.join(parts).replace('private final class', 'final class').replace('private struct', 'struct').replace('private func', 'func')
         capability = [line for line in entry.splitlines() if 'if routingIntent != nil { try NativeRoutingSpec.requireRuntime' in line]
         start_pair = [line for line in native.splitlines() if 'try startXRay(xrayConfig:' in line]
         assert len(capability) == len(start_pair) == 1
@@ -137,7 +139,7 @@ def main():
         assert hashlib.sha256((ROOT / name).read_bytes()).hexdigest() == digest
     (output / 'result.json').write_text(json.dumps({'success': True, 'native_runtime_executed': False,
         'source_sha256': hashes, 'source_mutation_controls': mutations,
-        'transitive_actual_methods': ['prepareInitialRuntimeSpec', 'RuntimeSource', 'RuntimeSpec', 'checkEndpointPreflight', 'installProtectedSettings', 'onRuntimeQueue', 'startXRay', 'actual native start pair']}, indent=2) + '\n')
+        'transitive_actual_methods': ['prepareInitialRuntimeSpec', 'RuntimeSource', 'RuntimeSpec', 'endpointSpecIsFresh', 'checkEndpointPreflight', 'installProtectedSettings', 'onRuntimeQueue', 'startXRay', 'actual native start pair']}, indent=2) + '\n')
 
 
 if __name__ == '__main__':

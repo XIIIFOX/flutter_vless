@@ -37,6 +37,10 @@ private struct Log {
     func info(_ text: FixtureLogMessage) {}
 }
 private let pluginLog = Log()
+private struct NativeDiagnosticTimer {
+    func elapsedMilliseconds() -> UInt64 { 0 }
+}
+private func pluginDebug(_ text: FixtureLogMessage) {}
 private struct NativeRoutingIntent {}
 private final class PluginXRayLogger {
     func reset() {}

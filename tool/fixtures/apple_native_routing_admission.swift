@@ -56,6 +56,13 @@ struct TunnelEndpointCandidate {
 }
 struct TunnelEndpointCandidates { let path: TunnelEndpointPath }
 struct TunnelEndpointSelection { let candidates: TunnelEndpointCandidates, selected: TunnelEndpointCandidate }
+final class TunnelEndpointDiscovery: @unchecked Sendable {
+    let isInvalidated = false
+    func isFresh(_ selections: [TunnelEndpointSelection], at now: TimeInterval) -> Bool { true }
+    func claimInitialInvalidationIfNeeded() -> Bool { false }
+    func admitSelections(_ selections: [TunnelEndpointSelection]) -> Bool { true }
+    func noteProtectedSettingsInstalled() {}
+}
 struct FixturePrepared {
     let data: Data
     let routingEnvelope: NativeRoutingEnvelope?
@@ -86,8 +93,13 @@ final class Provider: @unchecked Sendable {
     func isIPv4Literal(_ text: String) -> Bool { false }
     func parseConfig(jsonData: Data) -> (inboundPort: Int, unused: Bool)? { (10808, false) }
     func setStartupPreparation(_ task: Task<TunnelPreparedConfig, Error>?, epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token) {}
+    func makeStartupDiscovery(epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token,
+        path: TunnelEndpointPath, deadline: TimeInterval) -> TunnelEndpointDiscovery { TunnelEndpointDiscovery() }
+    func setStartupDiscovery(_ discovery: TunnelEndpointDiscovery?, epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token) {}
+    func invalidateStartupDiscovery(epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token,
+        deadline: TimeInterval, permit: InitialDiscoveryCorrectionPermit? = nil) {}
     func prepareEndpointConfig(_ source: RuntimeSource, token: TunnelEndpointPlanAdmission.Token,
-        path: TunnelEndpointPath, attempt: UInt64, deadline: TimeInterval) async throws -> TunnelPreparedConfig {
+        path: TunnelEndpointPath, attempt: UInt64, deadline: TimeInterval, discovery: TunnelEndpointDiscovery?) async throws -> TunnelPreparedConfig {
         var prepared = suppliedPrepared!; prepared.endpointPath = path; return prepared
     }
     func protectedNetworkSettings(_ spec: RuntimeSpec) -> Int { 1 }

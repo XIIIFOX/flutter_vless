@@ -221,20 +221,23 @@ import sys
 root, out = map(Path,sys.argv[1:])
 sources = [root/'ios/flutter_vless/Sources/flutter_vless/FlutterVlessPlugin.swift',
  root/'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos/FlutterVlessPlugin.swift']
-bodies=[]
-for path in sources:
- s=path.read_text()
- a=s.index('        let preparationChanges = Array(changes)') + len('        let preparationChanges = Array(changes)\n')
- b=s.index('\n        Task {',a)
- bodies.append(s[a:b])
-assert bodies[0] == bodies[1], 'Both Apple start paths must use the checked transaction'
-probe='''private final class StartProbe {
+def transaction_probe(source):
+ preparation = '        let preparationChanges = Array(changes)\n'
+ operation_start = source.index(preparation) + len(preparation)
+ task_start = source.index('\n        Task {', operation_start)
+ success_body = '\n            do {'
+ success_start = source.index(success_body, task_start) + len(success_body)
+ success_end = source.index('\n            } catch', success_start)
+ timing = ' let startupTiming = NativeDiagnosticTimer()\n' if 'startupTiming' in source[operation_start:success_end] else ''
+ # Execute each actual platform's transaction and reply. macOS also logs
+ # startup timings, but its start and failure contract is the same.
+ return '''private final class StartProbe {
  let commands = NativeOperationQueue()
  let proxyOnlyRunner = Proxy()
  let packetTunnelManager: Manager? = Manager()
  let controlGroup: String? = nil
  func start(proxyOnly: Bool, data: Data = Data(#"{"fixture":"new"}"#.utf8), changes: [NativePreparationReport.Change] = []) -> Task<NativePreparationReport, Error> {
- let effectiveConfigData = data
+'''+timing+''' let effectiveConfigData = data
  let preparationChanges = changes
  let vpnRouting: NativeRoutingIntent? = nil
  let preparedProxyConfig: Proxy.Prepared? = proxyOnly ? Proxy.Prepared(data: Data(#"{"fixture":"prepared-new"}"#.utf8)) : nil
@@ -242,25 +245,19 @@ probe='''private final class StartProbe {
  let certificateAssetsDirectory: String? = "/fixture/new-certificate-assets"
  let bypassSubnets: [String]? = []
  let remark = "new"
-'''+bodies[0]+'''
+'''+source[operation_start:task_start]+'''
  return operation
  }
-}
-'''
-success_start=sources[0].read_text().index('\n            do {', sources[0].read_text().index('\n        Task {', sources[0].read_text().index('        let operation = commands.submit {\n            // Do not replace the app-process singleton')))+len('\n            do {')
-success_end=sources[0].read_text().index('\n            } catch', success_start)
-success=sources[0].read_text()[success_start:success_end]
-probe=probe.replace('\n}\n', '''
  func refreshRuntimePolling(reason: String) {}
  func startReply(proxyOnly: Bool) async throws -> Any? {
- let operation = start(proxyOnly: proxyOnly)
+'''+timing+''' let operation = start(proxyOnly: proxyOnly)
  var response: Any?
  let result: (Any?) -> Void = { response = $0 }
-'''+success+'''
+'''+source[success_start:success_end]+'''
  return response
  }
 }
-''', 1)
+'''
 fixture=(root/'tool/fixtures/apple_preflight_transaction.swift').read_text()
 for index, path in enumerate(sources):
  source=path.read_text()
@@ -300,7 +297,7 @@ for index, path in enumerate(sources):
     }
 }
 '''
- (out/f'transaction-{index}.swift').write_text(fixture.replace('// PREFLIGHT_TRANSACTION_SOURCE is replaced by the production operation body.',probe).replace('// PROXY_RUNNER_START_SOURCE is replaced by the production runner methods.',runner))
+ (out/f'transaction-{index}.swift').write_text(fixture.replace('// PREFLIGHT_TRANSACTION_SOURCE is replaced by the production operation body.',transaction_probe(source)).replace('// PROXY_RUNNER_START_SOURCE is replaced by the production runner methods.',runner))
 PY
 for PLATFORM in 0 1; do
     PRIVACY="$ROOT/ios/flutter_vless/Sources/flutter_vless_privacy"

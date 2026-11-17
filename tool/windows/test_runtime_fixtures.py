@@ -68,7 +68,8 @@ class RuntimeFixtureTest(unittest.TestCase):
             runtime.main()
             profile.assert_called_once()
             external.assert_not_called()
-        with patch.object(runtime.sys, "argv", args), patch.object(runtime, "profile_balancer_only") as profile:
+        with patch.object(runtime, "os", SimpleNamespace(name="nt", environ={})), \
+                patch.object(runtime.sys, "argv", args), patch.object(runtime, "profile_balancer_only") as profile:
             with self.assertRaisesRegex(SystemExit, "disposable GitHub Windows runner"):
                 runtime.main()
             profile.assert_not_called()

@@ -5,6 +5,9 @@ atomic editing and exact JSON paths. The existing 1.1.7 entry points and
 mutable models retain their contracts. Profiles launch through
 `startVless(remark: ..., config: profile.toCoreJson())`.
 
+The target native runtime for Android, iOS, macOS and Windows is Xray-core
+26.11.9. The compatibility suite also runs against the previous Core 26.10.31.
+
 ## Profile and editing
 
 - `XrayProfile.fromJson` accepts JSON and JSONC and snapshots the complete

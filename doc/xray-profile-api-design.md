@@ -56,8 +56,8 @@ exceptions ahead of its default. If an imported profile already has an
 unscoped catch-all, edit it explicitly before setting a new default. A rule
 scoped to an imported inbound requires `VpnRoutingOptions.sourceInboundIndex`
 when the platform uses a private SOCKS listener. Native preparation keeps
-protected DNS and platform guard rules ahead of the catch-all. The group controls flows
-matched by its rule. An OS kill switch and platform protected DNS have their
+protected DNS and platform guard rules ahead of the catch-all. The group controls
+flows matched by its rule. An OS kill switch and platform protected DNS have their
 own policy. Test uncached A and AAAA lookups separately after the primary
 outbound fails, with a fixture that explicitly routes its DNS through the
 group. Existing protected DNS on Apple, Android and Windows may select a
@@ -110,10 +110,19 @@ wrappers can use raw paths in the meantime.
 | Native Proxy and VPN | Verify direct and grouped domains, private ingress and service selectors, uncached DNS after failure, and session cleanup on Android, iOS, macOS and Windows |
 | Promoted typed field | Typed and raw edits produce equivalent Core JSON and retain unknown siblings |
 
-Local SOCKS runs on 26.10.31 and 26.11.9 already confirmed cold block, fast
-member selection, alternate selection after a failed probe, all-down block,
-and zero requests to the first direct outbound. Separate runs confirmed
-`version.min` and the actual `delay: 0` effect. Native adapter and VPN
-acceptance still require the implementation.
+The Dart tests compare the generated outbound tags, routing and Observatory
+with the [native fixture](../tool/fixtures/compatibility/typed-profile-balancer.json).
+The root CI job runs the generated profiles against verified Xray 26.10.31
+and 26.11.9 executables. For the same checks locally, point
+`XRAY_PROFILE_TEST_OLD_CORE` and `XRAY_PROFILE_TEST_NEW_CORE` at the corresponding
+executables and run `flutter test test/xray_profile_core_integration_test.dart`.
+
+Android runs the failover fixture through the VPN service and TUN on an emulator.
+The Apple privacy harness uses the native VPN configuration preparer and its
+authenticated SOCKS and DNS paths on macOS and iOS Simulator. The Windows
+runtime workflow checks the prepared config, then tests Wintun traffic, DNS
+failover and removal of WFP state. These fixtures give DNS an explicit group
+route, retain the private inbound guards and check fresh A and AAAA records
+through the selected proxy.
 
 [Xray 26.11.9 release](https://github.com/XTLS/Xray-core/releases/tag/v26.11.9)

@@ -1,6 +1,9 @@
 import 'package:flutter_vless/flutter_vless.dart';
 import 'package:flutter_vless/url/xray_json.dart';
 
+typedef ProfileImporter =
+    ({String config, String? remark}) Function(String input);
+
 /// Keep full Xray JSON intact; share links use the existing protocol parser.
 ///
 /// Leading comments can belong to either JSON or a subscription list. Inspect

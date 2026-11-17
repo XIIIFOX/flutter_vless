@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_vless/flutter_vless.dart';
+import 'package:flutter_vless_example/balancer_example.dart';
 import 'package:flutter_vless_example/main.dart';
 import 'package:flutter_vless_example/options.dart';
 import 'package:flutter_vless_example/routing.dart';
@@ -143,6 +144,25 @@ void main() {
     expect(find.text('VPN Mode'), findsOneWidget);
     expect(find.text('Profile delay'), findsOneWidget);
     expect(find.text('VPN Diagnostics'), findsOneWidget);
+  });
+
+  testWidgets('balancer demo imports two links and Connect sends the group', (
+    tester,
+  ) async {
+    clipboard = 'socks://127.0.0.1:12081\nsocks://127.0.0.1:12082';
+    await tester.pumpWidget(
+      const MyApp(profileImporter: importBalancerProfile),
+    );
+    await tester.pumpAndSettle();
+    await tap(tester, 'Import (clipboard)');
+    await tap(tester, 'Connect');
+
+    final start = calls.singleWhere((call) => call.method == 'startVless');
+    final config = jsonDecode((start.arguments as Map)['config'] as String);
+    final group = config['routing']['balancers'].single;
+    expect(group['strategy']['type'], 'roundRobin');
+    expect(group['selector'], hasLength(2));
+    expect(config['routing']['rules'].last['balancerTag'], group['tag']);
   });
 
   for (final payload in <String, Object>{

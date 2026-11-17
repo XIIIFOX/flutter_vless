@@ -8,15 +8,22 @@ import 'profile_import.dart';
 import 'preparation_report.dart';
 import 'vpn_routing.dart';
 
-Future<void> main() async {
+Future<void> main() => runExample();
+
+Future<void> runExample({ProfileImporter profileImporter = importProfile}) async {
   WidgetsFlutterBinding.ensureInitialized();
   final options = await ExampleOptionsStorage.load();
-  runApp(MyApp(options: options));
+  runApp(MyApp(options: options, profileImporter: profileImporter));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key, this.options = const VlessOptions()});
+  const MyApp({
+    super.key,
+    this.options = const VlessOptions(),
+    this.profileImporter = importProfile,
+  });
   final VlessOptions options;
+  final ProfileImporter profileImporter;
 
   @override
   Widget build(BuildContext context) {
@@ -33,14 +40,19 @@ class MyApp extends StatelessWidget {
           border: OutlineInputBorder(),
         ),
       ),
-      home: HomePage(options: options),
+      home: HomePage(options: options, profileImporter: profileImporter),
     );
   }
 }
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, this.options = const VlessOptions()});
+  const HomePage({
+    super.key,
+    this.options = const VlessOptions(),
+    this.profileImporter = importProfile,
+  });
   final VlessOptions options;
+  final ProfileImporter profileImporter;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -293,10 +305,10 @@ class _HomePageState extends State<HomePage> {
       try {
         final text =
             (await Clipboard.getData('text/plain'))?.text?.trim() ?? '';
-        final imported = importProfile(text);
+        if (!mounted) return;
+        final imported = widget.profileImporter(text);
         remark = imported.remark ?? 'Imported profile';
         config.text = imported.config;
-        if (!mounted) return;
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('Imported')));
       } catch (e) {

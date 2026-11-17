@@ -1,5 +1,36 @@
 # Build and edit Xray profiles
 
+## Run the balancer in Example
+
+From the repository's `example` directory, run the balancer entry point on a
+device with the [usual Example setup](../README.md).
+
+```sh
+flutter run -t lib/balancer_example.dart
+```
+
+Copy two or more working share links, one per line. In Example, tap
+**Import (clipboard)**, inspect the generated JSON, and tap **Connect**.
+The default `roundRobin` distributes new connections across the group.
+Choose `random` with `--dart-define=BALANCER_STRATEGY=random`.
+
+For latency-based selection, supply a probe endpoint you control that returns
+HTTP 204. Keep your share links in the clipboard.
+
+```sh
+flutter run -t lib/balancer_example.dart \
+  --dart-define=BALANCER_STRATEGY=leastPing \
+  --dart-define=BALANCER_PROBE_URL=https://your-probe.example/204
+```
+
+Use `leastLoad` in the same command for Burst Observatory. These two strategies
+block grouped connections while no node is eligible. To test split routing,
+add a domain in the existing routing editor. Its traffic uses the direct
+outbound ahead of the final group rule. The platform's DNS policy continues to
+apply. Single profiles and full JSON can still use the regular import path.
+
+## Compose a profile in Dart
+
 Use the existing `FlutterVless` controller to start the generated profile.
 Initialize the controller and request VPN permission as in the main example.
 

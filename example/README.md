@@ -13,6 +13,7 @@ directory name.
 
 - Clipboard import for share links, full JSON and subscription profiles
 - Configuration and domain-routing editors
+- Runnable [balancer example](xray_profile/README.md) for multiple share links
 - Proxy-only and VPN startup/Stop
 - Connection duration, upload/download totals, speed and Core version
 - Notification, quick access, reconnect, protection and diagnostics options

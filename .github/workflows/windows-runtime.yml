@@ -6,7 +6,7 @@ on:
       validation:
         description: Validation scope
         type: choice
-        options: [all, numeric-ipv6]
+        options: [all, numeric-ipv6, typed-profile]
         default: all
       runtime_source:
         description: Build a candidate or test the fixed public native release
@@ -265,14 +265,22 @@ jobs:
           # Language-independent audit subcategory: Filtering Platform Connection.
           auditpol /set /subcategory:"{0CCE9226-69AE-11D9-BED3-505054503030}" /failure:enable
           if ($LASTEXITCODE) { throw 'Cannot enable native WFP block evidence' }
-      - name: Exercise native WFP, Wintun, routing, DNS and recovery
+      - name: Exercise typed profile routing and DNS failover through Wintun
         if: ${{ inputs.validation != 'numeric-ipv6' }}
+        shell: pwsh
+        run: |
+          python tool/windows/runtime_smoke.py --directory build/windows-runtime --vpn --typed-profile-only 2>&1 | Tee-Object -FilePath build/windows-runtime/typed-profile-runtime.log
+          if ($LASTEXITCODE) { throw 'Typed profile VPN runtime acceptance failed' }
+          $log = Get-Content build/windows-runtime/typed-profile-runtime.log -Raw
+          if ([regex]::Matches($log, '(?m)^WINDOWS_TYPED_PROFILE_RUNTIME_PASS=3\r?$').Count -ne 1) { throw 'Typed profile routing, DNS failover or cleanup acceptance is incomplete' }
+      - name: Exercise native WFP, Wintun, routing, DNS and recovery
+        if: ${{ inputs.validation != 'numeric-ipv6' && inputs.validation != 'typed-profile' }}
         shell: pwsh
         run: |
           python tool/windows/runtime_smoke.py --directory build/windows-runtime --vpn --native-routing 2>&1 | Tee-Object -FilePath build/windows-runtime/native-routing-runtime.log
           if ($LASTEXITCODE) { throw 'Native VPN runtime acceptance failed' }
       - name: Require native routing traffic and recovery
-        if: ${{ inputs.validation != 'numeric-ipv6' }}
+        if: ${{ inputs.validation != 'numeric-ipv6' && inputs.validation != 'typed-profile' }}
         shell: pwsh
         run: |
           $log = Get-Content build/windows-runtime/native-routing-runtime.log -Raw
@@ -280,7 +288,6 @@ jobs:
           if ($log -notmatch 'WINDOWS_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2') { throw 'VPN traffic with occupied preferred TCP ports was not tested' }
           if ([regex]::Matches($log, '(?m)^WINDOWS_TRAFFIC_COUNTER_RUNTIME_PASS=4\r?$').Count -ne 1) { throw 'VPN owned-counter acceptance is incomplete' }
           if ([regex]::Matches($log, '(?m)^WINDOWS_FAKEDNS_RUNTIME_PASS=2\r?$').Count -ne 1) { throw 'FakeDNS TCP/UDP and restart acceptance is incomplete' }
-          if ([regex]::Matches($log, '(?m)^WINDOWS_TYPED_PROFILE_RUNTIME_PASS=3\r?$').Count -ne 1) { throw 'Typed profile routing, DNS failover or cleanup acceptance is incomplete' }
       - name: Exercise numeric IPv6 routing runtime
         if: ${{ inputs.validation == 'numeric-ipv6' }}
         shell: pwsh
@@ -288,11 +295,13 @@ jobs:
           python tool/windows/runtime_smoke.py --directory build/windows-runtime --vpn --numeric-ipv6-only --numeric-ipv6-variant routing 2>&1 | Tee-Object -FilePath build/windows-runtime/native-routing-runtime.log
           if ($LASTEXITCODE) { throw 'Numeric IPv6 routing-runtime acceptance failed' }
       - name: Qualify numeric IPv6 routing runtime evidence
+        if: ${{ inputs.validation != 'typed-profile' }}
         shell: pwsh
         run: |
           python tool/windows/verify_numeric_ipv6_qualification.py --directory build/windows-runtime --variant routing
           if ($LASTEXITCODE) { throw 'Numeric IPv6 routing-runtime proof is incomplete' }
       - name: Exercise numeric IPv6 with the verified official runtime
+        if: ${{ inputs.validation != 'typed-profile' }}
         shell: pwsh
         run: |
           $ordinary = 'build/windows-runtime/numeric-ipv6-official'

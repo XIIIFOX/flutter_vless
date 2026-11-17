@@ -56,6 +56,23 @@ class RuntimeFixtureTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 runtime.profile_dns_answer(bad, 7)
 
+    def test_typed_profile_runner_scope_skips_external_https_control(self):
+        args = ["runtime_smoke.py", "--directory", "unused", "--vpn", "--typed-profile-only"]
+        def run_profile(*_):
+            self.assertFalse(runtime.REAL_DNS)
+        with patch.object(runtime, "os", SimpleNamespace(name="nt", environ={"GITHUB_ACTIONS": "true"})), \
+                patch.object(runtime.sys, "argv", args), patch.object(runtime, "PROBE", None), \
+                patch.object(runtime, "REAL_DNS", True), \
+                patch.object(runtime, "profile_balancer_only", side_effect=run_profile) as profile, \
+                patch.object(runtime, "external_http") as external:
+            runtime.main()
+            profile.assert_called_once()
+            external.assert_not_called()
+        with patch.object(runtime.sys, "argv", args), patch.object(runtime, "profile_balancer_only") as profile:
+            with self.assertRaisesRegex(SystemExit, "disposable GitHub Windows runner"):
+                runtime.main()
+            profile.assert_not_called()
+
     @staticmethod
     def core_process(pid=77, parent=70, mode='"run" "-config"', image=None):
         executable = image or (r"C:\Windows\Temp\flutter-vless-protected-" + "a" * 64 + r"\xray.exe")

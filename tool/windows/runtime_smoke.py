@@ -1473,20 +1473,23 @@ def native_routing_gate(probe, directory, address, dns, origin, results):
     print("WINDOWS_NATIVE_ROUTING_TRAFFIC_PASS=2", flush=True)
 
 
-def profile_balancer_gate(probe, directory, address, dns, origin, results):
+def start_profile_server(owned, server):
+    owned.enter_context(server)
+    server.daemon_threads = False
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    owned.callback(worker.join, 5)
+    owned.callback(server.shutdown)
+    return server
+
+
+def profile_balancer_gate(probe, directory, address, dns, results):
     label = "vpn-typed-profile"
     profile, stop, state, guard_stop = [directory / (label + suffix) for suffix in (".json", ".stop", ".state.json", ".guard-stop")]
     assert not any(path.exists() for path in (profile, stop, state, guard_stop)), "Typed-profile test requires fresh outputs"
-    with origin.direct_only_lock:
-        origin.direct_only_active = None
     with ExitStack() as owned:
-        peers = [owned.enter_context(profile_peer(address, node, latency))
+        peers = [start_profile_server(owned, profile_peer(address, node, latency))
                  for node, latency in ((7, 0.015), (8, 0.2))]
-        for peer in peers:
-            worker = threading.Thread(target=peer.serve_forever, daemon=True)
-            worker.start()
-            owned.callback(worker.join, 5)
-            owned.callback(peer.shutdown)
         source = json.dumps(profile_balancer_config(address, dns.server_address[1],
                             [peer.server_address[1] for peer in peers])).encode()
         profile.write_bytes(source)
@@ -1577,6 +1580,29 @@ def profile_balancer_gate(probe, directory, address, dns, origin, results):
                     if hasattr(primary_error, "add_note"):
                         primary_error.add_note("TYPED_PROFILE_CLEANUP_FAILED")
     print("WINDOWS_TYPED_PROFILE_RUNTIME_PASS=3", flush=True)
+
+
+def profile_balancer_only(probe, directory):
+    # UDP connect selects the runner's ordinary interface without sending a
+    # packet. The owned peers use that interface for the same socket pinning
+    # as ordinary VPN profiles. All test requests target the owned peers.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+        route.connect(("192.0.2.1", 9))
+        address = route.getsockname()[0]
+    with socket.socket() as applicant:
+        applicant.bind(("127.0.0.1", 0))
+        PORTS["inbound"] = applicant.getsockname()[1]
+    results = []
+    try:
+        with ExitStack() as owned:
+            origin = start_profile_server(owned, DirectOrigin((address, 0), Direct))
+            dns = Server((address, 0), DirectDns)
+            dns.questions, dns.questions_lock = [], threading.Lock()
+            start_profile_server(owned, dns)
+            PORTS["direct"] = origin.server_address[1]
+            profile_balancer_gate(probe, directory, address, dns, results)
+    finally:
+        (directory / "typed-profile-results.json").write_text(json.dumps(results, indent=2))
 
 
 
@@ -1974,7 +2000,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--vpn", action="store_true")
-    parser.add_argument("--numeric-ipv6-only", action="store_true")
+    fixture_mode = parser.add_mutually_exclusive_group()
+    fixture_mode.add_argument("--numeric-ipv6-only", action="store_true")
+    fixture_mode.add_argument("--typed-profile-only", action="store_true")
     parser.add_argument("--numeric-ipv6-variant", choices=("official", "routing"), default="routing")
     parser.add_argument("--native-routing", action="store_true", help="Append the separate native-routing profile; requires --vpn and an optional factory binary")
     parser.add_argument("--wine-bottle", help="CrossOver bottle for proxy-only tests on macOS")
@@ -1985,10 +2013,15 @@ def main():
         raise SystemExit("Full VPN tests require a disposable GitHub Windows runner")
     if args.numeric_ipv6_only and not args.vpn:
         raise SystemExit("Numeric IPv6 acceptance requires the disposable VPN runner")
-    REAL_DNS = args.vpn
+    if args.typed_profile_only and not args.vpn:
+        raise SystemExit("Typed-profile acceptance requires the disposable VPN runner")
+    REAL_DNS = args.vpn and not args.typed_profile_only
     directory = args.directory.resolve()
     probe = directory / "runtime_probe.exe"
     PROBE = probe
+    if args.typed_profile_only:
+        profile_balancer_only(probe, directory)
+        return
     if args.numeric_ipv6_only:
         isolated_results=[]
         numeric_ipv6_gate(probe,directory,isolated_results,args.numeric_ipv6_variant)
@@ -2330,8 +2363,6 @@ def main():
                 print("WINDOWS_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2", flush=True)
             fake_dns_cycles = fakedns_gate(probe, directory, direct_address, fake_proxy.server_address[1],
                                           direct_dns.server_address[1], fake_dns_payload, results)
-            if args.native_routing:
-                profile_balancer_gate(probe, directory, direct_address, direct_dns, servers[0], results)
     finally:
         primary = sys.exc_info()[1]
         server_cleanup_error = None

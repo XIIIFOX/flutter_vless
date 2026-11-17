@@ -545,8 +545,15 @@ class RelayTests(unittest.TestCase):
             client=None
             try:
                 deadline=time.monotonic()+1
-                while not ready.exists() and time.monotonic()<deadline:time.sleep(.005)
-                data=json.loads(ready.read_text());self.assertTrue(data['emulator_public_numeric_TCP_80_443'])
+                while True:
+                    try:
+                        data = json.loads(ready.read_text())
+                        break
+                    except (FileNotFoundError, json.JSONDecodeError):
+                        if time.monotonic() >= deadline or process.poll() is not None:
+                            raise
+                        time.sleep(.005)
+                self.assertTrue(data['emulator_public_numeric_TCP_80_443'])
                 self.assertEqual(data['bind'],'127.0.0.1');self.assertEqual(data['peer_bindings'],0)
                 self.assertFalse(data['host_network_configuration_changed']);self.assertEqual(data['limits']['server_seconds'],.25)
                 client=socket.create_connection(('127.0.0.1',data['port']),timeout=1);client.settimeout(1)

@@ -224,7 +224,23 @@ jobs:
       - name: Analyze root package
         run: flutter analyze lib test
       - name: Test root package
-        run: flutter test
+        run: |
+          set -euo pipefail
+          load_core() {
+            local version="$1" digest="$2" directory
+            directory="$RUNNER_TEMP/xray-profile-$version"
+            mkdir "$directory"
+            curl --fail --location --silent --show-error --max-time 120 \
+              "https://github.com/XTLS/Xray-core/releases/download/v$version/Xray-linux-64.zip" \
+              -o "$directory/core.zip"
+            printf '%s  %s\n' "$digest" "$directory/core.zip" | sha256sum --check --status
+            unzip -q "$directory/core.zip" -d "$directory"
+          }
+          load_core 26.10.31 e4bd9119f50ae7c41658b1abd0679ae06f98bd864a2907ff33f2f2cf7081b214
+          load_core 26.11.9 b651f7e1d9966ee2c1b1ee1bf8b52c72771824d3065dce96bbc8bcc19ed95f82
+          XRAY_PROFILE_TEST_OLD_CORE="$RUNNER_TEMP/xray-profile-26.10.31/xray" \
+          XRAY_PROFILE_TEST_NEW_CORE="$RUNNER_TEMP/xray-profile-26.11.9/xray" \
+            flutter test
       - name: Analyze and test platform interface package
         working-directory: packages/flutter_vless_platform_interface
         run: |

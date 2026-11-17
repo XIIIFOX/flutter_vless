@@ -356,6 +356,19 @@ final profiles = FlutterVless.parseMany(subscriptionText);
 Unsupported or not-yet-mapped protocols are skipped intentionally instead of
 being converted into broken Xray JSON.
 
+## `XrayProfile`
+
+Use `XrayProfile.build` to assemble nodes, balancers and ordered routes.
+Use `XrayProfile.fromJson` to retain the full authored JSON or JSONC, then
+`edit` to produce an independent profile. `CorePath` addresses fields that
+the typed builder has yet to model. `requireCoreAtLeast` adds an explicit
+version check for fields that the profile depends on.
+
+Pass `profile.toCoreJson()` as the existing `startVless(config: ...)`
+argument. Native preparation still applies the selected VPN and DNS
+policies. See the [profile examples](../example/xray_profile/README.md)
+and the [editing and routing contract](xray-profile-api-design.md).
+
 ## `parseFromURL()`
 
 Parses one share URL.

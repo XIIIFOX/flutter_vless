@@ -18,6 +18,7 @@ import 'package:flutter_vless_platform_interface/flutter_vless_platform_interfac
 
 export 'package:flutter_vless_platform_interface/flutter_vless_platform_interface.dart';
 export 'url/url.dart';
+export 'xray_profile.dart';
 
 /// App-facing controller for Xray/V2Ray proxy and VPN tunnel sessions.
 ///

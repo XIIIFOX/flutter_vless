@@ -85,6 +85,31 @@ void main() {
     'Windows': FlutterVlessWindows.new,
   };
   for (final adapter in adapters.entries) {
+    test('typed profile reaches the existing ${adapter.key} start contract',
+        () async {
+      VlessPlatform.instance = adapter.value();
+      final profile = XrayProfile.build((draft) {
+        final a = draft.addNode(
+            ProxyNode.fromMap({'protocol': 'freedom', 'tag': 'node-a'}));
+        final b = draft.addNode(
+            ProxyNode.fromMap({'protocol': 'freedom', 'tag': 'node-b'}));
+        final group = draft.addGroup(
+          nodes: [a, b],
+          strategy: const BalanceStrategy.roundRobin(),
+        );
+        draft.setDefaultRoute(RouteTarget.group(group));
+        draft.setRaw(CorePath.root.key('extension'), {
+          'nested': [null, <String, dynamic>{}],
+        });
+      });
+      final controller = FlutterVless(onStatusChanged: (_) {});
+      await controller.startVless(
+          remark: 'typed profile', config: profile.toCoreJson());
+      expect(calls.single.method, 'startVless');
+      expect(jsonDecode((calls.single.arguments as Map)['config'] as String),
+          profile.toCoreMap());
+    });
+
     test('public raw structure reaches the actual ${adapter.key} adapter',
         () async {
       VlessPlatform.instance = adapter.value();

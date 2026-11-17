@@ -1,0 +1,45 @@
+{
+  "inbounds": [
+    {
+      "tag": "in_proxy",
+      "protocol": "socks",
+      "listen": "127.0.0.1",
+      "port": 10807,
+      "settings": {"auth": "noauth", "udp": true}
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "fv-profile-node-1!",
+      "protocol": "socks",
+      "settings": {"servers": [{"address": "192.0.2.10", "port": 1080}]}
+    },
+    {
+      "tag": "fv-profile-node-2!",
+      "protocol": "socks",
+      "settings": {"servers": [{"address": "192.0.2.20", "port": 1080}]}
+    },
+    {"tag": "fv-profile-node-4!", "protocol": "blackhole"},
+    {"tag": "fv-profile-node-5!", "protocol": "freedom"}
+  ],
+  "routing": {
+    "balancers": [
+      {
+        "tag": "fv-profile-group-3!",
+        "selector": ["fv-profile-node-1!", "fv-profile-node-2!"],
+        "strategy": {"type": "leastPing"},
+        "fallbackTag": "fv-profile-node-4!"
+      }
+    ],
+    "rules": [
+      {"type": "field", "domain": ["full:profile-direct.invalid"], "outboundTag": "fv-profile-node-5!"},
+      {"type": "field", "network": "tcp,udp", "balancerTag": "fv-profile-group-3!"}
+    ]
+  },
+  "observatory": {
+    "subjectSelector": ["fv-profile-node-1!", "fv-profile-node-2!"],
+    "probeURL": "http://192.0.2.88/profile-observe",
+    "probeInterval": "250000us",
+    "enableConcurrency": true
+  }
+}

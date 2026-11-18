@@ -11,6 +11,7 @@ on:
           - all
           - android-emulator
           - apple-runtime
+          - macos-native-runtime
           - apple-host-policy
           - apple-fakedns
           - core-dns-context
@@ -127,6 +128,58 @@ jobs:
       - name: Test macOS endpoint discovery and DNS lifecycle
         if: runner.os == 'macOS'
         run: bash tool/test_macos_tunnel_support.sh --filter TunnelEndpointDiscoveryTests
+
+  macos-native-runtime:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.validation == 'macos-native-runtime'
+    name: macOS native SDK and timing
+    runs-on: ${{ inputs.apple_runner || 'macos-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: third_party/xray-mobile/go.mod
+          cache-dependency-path: third_party/xray-mobile/go.sum
+      - name: Build the unpublished pinned macOS SDK
+        run: tool/build_apple_core_preview.sh macos build/apple-core-preview/macos --vpn-routing --balancer-diagnostics
+      - name: Test macOS routing, profile inspection and Core lifecycle
+        env:
+          XRAY_RUNTIME_FRAMEWORK: ${{ github.workspace }}/build/apple-core-preview/macos/XRay.xcframework
+          EXPECTED_XRAY_CORE_VERSION: '26.11.9'
+          REQUIRE_CORE_PREFLIGHT: '1'
+          REQUIRE_VPN_ROUTING: '1'
+          REQUIRE_DARWIN_INTERFACE_BINDING: '1'
+          REQUIRE_MANAGED_SERVICE_LIFETIMES: '1'
+          REQUIRE_BALANCER_DIAGNOSTICS: '1'
+        run: bash tool/test_macos_privacy_runtime.sh
+      - name: Test controlled macOS startup and DNS timing
+        shell: bash
+        env:
+          FLVLESS_TIMING_MODE: candidate
+        run: |
+          set -euo pipefail
+          python3 tool/test_macos_startup_timing.py
+          bash tool/test_macos_tunnel_support.sh --filter TunnelEndpointStartupTimingTests \
+            2>&1 | tee build/macos-native-endpoint-timing.log
+      - name: Preserve synthetic macOS runtime and timing results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-native-runtime-evidence
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            build/macos_privacy_runtime_probe/runtime.log
+            build/macos-startup-timing-current/result.json
+            build/macos-startup-timing-current/*.log
+            build/macos-native-endpoint-timing.log
 
   apple-host-policy:
     if: github.event_name == 'workflow_dispatch' && inputs.validation == 'apple-host-policy'

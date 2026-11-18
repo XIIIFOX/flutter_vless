@@ -7,6 +7,7 @@ Xray delivers to a local underlay HTTP server or a loopback SOCKS server. No ser
 import argparse
 from contextlib import contextmanager, ExitStack
 import base64
+import errno
 import hashlib
 import http.client
 import ipaddress
@@ -514,6 +515,29 @@ class Socks(socketserver.BaseRequestHandler):
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
+
+
+def socks_datagram_pair(address, handler):
+    # Windows reserves independent port ranges for TCP and UDP. Hold both
+    # sockets before publishing a single endpoint to the pinned SOCKS fixture.
+    for _ in range(8):
+        with ExitStack() as candidate:
+            relay = candidate.enter_context(DatagramServer((address, 0), handler))
+            proxy = candidate.enter_context(Server(relay.server_address, Socks, bind_and_activate=False))
+            proxy.allow_reuse_address = False
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                proxy.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            try:
+                proxy.server_bind()
+                proxy.server_activate()
+            except OSError as error:
+                if error.errno != errno.EADDRINUSE and getattr(error, "winerror", None) not in (10013, 10048):
+                    raise
+                conflict = error
+                continue
+            candidate.pop_all()
+            return proxy, relay
+    raise RuntimeError("Cannot reserve a shared SOCKS TCP/UDP endpoint") from conflict
 
 
 class DirectDns(socketserver.BaseRequestHandler):
@@ -2150,32 +2174,33 @@ def main():
         # A VPN freedom socket is pinned to the underlay; use a local target
         # on that interface, not a loopback-only target on another interface.
         servers.append(DirectOrigin((direct_address, 0), Direct))
-        servers.append(Server((direct_address, 0), Socks))
+        if args.vpn:
+            proxy, relay = socks_datagram_pair(direct_address, IPv6PayloadDatagram)
+            servers.extend((proxy, relay))
+        else:
+            proxy = Server((direct_address, 0), Socks)
+            servers.append(proxy)
         servers[0].daemon_threads = False  # Join bounded HTTP callbacks before final direct-only observations.
         PORTS["direct"] = servers[0].server_address[1]
-        PORTS["proxy"] = servers[1].server_address[1]
+        PORTS["proxy"] = proxy.server_address[1]
         if args.vpn:
             ipv6_payload = IPv6PayloadState()
-            servers[1].ipv6_payload = ipv6_payload
+            proxy.ipv6_payload = ipv6_payload
             # UDP and TCP intentionally share the same fixed numeric IPv4
             # relay endpoint, keeping Xray's exact transport pin closed.
-            relay = DatagramServer((direct_address, PORTS["proxy"]), IPv6PayloadDatagram)
-            servers.append(relay)
             relay.socket.settimeout(1)
             relay.ipv6_payload = ipv6_payload
-            assert relay.server_address == servers[1].server_address, "IPv6 proxy UDP relay changed endpoint"
+            assert relay.server_address == proxy.server_address, "IPv6 proxy UDP relay changed endpoint"
             servers.append(ThreadingHTTPServer(("127.0.0.1", PORTS["direct"]), Direct))
             direct_dns = Server((direct_address, 0), DirectDns)
             servers.append(direct_dns)
             direct_dns.daemon_threads = False  # server_close joins the bounded, owned DNS callbacks.
             direct_dns.questions, direct_dns.questions_lock = [], threading.Lock()
             fake_dns_payload = FakeDnsPayloadState()
-            fake_proxy = Server((direct_address, 0), Socks)
-            servers.append(fake_proxy)
+            fake_proxy, fake_relay = socks_datagram_pair(direct_address, FakeDnsPayloadDatagram)
+            servers.extend((fake_proxy, fake_relay))
             fake_proxy.daemon_threads = False
             fake_proxy.fake_dns_payload = fake_dns_payload
-            fake_relay = DatagramServer(fake_proxy.server_address, FakeDnsPayloadDatagram)
-            servers.append(fake_relay)
             fake_relay.daemon_threads = False
             fake_relay.fake_dns_payload = fake_dns_payload
             if args.native_routing:

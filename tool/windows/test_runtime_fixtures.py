@@ -22,6 +22,37 @@ def question(name):
 
 
 class RuntimeFixtureTest(unittest.TestCase):
+    def test_socks_datagram_pair_keeps_both_protocols_at_one_endpoint(self):
+        tcp, udp = runtime.socks_datagram_pair("127.0.0.1", runtime.IPv6PayloadDatagram)
+        with tcp, udp:
+            self.assertGreater(tcp.server_address[1], 0)
+            self.assertEqual(tcp.socket.getsockname(), udp.socket.getsockname())
+            self.assertFalse(tcp.allow_reuse_address)
+
+    def test_socks_datagram_pair_retries_reserved_tcp_port_and_closes_both_sockets(self):
+        failure = PermissionError(runtime.errno.EACCES, "reserved fixture port")
+        failure.winerror = 10013
+        rejected_tcp, closed_udp = [], []
+        bind = runtime.Server.server_bind
+        udp_close = runtime.DatagramServer.server_close
+
+        def start(server):
+            if not rejected_tcp:
+                rejected_tcp.append(server.socket)
+                raise failure
+            return bind(server)
+
+        def close(server):
+            udp_close(server)
+            closed_udp.append(server.socket.fileno())
+
+        with patch.object(runtime.Server, "server_bind", start), patch.object(runtime.DatagramServer, "server_close", close):
+            tcp, udp = runtime.socks_datagram_pair("127.0.0.1", runtime.FakeDnsPayloadDatagram)
+            with tcp, udp:
+                self.assertEqual(rejected_tcp[0].fileno(), -1)
+                self.assertEqual(closed_udp, [-1])
+                self.assertEqual(tcp.server_address, udp.server_address)
+
     def test_typed_profile_fixture_preserves_a_catch_all_after_scoped_controls(self):
         profile = runtime.profile_balancer_config("192.0.2.10", 15353, [24007, 24008])
         rules = profile["routing"]["rules"]
@@ -556,14 +587,18 @@ class RuntimeFixtureTest(unittest.TestCase):
                         self.server_address = (address[0], address[1] or 19000 + len(owners))
                         self.socket = Mock(); self.started = False; self.shutdowns = 0; self.closes = 0
                         owners.append(self)
+                    def __enter__(self): return self
+                    def __exit__(self, *_): self.server_close()
+                    def server_bind(self): pass
+                    def server_activate(self): pass
                     def serve_forever(self): raise AssertionError("Real server loop is forbidden")
                     def shutdown(self):
                         self.shutdowns += 1
                         if not self.started: raise illegal_shutdown
                         if failure_stage == "shutdown_failure": raise OSError("synthetic shutdown failure")
                     def server_close(self): self.closes += 1
-                def stream_server(address, handler):
-                    if failure_stage == "second_constructor" and len(owners) == 1: raise primary
+                def stream_server(address, handler, *, bind_and_activate=True):
+                    if failure_stage == "second_constructor" and not bind_and_activate: raise primary
                     return Owner(address)
                 def datagram_server(address, handler):
                     if failure_stage == "datagram_constructor": raise primary

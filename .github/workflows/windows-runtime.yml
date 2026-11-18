@@ -13,6 +13,11 @@ on:
         type: choice
         options: [build, published]
         default: build
+      runner:
+        description: Windows runner to validate
+        type: choice
+        options: [both, windows-2022, windows-2025]
+        default: both
   push:
     branches: [fr/windows-runtime-validation, fr/windows-security-1.1.6]
 
@@ -28,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, windows-2025]
+        os: ${{ fromJSON(inputs.runner == 'windows-2022' && '["windows-2022"]' || inputs.runner == 'windows-2025' && '["windows-2025"]' || '["windows-2022","windows-2025"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
@@ -188,7 +193,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, windows-2025]
+        os: ${{ fromJSON(inputs.runner == 'windows-2022' && '["windows-2022"]' || inputs.runner == 'windows-2025' && '["windows-2025"]' || '["windows-2022","windows-2025"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
@@ -248,7 +253,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, windows-2025]
+        os: ${{ fromJSON(inputs.runner == 'windows-2022' && '["windows-2022"]' || inputs.runner == 'windows-2025' && '["windows-2025"]' || '["windows-2022","windows-2025"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:

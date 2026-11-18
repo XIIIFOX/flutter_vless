@@ -301,8 +301,10 @@ def check_managed_ws_bootstrap(core, directory, cert, pin):
     app_cert, _ = certificate(core, app_host, authority=True)
     app_pem = '\n'.join(app_cert['certificate']) + '\n'
     cert_path, key_path = directory / 'app.crt', directory / 'app.key'
-    cert_path.write_text(app_pem, encoding='utf-8')
-    key_path.write_text('\n'.join(app_cert['key']) + '\n', encoding='utf-8')
+    # Xray labels this PKCS#8 EC fixture key as RSA. OpenSSL needs its real type.
+    key_pem = ['-----BEGIN PRIVATE KEY-----', *app_cert['key'][1:-1], '-----END PRIVATE KEY-----']
+    cert_path.write_bytes(app_pem.encode('ascii'))
+    key_path.write_bytes(('\n'.join(key_pem) + '\n').encode('ascii'))
     origin_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     origin_tls.load_cert_chain(cert_path, key_path)
     app_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)

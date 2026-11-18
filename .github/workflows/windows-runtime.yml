@@ -33,7 +33,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.runner == 'windows-2022' && '["windows-2022"]' || inputs.runner == 'windows-2025' && '["windows-2025"]' || '["windows-2022","windows-2025"]') }}
+        os: [windows-2022, windows-2025]
+        exclude: ${{ fromJSON(inputs.runner == 'windows-2022' && '[{"os":"windows-2025"}]' || inputs.runner == 'windows-2025' && '[{"os":"windows-2022"}]' || '[]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
@@ -193,7 +194,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.runner == 'windows-2022' && '["windows-2022"]' || inputs.runner == 'windows-2025' && '["windows-2025"]' || '["windows-2022","windows-2025"]') }}
+        os: [windows-2022, windows-2025]
+        exclude: ${{ fromJSON(inputs.runner == 'windows-2022' && '[{"os":"windows-2025"}]' || inputs.runner == 'windows-2025' && '[{"os":"windows-2022"}]' || '[]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
@@ -253,7 +255,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.runner == 'windows-2022' && '["windows-2022"]' || inputs.runner == 'windows-2025' && '["windows-2025"]' || '["windows-2022","windows-2025"]') }}
+        os: [windows-2022, windows-2025]
+        exclude: ${{ fromJSON(inputs.runner == 'windows-2022' && '[{"os":"windows-2025"}]' || inputs.runner == 'windows-2025' && '[{"os":"windows-2022"}]' || '[]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:

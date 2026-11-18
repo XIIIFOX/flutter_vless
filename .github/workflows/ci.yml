@@ -113,8 +113,17 @@ jobs:
           with Path(os.environ['GITHUB_ENV']).open('a', encoding='utf-8') as env:
               env.write(f'XRAY_PROFILE_TEST_NEW_CORE={executable}\n')
           PY
-      - name: Test 34-node round-robin routes with Core
-        run: flutter test test/xray_profile_core_integration_test.dart --plain-name '34-node round-robin routes'
+      - name: Test Core inspection, typed profiles and subscription refresh
+        run: >-
+          flutter test --reporter expanded
+          test/core_inspection_api_test.dart
+          test/xray_profile_network_test.dart
+          test/xray_profile_services_test.dart
+          test/xray_subscription_refresh_test.dart
+          test/subscription_download_test.dart
+          test/xray_geodata_update_test.dart
+      - name: Test typed DNS, Freedom, GeoDAT and balancer routes with Core
+        run: flutter test --no-pub --reporter expanded test/xray_profile_core_integration_test.dart --plain-name '26.11.9'
       - name: Test macOS endpoint discovery and DNS lifecycle
         if: runner.os == 'macOS'
         run: bash tool/test_macos_tunnel_support.sh --filter TunnelEndpointDiscoveryTests

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_vless/flutter_vless.dart';
 import 'package:flutter_vless/src/subscription_download_io.dart';
 
 final _url = Uri.parse('https://provider.invalid/subscription?token=private');
@@ -122,6 +123,53 @@ void main() {
       ),
       _downloadError('Subscription download timed out.'),
     );
+    expect(client.closed, isTrue);
+  });
+
+  test('refresh fetches once and carries selection and edits across reorder',
+      () async {
+    const first = 'socks://first.invalid:1080#First';
+    const second = 'socks://second.invalid:1080#Second';
+    final previous = XraySubscription.fromProfiles(
+      FlutterVless.parseMany('$first\n$second'),
+    );
+    final id = previous.nodes.first.id;
+    final edited = previous.select(id).editProfile(
+          id,
+          (draft) => draft.setRaw(CorePath.root.key('localSetting'), true),
+        );
+    final client = _Client([
+      _Response(200, chunks: Stream.value(utf8.encode('$second\n$first'))),
+    ]);
+    final refreshed = await HttpOverrides.runZoned(
+      () => FlutterVless.refreshSubscription(_url, edited),
+      createHttpClient: (_) => client,
+    );
+    expect(client.urls, [_url]);
+    expect(client.closed, isTrue);
+    expect(refreshed.subscription.nodes.last.id, same(id));
+    expect(refreshed.subscription.selectedNodeId, same(id));
+    expect(refreshed.subscription.selectedNode?.profile.toCoreMap(),
+        containsPair('localSetting', true));
+  });
+
+  test('refresh failure keeps the previous selection and redacts payload',
+      () async {
+    final original = XraySubscription.fromProfiles(
+      FlutterVless.parseMany('socks://first.invalid:1080#First'),
+    );
+    final previous = original.select(original.nodes.single.id);
+    final client = _Client([
+      _Response(200, chunks: Stream.value(utf8.encode('private-payload'))),
+    ]);
+    await expectLater(
+      HttpOverrides.runZoned(
+        () => FlutterVless.refreshSubscription(_url, previous),
+        createHttpClient: (_) => client,
+      ),
+      _downloadError('The subscription contains no usable profiles.'),
+    );
+    expect(previous.selectedNode, same(original.nodes.single));
     expect(client.closed, isTrue);
   });
 }

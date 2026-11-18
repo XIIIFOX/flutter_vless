@@ -160,6 +160,145 @@ void main() {
             ? 'Set $variable to run Core traffic tests'
             : false);
 
+    test('typed Freedom and GeoDAT configurations on Core $version', () async {
+      final base = XrayProfile.build((draft) {
+        final node = draft.addNode(ProxyNode.fromMap({'protocol': 'freedom'}));
+        draft.setFreedomFinalRules(node, [
+          XrayFreedomFinalRule.allow(
+            destinationCidrs: [XrayCidr.parse('192.0.2.0/24')],
+            destinationPorts: [XrayPortRange.single(443)],
+            networks: {XrayRouteNetwork.tcp},
+          ),
+          XrayFreedomFinalRule.block(),
+        ]);
+        draft.setGeoDataSchedule(
+            XrayGeoDataSchedule.every(const Duration(hours: 12), assets: []));
+      });
+      final withImmediateBlock = base.edit((draft) {
+        draft.setFreedomFinalRules(draft.nodeAt(0), [
+          XrayFreedomFinalRule.block(
+            delay: XrayFreedomBlockDelay.fixed(Duration.zero),
+            logLevel: XrayFreedomLogLevel.none,
+          ),
+        ]);
+      });
+      final temp =
+          await Directory.systemTemp.createTemp('xray-typed-services-');
+      try {
+        final config = File('${temp.path}/profile.json');
+        Future<ProcessResult> check(XrayProfile profile) async {
+          await config.writeAsString(profile.toCoreJson());
+          return Process.run(
+              executable!, ['run', '-test', '-config', config.path]);
+        }
+
+        final compatible = await check(base);
+        expect(compatible.exitCode, 0, reason: '${compatible.stdout}');
+        final guarded = await check(withImmediateBlock);
+        if (version == '26.11.9') {
+          expect(guarded.exitCode, 0, reason: '${guarded.stdout}');
+        } else {
+          expect(guarded.exitCode, isNot(0));
+          expect('${guarded.stdout}${guarded.stderr}',
+              contains('26.11.9 or higher'));
+        }
+      } finally {
+        await temp.delete(recursive: true);
+      }
+    },
+        skip: executable == null
+            ? 'Set $variable to run Core version tests'
+            : false);
+
+    test('typed split DNS and combined route conditions work on Core $version',
+        () async {
+      const splitHost = 'corp.split-fixture.invalid';
+      const refusedHost = 'refused.$splitHost';
+      const defaultHost = 'public.split-fixture.invalid';
+      final primaryDns = await _LoopDns.start();
+      final splitDns = await _LoopDns.start(refuse: refusedHost);
+      addTearDown(primaryDns.close);
+      addTearDown(splitDns.close);
+
+      final ipv4 = await _Peer.start('split-ipv4', Duration.zero);
+      final ipv6 = await _Peer.start('default-ipv6', Duration.zero);
+      final fallback = await _Peer.start('route-fallback', Duration.zero);
+      addTearDown(ipv4.close);
+      addTearDown(ipv6.close);
+      addTearDown(fallback.close);
+      final port = await _unusedPort();
+      final profile = XrayProfile.build((draft) {
+        const primaryTag = 'default-dns';
+        const splitTag = 'corp-dns';
+        final ipv4Target = RouteTarget.node(draft.addNode(ipv4.outbound()));
+        final ipv6Target = RouteTarget.node(draft.addNode(ipv6.outbound()));
+        final fallbackTarget =
+            RouteTarget.node(draft.addNode(fallback.outbound()));
+        draft.setDnsOptions(const XrayDnsOptions(disableFallbackIfMatch: true));
+        draft.addDnsServer(XrayDnsServer.udp(
+          '127.0.0.1',
+          port: primaryDns.port,
+          tag: primaryTag,
+          queryStrategy: XrayDnsQueryStrategy.useIpv6,
+        ));
+        draft.addDnsServer(XrayDnsServer.udp(
+          '127.0.0.1',
+          port: splitDns.port,
+          tag: splitTag,
+          domains: ['domain:$splitHost'],
+          queryStrategy: XrayDnsQueryStrategy.useIpv4,
+          skipFallback: true,
+        ));
+        draft.addDnsServer(XrayDnsServer.doh(
+          Uri.parse('https://127.0.0.1:1/dns-query'),
+          domains: ['full:unused.split-fixture.invalid'],
+          skipFallback: true,
+          finalQuery: true,
+        ));
+        draft.setRoutingDomainStrategy(XrayRoutingDomainStrategy.ipOnDemand);
+        draft.addRule(RouteRule.match(
+          to: const RouteTarget.direct(),
+          inboundTags: [primaryTag, splitTag],
+          networks: {XrayRouteNetwork.udp},
+        ));
+        draft.addRule(RouteRule.match(
+          to: ipv4Target,
+          destinationCidrs: [XrayCidr.parse('127.0.0.0/8')],
+          destinationPorts: [XrayPortRange.range(18001, 18002)],
+          networks: {XrayRouteNetwork.tcp},
+        ));
+        draft.addRule(RouteRule.match(
+          to: ipv6Target,
+          destinationCidrs: [XrayCidr.parse('::1/128')],
+          destinationPorts: [XrayPortRange.single(18001)],
+          networks: {XrayRouteNetwork.tcp},
+        ));
+        draft.setDefaultRoute(fallbackTarget);
+        draft.setRaw(CorePath.root.key('inbounds'), [
+          {'listen': '127.0.0.1', 'port': port, 'protocol': 'http'},
+        ]);
+      });
+      Uri url(String host, [int destinationPort = 18001]) => Uri(
+          scheme: 'http', host: host, port: destinationPort, path: '/traffic');
+      await _withCore(executable!, port, profile, (client) async {
+        expect(await _query(client, url(splitHost)), ipv4.label);
+        expect(await _query(client, url(splitHost, 18002)), ipv4.label);
+        expect(await _query(client, url(splitHost, 18003)), fallback.label);
+        expect(await _query(client, url(defaultHost)), ipv6.label);
+        expect(await _query(client, url(refusedHost)), fallback.label);
+
+        expect(splitDns.questions[splitHost], {1});
+        expect(splitDns.questions[refusedHost], {1});
+        expect(splitDns.questions, isNot(contains(defaultHost)));
+        expect(primaryDns.questions[defaultHost], {28});
+        expect(primaryDns.questions, isNot(contains(splitHost)));
+        expect(primaryDns.questions, isNot(contains(refusedHost)));
+      });
+    },
+        skip: executable == null
+            ? 'Set $variable to run loopback DNS and routing tests'
+            : false);
+
     if (version == '26.11.9') {
       test('34-node round-robin routes on Core $version', () async {
         final peers = <_Peer>[];
@@ -290,6 +429,89 @@ Future<void> _until(HttpClient client, Uri uri, String? expected) async {
       expect(actual, expected);
     }
     await Future<void>.delayed(const Duration(milliseconds: 70));
+  }
+}
+
+final class _LoopDns {
+  _LoopDns(this._socket, this._refuse);
+
+  static Future<_LoopDns> start({String? refuse}) async {
+    final socket =
+        await RawDatagramSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final resolver = _LoopDns(socket, refuse);
+    resolver._subscription = socket.listen((event) {
+      if (event == RawSocketEvent.read) {
+        final packet = socket.receive();
+        if (packet != null) resolver._reply(packet);
+      }
+    });
+    return resolver;
+  }
+
+  final RawDatagramSocket _socket;
+  final String? _refuse;
+  late final StreamSubscription<RawSocketEvent> _subscription;
+  final questions = <String, Set<int>>{};
+
+  int get port => _socket.port;
+
+  void _reply(Datagram packet) {
+    final data = packet.data;
+    if (data.length < 17 || data[4] != 0 || data[5] != 1) return;
+    var index = 12;
+    final labels = <String>[];
+    while (index < data.length && data[index] != 0) {
+      final length = data[index++];
+      if (length > 63 || index + length >= data.length) return;
+      labels.add(String.fromCharCodes(data, index, index + length));
+      index += length;
+    }
+    if (index + 5 > data.length) return;
+    final host = labels.join('.');
+    final type = (data[index + 1] << 8) | data[index + 2];
+    questions.putIfAbsent(host, () => {}).add(type);
+    final answer = switch (type) {
+      1 => InternetAddress.loopbackIPv4.rawAddress,
+      28 => InternetAddress.loopbackIPv6.rawAddress,
+      _ => const <int>[],
+    };
+    final refused = host == _refuse;
+    final hasAnswer = !refused && answer.isNotEmpty;
+    _socket.send([
+      data[0],
+      data[1],
+      0x81,
+      refused ? 0x85 : 0x80,
+      0,
+      1,
+      0,
+      hasAnswer ? 1 : 0,
+      0,
+      0,
+      0,
+      0,
+      ...data.sublist(12, index + 5),
+      if (hasAnswer) ...[
+        0xc0,
+        0x0c,
+        0,
+        type,
+        0,
+        1,
+        0,
+        0,
+        0,
+        10,
+        0,
+        answer.length,
+        ...answer,
+      ],
+    ], packet.address, packet.port);
+  }
+
+  Future<void> close() async {
+    _socket.close();
+    await _subscription.cancel();
   }
 }
 

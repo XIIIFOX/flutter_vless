@@ -61,7 +61,8 @@ inline bool Probe(const fs::path& parent) {
   if (two) { error.clear(); fs::remove(second,error); clean=clean && !error; }
   return replaced && clean;
 }
-inline bool ValidateWritable(const Json& config, const fs::path& directory) try {
+inline bool ValidateWritable(const Json& config, const fs::path& directory,
+    bool check_atomic_replace = true, const std::function<bool(const fs::path&)>& check_path = {}) try {
   if (!HasSchedule(config)) return true;
   auto section=Field(config,"geodata");
   auto assets=Field(*section,"assets");
@@ -85,12 +86,12 @@ inline bool ValidateWritable(const Json& config, const fs::path& directory) try 
       begin=end+1;
     } while (true);
     auto file=directory/fs::u8path(name);
-    if (!fs::is_regular_file(file)) return false;
+    if ((check_path && !check_path(file)) || !fs::is_regular_file(file)) return false;
 #ifdef _WIN32
     const auto flags=GetFileAttributesW(file.c_str());
     if (flags==INVALID_FILE_ATTRIBUTES || (flags&FILE_ATTRIBUTE_READONLY)) return false;
 #endif
-    parents.insert(file.parent_path());
+    if (check_atomic_replace) parents.insert(file.parent_path());
   }
   for (const auto& parent:parents) if (!Probe(parent)) return false;
   return true;

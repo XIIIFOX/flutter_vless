@@ -1,6 +1,6 @@
 import 'package:flutter_vless/url/xray_json.dart';
 
-/// Early checks for pinned Core 26.10.31's GeoDAT updater. Core remains the
+/// Early checks for the supported GeoDAT updater. Core remains the
 /// authority for cron syntax, native file resolution and the 256 MiB decoded
 /// asset limit.
 /// This validator never downloads, reads files or rewrites caller fields.

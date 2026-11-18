@@ -1195,6 +1195,13 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             stopVless(result: result)
         case "getCoreVersion":
             getCoreVersion(result: result)
+        case "getCoreCapabilities":
+            result(NativeCoreInspection.capabilities(coreVersion: XRayGetVersion(),
+                profileValidation: FLVlessHasCorePreflight(), vpnRouting: FLVlessCoreRoutingCapability(),
+                geoDataUpdates: FLVlessCoreGeodataLifetimeCapability(), xdrive: FLVlessCoreXdriveLifetimeCapability(),
+                balancerSelections: FLVlessHasCoreBalancerDiagnostics()))
+        case "validateProfile":
+            validateProfile(call: call, result: result)
         case "getConnectedServerDelay":
             getConnectedServerDelay(call: call, result: result)
         case "getServerDelay":
@@ -1512,6 +1519,18 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             pluginLog.info("requestPermission result=\(isGranted, privacy: .public)")
             result(isGranted)
         }
+    }
+
+    private func validateProfile(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        let arguments = call.arguments as? [String: Any]
+        // Order the file-only check with starts that may update the Core's
+        // process asset location. The check does not own a session or a manager.
+        let operation = commands.submit {
+            NativeCoreInspection.validate(arguments, supported: FLVlessHasCorePreflight(),
+                geodataCapability: FLVlessCoreGeodataLifetimeCapability(),
+                xdriveCapability: FLVlessCoreXdriveLifetimeCapability(), check: FLVlessCheckCorePrivate)
+        }
+        Task { result((try? await operation.value) ?? ["status": "unavailable"]) }
     }
 
     private func getCoreVersion(result: @escaping FlutterResult) {

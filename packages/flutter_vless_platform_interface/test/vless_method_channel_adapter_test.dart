@@ -78,4 +78,54 @@ void main() {
 
     expect(await adapter.getBalancerSelections(), isEmpty);
   });
+
+  test('Core capability decoder retains only the version and known flags', () {
+    final capabilities = VlessCoreCapabilities.fromNativeReply({
+      'coreVersion': 'Xray 26.11.9 (secret.example)',
+      'profileValidation': true,
+      'xdrive': 'true',
+      'future': 'secret.example',
+    });
+    expect(capabilities.coreVersion, '26.11.9');
+    expect(capabilities.profileValidation, isTrue);
+    expect(capabilities.xdrive, isFalse);
+    expect(
+        VlessCoreCapabilities.fromNativeReply(
+            {'coreVersion': '/private/26.11.9'}).coreVersion,
+        isNull);
+  });
+
+  test(
+      'profile result validates authored entry locations and drops arbitrary text',
+      () {
+    final result = VlessProfileValidation.fromNativeReply({
+      'status': 'invalid',
+      'stage': 'coreCheck',
+      'section': 'outbounds',
+      'index': 2,
+      'message': 'secret.example',
+    });
+    expect(result.status, VlessProfileValidationStatus.invalid);
+    expect(result.stage, VlessProfileValidationStage.coreCheck);
+    expect(result.section, VlessProfileSection.outbounds);
+    expect(result.index, 2);
+    for (final wire in [
+      null,
+      'valid',
+      {'status': 'future'},
+      {'status': true}
+    ]) {
+      expect(VlessProfileValidation.fromNativeReply(wire).status,
+          VlessProfileValidationStatus.unavailable);
+    }
+    for (final index in [-1, 2147483648, '2']) {
+      final bad = VlessProfileValidation.fromNativeReply({
+        'status': 'invalid',
+        'stage': 'secret.example',
+        'section': 'inbounds',
+        'index': index,
+      });
+      expect((bad.stage, bad.section, bad.index), (null, null, null));
+    }
+  });
 }

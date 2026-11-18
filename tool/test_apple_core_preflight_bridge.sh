@@ -236,12 +236,26 @@ cmp "$SOURCE/FlutterVlessCoreCompat.m" "$ROOT/packages/flutter_vless_macos/macos
 cmp "$SOURCE/include/FlutterVlessCoreCompat.h" "$ROOT/packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_core_compat/include/FlutterVlessCoreCompat.h"
 xcrun swiftc -O -parse-as-library "$IOS" "$ROOT/tool/core_preflight_policy_test.swift" -o "$OUT/policy"
 "$OUT/policy"
+for POLICY in "$(dirname "$IOS")" "$(dirname "$MAC")"; do
+    xcrun swiftc -O -parse-as-library "$POLICY"/{CorePreflightPolicy,NativeCoreInspection,GeoDatAssetPolicy,XdriveServicePolicy,XrayCertificatePaths,LocalProxyAccessPolicy,XrayServiceTags}.swift \
+        "$ROOT/tool/core_inspection_policy_test.swift" -o "$OUT/inspection"
+    "$OUT/inspection"
+done
 python3 - "$ROOT" "$OUT" <<'PY'
 from pathlib import Path
 import sys
 root, out = map(Path,sys.argv[1:])
 sources = [root/'ios/flutter_vless/Sources/flutter_vless/FlutterVlessPlugin.swift',
  root/'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos/FlutterVlessPlugin.swift']
+for path in sources:
+ source = path.read_text()
+ assert 'case "getCoreCapabilities":' in source and 'NativeCoreInspection.capabilities(' in source
+ assert 'case "validateProfile":\n            validateProfile(call: call, result: result)' in source
+ start = source.index('    private func validateProfile(')
+ end = source.index('\n    private func getCoreVersion(', start)
+ entry = source[start:end]
+ assert 'NativeCoreInspection.validate(' in entry and 'check: FLVlessCheckCorePrivate' in entry
+ assert all(forbidden not in entry for forbidden in ('XRayStart', 'XRayStop', 'configureXrayAssetLocation', 'packetTunnelManager', 'ProxyOnlyRunner'))
 def transaction_probe(source):
  preparation = '        let preparationChanges = Array(changes)\n'
  operation_start = source.index(preparation) + len(preparation)

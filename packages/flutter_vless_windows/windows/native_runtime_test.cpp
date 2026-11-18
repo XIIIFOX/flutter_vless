@@ -332,6 +332,39 @@ int main(int argc, char** argv) {
     assert(listen(occupied, 1) == 0);
     const auto configuration = std::string("{\"inbounds\":[{\"listen\":\"127.0.0.1\",\"protocol\":\"socks\",\"port\":")
         + std::to_string(ntohs(address.sin_port)) + "}],\"outbounds\":[{\"protocol\":\"freedom\"}]}";
+    const auto capabilities = InspectBundledCore();
+    assert(capabilities.version == "26.11.9" && capabilities.profile_validation);
+    using ProfileStatus = ProfileCheckStatus;
+    using ProfileStage = flutter_vless::preparation::Stage;
+    const auto profile_check = ValidateBundledProfile(configuration);
+    assert(profile_check.status == ProfileStatus::valid);
+    assert(!TcpPortAvailable(ntohs(address.sin_port))); // The caller still owns the listener.
+    const auto rejected_profile = ValidateBundledProfile(R"({"outbounds":[{"protocol":"private-inspection-canary"}]})");
+    assert(rejected_profile.status == ProfileStatus::invalid && rejected_profile.stage == ProfileStage::core_check);
+    assert(ValidateBundledProfile("private-malformed-canary").status == ProfileStatus::invalid);
+    const auto invalid_assets = ValidateBundledProfile(configuration, fs::path(L"relative-assets"));
+    assert(invalid_assets.status == ProfileStatus::invalid && invalid_assets.stage == ProfileStage::prepare);
+    const auto invalid_certificates = ValidateBundledProfile(configuration, std::nullopt, fs::path(L"relative-certificates"));
+    assert(invalid_certificates.status == ProfileStatus::invalid && invalid_certificates.stage == ProfileStage::prepare);
+    const auto remote_assets = ValidateBundledProfile(configuration, fs::path(LR"(\\inspection.invalid\fixtures)"));
+    assert(remote_assets.status == ProfileStatus::invalid && remote_assets.stage == ProfileStage::prepare);
+    auto unsafe_cert = flutter_vless::xray_config::Parse(configuration);
+    unsafe_cert["outbounds"][0]["streamSettings"] = {
+        {"security", "tls"}, {"tlsSettings", {{"certificates", {{
+            {"certificateFile", R"(\\inspection.invalid\fixtures\cert.pem)"}}}}}}};
+    const auto remote_cert = ValidateBundledProfile(unsafe_cert.dump());
+    assert(remote_cert.status == ProfileStatus::invalid && remote_cert.stage == ProfileStage::prepare);
+    auto caller = flutter_vless::xray_config::Parse(configuration);
+    const auto caller_log = fs::temp_directory_path() / (L"inspection-canary-" + Wide(RandomHex(16)) + L".log");
+    caller["log"] = {{"access", caller_log.u8string()}, {"error", caller_log.u8string()}, {"loglevel", "debug"}};
+    caller["futureXrayField"] = {{"keep", true}};
+    assert(ValidateBundledProfile(caller.dump()).status == ProfileStatus::valid && !fs::exists(caller_log));
+    caller["Env"] = {{"XRAY_LOCATION_ASSET", "inspection-environment-canary"}};
+    assert(ValidateBundledProfile(caller.dump()).status == ProfileStatus::unsupported);
+    caller["Env"] = {{"XRAY_LOCATION_ASSET", 1}};
+    assert(ValidateBundledProfile(caller.dump()).status == ProfileStatus::invalid);
+    assert(temporary_documents() == documents_before);
+    std::cout << "WINDOWS_PROFILE_INSPECTION_PASS=10\n";
     assert(CheckConfig(configuration, *trusted, owner)); // Core must not bind the occupied listener.
     assert(!CheckConfig("{\"outbounds\":[{\"protocol\":\"private-preflight-canary\"}]}", *trusted, owner));
     assert(!CheckConfig("not-json-private-canary", *trusted, owner));

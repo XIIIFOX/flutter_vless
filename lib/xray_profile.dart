@@ -6,9 +6,13 @@ import 'dart:convert';
 
 import 'flutter_vless.dart' show FlutterVless;
 import 'url/xray_config_model.dart';
+import 'url/xray_geodata_update.dart';
 import 'url/xray_json.dart';
 
 part 'src/xray_profile_routing.dart';
+part 'src/xray_profile_dns.dart';
+part 'src/xray_profile_freedom.dart';
+part 'src/xray_profile_geodata.dart';
 
 /// An exact path into an authored Xray JSON document.
 final class CorePath {
@@ -110,11 +114,14 @@ final class XrayProfileDraft {
   final Set<String> _blockingGroups;
   final List<CorePath> _writes = [];
   final Map<Object, JsonMap> _references = {};
+  final Map<Object, CorePath> _newOutboundPaths = {};
   final Map<String, _HealthProbeKind?> _observed = {};
   final List<(JsonMap, RouteTarget)> _typedRules = [];
   final Map<_RouteTargetKind, NodeRef> _builtIn = {};
   HealthProbe? _probe;
   RouteTarget? _defaultRoute;
+  (String, JsonMap, String, NodeRef)? _geoDataOutbound;
+  CorePath? _minimumVersionWrite;
   JsonMap? _previousDefault;
   bool _addedRule = false;
   int _nextTag = 0;
@@ -134,8 +141,10 @@ final class XrayProfileDraft {
       throw ArgumentError('An outbound with this tag already exists');
     }
     outbound[tagKey] = tag;
-    _append(outbounds, outbound);
-    return NodeRef._(_reference(outbound), tag);
+    final path = _append(outbounds, outbound);
+    final id = _reference(outbound);
+    _newOutboundPaths[id] = path;
+    return NodeRef._(id, tag);
   }
 
   /// References an existing tagged outbound by its document index.
@@ -191,17 +200,128 @@ final class XrayProfileDraft {
     _probe = probe;
   }
 
-  /// Appends a domain rule in call order, before a newly generated default.
+  /// Appends a routing rule in call order, before a generated default.
   void addRule(RouteRule rule) {
     final rules = _routingArray('rules');
     final entry = <String, dynamic>{
       'type': 'field',
-      'domain': rule._domains,
+      ..._copyMap(rule._conditions),
       ..._target(rule._to),
     };
     _append(rules, entry);
     _typedRules.add((entry, rule._to));
     _addedRule = true;
+  }
+
+  /// Sets when Xray resolves destinations for IP-based route matching.
+  /// Other routing fields retain their authored values and ordering.
+  void setRoutingDomainStrategy(XrayRoutingDomainStrategy strategy) {
+    final (key, routing) = _routingObject();
+    final field = _schemaKey(routing, 'domainStrategy');
+    _record(CorePath.root.key(key).key(field));
+    routing[field] = strategy._wire;
+    _document[key] = routing;
+  }
+
+  /// Appends a resolver to the authored DNS list in call order.
+  /// Existing resolver definitions, including raw entries, are preserved.
+  void addDnsServer(XrayDnsServer server) {
+    final (key, dns) = _object('dns');
+    if (server._usesSplitQueries) _checkDnsScript(dns);
+    final field = _schemaKey(dns, 'servers');
+    final servers = dns[field] ?? <Object?>[];
+    if (servers is! List<Object?>) {
+      throw ArgumentError('Xray DNS servers must be an array');
+    }
+    _record(CorePath.root.key(key).key(field).index(servers.length));
+    servers.add(_copyMap(server._settings));
+    dns[field] = servers;
+    _document[key] = dns;
+  }
+
+  /// Sets the supplied DNS options and retains every other authored member.
+  void setDnsOptions(XrayDnsOptions options) {
+    final optionFields = options._toCore();
+    if (optionFields.isEmpty) return;
+    final (key, dns) = _object('dns');
+    if (options.disableFallbackIfMatch == true) _checkDnsScript(dns);
+    final changes = {
+      for (final field in optionFields.entries)
+        _schemaKey(dns, field.key): field.value,
+    };
+    final path = CorePath.root.key(key);
+    final writes = changes.keys.map(path.key).toList();
+    for (final write in writes) {
+      _checkWrite(write);
+    }
+    _writes.addAll(writes);
+    dns.addAll(changes);
+    _document[key] = dns;
+  }
+
+  /// Replaces the ordered final rules on an existing Freedom outbound.
+  /// Other outbound settings stay intact. A rule with an explicit delay or
+  /// log level also sets the minimum Core version to 26.11.9.
+  void setFreedomFinalRules(
+    NodeRef node,
+    List<XrayFreedomFinalRule> rules,
+  ) {
+    _nodeTag(node);
+    final (outboundPath, outbounds) =
+        _array(CorePath.root, _document, 'outbounds');
+    final outbound = _references[node._id]!;
+    final protocol = readXraySchemaField(outbound, 'protocol');
+    if (protocol is! String ||
+        !const {'freedom', 'direct'}.contains(protocol.toLowerCase())) {
+      throw ArgumentError('Final rules require a Freedom outbound');
+    }
+    final settingsKey = _schemaKey(outbound, 'settings');
+    final settings = outbound[settingsKey] ?? <String, dynamic>{};
+    if (settings is! JsonMap) {
+      throw ArgumentError('Freedom settings must be an object');
+    }
+    final field = _schemaKey(settings, 'finalRules');
+    final index = outbounds.indexWhere((value) => identical(value, outbound));
+    final path = outboundPath.index(index).key(settingsKey).key(field);
+    _checkWrite(path, permittedWrite: _newOutboundPaths[node._id]);
+    if (rules.any((rule) => rule._needsNewCore)) {
+      requireCoreAtLeast('26.11.9');
+    }
+    _writes.add(path);
+    settings[field] = [for (final rule in rules) _copyMap(rule._definition)];
+    outbound[settingsKey] = settings;
+  }
+
+  /// Sets the GeoDAT reload schedule and optionally its download outbound.
+  /// Omitted asset and outbound settings retain their existing values.
+  /// Check the installed Core's `geoDataUpdates` capability before starting.
+  void setGeoDataSchedule(XrayGeoDataSchedule schedule, {NodeRef? outbound}) {
+    final (key, geodata) = _object('geodata');
+    final assets = schedule._assets;
+    final outboundKey =
+        outbound == null ? null : _schemaKey(geodata, 'outbound');
+    final changes = {
+      _schemaKey(geodata, 'cron'): schedule._expression,
+      if (assets != null)
+        _schemaKey(geodata, 'assets'): [
+          for (final asset in assets) asset._toCore()
+        ],
+      if (outbound != null) outboundKey!: _nodeTag(outbound),
+    };
+    XrayGeodataUpdate.validate({
+      key: {...geodata, ...changes}
+    });
+    final path = CorePath.root.key(key);
+    final writes = changes.keys.map(path.key).toList();
+    for (final write in writes) {
+      _checkWrite(write);
+    }
+    _writes.addAll(writes);
+    geodata.addAll(changes);
+    _document[key] = geodata;
+    if (outbound != null) {
+      _geoDataOutbound = (key, geodata, outboundKey!, outbound);
+    }
   }
 
   /// Sets a TCP/UDP catch-all after the authored rules. If this profile has a
@@ -278,14 +398,24 @@ final class XrayProfileDraft {
       throw ArgumentError('Minimum Xray version exceeds the profile maximum');
     }
     if (keepMin) return;
-    if (existing == null) {
-      setRaw(CorePath.root.key(versionKey), {minKey: version});
-    } else {
-      setRaw(CorePath.root.key(versionKey).key(minKey), version);
+    final versionPath = CorePath.root.key(versionKey);
+    final path = existing == null ? versionPath : versionPath.key(minKey);
+    _checkWrite(path, permittedWrite: _minimumVersionWrite);
+    if (_minimumVersionWrite == null) {
+      _minimumVersionWrite = path;
+      _writes.add(path);
     }
+    versions[minKey] = version;
+    _document[versionKey] = versions;
   }
 
   XrayProfile _finish() {
+    if (_geoDataOutbound
+        case (final key, final geodata, final field, final node)
+        when identical(_document[key], geodata) &&
+            geodata[field] == node._tag) {
+      _nodeTag(node);
+    }
     if (_typedRules.isNotEmpty) {
       final rules = _routingEntries('rules');
       for (final (entry, target) in _typedRules) {
@@ -346,20 +476,27 @@ final class XrayProfileDraft {
   }
 
   (CorePath, List<Object?>) _routingArray(String name) {
-    final key = _schemaKey(_document, 'routing');
-    final existing = _document[key];
-    final routing = existing ?? <String, dynamic>{};
-    if (routing is! JsonMap) {
-      throw ArgumentError('Xray routing must be an object');
-    }
+    final (key, routing) = _routingObject();
+    final result = _array(CorePath.root.key(key), routing, name);
+    _document[key] = routing;
+    return result;
+  }
+
+  (String, JsonMap) _routingObject() {
+    final (key, routing) = _object('routing');
     final script = readXraySchemaField(routing, 'script');
     if (script != null && script != '') {
       throw ArgumentError(
           'Typed routes cannot be combined with a routing script');
     }
-    final result = _array(CorePath.root.key(key), routing, name);
-    _document[key] = routing;
-    return result;
+    return (key, routing);
+  }
+
+  (String, JsonMap) _object(String name) {
+    final key = _schemaKey(_document, name);
+    final data = _document[key] ?? <String, dynamic>{};
+    if (data is! JsonMap) throw ArgumentError('Xray $name must be an object');
+    return (key, data);
   }
 
   (CorePath, List<Object?>) _array(CorePath path, JsonMap parent, String name) {
@@ -372,9 +509,11 @@ final class XrayProfileDraft {
     return (path.key(key), list);
   }
 
-  void _append((CorePath, List<Object?>) array, JsonMap entry) {
-    _record(array.$1.index(array.$2.length));
+  CorePath _append((CorePath, List<Object?>) array, JsonMap entry) {
+    final path = array.$1.index(array.$2.length);
+    _record(path);
     array.$2.add(entry);
+    return path;
   }
 
   JsonMap _entryAt((CorePath, List<Object?>) array, int index) {
@@ -608,10 +747,15 @@ final class XrayProfileDraft {
   }
 
   void _record(CorePath path, {bool replace = false}) {
-    if (!replace && _writes.any((write) => _overlap(write, path))) {
+    if (!replace) _checkWrite(path);
+    _writes.add(path);
+  }
+
+  void _checkWrite(CorePath path, {CorePath? permittedWrite}) {
+    if (_writes.any((write) =>
+        !identical(write, permittedWrite) && _overlap(write, path))) {
       throw StateError('An overlapping profile edit requires replace: true');
     }
-    _writes.add(path);
   }
 }
 

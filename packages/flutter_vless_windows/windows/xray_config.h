@@ -301,9 +301,10 @@ inline bool Object(Json& parent, const char* key) {
 // Freeze only file fields actually consumed by Core's StreamConfig.Build.
 // The explicit root is a resolution base, not a filesystem sandbox. Referenced
 // files and their contents are validated by Core before session replacement.
-inline bool BindCertificatePaths(std::string& text, const asset_location::Root& directory, preparation::Report* report = nullptr) {
+inline bool BindCertificatePaths(std::string& text, const asset_location::Root& directory, preparation::Report* report = nullptr,
+    const std::function<bool(const std::filesystem::path&)>& check_path = {}) {
   bool bound = false;
-  if (!directory) return true;
+  if (!directory && !check_path) return true;
   if (!asset_location::Valid(directory)) return false;
   auto config = Parse(text);
   if (!config.is_object()) return false;
@@ -331,15 +332,17 @@ inline bool BindCertificatePaths(std::string& text, const asset_location::Root& 
           const auto raw = path->get<std::string>();
           if (raw.find('\0') != std::string::npos) return false;
           if (raw.empty()) continue;
-          const auto file = std::filesystem::u8path(raw);
-          if (!file.is_absolute()) {
+          auto file = std::filesystem::u8path(raw);
+          if (check_path && !check_path(file)) return false;
+          if (directory && !file.is_absolute()) {
             // Go Join appends nonabsolute file text before Clean. On
             // Windows operator/ would replace the base for \file.pem
             // or another drive-relative root name instead.
             auto joined = *directory;
             joined += std::filesystem::path::preferred_separator;
             joined += file.native();
-            *path = joined.lexically_normal().u8string();
+            file = joined.lexically_normal();
+            *path = file.u8string();
             bound = true;
           }
         }

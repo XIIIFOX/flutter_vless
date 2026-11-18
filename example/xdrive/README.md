@@ -29,7 +29,7 @@ cloud service availability, quotas and negotiated cloud TLS remain separate.
 ## Cloud configuration
 
 [s3.json](s3.json) and [google-drive.json](google-drive.json) are complete client
-configuration templates for Xray Core 26.10.31. They contain placeholders, not
+configuration templates for Xray Core 26.11.9. They contain placeholders, not
 working accounts. Both peers need compatible application protocol settings and
 matching storage details. XDRIVE requires VLESS Encryption and client Mux, even
 when the cloud endpoint already uses HTTPS. `encryption: "none"` is invalid for
@@ -41,6 +41,10 @@ the paired server `decryption` value on the other peer. A UUID, a cloud secret
 or a TLS certificate cannot substitute for this pair. Keep Mux enabled with
 nonnegative concurrency values; XDRIVE does not support Vision `flow` or
 `xudpProxyUDP443: "skip"`.
+
+Both templates set TCP Mux `concurrency` to `128`. Xray 26.11.9 normalizes
+enabled TCP Mux values from `0` through `128` to `128`. UDP multiplexing is
+configured separately with `xudpConcurrency`.
 
 Replace every `${NAME}` string through your application's configuration code
 before importing. Xray does **not** expand these placeholders or read cloud
@@ -74,7 +78,7 @@ your deployment deliberately provides that fronting service.
 ## Native runtime requirement
 
 XDRIVE admission requires the managed-service lifetime capabilities in the pinned
-26.10.31 runtimes. Storage-only or custom runtimes without worker ownership are
+26.11.9 runtimes. Storage-only or custom runtimes without worker ownership are
 refused for active XDRIVE before replacing a running session.
 Updating only the Flutter package or checking the Core version is insufficient.
 
@@ -101,7 +105,8 @@ HTTP/3/ECH/redirect matrix. `local` and `template` XDRIVE services remain outsid
 the plugin's admitted service set.
 
 Primary sources for the transport configuration and storage clients:
-[JSON configuration](https://github.com/XTLS/Xray-core/blob/0afec66085a85191e9dd2a4a6646c7c9a94688d1/infra/conf/transport_method.go),
-[VLESS Encryption and Mux requirements](https://github.com/XTLS/Xray-core/blob/0afec66085a85191e9dd2a4a6646c7c9a94688d1/infra/conf/xray.go),
-[S3](https://github.com/XTLS/Xray-core/blob/0afec66085a85191e9dd2a4a6646c7c9a94688d1/transport/internet/xdrive/s3.go),
-[Google Drive](https://github.com/XTLS/Xray-core/blob/0afec66085a85191e9dd2a4a6646c7c9a94688d1/transport/internet/xdrive/drive.go).
+[JSON configuration](https://github.com/XTLS/Xray-core/blob/676eaf66f8f05d4d558ee7a74b4736623d3feeb9/infra/conf/transport_method.go),
+[VLESS Encryption and Mux requirements](https://github.com/XTLS/Xray-core/blob/676eaf66f8f05d4d558ee7a74b4736623d3feeb9/infra/conf/xray.go),
+[Mux concurrency](https://github.com/XTLS/Xray-core/blob/676eaf66f8f05d4d558ee7a74b4736623d3feeb9/app/proxyman/outbound/handler.go#L121-L153),
+[S3](https://github.com/XTLS/Xray-core/blob/676eaf66f8f05d4d558ee7a74b4736623d3feeb9/transport/internet/xdrive/s3.go),
+[Google Drive](https://github.com/XTLS/Xray-core/blob/676eaf66f8f05d4d558ee7a74b4736623d3feeb9/transport/internet/xdrive/drive.go).

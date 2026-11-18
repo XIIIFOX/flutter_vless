@@ -6,6 +6,10 @@
 * Edit Core fields by exact JSON path with `CorePath`. Specify a minimum Xray version when a profile depends on a newer Core feature.
 * Run the balancer Example with multiple share links. The examples also cover composing a profile and editing a copy with Core-specific fields.
 * Fetch HTTPS subscriptions with `FlutterVless.fetchSubscription()` and build the Example balancer from share-link subscriptions.
+* Discover installed Core capabilities and validate profiles without connecting on Android, iOS, macOS and Windows.
+* Compose split DNS and combine IPv4/IPv6 CIDR, port and TCP/UDP conditions in typed routing rules.
+* Refresh a subscription while retaining a uniquely matched selection and local edits. Review removed profiles and conflicting changes.
+* Configure Freedom final rules and GeoDAT schedules in Dart. Update the XDRIVE templates for the TCP Mux behavior in Core 26.11.9.
 * Inspect the balancer's outbound choices in VPN Diagnostics on Android, iOS, macOS and Windows with a compatible Core. This opt-in history uses numeric aliases and lasts for the active VPN session.
 
 ## 1.1.7

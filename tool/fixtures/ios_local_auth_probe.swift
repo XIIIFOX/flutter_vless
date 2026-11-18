@@ -333,6 +333,14 @@ func runDomainRoutingChecks() throws {
             } catch let failure as CorePreflightError {
                 precondition(failure.stage == "build" && failure.section == "outbounds" && failure.index == 0)
             }
+            func inspect(_ document: Data) -> NSDictionary {
+                NativeCoreInspection.validate(["config": String(decoding: document, as: UTF8.self)],
+                    supported: FLVlessHasCorePreflight(), geodataCapability: FLVlessCoreGeodataLifetimeCapability(),
+                    xdriveCapability: FLVlessCoreXdriveLifetimeCapability(), check: FLVlessCheckCorePrivate) as NSDictionary
+            }
+            precondition(inspect(data) == ["status": "valid"])
+            precondition(inspect(rejected) ==
+                ["status": "invalid", "stage": "coreCheck", "section": "outbounds", "index": 0])
             print("PREFLIGHT_RUNNING_SESSION_PASS=\(generation)")
         } else if ProcessInfo.processInfo.environment["REQUIRE_CORE_PREFLIGHT"] == "1" {
             preconditionFailure("Runtime must expose Core preflight")

@@ -4,6 +4,7 @@
 import 'dart:convert';
 
 import 'package:flutter_vless/src/subscription_download.dart';
+import 'package:flutter_vless/src/xray_subscription.dart';
 import 'package:flutter_vless/url/hysteria2.dart';
 import 'package:flutter_vless/url/shadowsocks.dart';
 import 'package:flutter_vless/url/socks.dart';
@@ -15,9 +16,11 @@ import 'package:flutter_vless/url/vmess.dart';
 import 'package:flutter_vless/url/xray_config.dart';
 import 'package:flutter_vless/url/xray_config_model.dart';
 import 'package:flutter_vless/url/xray_config_validator.dart';
+import 'package:flutter_vless/xray_profile.dart';
 import 'package:flutter_vless_platform_interface/flutter_vless_platform_interface.dart';
 
 export 'package:flutter_vless_platform_interface/flutter_vless_platform_interface.dart';
+export 'src/xray_subscription.dart';
 export 'url/url.dart';
 export 'xray_profile.dart';
 
@@ -277,6 +280,49 @@ class FlutterVless {
   Future<VlessCapabilities> getCapabilities() =>
       VlessPlatform.instance.getCapabilities();
 
+  /// Reports features of the installed native Core, including its support for
+  /// [validateProfile]. This can be called before initialization.
+  Future<VlessCoreCapabilities> getCoreCapabilities() =>
+      VlessPlatform.instance.getCoreCapabilities();
+
+  /// Checks an authored profile without opening sockets, requesting VPN
+  /// permission, or changing an active session. This can run before initialization.
+  ///
+  /// This verifies the configuration against the Core and asset lookup used by
+  /// the app process. A later VPN start still prepares and checks its own
+  /// adapter configuration and can fail on permission, socket or network state.
+  Future<VlessProfileValidation> validateProfile(
+    XrayProfile profile, {
+    String? geoAssetsDirectory,
+    String? certificateAssetsDirectory,
+  }) =>
+      validateProfileJson(
+        profile.toCoreJson(),
+        geoAssetsDirectory: geoAssetsDirectory,
+        certificateAssetsDirectory: certificateAssetsDirectory,
+      );
+
+  /// Checks JSON or JSONC as in [validateProfile], including input that has
+  /// yet to be imported. A malformed document returns an invalid result.
+  Future<VlessProfileValidation> validateProfileJson(
+    String config, {
+    String? geoAssetsDirectory,
+    String? certificateAssetsDirectory,
+  }) async {
+    final String normalized;
+    try {
+      normalized = _normalizeConfigString(config);
+    } on ArgumentError {
+      return const VlessProfileValidation(VlessProfileValidationStatus.invalid,
+          stage: VlessProfileValidationStage.prepare);
+    }
+    return VlessPlatform.instance.validateProfile(
+      config: normalized,
+      geoAssetsDirectory: geoAssetsDirectory,
+      certificateAssetsDirectory: certificateAssetsDirectory,
+    );
+  }
+
   /// Asks Android 13+ to show its user-controlled Add Tile dialog.
   ///
   /// Returns [QuickTileAddResult.unsupported] when the loaded backend cannot
@@ -446,6 +492,20 @@ class FlutterVless {
       throw const FormatException(
           'The subscription contains no usable profiles.');
     }
+  }
+
+  /// Downloads [url] and reconciles it with [previous], preserving a uniquely
+  /// matched selection and local profile edits.
+  ///
+  /// Use the same provider feed used to create [previous]. Download and parse
+  /// errors have the same limits and behavior as [fetchSubscription]. A failed
+  /// refresh leaves [previous] usable. Persist the returned snapshot only after
+  /// checking the result for removed nodes and conflicting edits.
+  static Future<XraySubscriptionRefresh> refreshSubscription(
+    Uri url,
+    XraySubscription previous,
+  ) async {
+    return previous.refresh(await fetchSubscription(url));
   }
 
   /// Parses a single share link into a typed [FlutterVlessURL] object.

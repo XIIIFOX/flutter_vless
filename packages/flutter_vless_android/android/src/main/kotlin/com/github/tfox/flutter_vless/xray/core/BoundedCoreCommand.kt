@@ -9,11 +9,19 @@ import java.util.concurrent.TimeUnit
  * This collector never starts another reader or retains a background worker.
  */
 internal object BoundedCoreCommand {
+    data class Completion(val exitCode: Int, val output: ByteArray) {
+        override fun toString() = "Completion(exitCode=$exitCode)"
+    }
+
     fun capture(process: Process, timeoutMillis: Long = 2000, maxBytes: Int = 64 * 1024,
-        nanoTime: () -> Long = System::nanoTime): ByteArray? {
+        nanoTime: () -> Long = System::nanoTime): ByteArray? =
+        complete(process, timeoutMillis, maxBytes, nanoTime)?.takeIf { it.exitCode == 0 }?.output
+
+    fun complete(process: Process, timeoutMillis: Long = 2000, maxBytes: Int = 64 * 1024,
+        nanoTime: () -> Long = System::nanoTime): Completion? {
         require(timeoutMillis in 1..10000 && maxBytes in 1..1024 * 1024)
         var interrupted = Thread.interrupted()
-        var result: ByteArray? = null
+        var result: Completion? = null
         try {
             if (!interrupted) {
                 val deadline = nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
@@ -29,7 +37,7 @@ internal object BoundedCoreCommand {
                         continue // Recheck the same deadline even for continuous output.
                     }
                     if (!process.isAlive) {
-                        if (process.exitValue() == 0) result = output.toByteArray()
+                        result = Completion(process.exitValue(), output.toByteArray())
                         finished = true
                         break
                     }

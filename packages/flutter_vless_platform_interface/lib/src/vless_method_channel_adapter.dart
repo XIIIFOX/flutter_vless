@@ -10,6 +10,7 @@ import 'balancer_selection.dart';
 import 'vpn_routing_options.dart';
 import 'vless_options.dart';
 import 'vless_preparation_report.dart';
+import 'vless_core_inspection.dart';
 
 /// Shared Flutter-channel backend with capability-gated, cancellable startup.
 ///
@@ -120,6 +121,44 @@ class VlessMethodChannelAdapter extends VlessPlatform {
       return VlessCapabilities.fromMap(result ?? const {});
     } on MissingPluginException {
       return const VlessCapabilities();
+    }
+  }
+
+  @override
+  Future<VlessCoreCapabilities> getCoreCapabilities() async {
+    try {
+      final reply =
+          await methodChannel.invokeMethod<Object?>('getCoreCapabilities');
+      return VlessCoreCapabilities.fromNativeReply(reply);
+    } on MissingPluginException {
+      return const VlessCoreCapabilities();
+    } on PlatformException {
+      return const VlessCoreCapabilities();
+    }
+  }
+
+  @override
+  Future<VlessProfileValidation> validateProfile({
+    required String config,
+    String? geoAssetsDirectory,
+    String? certificateAssetsDirectory,
+  }) async {
+    try {
+      final reply =
+          await methodChannel.invokeMethod<Object?>('validateProfile', {
+        'config': config,
+        if (geoAssetsDirectory != null)
+          'geo_assets_directory': geoAssetsDirectory,
+        if (certificateAssetsDirectory != null)
+          'certificate_assets_directory': certificateAssetsDirectory,
+      });
+      return VlessProfileValidation.fromNativeReply(reply);
+    } on MissingPluginException {
+      return const VlessProfileValidation(
+          VlessProfileValidationStatus.unsupported);
+    } on PlatformException {
+      return const VlessProfileValidation(
+          VlessProfileValidationStatus.unavailable);
     }
   }
 

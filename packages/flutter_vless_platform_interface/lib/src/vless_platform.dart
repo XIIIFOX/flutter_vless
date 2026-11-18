@@ -8,6 +8,7 @@ import 'android_dns_policy.dart';
 import 'vpn_routing_options.dart';
 import 'vless_options.dart';
 import 'vless_preparation_report.dart';
+import 'vless_core_inspection.dart';
 import 'method_channel_vless_platform.dart';
 
 /// Contract implemented by every federated `flutter_vless` platform package.
@@ -77,6 +78,21 @@ abstract class VlessPlatform extends PlatformInterface {
   /// This is not the Core transport capability/preflight result.
   Future<VlessCapabilities> getCapabilities() async =>
       const VlessCapabilities();
+
+  /// Reports features of the installed Core independently of OS VPN options.
+  Future<VlessCoreCapabilities> getCoreCapabilities() async =>
+      const VlessCoreCapabilities();
+
+  /// Checks a single authored configuration without starting or changing a session.
+  ///
+  /// The backend uses the specified data and certificate directories when it
+  /// can inspect them in isolation. Otherwise it reports `unsupported`.
+  Future<VlessProfileValidation> validateProfile({
+    required String config,
+    String? geoAssetsDirectory,
+    String? certificateAssetsDirectory,
+  }) async =>
+      const VlessProfileValidation(VlessProfileValidationStatus.unsupported);
 
   /// Requests Android's Add Quick Tile dialog from a supported foreground host.
   ///

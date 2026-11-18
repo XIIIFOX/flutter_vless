@@ -72,9 +72,92 @@ final class RouteTarget {
   final GroupRef? _group;
 }
 
-/// A domain routing rule in Xray's ordered rule list.
+/// A destination network for an Xray routing rule.
+enum XrayRouteNetwork {
+  /// Matches TCP connections.
+  tcp,
+
+  /// Matches UDP flows.
+  udp,
+}
+
+/// Controls DNS resolution by the Xray router for IP-based matching.
+enum XrayRoutingDomainStrategy {
+  /// Uses the destination as received, without resolving it in the router.
+  asIs('AsIs'),
+
+  /// Resolves domain destinations when checking an IP condition.
+  ipOnDemand('IPOnDemand'),
+
+  /// Retries rules with a resolved destination after no rule matches.
+  /// A catch-all rule prevents this second pass.
+  ipIfNonMatch('IPIfNonMatch');
+
+  const XrayRoutingDomainStrategy(this._wire);
+
+  final String _wire;
+}
+
+/// A literal IPv4 or IPv6 destination prefix for an Xray routing rule.
+final class XrayCidr {
+  const XrayCidr._(this.address, this.prefixLength);
+
+  /// Parses a numeric address and prefix length, such as `192.0.2.0/24` or
+  /// `2001:db8::/32`. Scoped and IPv4-mapped IPv6 literals are excluded.
+  factory XrayCidr.parse(String source) {
+    final parts = source.split('/');
+    if (parts.length != 2 || !RegExp(r'^[0-9]+$').hasMatch(parts[1])) {
+      throw const FormatException('Expected an IP address and CIDR prefix');
+    }
+    final address = parts[0];
+    final bytes = _parseProfileIpLiteral(address);
+    final prefix = int.tryParse(parts[1]);
+    final mapped = bytes.length == 16 &&
+        bytes.take(10).every((byte) => byte == 0) &&
+        bytes[10] == 255 &&
+        bytes[11] == 255;
+    if (prefix == null || prefix > bytes.length * 8 || mapped) {
+      throw const FormatException('Invalid Xray CIDR address or prefix length');
+    }
+    return XrayCidr._(address, prefix);
+  }
+
+  /// Numeric address portion of the prefix, without the mask.
+  final String address;
+
+  /// Mask length in bits.
+  final int prefixLength;
+
+  String get _wire => '$address/$prefixLength';
+}
+
+/// One destination port or an inclusive range for an Xray routing rule.
+final class XrayPortRange {
+  const XrayPortRange._(this.first, this.last);
+
+  /// Matches [port], a value from 1 to 65535.
+  factory XrayPortRange.single(int port) => XrayPortRange.range(port, port);
+
+  /// Matches ports from [first] through [last], inclusive.
+  factory XrayPortRange.range(int first, int last) {
+    _checkProfilePort(first);
+    _checkProfilePort(last);
+    if (first > last) throw ArgumentError('Port range must be ordered');
+    return XrayPortRange._(first, last);
+  }
+
+  /// First matching port, inclusive.
+  final int first;
+
+  /// Last matching port, inclusive.
+  final int last;
+
+  String get _wire => first == last ? '$first' : '$first-$last';
+}
+
+/// A rule in Xray's ordered route list.
 final class RouteRule {
-  RouteRule._(this._domains, this._to);
+  RouteRule._(this._conditions, this._to);
 
   /// Matches Xray domain expressions such as `domain:example.org` or
   /// `full:example.org` and sends the matching flow to [to].
@@ -82,12 +165,87 @@ final class RouteRule {
     if (domains.isEmpty || domains.any((domain) => domain.trim().isEmpty)) {
       throw ArgumentError('A domain rule requires nonempty domain expressions');
     }
-    return RouteRule._(List<String>.unmodifiable(domains), to);
+    return RouteRule._(_freezeMap({'domain': domains}), to);
   }
 
-  final List<String> _domains;
+  /// Matches destinations and sends matching traffic to [to]. At least one
+  /// condition is required. Xray combines different fields with AND and
+  /// entries within the same field with OR. Use `setDefaultRoute` for TCP and
+  /// UDP traffic that reaches the end of the rule list.
+  ///
+  /// [domains] accepts Core domain expressions. [inboundTags] can match the
+  /// tag of a remote Xray DNS resolver to route its queries independently.
+  factory RouteRule.match({
+    required RouteTarget to,
+    List<String> domains = const [],
+    List<XrayCidr> destinationCidrs = const [],
+    List<XrayPortRange> destinationPorts = const [],
+    Set<XrayRouteNetwork> networks = const {},
+    List<String> inboundTags = const [],
+  }) {
+    if (domains.any((domain) => domain.trim().isEmpty) ||
+        inboundTags.any((tag) => tag.trim().isEmpty)) {
+      throw ArgumentError('Routing domains and inbound tags must be nonempty');
+    }
+    if (domains.isEmpty &&
+        destinationCidrs.isEmpty &&
+        destinationPorts.isEmpty &&
+        inboundTags.isEmpty &&
+        networks.length != 1) {
+      throw ArgumentError('Choose a match condition or use setDefaultRoute');
+    }
+    final conditions = <String, dynamic>{
+      if (domains.isNotEmpty) 'domain': domains,
+      if (destinationCidrs.isNotEmpty)
+        'ip': [for (final cidr in destinationCidrs) cidr._wire],
+      if (destinationPorts.isNotEmpty)
+        'port': destinationPorts.map((port) => port._wire).join(','),
+      if (networks.isNotEmpty)
+        'network': XrayRouteNetwork.values
+            .where(networks.contains)
+            .map((network) => network.name)
+            .join(','),
+      if (inboundTags.isNotEmpty) 'inboundTag': inboundTags,
+    };
+    return RouteRule._(_freezeMap(conditions), to);
+  }
+
+  final JsonMap _conditions;
   final RouteTarget _to;
 }
+
+void _checkProfilePort(int port) {
+  if (port < 1 || port > 65535) {
+    throw ArgumentError('Port must be between 1 and 65535');
+  }
+}
+
+List<int> _parseProfileIpLiteral(String address) {
+  try {
+    if (address.contains(':')) {
+      if (address.contains('%') ||
+          address.contains('[') ||
+          address.contains(']')) {
+        throw const FormatException();
+      }
+      if (address.contains('.')) {
+        _parseProfileIpv4(address.split(':').last);
+      }
+      return Uri.parseIPv6Address(address);
+    }
+    return _parseProfileIpv4(address);
+  } on FormatException {
+    throw const FormatException('Expected a numeric IPv4 or IPv6 address');
+  }
+}
+
+List<int> _parseProfileIpv4(String address) {
+  if (!_profileIpv4Pattern.hasMatch(address)) throw const FormatException();
+  return Uri.parseIPv4Address(address);
+}
+
+final _profileIpv4Pattern = RegExp(r'^(?:0|[1-9][0-9]{0,2})'
+    r'(?:\.(?:0|[1-9][0-9]{0,2})){3}$');
 
 /// A concrete outbound used when Core cannot select a balancer member.
 final class GroupFallback {

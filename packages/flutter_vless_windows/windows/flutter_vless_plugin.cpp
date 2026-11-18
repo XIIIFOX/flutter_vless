@@ -70,6 +70,36 @@ void CompleteStartup(flutter::MethodResult<flutter::EncodableValue>& result, boo
       : "VPN setup failed. Check configuration, administrator rights and bundled runtime files.", StartupErrorValue(outcome));
 }
 
+flutter::EncodableValue CoreCapabilitiesValue(const flutter_vless::native::CoreCapabilities& capabilities) {
+  flutter::EncodableMap value{
+      {flutter::EncodableValue("profileValidation"), flutter::EncodableValue(capabilities.profile_validation)},
+      {flutter::EncodableValue("vpnRouting"), flutter::EncodableValue(capabilities.vpn_routing)},
+      {flutter::EncodableValue("geoDataUpdates"), flutter::EncodableValue(capabilities.geodata_updates)},
+      {flutter::EncodableValue("xdrive"), flutter::EncodableValue(capabilities.xdrive)},
+      {flutter::EncodableValue("balancerSelections"), flutter::EncodableValue(capabilities.balancer_selections)}};
+  if (!capabilities.version.empty()) {
+    value.emplace(flutter::EncodableValue("coreVersion"), flutter::EncodableValue(capabilities.version));
+  }
+  return flutter::EncodableValue(std::move(value));
+}
+
+flutter::EncodableValue ProfileCheckValue(const flutter_vless::native::ProfileCheck& check) {
+  using Status = flutter_vless::native::ProfileCheckStatus;
+  const char* name = "unavailable";
+  switch (check.status) {
+    case Status::valid: name = "valid"; break;
+    case Status::invalid: name = "invalid"; break;
+    case Status::unsupported: name = "unsupported"; break;
+    case Status::unavailable: break;
+  }
+  flutter::EncodableMap value{{flutter::EncodableValue("status"), flutter::EncodableValue(name)}};
+  if (check.status == Status::invalid) {
+    const char* stage = check.stage == flutter_vless::preparation::Stage::core_check ? "coreCheck" : "prepare";
+    value.emplace(flutter::EncodableValue("stage"), flutter::EncodableValue(stage));
+  }
+  return flutter::EncodableValue(std::move(value));
+}
+
 /**
  * @brief Helper function to log messages to console and Windows debug output.
  * 
@@ -160,6 +190,8 @@ class FlutterVlessPlugin : public flutter::Plugin {
   // Mutex to serialize Start/Stop operations to prevent race conditions
   std::mutex lifecycle_mutex_;
   NativeTaskQueue operations_;
+  // File-only checks cannot delay Stop or hold the session lifecycle mutex.
+  NativeTaskQueue inspections_;
   flutter_vless::NativeOptions native_options_;
   std::unique_ptr<flutter_vless::SystemTray> tray_;
   struct QuickProfile {
@@ -384,6 +416,7 @@ FlutterVlessPlugin::~FlutterVlessPlugin() {
   tray_.reset();
   StopStatusTimer();
   V2rayManager::GetInstance().Shutdown();
+  inspections_.Stop();
   
   // Unregister window proc delegate
   if (registrar_ && window_proc_delegate_id_ != 0) {
@@ -422,6 +455,47 @@ void FlutterVlessPlugin::HandleMethodCall(
     operations_.Submit([this, report] {
       const bool balancer = flutter_vless::native::BundledBalancerCapability();
       RunOnUIThread([report, balancer] { report(balancer); });
+    });
+  } else if (method_call.method_name() == "getCoreCapabilities") {
+    if (!main_window_handle_ || !ui_callback_message_id_ || !window_proc_delegate_id_) {
+      result->Success(CoreCapabilitiesValue({}));
+      return;
+    }
+    std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> reply = std::move(result);
+    inspections_.Submit([this, reply] {
+      auto value = CoreCapabilitiesValue(flutter_vless::native::InspectBundledCore());
+      RunOnUIThread([reply, value = std::move(value)] { reply->Success(value); });
+    });
+  } else if (method_call.method_name() == "validateProfile") {
+    using Status = flutter_vless::native::ProfileCheckStatus;
+    const auto* arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
+    if (!arguments) { result->Success(ProfileCheckValue({Status::invalid})); return; }
+    const auto config_it = arguments->find(flutter::EncodableValue("config"));
+    const auto* config = config_it == arguments->end() ? nullptr : std::get_if<std::string>(&config_it->second);
+    const auto read_directory = [&](const char* key, flutter_vless::asset_location::Root& directory) {
+      const auto found = arguments->find(flutter::EncodableValue(key));
+      if (found == arguments->end() || found->second.IsNull()) return true;
+      const auto* text = std::get_if<std::string>(&found->second);
+      if (!text) return false;
+      const auto path = flutter_vless::native::Wide(*text);
+      if (path.empty()) return false;
+      directory = fs::path(path);
+      return true;
+    };
+    flutter_vless::asset_location::Root assets, certificates;
+    if (!config || !read_directory("geo_assets_directory", assets)
+        || !read_directory("certificate_assets_directory", certificates)) {
+      result->Success(ProfileCheckValue({Status::invalid}));
+      return;
+    }
+    if (!main_window_handle_ || !ui_callback_message_id_ || !window_proc_delegate_id_) {
+      result->Success(ProfileCheckValue({Status::unavailable}));
+      return;
+    }
+    std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> reply = std::move(result);
+    inspections_.Submit([this, config = *config, assets, certificates, reply]() mutable {
+      const auto check = flutter_vless::native::ValidateBundledProfile(std::move(config), assets, certificates);
+      RunOnUIThread([reply, check] { reply->Success(ProfileCheckValue(check)); });
     });
   } else if (method_call.method_name() == "requestAddQuickTile") {
     result->Success(flutter::EncodableValue("unsupported"));

@@ -22,6 +22,27 @@ std::unique_ptr<ProcessHandle> Launch(const fs::path& executable,
     unsigned stdout_buffer_bytes = 0);
 bool Command(const fs::path& executable, const std::vector<std::wstring>& arguments,
     std::string& output, unsigned timeout_ms = 3000, const asset_location::Root& assets = std::nullopt);
+
+struct CoreCapabilities {
+  std::string version;
+  bool profile_validation = false;
+  bool vpn_routing = false;
+  bool geodata_updates = false;
+  bool xdrive = false;
+  bool balancer_selections = false;
+};
+enum class ProfileCheckStatus { valid, invalid, unsupported, unavailable };
+struct ProfileCheck {
+  ProfileCheckStatus status;
+  preparation::Stage stage = preparation::Stage::prepare;
+};
+
+// Inspect the application's own Xray without reading or replacing the live
+// session. The file-only check never starts a runtime or binds listeners.
+CoreCapabilities InspectBundledCore();
+ProfileCheck ValidateBundledProfile(std::string config,
+    const asset_location::Root& assets = std::nullopt,
+    const asset_location::Root& certificates = std::nullopt);
 bool SystemCommand(const wchar_t* name, const std::vector<std::wstring>& arguments);
 bool WritePrivateConfig(const std::string& config, fs::path& path);
 void RemovePrivateConfig(fs::path& path);

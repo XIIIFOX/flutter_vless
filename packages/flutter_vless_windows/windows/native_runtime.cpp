@@ -10,6 +10,7 @@
 #include <bcrypt.h>
 #include <sddl.h>
 #include <algorithm>
+#include <regex>
 
 namespace flutter_vless::native {
 std::wstring Wide(const std::string& s) {
@@ -201,10 +202,15 @@ bool Command(const fs::path& exe, const std::vector<std::wstring>& arguments,
   }
 }
 
-bool BalancerCapability(const ProtectedRuntime& runtime, const asset_location::Root& assets) {
+static bool CommandCapability(const fs::path& image, const wchar_t* command,
+    const asset_location::Root& assets = std::nullopt) {
   std::string output;
-  return Command(runtime.Executable(), {L"native-balancer", L"capabilities"}, output, 3000, assets)
+  return Command(image, {command, L"capabilities"}, output, 3000, assets)
       && native_routing::SuccessfulReply(output, "capabilities", true);
+}
+
+bool BalancerCapability(const ProtectedRuntime& runtime, const asset_location::Root& assets) {
+  return CommandCapability(runtime.Executable(), L"native-balancer", assets);
 }
 
 bool BundledBalancerCapability() try {
@@ -306,14 +312,149 @@ void RemovePrivateConfig(fs::path& path) {
   if (path.empty()) return;
   if (DeleteFileW(path.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND) path.clear();
 }
+static unsigned ManagedServiceBits(const fs::path& image, const asset_location::Root& assets = std::nullopt) {
+  std::string output;
+  return Command(image, {L"native-services", L"capabilities"}, output, 3000, assets)
+      ? managed_services::ParseCapabilities(output) : 0;
+}
+
 static bool ManagedServicesAllowed(const xray_config::Json& config, const fs::path& executable, const asset_location::Root& assets) {
   const auto required = managed_services::Required(config);
   if (!required) return true;
-  std::string output;
-  if (!Command(executable, {L"native-services", L"capabilities"}, output, 3000, assets)
-      || !managed_services::Allows(config, managed_services::ParseCapabilities(output))) return false;
+  if ((required & ManagedServiceBits(executable, assets)) != required) return false;
   return !(required & managed_services::kGeodata) || geodata_assets::ValidateWritable(config, assets.value_or(executable.parent_path()));
 }
+
+static bool IsLocalInspectionPath(const fs::path& input) {
+  // Inspect only local files. A UNC path, mapped drive or directory reparse
+  // point can otherwise cause network I/O even during a filesystem check.
+  const auto path = input.lexically_normal();
+  const auto name = path.root_name().native();
+  if (!path.is_absolute() || name.size() != 2 || name[1] != L':'
+      || path.native().find(L'\0') != std::wstring::npos) return false;
+  const auto drive = GetDriveTypeW(path.root_path().c_str());
+  if (drive == DRIVE_UNKNOWN || drive == DRIVE_NO_ROOT_DIR || drive == DRIVE_REMOTE) return false;
+  auto part = path.root_path();
+  for (const auto& component : path.relative_path()) {
+    if (component.native().find(L':') != std::wstring::npos) return false;
+    part /= component;
+    const auto flags = GetFileAttributesW(part.c_str());
+    if (flags == INVALID_FILE_ATTRIBUTES) {
+      const auto error = GetLastError();
+      return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+    }
+    if (flags & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DEVICE)) return false;
+  }
+  return true;
+}
+
+static bool HasProfileCompiler(const fs::path& image) {
+  std::string help;
+  return Command(image, {L"help", L"convert", L"pb"}, help)
+      && help.find("-debug") != std::string::npos;
+}
+
+CoreCapabilities InspectBundledCore() try {
+  const auto executable = FindBundledFile(L"xray.exe");
+  if (!executable || !IsLocalInspectionPath(*executable)) return {};
+  ProtectedRuntime isolated;
+  auto image = *executable;
+  if (IsAdministrator()) {
+    if (!isolated.Create(image, false)) return {};
+    image = isolated.Executable();
+  }
+
+  std::string output;
+  std::smatch version;
+  static const std::regex version_format(R"(^Xray ([0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4})(\s|$))");
+  if (!Command(image, {L"version"}, output) || !std::regex_search(output, version, version_format)) return {};
+
+  CoreCapabilities capabilities;
+  capabilities.version = version[1].str();
+  capabilities.profile_validation = HasProfileCompiler(image);
+  const auto service_bits = ManagedServiceBits(image);
+  capabilities.geodata_updates = (service_bits & managed_services::kGeodata) != 0;
+  capabilities.xdrive = (service_bits & managed_services::kXdrive) == managed_services::kXdrive;
+  capabilities.vpn_routing = CommandCapability(image, L"native-routing");
+  capabilities.balancer_selections = CommandCapability(image, L"native-balancer");
+  return capabilities;
+} catch (...) { return {}; }
+
+ProfileCheck ValidateBundledProfile(std::string config, const asset_location::Root& assets,
+    const asset_location::Root& certificates) try {
+  using Status = ProfileCheckStatus;
+  const auto valid_root = [](const asset_location::Root& root) {
+    return !root || (IsLocalInspectionPath(*root) && asset_location::Valid(root));
+  };
+  if (config.size() > 16 * 1024 * 1024 || !valid_root(assets) || !valid_root(certificates)) return {Status::invalid};
+  auto document = xray_config::Parse(config);
+  if (!xray_config::Fields(document, {"env", "log"})) return {Status::invalid};
+  // Configuration Build can apply authored Env process-wide. Match the private
+  // Apple preflight policy and keep the isolated child's asset policy intact.
+  const auto environment = document.value("env", xray_config::Json());
+  if (!environment.is_null() && !environment.is_object()) return {Status::invalid};
+  if (environment.is_object() && !environment.empty()) {
+    for (const auto& value : environment) {
+      if (!value.is_string() && !value.is_null()) return {Status::invalid};
+    }
+    return {Status::unsupported};
+  }
+  document["log"] = {{"access", "none"}, {"error", "none"}, {"loglevel", "none"}, {"dnsLog", false}};
+  const auto required = managed_services::Required(document);
+
+  const auto executable = FindBundledFile(L"xray.exe");
+  if (!executable || !IsLocalInspectionPath(*executable)) return {Status::unavailable};
+  ProtectedRuntime isolated;
+  auto image = *executable;
+  const bool elevated = IsAdministrator();
+  if (elevated) {
+    if (!isolated.Create(image, !assets.has_value())) return {Status::unavailable};
+    image = isolated.Executable();
+  }
+  if (required && (required & ManagedServiceBits(image, assets)) != required) return {Status::unsupported};
+  if ((required & managed_services::kGeodata)
+      && !geodata_assets::ValidateWritable(document, assets.value_or(image.parent_path()), false, IsLocalInspectionPath))
+    return {Status::invalid};
+  config = document.dump();
+  const auto check_certificate = [&](const fs::path& path) {
+    const auto& name = path.native();
+    const auto slash = [](wchar_t c) { return c == L'\\' || c == L'/'; };
+    if (name.size() > 1 && slash(name[0]) && slash(name[1])) return false;
+    if (path.is_absolute()) return IsLocalInspectionPath(path);
+    if (path.has_root_name()) return false;
+    auto joined = certificates.value_or(image.parent_path());
+    joined += fs::path::preferred_separator;
+    joined += path.native();
+    return IsLocalInspectionPath(joined);
+  };
+  if (!xray_config::BindCertificatePaths(config, certificates, nullptr, check_certificate)) return {Status::invalid};
+
+  struct PrivateDocument {
+    fs::path path;
+    ~PrivateDocument() { RemovePrivateConfig(path); }
+  } candidate;
+  const bool persisted = elevated ? isolated.WriteConfig(config, candidate.path)
+                                  : WritePrivateConfig(config, candidate.path);
+  if (!persisted) return {Status::unavailable};
+
+  // Conversion builds the authored profile without constructing a live Core.
+  // Debug mode uses the inherited null stdout handle instead of opening an
+  // output file. Both output streams go directly to NUL.
+  auto process = Launch(image, {L"convert", L"pb", L"-debug", candidate.path.wstring()}, false, assets);
+  if (!process) return {Status::unavailable};
+  const auto handle = reinterpret_cast<HANDLE>(process->hProcess);
+  DWORD code = 0;
+  if (WaitForSingleObject(handle, 10000) != WAIT_OBJECT_0 || !GetExitCodeProcess(handle, &code)) return {Status::unavailable};
+  switch (code) {
+    case 0: return {Status::valid};
+    case 1: return {Status::invalid, preparation::Stage::core_check};
+    case 2: return {HasProfileCompiler(image) ? Status::unavailable : Status::unsupported};
+    default: return {Status::unavailable};
+  }
+} catch (const std::invalid_argument&) { return {ProfileCheckStatus::invalid}; }
+  catch (const nlohmann::json::exception&) { return {ProfileCheckStatus::invalid}; }
+  catch (...) { return {ProfileCheckStatus::unavailable}; }
+
 bool CheckConfig(const std::string& config, const fs::path& executable, ConfigCheckStorage storage,
     const asset_location::Root& assets, preparation::Stage* failure) try {
   if (failure) *failure = preparation::Stage::prepare;
@@ -358,9 +499,7 @@ bool CheckPreparedConfig(const std::string& config, ProtectedRuntime& runtime,
   return GetExitCodeProcess(handle, &code) && code == 0;
 } catch (...) { return false; }
 bool RoutingCapability(const ProtectedRuntime& runtime, const asset_location::Root& assets) {
-  std::string output;
-  return Command(runtime.Executable(), {L"native-routing", L"capabilities"}, output, 3000, assets)
-      && native_routing::SuccessfulReply(output, "capabilities", true);
+  return CommandCapability(runtime.Executable(), L"native-routing", assets);
 }
 bool CheckRoutingPreparedConfig(const std::string& config, const std::string& metadata,
     ProtectedRuntime& runtime, fs::path& config_path, fs::path& metadata_path,

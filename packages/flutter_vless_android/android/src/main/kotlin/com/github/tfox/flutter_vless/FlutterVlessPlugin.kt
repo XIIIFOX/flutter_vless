@@ -17,6 +17,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ResultReceiver
 import androidx.core.app.ActivityCompat
+import com.github.tfox.flutter_vless.xray.core.AndroidCoreInspection
 import com.github.tfox.flutter_vless.xray.core.XrayCoreManager
 import com.github.tfox.flutter_vless.xray.dto.XrayConfig
 import com.github.tfox.flutter_vless.xray.service.XrayVPNService
@@ -120,6 +121,21 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                     })
                 try { context.startService(intent) }
                 catch (_: Exception) { result.error("QUICK_ACCESS_UNAVAILABLE","Cannot clear the retained profile in the background",null) }
+            }
+            "getCoreCapabilities" -> inspectCore(result, emptyMap()) { AndroidCoreInspection.capabilities(context) }
+            "validateProfile" -> {
+                val arguments = call.arguments as? Map<*, *>
+                val config = arguments?.get("config") as? String
+                val geoDirectory = arguments?.get("geo_assets_directory")
+                val certificateDirectory = arguments?.get("certificate_assets_directory")
+                if (config == null || geoDirectory != null && geoDirectory !is String ||
+                    certificateDirectory != null && certificateDirectory !is String) {
+                    result.success(mapOf("status" to "invalid", "stage" to "prepare"))
+                    return
+                }
+                inspectCore(result, mapOf("status" to "unavailable")) {
+                    AndroidCoreInspection.validate(context, config, geoDirectory as? String, certificateDirectory as? String)
+                }
             }
             "getSecurityCapabilities" -> result.success(mapOf("androidProxyDns" to true, "iosKeychainReference" to false,
                 "certificateAssetsDirectory" to true, "vpnRouting" to true))
@@ -447,6 +463,18 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                 // ignore
             }
             xrayReceiver = null
+        }
+    }
+
+    private fun inspectCore(result: MethodChannel.Result, unavailable: Map<String, Any>, run: () -> Map<String, Any>) {
+        val handler = Handler(Looper.getMainLooper())
+        try {
+            executor.execute {
+                val response = try { run() } catch (_: Exception) { unavailable }
+                handler.post { result.success(response) }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            result.success(unavailable)
         }
     }
 

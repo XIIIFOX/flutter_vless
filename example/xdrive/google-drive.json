@@ -36,7 +36,7 @@
       },
       "mux": {
         "enabled": true,
-        "concurrency": 8,
+        "concurrency": 128,
         "xudpConcurrency": 8,
         "xudpProxyUDP443": "allow"
       },

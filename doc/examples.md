@@ -188,3 +188,166 @@ final configuration = edited.toCoreJson();
 This changes the address family Xray requests when resolving names. Other DNS
 settings and routing rules are preserved in the edited copy. Use
 `original.toCoreJson()` to restore the imported profile.
+
+## 7. Check A Profile Before Connecting
+
+Read the installed Core's capabilities and check the profile before offering
+Connect. This works before `initializeVless()` and leaves the active session
+untouched.
+
+```dart
+Future<VlessProfileValidation> checkSavedProfile(XrayProfile profile) async {
+  final capabilities = await flutterVless.getCoreCapabilities();
+  if (!capabilities.profileValidation) {
+    return const VlessProfileValidation(VlessProfileValidationStatus.unsupported);
+  }
+  return flutterVless.validateProfile(profile);
+}
+```
+
+Use `validateProfileJson(text)` to check pasted JSON or JSONC before importing
+it. The result carries a stable status and may identify a rejected entry by
+section and index. You can use `xdrive`, `geoDataUpdates`, and
+`balancerSelections` to show controls only when the installed Core supports
+them.
+
+The check covers the authored Core configuration and supported file references.
+VPN permissions, tunnel setup, and network reachability are checked separately
+when connecting. A profile that sets Core `env` values reports `unsupported`
+because inspection leaves the process environment intact. On Apple, validation
+uses the app's current GeoDAT lookup context. A custom `geoAssetsDirectory`
+reports `unsupported` because changing that context could affect an active
+session.
+
+## 8. Split DNS And Match IP Networks
+
+Keep a general resolver first and give a specific domain its own resolver.
+Xray combines a rule’s CIDR, port, and network conditions. In this example,
+TCP traffic to the private network on port 443 goes directly, the same UDP
+traffic is blocked, and other traffic uses the proxy.
+
+```dart
+XrayProfile buildSplitProfile(String link) {
+  return XrayProfile.build((draft) {
+    final proxy = draft.addNode(ProxyNode.fromLink(link));
+    draft.setDnsOptions(const XrayDnsOptions(disableFallbackIfMatch: true));
+    draft.addDnsServer(XrayDnsServer.udp('1.1.1.1'));
+    draft.addDnsServer(XrayDnsServer.doh(
+      Uri.parse('https://1.0.0.1/dns-query'),
+      domains: ['domain:example.org'],
+      skipFallback: true,
+    ));
+
+    draft.setRoutingDomainStrategy(XrayRoutingDomainStrategy.ipOnDemand);
+    final privateNetworks = [
+      XrayCidr.parse('192.168.0.0/16'),
+      XrayCidr.parse('fd00::/8'),
+    ];
+    final httpsPorts = [XrayPortRange.single(443)];
+    draft.addRule(RouteRule.match(
+      destinationCidrs: privateNetworks,
+      destinationPorts: httpsPorts,
+      networks: {XrayRouteNetwork.tcp},
+      to: const RouteTarget.direct(),
+    ));
+    draft.addRule(RouteRule.match(
+      destinationCidrs: privateNetworks,
+      destinationPorts: httpsPorts,
+      networks: {XrayRouteNetwork.udp},
+      to: const RouteTarget.block(),
+    ));
+    draft.setDefaultRoute(RouteTarget.node(proxy));
+  });
+}
+```
+
+Rules match in order. `ipOnDemand` also lets Xray check named destinations
+against CIDRs before a catch-all rule. Use a DNS server's `tag` with
+`RouteRule.match(inboundTags: …)` when its queries need a specific outbound.
+
+## 9. Refresh A Subscription And Keep Local Edits
+
+Store the selected node's ID in the subscription state. The refresh reads the
+same feed and returns a new state with its latest order.
+
+```dart
+var subscription = XraySubscription.fromProfiles(
+  await FlutterVless.fetchSubscription(subscriptionUrl),
+);
+final id = subscription.nodes.first.id;
+subscription = subscription.select(id).editProfile(id, (draft) {
+  draft.setDnsOptions(const XrayDnsOptions(
+    queryStrategy: XrayDnsQueryStrategy.useIpv4,
+  ));
+});
+
+final refresh = await FlutterVless.refreshSubscription(
+  subscriptionUrl,
+  subscription,
+);
+subscription = refresh.subscription;
+final profileToConnect = subscription.selectedNode?.profile;
+```
+
+Inspect `removedNodes` for removed or ambiguous matches. That list includes
+their local profiles. `conflictedNodeIds` identifies nodes with edits on both
+sides to the same value. Arrays such as outbounds are reconciled as a unit.
+When both sides change one array, the effective profile keeps the local array
+and `sourceProfile` holds the latest provider value. Use `resetProfile(id)` to
+restore that node's source configuration. Pass a stable provider ID through
+`fromProfiles(sourceId: …)` when your data supplies one.
+
+## 10. Set Freedom Final Rules
+
+Apply rules in order on a Freedom outbound. This example closes UDP traffic to
+port 443 when it reaches that outbound, with per-destination logging disabled.
+Other traffic follows Core's remaining policy for the outbound.
+
+```dart
+final profile = XrayProfile.build((draft) {
+  final direct = draft.addNode(ProxyNode.fromMap({'protocol': 'freedom'}));
+  draft.setFreedomFinalRules(direct, [
+    XrayFreedomFinalRule.block(
+      destinationPorts: [XrayPortRange.single(443)],
+      networks: {XrayRouteNetwork.udp},
+      delay: XrayFreedomBlockDelay.fixed(Duration.zero),
+      logLevel: XrayFreedomLogLevel.none,
+    ),
+  ]);
+});
+```
+
+Setting the delay or log level adds a minimum Core version of 26.11.9.
+
+## 11. Schedule GeoDAT Updates
+
+Check the native capability before offering scheduled updates. This example
+checks a profile that reloads its installed datasets every 24 hours.
+
+```dart
+final capabilities = await flutterVless.getCoreCapabilities();
+if (capabilities.geoDataUpdates) {
+  final updated = original.edit((draft) {
+    draft.setGeoDataSchedule(
+      XrayGeoDataSchedule.every(const Duration(hours: 24), assets: []),
+    );
+  });
+  final check = await flutterVless.validateProfile(updated);
+}
+```
+
+Use `XrayGeoDataSchedule.cron('0 3 * * *')` for a calendar schedule.
+To download updates, add a dataset to `assets`:
+
+```dart
+final geosite = XrayGeoDataAsset(
+  url: Uri.parse(
+    'https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geosite.dat.gz',
+  ),
+  file: 'geosite.dat',
+);
+```
+
+Pass a writable directory with the existing `.dat` targets as
+`geoAssetsDirectory` to `startVless()`. Apple checks this download setup at
+startup. Standalone validation of that setup returns `unsupported`.

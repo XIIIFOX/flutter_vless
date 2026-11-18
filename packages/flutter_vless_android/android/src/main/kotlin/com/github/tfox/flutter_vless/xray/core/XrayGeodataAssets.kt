@@ -27,7 +27,7 @@ internal object XrayGeodataAssets {
         return cron.isNotEmpty()
     }
 
-    fun validateWritableRoot(json: String, directory: File) {
+    fun validateWritableRoot(json: String, directory: File, checkAtomicReplace: Boolean = true) {
         if (!hasSchedule(json)) return
         val section = section(json)!!
         val raw = field(section, "assets") ?: return // Reload only, no writes.
@@ -44,7 +44,10 @@ internal object XrayGeodataAssets {
             require(file.isFile) { "GeoDAT updater assets must already exist as regular files" }
             parents.add(file.parentFile!!)
         }
-        for (parent in parents) probe(parent)
+        for (parent in parents) {
+            if (checkAtomicReplace) probe(parent)
+            else require(parent.canWrite()) { "GeoDAT updater requires a writable asset directory" }
+        }
     }
 
     private fun probe(parent: File) {

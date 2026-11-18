@@ -11,6 +11,8 @@
 migrate_working_dir/
 artifacts/
 /doc/security-backlog/
+# Local article drafts, images, examples, reviews and reading previews.
+/doc/editorial/
 /doc/security-validation-*/
 /doc/*security-remediation-*.md
 /doc/ios-device-validation-*.md

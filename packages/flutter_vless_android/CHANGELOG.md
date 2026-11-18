@@ -1,3 +1,7 @@
+## 1.1.8
+
+* Pin the Xray-core `26.11.9-protect1` Maven runtime.
+
 ## 1.1.7+1
 
 * Use the pinned Maven runtime `26.10.31-protect2` for all four device/emulator ABIs with 16 KiB alignment.

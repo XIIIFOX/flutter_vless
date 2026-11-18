@@ -35,6 +35,13 @@ chmod +x build_xray.sh
 ./build_xray.sh
 ```
 
+For a local balancer diagnostics build, set `XRAY_BALANCER_DIAGNOSTICS=1`
+and provide a separate `TARGET_DIR`. The Android wrapper reports support
+through `getCapabilities()` after probing the packaged Core. With diagnostics
+and `recordBalancerSelections` enabled, the VPN worker keeps bounded numeric
+selection history for its own managed inbound. The local wrapper requests it
+over the worker's inherited process pipes.
+
 ## 3. Build Tun2socks (`libtun2socks.so`)
 
 We use a custom Go-based build script (`build_tun2socks.sh`) instead of the old C-based one. This ensures 16KB page alignment and includes the socket-based FD passing logic.

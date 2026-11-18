@@ -1,8 +1,8 @@
 # Xray profile API
 
 The Dart API adds an immutable profile, typed outbounds, groups and routes,
-atomic editing and exact JSON paths. The existing 1.1.7 entry points and
-mutable models retain their contracts. Profiles launch through
+atomic editing and exact JSON paths. Existing entry points and mutable models
+retain their contracts. Profiles launch through
 `startVless(remark: ..., config: profile.toCoreJson())`.
 
 The target native runtime for Android, iOS, macOS and Windows is Xray-core
@@ -106,7 +106,7 @@ wrappers can use raw paths in the meantime.
 
 | Check | Pass condition |
 | --- | --- |
-| Released 1.1.7 client with new Dart API available | Legacy code compiles, starts and imports links, JSONC, full JSON and profile lists as before |
+| Existing client upgraded to 1.1.8 | Legacy code compiles, starts and imports links, JSONC, full JSON and profile lists as before |
 | Atomic copy | Nested unknowns, aliases, nulls, order and original snapshot survive edits. Reject foreign references, ambiguous paths and conflicting operations |
 | New field on both Cores | Both parse `delay: 0`. A blocked request closes immediately on 26.11.9. 26.10.31 rejects the guarded profile |
 | Group on both Cores | Real local traffic proves round robin across connections, least-ping selection and failover, no direct leak when all members fail, recovery and correct selector membership |

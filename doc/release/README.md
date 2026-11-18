@@ -10,22 +10,21 @@ separate values.
 
 | Package | Version |
 | --- | --- |
-| `flutter_vless_platform_interface` | `1.1.7` |
-| `flutter_vless_android` | `1.1.7+1` |
-| `flutter_vless_macos` | `1.1.7+1` |
-| `flutter_vless_windows` | `1.1.7+1` |
-| `flutter_vless` | `1.1.7` |
+| `flutter_vless_platform_interface` | `1.1.8` |
+| `flutter_vless_android` | `1.1.8` |
+| `flutter_vless_macos` | `1.1.8` |
+| `flutter_vless_windows` | `1.1.8` |
+| `flutter_vless` | `1.1.8` |
 
-The root requires the implementation packages at `^1.1.7+1` and the platform
-interface at `^1.1.7`. Pub treats the build suffix as part of package version
-ordering; published package versions cannot be overwritten. Do not copy a Dart
-build suffix into a Maven version or native application build number.
+The root requires the implementation packages and platform interface at
+`^1.1.8`. Pub treats the build suffix as part of package version ordering;
+published package versions cannot be overwritten. Native runtime revisions
+and application build numbers follow their own versioning.
 
 ## Native runtimes
 
 The repository uses Xray-core **26.11.9**, pinned to
 `676eaf66f8f05d4d558ee7a74b4736623d3feeb9` and built with Go 1.27.3.
-The published 1.1.7 packages shipped Core 26.10.31.
 
 | Platform | Runtime notes |
 | --- | --- |

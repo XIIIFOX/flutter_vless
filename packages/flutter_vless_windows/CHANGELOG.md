@@ -1,3 +1,7 @@
+## 1.1.8
+
+* Integrate with the managed Xray-core `26.11.9-r1` companion.
+
 ## 1.1.7+1
 
 * Support the managed `xray-windows-v26.10.31-r2` companion for native routing, XDRIVE/GeoDAT services and owned cleanup.

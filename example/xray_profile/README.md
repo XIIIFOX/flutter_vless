@@ -9,8 +9,12 @@ device with the [usual Example setup](../README.md).
 flutter run -t lib/balancer_example.dart
 ```
 
-Copy two or more working share links, one per line. In Example, tap
-**Import (clipboard)**, inspect the generated JSON, and tap **Connect**.
+Copy an HTTPS subscription URL, a base64 share-link subscription, or two or
+more share links, one per line. In Example, tap **Import (clipboard)**, inspect
+the generated JSON, and tap **Connect**. The HTTPS response is fetched when
+you tap Import. Each distinct supported proxy is added to the group in order.
+The **Configuration (JSON)** heading shows how many nodes the import added to
+the balancer.
 The default `roundRobin` distributes new connections across the group.
 Choose `random` with `--dart-define=BALANCER_STRATEGY=random`.
 
@@ -27,7 +31,27 @@ Use `leastLoad` in the same command for Burst Observatory. These two strategies
 block grouped connections while no node is eligible. To test split routing,
 add a domain in the existing routing editor. Its traffic uses the direct
 outbound ahead of the final group rule. The platform's DNS policy continues to
-apply. Single profiles and full JSON can still use the regular import path.
+apply. A standalone full Xray JSON retains its routing and DNS. Use the share
+links for a group when a subscription returns several separate Xray configs.
+
+## Inspect balancer selections
+
+1. On a device with the compatible VPN runtime, open **Plugin options**
+   → **Diagnostics Options**, enable **Record balancer selections**, and tap
+   **Apply options**. Import two working share links and connect in **VPN Mode**.
+2. In a browser, open [tfox.dev/ip](https://tfox.dev/ip/) and [2ip.ru](https://2ip.ru/).
+   Keep both domains and `2ip.io` out of the routing editor's bypass list.
+3. Return to Example while the VPN is active and open **VPN Diagnostics**.
+   Under **Recent balancer selections**, look for entries such as
+   `#1 · Group 1 · Node 1`. Node numbers follow the order of the imported links.
+   Use **Refresh selections** to read new choices. With `roundRobin` and two
+   nodes, new connections that reach the group alternate between them.
+
+A browser can reuse an existing connection or open several per page. The list
+shows choices from VPN traffic in the order they were recorded, newest first.
+The history records numeric aliases for the active session and contains no
+site addresses or profile identifiers. It stays out of general diagnostics
+exports. See [runtime diagnostics](../../doc/runtime-diagnostics.md#vpn-balancer-diagnostics).
 
 ## Verify first connection and split routing
 
@@ -43,8 +67,8 @@ credentials outside the repository.
    using the same device, Core version, network and subscription.
 3. With no domain bypass, open fresh HTTPS connections to the two IP sites.
    Verify that the public exit differs from the baseline and that repeated
-   requests use different exits. On iOS, check the recorded node selections
-   during the active session.
+   requests use different exits when the nodes have distinct exit IPs. With a
+   compatible runtime, check the recorded node selections during the session.
 4. Run both split-routing cases. Bypass tfox.dev and keep ipify on the
    balancer, then swap the rules. The bypassed site must see the baseline IP.
    The other site must see an exit from the group.

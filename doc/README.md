@@ -1,7 +1,7 @@
 # Documentation
 
-Guides for flutter_vless 1.1.7. Start with installation and the setup for your
-target platform; the root README contains the package overview and quick start.
+Guides for flutter_vless 1.1.8. The root README has the package overview and
+quick start. Use the platform guide for your app's native setup.
 
 ## Using the plugin
 
@@ -14,6 +14,7 @@ target platform; the root README contains the package overview and quick start.
 7. [Compatibility](compatibility.md)
 8. [Runtime diagnostics](runtime-diagnostics.md)
 9. [Troubleshooting](troubleshooting.md)
+10. [Xray profiles and balancers](xray-profile-api-design.md)
 
 ## Native integration
 

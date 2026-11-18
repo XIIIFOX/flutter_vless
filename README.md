@@ -1,4 +1,4 @@
-![flutter_vless 1.1.7 — Xray/V2Ray VPN plugin for Flutter](https://raw.githubusercontent.com/XIIIFOX/flutter_vless/main/doc/assets/flutter-vless-hero-1.1.7.png)
+![flutter_vless — Xray/V2Ray VPN plugin for Flutter](https://raw.githubusercontent.com/XIIIFOX/flutter_vless/main/doc/assets/flutter-vless-hero.png)
 
 # flutter_vless — Xray/V2Ray VPN plugin for Flutter
 [![Pub Publisher](https://img.shields.io/pub/publisher/flutter_vless)](https://pub.dev/publishers/tfox.dev/packages)
@@ -61,7 +61,7 @@ If `flutter_vless` is useful to you, please give it a like on [pub.dev](https://
 - Proxy-only mode and VPN/tunnel mode.
 - Connection status, traffic counters and delay measurements.
 - Full-profile VPN routing with caller DNS and IPv4/IPv6 payload support.
-- Typed Xray config helpers for more explicit advanced configuration.
+- Immutable Xray profiles, typed routing and balancers, and exact JSON edits for Core fields.
 - Typed [notification, quick access, reconnect, protection and diagnostics options](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/options-and-system-controls.md).
 
 ## Recommended Reading
@@ -114,7 +114,7 @@ Add the dependency to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  flutter_vless: ^1.1.7
+  flutter_vless: ^1.1.8
 ```
 
 Then run `flutter pub get`.
@@ -191,21 +191,25 @@ Use `parse()` for a single share link or a raw config, and `parseMany()` when yo
 
 ## Advanced Usage
 
-The parsed URL objects expose low-level Xray maps for advanced configuration work, including inbound, routing, log, and stream settings. That is intentionally powerful, but it is also intentionally low-level.
+Use `XrayProfile.build()` to compose proxy nodes, balancers and ordered
+routing rules. Use `XrayProfile.fromJson()` to import a full JSON or JSONC
+profile, and `edit()` to create an independent copy. `CorePath` and the draft's
+`setRaw()` and `removeRaw()` methods can edit fields supported by Xray that the
+typed builder has yet to model. Pass `profile.toCoreJson()` to `startVless()`.
+See the [profile contract](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/xray-profile-api-design.md)
+and [profile examples](https://github.com/XIIIFOX/flutter_vless/blob/main/example/xray_profile/README.md).
 
-If you want a typed config builder instead of mutating maps, see
-`lib/url/xray_config_model.dart` and `lib/url/xray_config_validator.dart`.
-Those helpers are useful when you want to construct or validate a config before
-turning it into JSON.
-
-If you need to edit the runtime config, start with [Configuration Guide](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/configuration.md) and [Architecture Notes](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/architecture.md).
+Read the [configuration guide](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/configuration.md)
+for how native startup prepares the resulting profile.
 
 ## Example App
 
-The bundled example app shows clipboard import, routing edits, proxy-only mode, and status tracking:
+The bundled app demonstrates clipboard import, routing edits, proxy-only mode,
+VPN mode and status tracking. Its balancer entry point groups multiple share
+links and uses the same connection controls.
 
-- [example/README.md](https://github.com/XIIIFOX/flutter_vless/blob/main/example/README.md)
-- [example/lib/main.dart](https://github.com/XIIIFOX/flutter_vless/blob/main/example/lib/main.dart)
+- [Run the Example app](https://github.com/XIIIFOX/flutter_vless/blob/main/example/README.md)
+- [Run the balancer Example](https://github.com/XIIIFOX/flutter_vless/blob/main/example/xray_profile/README.md#run-the-balancer-in-example)
 
 ## Platform Setup
 

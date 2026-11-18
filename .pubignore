@@ -8,6 +8,8 @@ output/
 artifacts/
 
 # Internal security work and device validation are not package documentation.
+# Editorial drafts and all companion materials stay local.
+doc/editorial/
 doc/security-backlog/
 doc/security-validation-*/
 doc/*security-remediation-*.md

@@ -11,7 +11,7 @@ directory name.
 
 ## What It Demonstrates
 
-- Clipboard import for share links, full JSON and subscription profiles
+- Clipboard import for share links, full JSON and HTTPS subscriptions
 - Configuration and domain-routing editors
 - Runnable [balancer example](xray_profile/README.md) for multiple share links
 - Proxy-only and VPN startup/Stop
@@ -23,6 +23,15 @@ directory name.
 For a normal connection, use **Import (clipboard)** and **Connect**. Leave
 **VPN routing** off and **Certificate files** empty unless the profile needs
 those advanced settings. A subscription imports its first supported profile.
+
+## Configuration examples
+
+- [Typed profiles, balancers and copy editing](xray_profile/README.md)
+- [Per-domain DNS and routing](configs/split-dns/README.md)
+- [Migration to `finalmask`](configs/finalmask/README.md)
+- [Scheduled GeoDAT updates](geodata/README.md) and [gzip downloads](configs/core31/geodat-gzip.md)
+- [XDRIVE with S3 or Google Drive](xdrive/README.md)
+- [XHTTP and HTTP inbound](configs/core31/README-xhttp-http.md), [QUIC routing](configs/core31/quic-routing.md) and [Windows Core TUN](configs/core31/windows-core-tun-leaks.md)
 
 ## Per-session VPN routing
 

@@ -1,3 +1,7 @@
+## 1.1.8
+
+* Pin the universal Xray-core `26.11.9-r1` framework.
+
 ## 1.1.7+1
 
 * Use the pinned universal `xray-macos-v26.10.31-r2` runtime with protected socket binding and managed resource cleanup.

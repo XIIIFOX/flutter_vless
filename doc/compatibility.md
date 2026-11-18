@@ -5,10 +5,9 @@ accepting a profile does not guarantee that its remote server is reachable.
 
 ## Versions and platforms
 
-The main package and platform interface use `1.1.7`. Android, macOS and Windows
-implementations use `1.1.7+1`. The published packages shipped Xray-core
-**26.10.31**. Builds from the repository, including the example with local
-package overrides, use the **26.11.9** native previews below.
+The main package, platform interface and Android, macOS and Windows packages
+use `1.1.8`. The table lists their **Xray-core 26.11.9** runtime pins.
+Confirm the loaded Core with `getCoreVersion()`.
 
 | Platform | Modes | Requirements | Runtime |
 | --- | --- | --- | --- |
@@ -27,6 +26,10 @@ alignment. Apps that require extracted native executables must retain
 signed devices; an iOS simulator is not a substitute for a real VPN session.
 Windows applications supply `xray.exe`, compatible `tun2socks.exe` and
 `wintun.dll`; the plugin does not download missing binaries.
+
+VPN balancer diagnostics require a Core built with the private observation
+capability. Check `VlessCapabilities.balancerSelections` at runtime.
+See [runtime diagnostics](runtime-diagnostics.md#vpn-balancer-diagnostics).
 
 ## Profiles and imports
 

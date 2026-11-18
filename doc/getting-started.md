@@ -43,7 +43,7 @@ Add the dependency to your `pubspec.yaml` and run `flutter pub get`:
 
 ```yaml
 dependencies:
-  flutter_vless: ^1.1.7
+  flutter_vless: ^1.1.8
 ```
 
 For macOS, run the metadata preparation step before the first build:

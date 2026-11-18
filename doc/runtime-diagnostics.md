@@ -44,6 +44,25 @@ session you need to investigate. The returned text is for human inspection,
 not connection-state detection. Use status events for connection state and
 `getConnectedServerDelay()` for a permitted destination's reachability.
 
+## VPN balancer diagnostics
+
+Set `DiagnosticsOptions(recordBalancerSelections: true)` before connecting,
+then use `FlutterVless.getBalancerSelections()` to inspect the recent outbounds
+Xray selected for connections that reached a balancer. Collection is off by
+default. On Android, iOS, macOS and Windows, query
+`VlessCapabilities.balancerSelections` to check whether the installed Core
+supports it. The Example shows the history in **VPN Diagnostics**.
+
+The history uses session-local numeric aliases for the nodes and keeps a
+bounded number of recent selections in memory while the VPN is active. Each
+entry represents a Core routing decision. A browser can reuse a connection for
+multiple page loads or open multiple connections during a single load.
+
+Destinations, IP addresses, hostnames, profile tags, credentials and payloads
+are excluded from these entries. The in-app history is excluded from the
+general diagnostics clipboard export and system logs. See the
+[balancer Example](../example/xray_profile/README.md#inspect-balancer-selections).
+
 ## Privacy
 
 iOS and Android use fixed safe events instead of copying raw Xray/tun2socks

@@ -1,3 +1,7 @@
+## 1.1.8
+
+* Add opt-in VPN balancer selection diagnostics with capability discovery and typed, session-local results.
+
 ## 1.1.7
 
 * Add typed Notification, Quick Access, Reconnect, Protection and Diagnostics options, action/protection enums and validated `VlessOptions.fromMap` restoration.

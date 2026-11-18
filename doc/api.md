@@ -137,11 +137,9 @@ Optional parameters:
   default. Caller rules, imported listeners and private DNS/probe rules remain.
   Omit the whole option for ordinary startup; an explicit empty option still
   requires the routing factory. Proxy-only requests and unsupported runtimes
-  fail before replacing the current session. The pinned published Android
-  `26.10.31-protect2`, Apple `26.10.31-r2` and managed Windows `26.10.31-r2`
-  runtimes and their repository previews based on 26.11.9 supply the factory.
-  The actual loaded artifact is checked. Update
-  the copied iOS provider together with the plugin.
+  fail before replacing the current session. The pinned Xray 26.11.9 Android,
+  Apple and managed Windows runtimes supply the factory. The actual loaded
+  artifact is checked. Update the copied iOS provider together with the plugin.
 
 Traffic events use bytes for `upload`/`download` and bytes per second for
 `uploadSpeed`/`downloadSpeed`. The plugin enables missing inbound statistics
@@ -205,7 +203,7 @@ Preparation reports are optional API results. The example displays connection
 errors without adding a persistent report panel.
 
 An Apple Core version string alone does not identify the loaded bridge ABI.
-Use capabilities from the actual artifact; the pinned published r2 SDKs include
+Use capabilities from the actual artifact. The pinned 26.11.9 SDKs include
 the Check/routing interfaces used by the adapters. A missing
 Check ABI yields `coreCheck: unavailable`; an explicit native routing request
 still requires native routing capability and fails closed when it is absent.
@@ -355,6 +353,19 @@ final profiles = FlutterVless.parseMany(subscriptionText);
 
 Unsupported or not-yet-mapped protocols are skipped intentionally instead of
 being converted into broken Xray JSON.
+
+## `fetchSubscription()`
+
+Fetch a subscription over HTTPS and parse its response on a native platform.
+The result retains all profiles supported by `parseMany()` in feed order.
+
+```dart
+final profiles = await FlutterVless.fetchSubscription(subscriptionUri);
+```
+
+Call this on user request. The response limit is 2 MiB and the timeout is
+12 seconds, including redirects. Keep URLs and profile contents out of logs.
+Use `parseMany()` for payloads your application has already downloaded.
 
 ## `XrayProfile`
 

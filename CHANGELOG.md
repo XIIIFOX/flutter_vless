@@ -1,3 +1,13 @@
+## 1.1.8
+
+* Update the pinned Android, iOS, macOS and Windows runtimes to **Xray-core 26.11.9**.
+* Add immutable `XrayProfile` construction and copy editing. Import full JSON or JSONC while retaining extension fields, nulls and ordering.
+* Add typed node and group references, domain routing, and the `random`, `roundRobin`, `leastPing` and `leastLoad` balancing strategies.
+* Edit Core fields by exact JSON path with `CorePath`. Specify a minimum Xray version when a profile depends on a newer Core feature.
+* Run the balancer Example with multiple share links. The examples also cover composing a profile and editing a copy with Core-specific fields.
+* Fetch HTTPS subscriptions with `FlutterVless.fetchSubscription()` and build the Example balancer from share-link subscriptions.
+* Inspect the balancer's outbound choices in VPN Diagnostics on Android, iOS, macOS and Windows with a compatible Core. This opt-in history uses numeric aliases and lasts for the active VPN session.
+
 ## 1.1.7
 
 **Control & Compatibility Update**

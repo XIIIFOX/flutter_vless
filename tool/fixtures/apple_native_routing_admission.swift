@@ -5,10 +5,12 @@ import Foundation
 enum Boundary {
     static var capability: Int64 = 1, bindingCapability: Int64 = 1, checkCode: Int64 = 0
     static var preflight = true, startSucceeds = true
+    static var balancerCapability = false, recordBalancer = false
     static var events: [String] = []
     static var checked: [(Data, Data?)] = [], started: [(Data, Data?)] = []
     static func reset() {
         capability = 1; bindingCapability = 1; checkCode = 0; preflight = true; startSucceeds = true
+        balancerCapability = false; recordBalancer = false
         events = []; checked = []; started = []
     }
 }
@@ -25,6 +27,12 @@ func XRaySetAssetLocation(_ directory: String, _ error: inout NSError?) -> Bool 
 func XRayGetVersion() -> String { "synthetic" }
 func FLVlessStartCoreRoutingPrivate(_ config: Data, _ spec: Data, _ logger: NSObject, _ error: inout NSError?) -> Bool {
     Boundary.events.append("routing-start"); Boundary.started.append((config, spec)); return Boundary.startSucceeds
+}
+func FLVlessHasCoreBalancerDiagnostics() -> Bool { Boundary.balancerCapability }
+func FLVlessStartCoreBalancerDiagnostics(_ config: Data, _ spec: Data?, _ tag: String, _ maxLines: Int64,
+                                        _ logger: NSObject, _ error: inout NSError?) -> Bool {
+    precondition(tag == "managed" && maxLines == 30)
+    Boundary.events.append("balancer-start"); Boundary.started.append((config, spec)); return Boundary.startSucceeds
 }
 func XRayStartPrivate(_ config: Data, _ logger: NSObject, _ error: inout NSError?) -> Bool {
     Boundary.events.append("ordinary-start"); Boundary.started.append((config, nil)); return Boundary.startSucceeds
@@ -44,7 +52,10 @@ struct FixtureMessage: ExpressibleByStringLiteral, ExpressibleByStringInterpolat
 struct FixtureLogger { func info(_ message: FixtureMessage) {}; func error(_ message: FixtureMessage) {} }
 let tunnelLog = FixtureLogger()
 func rememberTunnelLog(_ message: String) {}
-struct VlessNativeOptions {}
+struct VlessNativeOptions {
+    let diagnosticsEnabled = true, recordBalancerSelections = Boundary.recordBalancer
+    let diagnosticsMaxLines = 30
+}
 struct TunnelEndpointPath: Equatable {
     var generation: UInt64 = 0
     func rebased(generation: UInt64) -> Self { Self(generation: generation) }
@@ -68,6 +79,7 @@ struct FixturePrepared {
     let routingEnvelope: NativeRoutingEnvelope?
     var endpointPath: TunnelEndpointPath?
     let endpointSelections: [TunnelEndpointSelection] = [], bootstrapAddresses: [String] = []
+    let managedInboundTag: String? = "managed"
     init(data: Data, routingEnvelope: NativeRoutingEnvelope?, endpointPath: TunnelEndpointPath? = nil) {
         self.data = data; self.routingEnvelope = routingEnvelope; self.endpointPath = endpointPath
     }
@@ -180,6 +192,13 @@ final class Provider: @unchecked Sendable {
         Boundary.reset(); Boundary.startSucceeds = false
         await rejected { try provider.start(spec) }
         precondition(Boundary.started.count == 1 && !Boundary.events.contains("ordinary-start"))
+        for (supported, requested) in [(false, true), (true, false), (true, true)] {
+            Boundary.reset(); Boundary.balancerCapability = supported; Boundary.recordBalancer = requested
+            let observed = try await provider.admit(prepared, intent: intent)
+            try provider.start(observed)
+            precondition(Boundary.started.count == 1 && Boundary.started[0].0 == bytes && Boundary.started[0].1 == envelope.metadataData)
+            precondition(Boundary.events.contains(supported && requested ? "balancer-start" : "routing-start"))
+        }
         for suppliedIntent: NativeRoutingIntent? in [nil, intent] {
             Boundary.reset()
             let missing = FixturePrepared(data: bytes, routingEnvelope: suppliedIntent == nil ? envelope : nil)

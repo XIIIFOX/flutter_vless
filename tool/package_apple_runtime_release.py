@@ -12,9 +12,12 @@ import zipfile
 from package_apple_core_preview import (EXPORTS, XDRIVE_PATCH, GEODATA_PATCH, XHTTP_LISTENER_PATCH,
                                        digest, git_bindings, require_managed_lifetimes,
                                        require_xhttp_listener_cleanup, safe_name, tree)
+from prepare_apple_classic_core import BALANCER_DIAGNOSTICS_INPUTS
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE_COMMIT = '676eaf66f8f05d4d558ee7a74b4736623d3feeb9'
+BALANCER_DIAGNOSTICS_EXPORTS = ('XRayBalancerDiagnosticsCapability', 'XRayStartBalancerDiagnosticsPrivate',
+                               'XRayReadBalancerDiagnostics')
 
 
 def output(command, root):
@@ -30,6 +33,11 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
         raise ValueError('New output and regular preparation receipt required')
     report = json.loads(preparation.read_text())
     preparation_sha = digest(preparation)
+    diagnostics = 'balancer_diagnostics_capability_expected' in report
+    if diagnostics and (type(report['balancer_diagnostics_capability_expected']) is not int
+                        or report['balancer_diagnostics_capability_expected'] != 1):
+        raise ValueError('Invalid iOS balancer diagnostics capability')
+    exports = (*EXPORTS, *BALANCER_DIAGNOSTICS_EXPORTS) if diagnostics else EXPORTS
     pin = json.loads((repository/'third_party/xray-vpn-routing/pin-manifest.json').read_text())
     if pin.get('core_commit') != CORE_COMMIT:
         raise ValueError('Canonical release Core commit differs')
@@ -74,6 +82,8 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
     for folder, pattern in [('transport/internet/xdrive', '*_test.go'), ('app/geodata', 'native_*.go'),
                             ('core', 'native_managed_lifetime_test.go')]:
         expected_inputs.update(p.relative_to(repository).as_posix() for p in (native_overlay/folder).glob(pattern))
+    if diagnostics:
+        expected_inputs.update(BALANCER_DIAGNOSTICS_INPUTS)
     if set(sources) != expected_inputs:
         raise ValueError('Canonical producer source set differs')
     require_managed_lifetimes(report, sources)
@@ -111,8 +121,11 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
             if library.get('HeadersPath') != 'Headers':
                 raise ValueError('Canonical macOS headers differ')
             header = framework/identifier/'Headers/XRay.objc.h'
-        if not all(re.search(r'\b'+name+r'\s*\(', header.read_text()) for name in EXPORTS):
+        header_text = header.read_text()
+        if not all(re.search(r'\b'+name+r'\s*\(', header_text) for name in exports):
             raise ValueError('Canonical ABI header incomplete')
+        if not diagnostics and any(re.search(r'\b'+name+r'\s*\(', header_text) for name in BALANCER_DIAGNOSTICS_EXPORTS):
+            raise ValueError('Diagnostic ABI requires the r2 producer receipt')
         actual = output(['xcrun', 'lipo', '-archs', str(binary)], repository).split()
         if set(actual) != expected or len(actual) != len(expected):
             raise ValueError('Actual binary architectures differ')
@@ -120,7 +133,7 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
         for arch in sorted(expected):
             lines = output(['xcrun', 'nm', '-arch', arch, '-m', '-gU', str(binary)], repository).splitlines()
             strong = {}
-            for name in EXPORTS:
+            for name in exports:
                 matches = [line for line in lines if re.search(r'(?:^|\s)_'+re.escape(name)+r'$', line)]
                 if len(matches) != 1 or not re.search(r'\bexternal\b', matches[0]) \
                         or not any(kind in matches[0] for kind in ('(__TEXT,__text)', '(LTO,CODE)')) \
@@ -150,7 +163,8 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
                    [('core_source', 'module_cache_before_sha256'), ('replacement', 'core_copy_sha256')]):
         raise ValueError('Framework changed during packaging')
     git_bindings(repository, head, sources)
-    manifest = {'success': True, 'platform': platform, 'head': head, 'release_version': '26.11.9', 'runtime_revision': 'r1',
+    manifest = {'success': True, 'platform': platform, 'head': head, 'release_version': '26.11.9',
+                'runtime_revision': 'r2' if diagnostics else 'r1',
                 'core_commit': pin['core_commit'], 'core_version': pin['module_version'], 'core_sum': pin['module_sum'],
                 'archive': archive.name, 'archive_sha256': digest(archive), 'framework_sha256': files,
                 'architectures': architectures, 'strong_exports': symbols, 'source_sha256': sources,
@@ -161,6 +175,8 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
                 'xhttp_listener_cleanup_patch_sha256': sources[XHTTP_LISTENER_PATCH],
                 'xhttp_listener_cleanup_source_sha256': report['xhttp_listener_cleanup_source_sha256'],
                 'runtime_executed_by_packager': False, 'published': False}
+    if diagnostics:
+        manifest['balancer_diagnostics_capability_expected'] = 1
     (destination/'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
     (destination/'SHA256SUMS').write_text(manifest['archive_sha256']+'  '+archive.name+'\n')
     return manifest

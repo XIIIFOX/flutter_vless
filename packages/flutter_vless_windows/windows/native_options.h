@@ -16,10 +16,12 @@ struct NativeOptions {
   bool quick_enabled = false, require_unlock = true;
   std::string surface = "platformDefault", label = "VPN", quick_action = "toggle", android_icon = "flutter_vless_ic_quick_tile", apple_symbol = "network", windows_icon;
   bool reconnect_enabled = true, diagnostics_enabled = true;
+  bool record_balancer_selections = false;
   int initial_delay_ms = 1000, max_delay_ms = 60000, max_attempts = 0, diagnostics_bytes = 131072, diagnostics_lines = 300;
   std::string kill_switch = "required", on_demand = "platformDefault", always_on = "system";
   bool MayRetry(int failures) const { return reconnect_enabled && (max_attempts == 0 || failures < max_attempts); }
   int RetryDelay(int failures) const { return static_cast<int>(std::min<int64_t>(max_delay_ms, int64_t(initial_delay_ms) << std::clamp(failures, 0, 23))); }
+  bool RecordsBalancerSelections() const { return diagnostics_enabled && record_balancer_selections; }
   void ValidateWindows() const {
     if (quick_enabled && surface != "platformDefault" && surface != "systemTray") throw std::invalid_argument("quickAccess.surface");
     if (on_demand == "enabled" || always_on == "requireEnabled") throw std::invalid_argument("Unsupported system-managed protection option");
@@ -71,6 +73,7 @@ struct NativeOptions {
     out.always_on=choice(text(p,"alwaysOn",out.always_on),{"system","requireEnabled"});
     if (!out.reconnect_enabled && out.on_demand=="enabled") throw std::invalid_argument("onDemand/reconnect");
     out.diagnostics_enabled=flag(d,"enabled",true); out.diagnostics_bytes=number(d,"maxBytes",131072); out.diagnostics_lines=number(d,"maxLines",300);
+    out.record_balancer_selections=flag(d,"recordBalancerSelections",false);
     if (out.diagnostics_bytes<4096 || out.diagnostics_bytes>131072 || out.diagnostics_lines<1 || out.diagnostics_lines>300) throw std::invalid_argument("diagnostics");
     return out;
   }

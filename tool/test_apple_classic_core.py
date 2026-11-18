@@ -25,13 +25,19 @@ class AppleClassicProducerTests(unittest.TestCase):
         self.assertIn('--mobile "$PWD"', source)
         self.assertIn('--destination "$PWD/../Core-classic"', source)
         self.assertIn('--vpn-routing', source)
-        self.assertIn('-tags=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding', source)
+        self.assertIn('flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding', source)
         self.assertIn('flutter_vless_managed_service_lifetimes', source)
         self.assertIn('go1.27.3', source)
         self.assertIn('--verify', source)
 
     def test_legacy_ios_requires_classic_after_pin(self):
         self.require_hook('ios/build_xray_ios.sh')
+
+    def test_diagnostic_ios_producer_opts_into_source_and_binding_together(self):
+        source = (ROOT / 'ios/build_xray_ios.sh').read_text()
+        self.assertIn('PREPARATION_FLAGS+=(--balancer-diagnostics)', source)
+        self.assertIn('BIND_TAGS+=,flutter_vless_balancer_diagnostics', source)
+        self.assertIn('-tags="$BIND_TAGS" -run \'^TestPrivateBalancerDiagnosticsRuntime$\'', source)
 
     def test_legacy_macos_requires_classic_after_pin(self):
         self.require_hook('packages/flutter_vless_macos/macos/build_xray_macos.sh')

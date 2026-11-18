@@ -25,6 +25,7 @@ import java.util.concurrent.TimeUnit
 /** Process owner delegates all session transitions to XrayVPNService. */
 object XrayCoreManager {
     @Volatile private var xrayProcess: Process? = null
+    @Volatile private var balancerProcess: NativeBalancerProcess? = null
     private var runtimeInputs: NativeRuntimeConfig.Inputs? = null
     private var lastProxyUplink: Long? = null
     private var lastProxyDownlink: Long? = null
@@ -401,6 +402,16 @@ object XrayCoreManager {
         NativeRoutingCommand.capabilities(BoundedCoreCommand.capture(builder.start(), maxBytes=4096))
     } catch (_: Exception) { false }
 
+    internal fun supportsBalancerDiagnostics(context: Context): Boolean = runCatching {
+        supportsBalancerDiagnostics(runtimeExecutable(context, false).absolutePath)
+    }.getOrDefault(false)
+
+    private fun supportsBalancerDiagnostics(executable: String): Boolean = try {
+        val builder = ProcessBuilder(executable, "native-balancer", "capabilities").redirectErrorStream(true)
+        builder.environment().remove("FLUTTER_VLESS_PROTECT_SOCKET")
+        NativeBalancerDiagnostics.supported(BoundedCoreCommand.capture(builder.start(), maxBytes = 1024))
+    } catch (_: Exception) { false }
+
     /** Query the actual immutable executable, including every recovery admission. */
     internal fun managedServiceCapabilities(context: Context, routing: Boolean = false): Int = try {
         val builder = ProcessBuilder(runtimeExecutable(context, routing).absolutePath,
@@ -446,29 +457,42 @@ object XrayCoreManager {
 
     internal fun startCore(context: Service, config: XrayConfig, configuration: NativeRuntimeConfig,
         protector: XraySocketProtector?, ownerGeneration: Long,
-        admitStart: ((() -> Process) -> Process)? = null, onExit: (Long, Int) -> Unit): Boolean {
+        admitStart: ((() -> Process) -> Process)? = null, balancerMaxLines: Int? = null,
+        onExit: (Long, Int) -> Unit): Boolean {
         if (!managedServicesAllowed(context, configuration.bytes.toString(Charsets.UTF_8), configuration.hasRouting, config.GEO_ASSETS_DIRECTORY)) return false
         if (!stopWorkers()) return false
         return try {
             val inputs = configuration.createInputs(context.noBackupFilesDir, "xray")
             runtimeInputs = inputs
             val executable=runtimeExecutable(context,configuration.hasRouting).absolutePath
-            val builder = ProcessBuilder(*inputs.command(executable, check=false).toTypedArray())
-                .directory(context.noBackupFilesDir).redirectErrorStream(true)
+            val managedInbound = config.runtimeTrafficInboundTag?.takeIf {
+                !config.PROXY_ONLY && balancerMaxLines != null && supportsBalancerDiagnostics(executable)
+            }
+            val command = if (managedInbound != null)
+                inputs.balancerCommand(executable, managedInbound, requireNotNull(balancerMaxLines))
+            else inputs.command(executable, check = false)
+            val builder = ProcessBuilder(command).directory(context.noBackupFilesDir)
+                .redirectErrorStream(managedInbound == null)
             Utilities.configureXrayAssets(context, builder.environment(), config.GEO_ASSETS_DIRECTORY)
             if (protector != null) builder.environment()["FLUTTER_VLESS_PROTECT_SOCKET"] = protector.socketName
             // The optional owner gate linearizes only launch admission, never readiness or success.
             val process = if (admitStart == null) builder.start() else admitStart { builder.start() }
             xrayProcess = process
+            val diagnostics = managedInbound?.let { NativeBalancerProcess(process, requireNotNull(balancerMaxLines)) }
+            balancerProcess = diagnostics
             Thread({
                 try {
-                    process.inputStream.use { stream -> val bytes = ByteArray(4096); while (stream.read(bytes) >= 0) { } }
+                    // Preserve stdout for the private CLI protocol. Neither
+                    // its frames nor its separate stderr are sent to logs.
+                    val stream = if (diagnostics == null) process.inputStream else process.errorStream
+                    stream.use { val bytes = ByteArray(4096); while (it.read(bytes) >= 0) { } }
                     val code = process.waitFor()
                     synchronized(this) { if (xrayProcess !== process) return@Thread }
                     onExit(ownerGeneration, code)
                 } catch (_: Exception) { onExit(ownerGeneration, -1) }
             }, "xray-monitor").apply { isDaemon = true; start() }
             if (protector != null && !protector.awaitVerified()) { stopWorkers(); return false }
+            if (diagnostics != null && !diagnostics.awaitStarted()) { stopWorkers(); return false }
             if (!process.isAlive) { stopWorkers(); return false }
             AppConfigs.V2RAY_CONFIG = config
             clearTrafficBaselines()
@@ -481,11 +505,23 @@ object XrayCoreManager {
     internal fun currentCoreProcess(): Process? = xrayProcess
     internal fun ownsCoreProcess(candidate: Process): Boolean = xrayProcess === candidate && candidate.isAlive
 
+    internal fun balancerSelections(maxLines: Int, maxBytes: Int): String {
+        val owner = xrayProcess ?: return ""
+        val diagnostics = balancerProcess ?: return ""
+        val rows = diagnostics.snapshot(maxLines, maxBytes)
+        return rows.takeIf { ownsCoreProcess(owner) && balancerProcess === diagnostics }.orEmpty()
+    }
+
+    internal fun disableBalancerSelections(): Boolean = balancerProcess?.disable() != false
+
     @Synchronized internal fun stopWorkers(): Boolean {
         clearTrafficBaselines()
         val process = xrayProcess
+        val diagnostics = balancerProcess
+        balancerProcess = null
         xrayProcess = null // Invalidate callbacks before signaling the old process.
         if (process != null) {
+            diagnostics?.closeInput()
             process.destroy()
             if (!process.waitFor(1, TimeUnit.SECONDS)) process.destroyForcibly()
             if (!process.waitFor(1, TimeUnit.SECONDS)) { xrayProcess = process; return false }

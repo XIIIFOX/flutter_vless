@@ -59,6 +59,7 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
     private var activity: Activity? = null
     private var xrayReceiver: BroadcastReceiver? = null
     private var pendingResult: MethodChannel.Result? = null
+    private var optionsRequest = 0L
     private lateinit var context: Context
 
     companion object {
@@ -92,7 +93,14 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
             "getCapabilities" -> {
                 val handler = Handler(Looper.getMainLooper())
                 var completed = false
-                fun respond() { if (!completed) { completed = true; result.success(NativeQuickAccess.capabilities()) } }
+                fun respond() {
+                    if (completed) return
+                    completed = true
+                    executor.execute {
+                        val supported = XrayCoreManager.supportsBalancerDiagnostics(context)
+                        handler.post { result.success(NativeQuickAccess.capabilities() + ("balancerSelections" to supported)) }
+                    }
+                }
                 val intent = Intent(context,XrayVPNService::class.java).setAction(XrayVPNService.ACTION_QUERY_SYSTEM_STATE)
                     .putExtra("receiver",object : ResultReceiver(handler) {
                         override fun onReceiveResult(code: Int, data: Bundle?) {
@@ -227,27 +235,41 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
                 }
                 val store = NativeOptionsStore(context)
                 val previous = store.read()
-                try {
-                    store.write(options)
-                    XrayDiagnosticsStore.configure(context.filesDir,options.diagnostics)
-                } catch (_: Exception) {
-                    runCatching { store.write(previous); XrayDiagnosticsStore.configure(context.filesDir,previous.diagnostics) }
-                    result.error("OPTIONS_SAVE_FAILED","Could not save native options",null); return
+                val request = ++optionsRequest
+                fun commit() {
+                    if (optionsRequest != request) {
+                        result.error("OPTIONS_SAVE_FAILED", "Native options were superseded", null)
+                        return
+                    }
+                    try {
+                        store.write(options)
+                        XrayDiagnosticsStore.configure(context.filesDir,options.diagnostics)
+                    } catch (_: Exception) {
+                        runCatching { store.write(previous); XrayDiagnosticsStore.configure(context.filesDir,previous.diagnostics) }
+                        result.error("OPTIONS_SAVE_FAILED","Could not save native options",null); return
+                    }
+                    if (!options.quickAccess.enabled) {
+                        NativeQuickAccess.profile(context).disarm()
+                        // Serialize a second clear after any already-running daemon save.
+                        runCatching { context.startService(Intent(context, XrayVPNService::class.java).setAction(XrayVPNService.ACTION_CLEAR_QUICK_ACCESS)) }
+                    }
+                    NativeQuickAccess.refresh(context)
+                    val iconResourceName = call.argument<String>("notificationIconResourceName")
+                    val iconResourceType = call.argument<String>("notificationIconResourceType")
+                    if (iconResourceName != null && iconResourceType != null) {
+                        AppConfigs.NOTIFICATION_ICON_RESOURCE_NAME = iconResourceName
+                        AppConfigs.NOTIFICATION_ICON_RESOURCE_TYPE = iconResourceType
+                    }
+                    result.success(null)
                 }
-                if (!options.quickAccess.enabled) {
-                    NativeQuickAccess.profile(context).disarm()
-                    // Serialize a second clear after any already-running daemon save.
-                    runCatching { context.startService(Intent(context, XrayVPNService::class.java).setAction(XrayVPNService.ACTION_CLEAR_QUICK_ACCESS)) }
+                if (previous.diagnostics.collectsBalancerSelections && !options.diagnostics.collectsBalancerSelections) {
+                    requestBalancerCommand(XrayVPNService.ACTION_DISABLE_BALANCER_SELECTIONS) { code, _ ->
+                        if (code == 0) commit()
+                        else result.error("OPTIONS_SAVE_FAILED", "Could not clear active balancer diagnostics", null)
+                    }
+                } else {
+                    commit()
                 }
-                NativeQuickAccess.refresh(context)
-                // Store notification icon settings globally
-                val iconResourceName = call.argument<String>("notificationIconResourceName")
-                val iconResourceType = call.argument<String>("notificationIconResourceType")
-                if (iconResourceName != null && iconResourceType != null) {
-                    AppConfigs.NOTIFICATION_ICON_RESOURCE_NAME = iconResourceName
-                    AppConfigs.NOTIFICATION_ICON_RESOURCE_TYPE = iconResourceType
-                }
-                result.success(null)
             }
             "getServerDelay" -> {
                 val certificateArgument = call.argument<Any>("certificate_assets_directory")
@@ -326,6 +348,15 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
             "getProviderDebugSnapshot" -> {
                 result.success(XrayCoreManager.getProviderDebugSnapshot(context))
             }
+            "getBalancerSelections" -> {
+                val store = NativeOptionsStore(context)
+                if (!store.read().diagnostics.collectsBalancerSelections) {
+                    result.success("")
+                } else requestBalancerCommand(XrayVPNService.ACTION_BALANCER_SELECTIONS) { code, data ->
+                    result.success(if (code == 0 && store.read().diagnostics.collectsBalancerSelections)
+                        data?.getString("rows").orEmpty() else "")
+                }
+            }
             "requestPermission" -> {
                 // Requests VPN permission from the OS
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -349,6 +380,26 @@ class FlutterVlessPlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activity
      * Registers a BroadcastReceiver to listen for updates from XrayVPNService.
      * This allows us to receive state changes (Connected/Disconnected) and traffic stats.
      */
+    private fun requestBalancerCommand(action: String, respond: (Int, Bundle?) -> Unit) {
+        val handler = Handler(Looper.getMainLooper())
+        var completed = false
+        fun finish(code: Int, data: Bundle?) {
+            if (!completed) { completed = true; respond(code, data) }
+        }
+        val timeout = Runnable { finish(1, null) }
+        val intent = Intent(context, XrayVPNService::class.java).setAction(action)
+            .putExtra("receiver", object : ResultReceiver(handler) {
+                override fun onReceiveResult(code: Int, data: Bundle?) {
+                    handler.removeCallbacks(timeout)
+                    finish(code, data)
+                }
+            })
+        try {
+            context.startService(intent)
+            handler.postDelayed(timeout, 3000)
+        } catch (_: Exception) { finish(1, null) }
+    }
+
     private fun registerReceiver() {
         if (activity == null) return
         if (xrayReceiver == null) {

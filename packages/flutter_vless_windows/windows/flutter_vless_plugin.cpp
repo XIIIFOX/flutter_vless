@@ -405,11 +405,24 @@ void FlutterVlessPlugin::HandleMethodCall(
       {flutter::EncodableValue("certificateAssetsDirectory"), flutter::EncodableValue(true)},
       {flutter::EncodableValue("vpnRouting"), flutter::EncodableValue(true)}}));
   } else if (method_call.method_name() == "getCapabilities") {
-    result->Success(flutter::EncodableValue(flutter::EncodableMap{
-      {flutter::EncodableValue("optionsVersion"), flutter::EncodableValue(1)},
-      {flutter::EncodableValue("quickAccessSurfaces"), flutter::EncodableValue(flutter::EncodableList{flutter::EncodableValue("systemTray")})},
-      {flutter::EncodableValue("customReconnectBackoff"), flutter::EncodableValue(true)},
-      {flutter::EncodableValue("killSwitch"), flutter::EncodableValue(true)}}));
+    std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> reply = std::move(result);
+    const auto report = [reply](bool balancer) {
+      reply->Success(flutter::EncodableValue(flutter::EncodableMap{
+        {flutter::EncodableValue("optionsVersion"), flutter::EncodableValue(1)},
+        {flutter::EncodableValue("quickAccessSurfaces"), flutter::EncodableValue(flutter::EncodableList{flutter::EncodableValue("systemTray")})},
+        {flutter::EncodableValue("customReconnectBackoff"), flutter::EncodableValue(true)},
+        {flutter::EncodableValue("killSwitch"), flutter::EncodableValue(true)},
+        {flutter::EncodableValue("balancerSelections"), flutter::EncodableValue(balancer)}}));
+    };
+    // A headless runner has no window on which to deliver worker replies.
+    if (!main_window_handle_ || !ui_callback_message_id_ || !window_proc_delegate_id_) {
+      report(false);
+      return;
+    }
+    operations_.Submit([this, report] {
+      const bool balancer = flutter_vless::native::BundledBalancerCapability();
+      RunOnUIThread([report, balancer] { report(balancer); });
+    });
   } else if (method_call.method_name() == "requestAddQuickTile") {
     result->Success(flutter::EncodableValue("unsupported"));
   } else if (method_call.method_name() == "clearQuickAccessProfile") {
@@ -431,8 +444,14 @@ void FlutterVlessPlugin::HandleMethodCall(
             [this](bool expected_active) { ToggleFromTray(expected_active); }, [this] { OpenApp(); },
             [this] { return quick_profile_generation_.load(); });
         if (!tray_->Configure(parsed)) { result->Error("QUICK_ACCESS_UNAVAILABLE", "Cannot create the system tray icon; check the .ico path and desktop session"); return; }
+        const bool balancer_opt_out = native_options_.RecordsBalancerSelections() && !parsed.RecordsBalancerSelections();
         native_options_ = parsed; ++options_generation_;
         flutter_vless::DiagnosticsLog::Instance().Configure(parsed.diagnostics_enabled, parsed.diagnostics_bytes, parsed.diagnostics_lines);
+        if (balancer_opt_out) {
+          V2rayManager::GetInstance().DisableBalancerSelections();
+          // Also retire consent for a Start already owned by the queue.
+          operations_.Submit([] { V2rayManager::GetInstance().DisableBalancerSelections(); });
+        }
         if (!parsed.quick_enabled) operations_.Submit([this] { quick_profile_.reset(); });
         RefreshTray(); result->Success(flutter::EncodableValue(nullptr));
       } catch (const std::exception&) { result->Error("INVALID_OPTIONS", "Unsupported or invalid Windows options"); }
@@ -635,6 +654,22 @@ void FlutterVlessPlugin::HandleMethodCall(
   } else if (method_call.method_name().compare("getProviderDebugSnapshot") == 0) {
     result->Success(flutter::EncodableValue(
         V2rayManager::GetInstance().GetProviderDebugSnapshot()));
+  } else if (method_call.method_name() == "getBalancerSelections") {
+    if (!native_options_.RecordsBalancerSelections()) {
+      result->Success(flutter::EncodableValue(std::string{}));
+      return;
+    }
+    const auto generation = options_generation_.load();
+    std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> reply = std::move(result);
+    // Follow any queued Start/Stop/disable. Recheck consent on the UI thread
+    // where options can change while this reply is waiting to be delivered.
+    operations_.Submit([this, reply, generation] {
+      RunOnUIThread([this, reply, generation] {
+        const auto rows = generation == options_generation_.load() && native_options_.RecordsBalancerSelections()
+            ? V2rayManager::GetInstance().GetBalancerSelections() : std::string{};
+        reply->Success(flutter::EncodableValue(rows));
+      });
+    });
   } else {
     result->NotImplemented();
   }

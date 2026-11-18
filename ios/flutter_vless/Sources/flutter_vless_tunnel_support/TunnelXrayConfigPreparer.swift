@@ -32,9 +32,10 @@ public struct TunnelPreparedConfig {
     public let routingEnvelope: NativeRoutingEnvelope?
     public let endpointPath: TunnelEndpointPath?
     public let endpointSelections: [TunnelEndpointSelection]
+    public let managedInboundTag: String?
 
     public init(data: Data, logMessages: [String], proxyUsesXhttp: Bool, bootstrapAddresses: [String] = [], routingEnvelope: NativeRoutingEnvelope? = nil,
-                endpointPath: TunnelEndpointPath? = nil, endpointSelections: [TunnelEndpointSelection] = []) {
+                endpointPath: TunnelEndpointPath? = nil, endpointSelections: [TunnelEndpointSelection] = [], managedInboundTag: String? = nil) {
         self.data = data
         self.logMessages = logMessages
         self.proxyUsesXhttp = proxyUsesXhttp
@@ -42,6 +43,7 @@ public struct TunnelPreparedConfig {
         self.routingEnvelope = routingEnvelope
         self.endpointPath = endpointPath
         self.endpointSelections = endpointSelections
+        self.managedInboundTag = managedInboundTag
     }
 }
 
@@ -166,7 +168,8 @@ public enum TunnelXrayConfigPreparer {
                     }
                     return TunnelPreparedConfig(data: prepared.data, logMessages: prepared.logMessages,
                         proxyUsesXhttp: prepared.proxyUsesXhttp, bootstrapAddresses: prepared.bootstrapAddresses,
-                        routingEnvelope: prepared.routingEnvelope, endpointPath: endpointPath, endpointSelections: selections)
+                        routingEnvelope: prepared.routingEnvelope, endpointPath: endpointPath, endpointSelections: selections,
+                        managedInboundTag: prepared.managedInboundTag)
                 }
                 guard let host = missingHost else { throw StartupError.invalidConfiguration }
                 guard answers.count < 64 else { throw StartupError.invalidConfiguration }
@@ -385,7 +388,7 @@ public enum TunnelXrayConfigPreparer {
                 managedInboundTag: managedTag, authUser: credentials.username, intent: routingIntent,
                 sourceInboundFinalIndex: routingIntent?.sourceInboundIndex.map { $0 + 1 }, guardRuleIndices: guards)
             return TunnelPreparedConfig(data: data, logMessages: messages, proxyUsesXhttp: proxyUsesXhttp,
-                                        bootstrapAddresses: bootstrapAddresses, routingEnvelope: envelope)
+                                        bootstrapAddresses: bootstrapAddresses, routingEnvelope: envelope, managedInboundTag: managedTag)
         } catch {
             return nil
         }

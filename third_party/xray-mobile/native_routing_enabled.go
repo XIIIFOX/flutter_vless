@@ -21,6 +21,10 @@ func CheckRoutingPrivate(config, spec []byte) int64 {
 }
 
 func StartRoutingPrivate(config, spec []byte, logger Logger) error {
+	return startRoutingPrivate(config, spec, logger, nil)
+}
+
+func startRoutingPrivate(config, spec []byte, logger Logger, configure configureBalancerDiagnostics) error {
 	runtimeOperation.Lock()
 	defer runtimeOperation.Unlock()
 	if hasPublishedRuntime() {
@@ -43,6 +47,7 @@ func StartRoutingPrivate(config, spec []byte, logger Logger) error {
 		_ = owner.Close()
 		return startupFailure(logger, "routing guards")
 	}
+	ctx, diagnostics := prepareBalancerDiagnostics(ctx, prepared.config, configure)
 	xlog.RegisterHandler(privateLogHandler{logger: logger, level: prepared.level, enabled: prepared.diagnostics, phase: "configuration"})
 	stage, err := activateNativeRoutingCandidate(owner, func() (routingRuntime, error) {
 		instance, err := core.NewWithContext(ctx, prepared.config)
@@ -53,7 +58,7 @@ func StartRoutingPrivate(config, spec []byte, logger Logger) error {
 	}, func(candidate routingRuntime) error {
 		return owner.Seal(candidate.(*core.Instance))
 	}, func(candidate routingRuntime) error {
-		return publishPrivateRuntime(candidate.(*core.Instance), owner)
+		return publishPrivateRuntime(candidate.(*core.Instance), owner, diagnostics)
 	})
 	if err != nil {
 		return startupFailure(logger, "routing "+stage)

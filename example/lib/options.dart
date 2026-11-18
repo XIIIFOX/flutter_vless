@@ -24,6 +24,8 @@ class _PluginOptionsPageState extends State<PluginOptionsPage> {
   late bool unlock = widget.initial.quickAccess.requireUnlock;
   late bool reconnect = widget.initial.reconnect.enabled;
   late bool diagnostics = widget.initial.diagnostics.enabled;
+  late bool recordBalancerSelections =
+      widget.initial.diagnostics.recordBalancerSelections;
   late QuickAccessSurface surface = widget.initial.quickAccess.surface;
   late VlessSystemAction action = widget.initial.quickAccess.action;
   late VlessNotificationAction notificationAction =
@@ -142,7 +144,8 @@ class _PluginOptionsPageState extends State<PluginOptionsPage> {
           diagnostics: DiagnosticsOptions(
               enabled: diagnostics,
               maxBytes: int.parse(bytes.text),
-              maxLines: int.parse(lines.text)));
+              maxLines: int.parse(lines.text),
+              recordBalancerSelections: recordBalancerSelections));
       options.validate();
       await widget.onApply(options);
       if (mounted) Navigator.pop(context);
@@ -257,6 +260,17 @@ class _PluginOptionsPageState extends State<PluginOptionsPage> {
                   'Raw configuration and credentials are never enabled.'),
               value: diagnostics,
               onChanged: (v) => setState(() => diagnostics = v)),
+          if (caps.balancerSelections || recordBalancerSelections)
+            SwitchListTile(
+              title: const Text('Record balancer selections'),
+              subtitle: const Text(
+                'Shows group and node numbers in VPN diagnostics for the next connection.',
+              ),
+              value: recordBalancerSelections,
+              onChanged: diagnostics
+                  ? (value) => setState(() => recordBalancerSelections = value)
+                  : null,
+            ),
           field('Diagnostics bytes (4096–131072)', bytes, number: true),
           field('Diagnostics lines (1–300)', lines, number: true),
           const Text(

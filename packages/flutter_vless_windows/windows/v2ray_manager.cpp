@@ -184,6 +184,14 @@ std::string V2rayManager::GetProviderDebugSnapshot() {
   return flutter_vless::DiagnosticsLog::Instance().Snapshot();
 }
 
+std::string V2rayManager::GetBalancerSelections() {
+  return !proxy_only_.load() && vpn_service_ ? vpn_service_->GetBalancerSelections() : std::string{};
+}
+
+void V2rayManager::DisableBalancerSelections() {
+  if (vpn_service_) vpn_service_->DisableBalancerSelections();
+}
+
 /**
  * @brief Retrieves current traffic statistics from the active service.
  * 

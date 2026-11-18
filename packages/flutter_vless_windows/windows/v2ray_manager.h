@@ -47,6 +47,8 @@ class V2rayManager {
 
   // Bounded stdout/stderr from the current or most recent native session.
   std::string GetProviderDebugSnapshot();
+  std::string GetBalancerSelections();
+  void DisableBalancerSelections();
 
  private:
   V2rayManager();

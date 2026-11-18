@@ -611,7 +611,7 @@ def profile_peer(address, node, latency):
     return server
 
 
-def profile_balancer_config(address, dns_port, peers):
+def profile_balancer_config(address, dns_port, peers, round_robin=False):
     fixture = Path(__file__).resolve().parents[2] / "tool/fixtures/compatibility/typed-profile-balancer.json"
     profile = json.loads(fixture.read_text(encoding="utf-8"))
     socket.inet_aton(address)
@@ -645,6 +645,9 @@ def profile_balancer_config(address, dns_port, peers):
         {"type": "field", "ip": [str(cidr) for cidr in outside_target] + ["::/0"],
          "outboundTag": "runner-direct"},
     ]
+    if round_robin:
+        profile.pop("observatory")
+        profile["routing"]["balancers"][0]["strategy"] = {"type": "roundRobin"}
     return profile
 
 
@@ -1483,30 +1486,94 @@ def start_profile_server(owned, server):
     return server
 
 
-def profile_balancer_gate(probe, directory, address, dns, results):
-    label = "vpn-typed-profile"
+def profile_timing(log, stage, budget_ms):
+    rows = re.findall(rf"(?m)^{stage}_ELAPSED_MS=(\d+)$", log)
+    assert len(rows) == 1, f"Missing or duplicated {stage} duration"
+    actual = int(rows[0])
+    assert actual < budget_ms, f"{stage} exceeded {budget_ms} ms: {actual} ms"
+    return actual
+
+
+def await_profile_selections(state, expected, timeout=8):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            snapshot = json.loads(state.read_text())
+            if snapshot.get("running") is True and snapshot.get("protecting") is True:
+                rows = snapshot.get("balancer_selections")
+                assert type(rows) is str and re.fullmatch(r"(?:[1-9]\d{0,18},1,[12](?:\n[1-9]\d{0,18},1,[12])?)?", rows, re.ASCII), \
+                    "Invalid private balancer snapshot"
+                if rows == expected:
+                    return
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.1)
+    raise AssertionError("Expected private balancer selections did not arrive")
+
+
+def verify_profile_selections(probe, process, peers, state, results):
+    for peer in peers:
+        with peer.profile_lock:
+            peer.healthy = True
+    await_profile_selections(state, "")
+    payloads = [request(PROFILE_GROUP_HOST, True) for _ in range(4)]
+    assert payloads in (["GROUP-7", "GROUP-8"] * 2, ["GROUP-8", "GROUP-7"] * 2), "Round robin did not alternate both peers"
+    first, second = (1, 2) if payloads[0] == "GROUP-7" else (2, 1)
+    latest = f"3,1,{first}\n4,1,{second}"
+    await_profile_selections(state, latest)
+    assert request(PROFILE_DIRECT_HOST, True) == "DIRECT-FIXTURE", "Explicit direct traffic reached the balancer"
+    assert request(PROFILE_GROUP_HOST, True) == payloads[0], "Direct traffic consumed a turn in the balancer"
+    await_profile_selections(state, f"4,1,{second}\n5,1,{first}")
+    results.append(dict(check="bounded numeric history matches alternating Wintun traffic and excludes direct requests", passed=True))
+
+    started = time.monotonic()
+    kill_worker(process.pid, "xray.exe")
+    await_state(state, False)
+    assert int(native(probe, "policy-count")) > 0, "WFP protection did not survive worker loss"
+    await_state(state, True, timeout=60)
+    recovery_ms = round((time.monotonic() - started) * 1000)
+    await_profile_selections(state, "")
+    assert request(PROFILE_DIRECT_HOST, True) == "DIRECT-FIXTURE"
+    first_payload = request(PROFILE_GROUP_HOST, True)
+    assert first_payload in ("GROUP-7", "GROUP-8")
+    await_profile_selections(state, "1,1,1" if first_payload == "GROUP-7" else "1,1,2")
+    results.append(dict(check="protected recovery with fresh selection history", recovery_ms=recovery_ms, passed=True))
+
+    Path(str(state) + ".disable-balancer").touch()
+    await_profile_selections(state, "")
+    assert request(PROFILE_GROUP_HOST, True) == ("GROUP-8" if first_payload == "GROUP-7" else "GROUP-7")
+    assert request(PROFILE_DIRECT_HOST, True) == "DIRECT-FIXTURE"
+    assert request(PROFILE_GROUP_HOST, True) == first_payload
+    await_profile_selections(state, "")
+    results.append(dict(check="live opt-out clears history and preserves both traffic paths", passed=True))
+
+
+def profile_balancer_gate(probe, directory, address, dns, results, diagnostics=False):
+    label = "vpn-balancer-diagnostics" if diagnostics else "vpn-typed-profile"
     profile, stop, state, guard_stop = [directory / (label + suffix) for suffix in (".json", ".stop", ".state.json", ".guard-stop")]
     assert not any(path.exists() for path in (profile, stop, state, guard_stop)), "Typed-profile test requires fresh outputs"
     with ExitStack() as owned:
         peers = [start_profile_server(owned, profile_peer(address, node, latency))
                  for node, latency in ((7, 0.015), (8, 0.2))]
         source = json.dumps(profile_balancer_config(address, dns.server_address[1],
-                            [peer.server_address[1] for peer in peers])).encode()
+                            [peer.server_address[1] for peer in peers], round_robin=diagnostics)).encode()
         profile.write_bytes(source)
         log_path = directory / (label + ".log")
         with log_path.open("w") as log:
-            process = subprocess.Popen([str(probe), "run-vpn", str(profile), "120", str(stop), str(state)],
+            mode = "run-vpn-balancer-diagnostics" if diagnostics else "run-vpn"
+            process = subprocess.Popen([str(probe), mode, str(profile), "180", str(stop), str(state)],
                                        cwd=directory, stdout=log, stderr=log)
             guard = None
             primary_error = None
             try:
-                guard = subprocess.Popen([str(probe), "guard", str(process.pid), "120", str(guard_stop)],
+                guard = subprocess.Popen([str(probe), "guard", str(process.pid), "180", str(guard_stop)],
                                          cwd=directory, stdout=log, stderr=log)
                 deadline = time.monotonic() + 65
                 while "START_RETURN=1" not in log_path.read_text(errors="replace"):
                     assert process.poll() is None and time.monotonic() < deadline, "Typed-profile VPN did not become ready"
                     time.sleep(0.1)
                 assert await_state(state, True, timeout=5)["protecting"], "Typed-profile catch-all displaced readiness"
+                start_ms = profile_timing(log_path.read_text(errors="replace"), "START", 50000)
 
                 def wait_group(expected):
                     deadline = time.monotonic() + 8
@@ -1521,36 +1588,49 @@ def profile_balancer_gate(probe, directory, address, dns, results):
                         time.sleep(0.1)
                     raise AssertionError("Typed-profile traffic did not select the expected group member")
 
-                assert request(PROFILE_DIRECT_HOST, True) == "DIRECT-FIXTURE"
-                wait_group(None)
-                for peer in peers:
-                    with peer.profile_lock:
-                        assert peer.group_requests == 0, "Cold group sent payload to an unqualified member"
-                        peer.healthy = True
-                wait_group("GROUP-7")
-                for qtype in (1, 28):
-                    profile_dns_request(qtype, 7, peers)
-                results.append(dict(mode=label, check="direct rule, healthy group and initial uncached A and AAAA", passed=True))
+                if diagnostics:
+                    verify_profile_selections(probe, process, peers, state, results)
+                else:
+                    assert request(PROFILE_DIRECT_HOST, True) == "DIRECT-FIXTURE"
+                    wait_group(None)
+                    for peer in peers:
+                        with peer.profile_lock:
+                            assert peer.group_requests == 0, "Cold group sent payload to an unqualified member"
+                            peer.healthy = True
+                    wait_group("GROUP-7")
+                    for qtype in (1, 28):
+                        profile_dns_request(qtype, 7, peers)
+                    results.append(dict(mode=label, check="direct rule, healthy group and initial uncached A and AAAA", passed=True))
 
-                with peers[0].profile_lock:
-                    peers[0].healthy = False
-                wait_group("GROUP-8")
-                for qtype in (1, 28):
-                    profile_dns_request(qtype, 8, peers)
-                with peers[0].profile_lock:
-                    assert peers[0].failed_probes > 0, "Failover lacked a failed primary observation"
-                assert request(PROFILE_DIRECT_HOST, True) == "DIRECT-FIXTURE"
-                results.append(dict(mode=label, check="primary loss reroutes data and fresh A and AAAA", passed=True))
+                    with peers[0].profile_lock:
+                        peers[0].healthy = False
+                    wait_group("GROUP-8")
+                    for qtype in (1, 28):
+                        profile_dns_request(qtype, 8, peers)
+                    with peers[0].profile_lock:
+                        assert peers[0].failed_probes > 0, "Failover lacked a failed primary observation"
+                    assert request(PROFILE_DIRECT_HOST, True) == "DIRECT-FIXTURE"
+                    results.append(dict(mode=label, check="primary loss reroutes data and fresh A and AAAA", passed=True))
 
                 assert profile.read_bytes() == source, "Typed-profile preparation changed its authored JSON"
                 stop.touch()
-                assert process.wait(timeout=25) == 0, "Typed-profile VPN Stop failed"
+                assert process.wait(timeout=18) == 0, "Typed-profile VPN Stop failed"
+                output = log_path.read_text(errors="replace")
+                stop_ms = profile_timing(output, "STOP", 15000)
+                if diagnostics:
+                    assert "BALANCER_EMPTY_AFTER_STOP=1" in output.splitlines()
+                assert "STOPPED=1" in output.splitlines()
                 assert native(probe, "policy-count") == "0", "Typed-profile Stop retained WFP filters"
                 inventory = json.loads(subprocess.check_output(["powershell", "-NoProfile", "-Command",
                     "[pscustomobject]@{Routes=@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1','::/1','8000::/1') }).Count; "
                     "IPv6Addresses=@(Get-NetIPAddress -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -eq 'flutter_vless_tun' -and $_.IPAddress -eq 'fd00:198:18::2' }).Count} | ConvertTo-Json -Compress"], text=True, timeout=25))
                 assert inventory == {"Routes": 0, "IPv6Addresses": 0}, "Typed-profile Stop retained routes/address"
-                results.append(dict(mode=label, check="typed-profile Stop releases WFP and Wintun policy", passed=True))
+                owned_workers = subprocess.check_output(["powershell", "-NoProfile", "-Command", "$ErrorActionPreference='Stop'; "
+                    f"@(Get-CimInstance Win32_Process | Where-Object {{ $_.ParentProcessId -eq {process.pid} "
+                    "-and $_.Name -in @('xray.exe','tun2socks.exe') }).Count"], text=True, timeout=10).strip()
+                assert owned_workers == "0", "Typed-profile Stop retained owned workers"
+                results.append(dict(mode=label, check="typed-profile Stop releases WFP, routes, address and workers",
+                                    start_ms=start_ms, stop_ms=stop_ms, passed=True))
             except BaseException as error:
                 primary_error = error
                 raise
@@ -1579,10 +1659,10 @@ def profile_balancer_gate(probe, directory, address, dns, results):
                         raise cleanup_error
                     if hasattr(primary_error, "add_note"):
                         primary_error.add_note("TYPED_PROFILE_CLEANUP_FAILED")
-    print("WINDOWS_TYPED_PROFILE_RUNTIME_PASS=3", flush=True)
+    print("WINDOWS_BALANCER_DIAGNOSTICS_RUNTIME_PASS=4" if diagnostics else "WINDOWS_TYPED_PROFILE_RUNTIME_PASS=3", flush=True)
 
 
-def profile_balancer_only(probe, directory):
+def profile_balancer_only(probe, directory, diagnostics=False):
     # UDP connect selects the runner's ordinary interface without sending a
     # packet. The owned peers use that interface for the same socket pinning
     # as ordinary VPN profiles. All test requests target the owned peers.
@@ -1600,9 +1680,10 @@ def profile_balancer_only(probe, directory):
             dns.questions, dns.questions_lock = [], threading.Lock()
             start_profile_server(owned, dns)
             PORTS["direct"] = origin.server_address[1]
-            profile_balancer_gate(probe, directory, address, dns, results)
+            profile_balancer_gate(probe, directory, address, dns, results, diagnostics=diagnostics)
     finally:
-        (directory / "typed-profile-results.json").write_text(json.dumps(results, indent=2))
+        report = "balancer-diagnostics-results.json" if diagnostics else "typed-profile-results.json"
+        (directory / report).write_text(json.dumps(results, indent=2))
 
 
 
@@ -2003,6 +2084,7 @@ def main():
     fixture_mode = parser.add_mutually_exclusive_group()
     fixture_mode.add_argument("--numeric-ipv6-only", action="store_true")
     fixture_mode.add_argument("--typed-profile-only", action="store_true")
+    fixture_mode.add_argument("--balancer-diagnostics-only", action="store_true")
     parser.add_argument("--numeric-ipv6-variant", choices=("official", "routing"), default="routing")
     parser.add_argument("--native-routing", action="store_true", help="Append the separate native-routing profile; requires --vpn and an optional factory binary")
     parser.add_argument("--wine-bottle", help="CrossOver bottle for proxy-only tests on macOS")
@@ -2015,12 +2097,17 @@ def main():
         raise SystemExit("Numeric IPv6 acceptance requires the disposable VPN runner")
     if args.typed_profile_only and not args.vpn:
         raise SystemExit("Typed-profile acceptance requires the disposable VPN runner")
-    REAL_DNS = args.vpn and not args.typed_profile_only
+    if args.balancer_diagnostics_only and not args.vpn:
+        raise SystemExit("Balancer diagnostics acceptance requires the disposable VPN runner")
+    REAL_DNS = args.vpn and not (args.typed_profile_only or args.balancer_diagnostics_only)
     directory = args.directory.resolve()
     probe = directory / "runtime_probe.exe"
     PROBE = probe
     if args.typed_profile_only:
         profile_balancer_only(probe, directory)
+        return
+    if args.balancer_diagnostics_only:
+        profile_balancer_only(probe, directory, diagnostics=True)
         return
     if args.numeric_ipv6_only:
         isolated_results=[]

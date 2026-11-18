@@ -5,7 +5,8 @@ set -euo pipefail
 case "$#:${1-}" in
     0:) APPLE_RUNTIME_PROBE_MODE=full ;;
     1:--fakedns-only) APPLE_RUNTIME_PROBE_MODE=fakedns-only ;;
-    *) echo 'Usage: test_ios_privacy_runtime.sh [--fakedns-only]' >&2; exit 2 ;;
+    1:--balancer-diagnostics-only) APPLE_RUNTIME_PROBE_MODE=balancer-diagnostics-only; export REQUIRE_BALANCER_DIAGNOSTICS=1 ;;
+    *) echo 'Usage: test_ios_privacy_runtime.sh [--fakedns-only|--balancer-diagnostics-only]' >&2; exit 2 ;;
 esac
 export APPLE_RUNTIME_PROBE_MODE
 : "${SIMULATOR_UDID:?Set SIMULATOR_UDID to an already booted disposable iOS simulator}"
@@ -15,6 +16,7 @@ EXPECTED_XRAY_CORE_VERSION="${EXPECTED_XRAY_CORE_VERSION:-$(sed -nE 's/^let xray
 : "${EXPECTED_XRAY_CORE_VERSION:?Expected a pinned ios Core version}"
 OUT="$ROOT/build/ios_privacy_runtime_probe"
 BUNDLE=dev.tfox.security-runtime-probe
+if [ "$APPLE_RUNTIME_PROBE_MODE" = balancer-diagnostics-only ]; then OUT="${OUT}_balancer"; fi
 mkdir -p "$OUT/modules" "$OUT/Probe.app"
 PROBE_LAUNCHED_AT=
 PHASE_COLLECTED=0
@@ -46,8 +48,18 @@ head=source[:source.index('public class FlutterVlessPlugin:')].replace('import F
 asset=source[source.index('private func configureXrayAssetLocation'):source.index('final class PacketTunnelManager:')]
 harness=(root/'tool/fixtures/ios_local_auth_probe.swift').read_text()+'\n'+(root/'tool/fixtures/ios_dns_runtime_probe.swift').read_text()+'\n'+(root/'tool/fixtures/apple_fakedns_runtime.swift').read_text()+'\n'+(root/'tool/fixtures/apple_native_routing_runtime.swift').read_text()+'\n'+(root/'tool/fixtures/ios_privacy_probe.swift').read_text()
 harness=(root/'tool/fixtures/macos_runtime_regressions.swift').read_text()+'\n'+harness
-harness=harness.replace('    let markers = [', '    do { try await runAppleProxyCounterChecks() } catch { print("IOS_COUNTERS_FAILED"); exit(1) }\n    do { try runAppleFakeDNSRuntimeChecks() } catch { print("APPLE_FAKEDNS_SDK_FAILED"); exit(1) }\n    let markers = [')
-if os.environ.get('APPLE_RUNTIME_PROBE_MODE') == 'fakedns-only':
+harness=harness.replace('    let markers = [', '    do { try await runAppleProxyCounterChecks() } catch { print("IOS_COUNTERS_FAILED"); exit(1) }\n    do { try runAppleFakeDNSRuntimeChecks() } catch { print("APPLE_FAKEDNS_SDK_FAILED"); exit(1) }\n    do { try runAppleBalancerDiagnosticsChecks() } catch { print("APPLE_BALANCER_DIAGNOSTICS_SDK_FAILED"); exit(1) }\n    let markers = [')
+mode = os.environ.get('APPLE_RUNTIME_PROBE_MODE')
+if mode == 'balancer-diagnostics-only':
+    begin, end = harness.index('func runModes() async {'), harness.index('class ModeDelegate:')
+    harness = harness[:begin] + r'''func runModes() async {
+    setbuf(stdout, nil)
+    print("RUNTIME=\(XRayGetVersion())")
+    do { try runAppleBalancerDiagnosticsChecks() } catch { print("APPLE_BALANCER_DIAGNOSTICS_SDK_FAILED"); exit(1) }
+    exit(0)
+}
+''' + harness[end:]
+elif mode == 'fakedns-only':
     begin, end = harness.index('func runModes() async {'), harness.index('class ModeDelegate:')
     harness = harness[:begin] + r'''func runModes() async {
     requireManagedServiceLifetimeCapabilities()
@@ -86,6 +98,7 @@ SIMCTL_CHILD_REQUIRE_CORE_PREFLIGHT="${REQUIRE_CORE_PREFLIGHT:-0}" \
 SIMCTL_CHILD_REQUIRE_VPN_ROUTING="${REQUIRE_VPN_ROUTING:-0}" \
 SIMCTL_CHILD_REQUIRE_MANAGED_SERVICE_LIFETIMES="${REQUIRE_MANAGED_SERVICE_LIFETIMES:-0}" \
 SIMCTL_CHILD_REQUIRE_DARWIN_INTERFACE_BINDING="${REQUIRE_DARWIN_INTERFACE_BINDING:-0}" \
+SIMCTL_CHILD_REQUIRE_BALANCER_DIAGNOSTICS="${REQUIRE_BALANCER_DIAGNOSTICS:-0}" \
     python3 "$ROOT/tool/run_apple_runtime_probe.py" --timeout 600 --ios-simulator "$SIMULATOR_UDID" -- \
     xcrun simctl launch --console "$SIMULATOR_UDID" "$BUNDLE" 2>&1 | tee "$OUT/runtime.log"
 collect_probe_phase
@@ -95,6 +108,10 @@ import os, sys
 from pathlib import Path
 text=Path(sys.argv[1]).read_text()
 assert text.splitlines().count('RUNTIME='+sys.argv[2]) == 1, 'Unexpected embedded Xray version'
+if os.environ.get('REQUIRE_BALANCER_DIAGNOSTICS') == '1' and os.environ.get('APPLE_RUNTIME_PROBE_MODE') != 'fakedns-only':
+    assert text.splitlines().count('APPLE_BALANCER_DIAGNOSTICS_SDK_PASS=3') == 1, 'Missing or duplicate Apple SDK balancer diagnostics gate'
+if os.environ.get('APPLE_RUNTIME_PROBE_MODE') == 'balancer-diagnostics-only':
+    raise SystemExit(0)
 if os.environ.get('REQUIRE_MANAGED_SERVICE_LIFETIMES') == '1':
     for marker in ['APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1', 'APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=2']:
         assert text.splitlines().count(marker) == 1, 'Missing or duplicate managed lifetime capability value'

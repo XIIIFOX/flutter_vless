@@ -151,6 +151,95 @@ private final class ProfileRoutingPeer: @unchecked Sendable {
     }
 }
 
+func runAppleBalancerDiagnosticsChecks() throws {
+    if !FLVlessHasCoreBalancerDiagnostics(), ProcessInfo.processInfo.environment["REQUIRE_BALANCER_DIAGNOSTICS"] != "1" { return }
+    precondition(FLVlessHasCoreBalancerDiagnostics(), "Balancer diagnostics runtime is required")
+    let direct = LocalProbeOrigin(port: 0)
+    let primary = ProfileRoutingPeer(marker: 65, probeLatency: 0)
+    let alternate = ProfileRoutingPeer(marker: 66, probeLatency: 0)
+    let first = LocalProbeOrigin(port: 0) { primary.serve($0, dnsPort: direct.port) }
+    let second = LocalProbeOrigin(port: 0) { alternate.serve($0, dnsPort: direct.port) }
+    defer { XRayStop(); first.stop(); second.stop(); direct.stop() }
+    let credentials = try LocalProxyCredentials.generate()
+    let members = ["diag-node-a!", "diag-node-b!"]
+    let group = "diag-group"
+    let proxies: [[String: Any]] = zip(members, [first.port, second.port]).map { tag, port in
+        ["tag": tag, "protocol": "http", "settings": ["servers": [["address": "127.0.0.1", "port": port]]]]
+    }
+    let source: [String: Any] = [
+        "dns": ["servers": ["tcp://127.0.0.1:\(direct.port)"]],
+        "outbounds": [["tag": "direct", "protocol": "freedom", "settings": ["redirect": "127.0.0.1:\(direct.port)"]]] + proxies,
+        "routing": ["rules": [
+            ["type": "field", "domain": ["full:direct.invalid"], "outboundTag": "direct"],
+            ["type": "field", "network": "tcp", "balancerTag": group],
+        ], "balancers": [["tag": group, "selector": members, "strategy": ["type": "roundRobin"]]]],
+    ]
+    guard let config = TunnelXrayConfigPreparer.prepare(jsonData: try JSONSerialization.data(withJSONObject: source),
+        credentials: credentials, tcpPortAvailable: LocalProxyAccessPolicy.isTCPPortAvailable),
+        let managedTag = config.managedInboundTag,
+        let inbound = TunnelXrayConfigPreparer.parseConfig(jsonData: config.data) else {
+        preconditionFailure("Balancer diagnostics fixture could not be prepared")
+    }
+    var error: NSError?
+    precondition(XRaySetAssetLocation("", &error))
+    let startedAt = DispatchTime.now().uptimeNanoseconds
+    precondition(FLVlessStartCoreBalancerDiagnostics(config.data, nil, managedTag, 2, ProbeLogger(), &error),
+                 "Balancer diagnostics Core start failed")
+
+    func request(_ host: String, count: Int) throws -> [UInt8] {
+        let fd = try LocalSOCKS5Client.openConnection(proxyPort: inbound.inboundPort, credentials: credentials,
+            host: host, port: 80, timeout: 3)
+        defer { close(fd) }
+        precondition(LocalSOCKS5Client.sendAll(fd: fd, bytes: Array("GET /profile HTTP/1.1\r\nHost: \(host)\r\nConnection: close\r\n\r\n".utf8)))
+        guard let response = LocalSOCKS5Client.receiveExactly(fd: fd, count: count) else {
+            preconditionFailure("Balancer diagnostics traffic did not reach its peer")
+        }
+        return response
+    }
+    func node() throws -> Int {
+        let header = Array("HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\n".utf8)
+        let reply = try request("balanced.invalid", count: header.count + 1)
+        precondition(reply.starts(with: header))
+        switch reply.last {
+        case 65: return 2
+        case 66: return 3
+        default: preconditionFailure("Unexpected balancer peer response")
+        }
+    }
+    func snapshot() -> String {
+        PrivateBalancerDiagnostics.snapshot(Data(FLVlessReadCoreBalancerDiagnostics().utf8), maxBytes: 18_000, maxLines: 300)
+    }
+    precondition(FLVlessReadCoreBalancerDiagnostics().isEmpty)
+    let firstNode = try node()
+    let firstReadyMs = (DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
+    precondition(snapshot() == "1,1,\(firstNode)")
+    let directResponse = Array("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
+    let actualDirect = try request("direct.invalid", count: directResponse.count)
+    precondition(actualDirect == directResponse && snapshot() == "1,1,\(firstNode)")
+    let secondNode = try node(), thirdNode = try node()
+    precondition(secondNode != firstNode && thirdNode == firstNode)
+    precondition(snapshot() == "2,1,\(secondNode)\n3,1,\(thirdNode)")
+    let stoppingAt = DispatchTime.now().uptimeNanoseconds
+    XRayStop()
+    precondition(FLVlessReadCoreBalancerDiagnostics().isEmpty)
+    do {
+        let fd = try LocalSOCKS5Client.openConnection(proxyPort: inbound.inboundPort, credentials: credentials,
+            host: "balanced.invalid", port: 80, timeout: 1)
+        close(fd)
+        preconditionFailure("Stopped Core still forwards connections")
+    } catch LocalSOCKS5Client.Failure.connect {
+        // Reject an authentication or SOCKS failure on a still-open listener.
+    }
+    let stoppedMs = (DispatchTime.now().uptimeNanoseconds - stoppingAt) / 1_000_000
+    print("APPLE_CORE_LIFECYCLE firstReadyMs=\(firstReadyMs) stoppedMs=\(stoppedMs)")
+    precondition(firstReadyMs < 5000 && stoppedMs < 3000, "Local Core lifecycle exceeded its deadline")
+    error = nil
+    precondition(XRayStartPrivate(config.data, ProbeLogger(), &error))
+    _ = try node()
+    precondition(FLVlessReadCoreBalancerDiagnostics().isEmpty, "Ordinary restart unexpectedly enabled observation")
+    print("APPLE_BALANCER_DIAGNOSTICS_SDK_PASS=3")
+}
+
 // Actual Core routing through the private packet ingress and virtual DNS relay.
 // Synthetic endpoints are owned loopback listeners, without an OS VPN session.
 func runAppleProfileBalancerChecks() throws {

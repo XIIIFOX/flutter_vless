@@ -329,23 +329,35 @@ int main(int argc,char** argv) {
   std::ifstream input{std::filesystem::path(arguments[2])};std::string config((std::istreambuf_iterator<char>(input)),{});
   const bool no_reconnect = action == "run-vpn-no-reconnect";
   const bool routing_requested = action == "run-vpn-routing";
-  bool vpn=action=="run-vpn" || no_reconnect || routing_requested;
+  const bool balancer_diagnostics = action == "run-vpn-balancer-diagnostics";
+  bool vpn=action=="run-vpn" || no_reconnect || routing_requested || balancer_diagnostics;
   if(!vpn && action!="run-proxy")return 2;
   if(vpn && !isolated)return 20;
   auto& manager=V2rayManager::GetInstance();
   flutter_vless::asset_location::Root assets;
   if (arguments.size() > 6) assets = std::filesystem::path(arguments[6]);
   flutter_vless::NativeOptions options; options.reconnect_enabled = !no_reconnect;
+  if (balancer_diagnostics) {
+    options.record_balancer_selections = true;
+    options.diagnostics_lines = 2;
+  }
   std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing;
   if (routing_requested) routing = flutter_vless::native_routing::NativeRoutingIntent{0, "selected-default"};
-  bool started=manager.Start(config,!vpn,options,assets,routing);std::cout<<"START_RETURN="<<started<<std::endl;
+  const auto start = std::chrono::steady_clock::now();
+  bool started=manager.Start(config,!vpn,options,assets,routing);
+  const auto elapsed_ms = [](auto since) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - since).count();
+  };
+  std::cout<<"START_ELAPSED_MS="<<elapsed_ms(start)<<'\n'<<"START_RETURN="<<started<<std::endl;
   if(!started){manager.Stop();std::cout<<manager.GetProviderDebugSnapshot()<<std::endl;return 3;}
   int seconds=argc>3?std::stoi(argv[3]):20;
   const std::filesystem::path stop_file = arguments.size() > 4 ? arguments[4] : L"";
   const std::filesystem::path state_file = arguments.size() > 5 ? arguments[5] : L"";
   const std::filesystem::path reject_file = state_file.empty() ? L"" : state_file.wstring() + L".reject";
   const std::filesystem::path reject_routing = state_file.empty() ? L"" : state_file.wstring() + L".reject-routing";
-  for(int i=0;i<seconds;i++){
+  const std::filesystem::path disable_balancer = state_file.empty() ? L"" : state_file.wstring() + L".disable-balancer";
+  const int samples_per_second = balancer_diagnostics ? 5 : 1;
+  for(int i=0;i<seconds * samples_per_second;i++){
     if (!stop_file.empty() && std::filesystem::exists(stop_file)) break;
     if (!reject_file.empty() && std::filesystem::exists(reject_file)) {
       std::ifstream candidate(reject_file);
@@ -368,6 +380,10 @@ int main(int argc,char** argv) {
       std::cout << "REJECTED_ROUTING_PRESERVED=" << rejected << std::endl;
       if (!rejected) { manager.Stop(); return 28; }
     }
+    if (balancer_diagnostics && !disable_balancer.empty() && std::filesystem::exists(disable_balancer)) {
+      manager.DisableBalancerSelections();
+      std::filesystem::remove(disable_balancer);
+    }
     if (!state_file.empty()) {
       const auto traffic = manager.GetTrafficSample();
       std::ofstream state(state_file);
@@ -377,16 +393,27 @@ int main(int argc,char** argv) {
             << ",\"upload\":" << traffic.upload.value_or(0)
             << ",\"download\":" << traffic.download.value_or(0)
             << ",\"upload_available\":" << (traffic.upload.has_value()?"true":"false")
-            << ",\"download_available\":" << (traffic.download.has_value()?"true":"false") << "}";
+            << ",\"download_available\":" << (traffic.download.has_value()?"true":"false");
+      if (balancer_diagnostics)
+        state << ",\"balancer_selections\":" << nlohmann::json(manager.GetBalancerSelections()).dump();
+      state << "}";
     }
-    std::cout<<"RUNNING="<<manager.IsRunning()<<" SECOND="<<i+1<<std::endl;
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    if (i % samples_per_second == 0)
+      std::cout<<"RUNNING="<<manager.IsRunning()<<" SECOND="<<i/samples_per_second+1<<std::endl;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000 / samples_per_second));
   }
   const bool healthy = manager.IsRunning();
   std::string control;
   if (!stop_file.empty()) { std::ifstream signal(stop_file); signal >> control; }
   if (control == "shutdown") { manager.Shutdown(); std::cout << "SHUTDOWN_PROTECTING=" << manager.IsProtecting() << std::endl; return 0; }
-  manager.Stop();std::cout<<"STOPPED="<<!manager.IsRunning()<<std::endl;
+  const auto stop = std::chrono::steady_clock::now();
+  manager.Stop();
+  std::cout<<"STOP_ELAPSED_MS="<<elapsed_ms(stop)<<'\n'<<"STOPPED="<<!manager.IsRunning()<<std::endl;
+  if (balancer_diagnostics) {
+    const bool empty_history = manager.GetBalancerSelections().empty();
+    std::cout << "BALANCER_EMPTY_AFTER_STOP=" << empty_history << std::endl;
+    if (!empty_history) return 29;
+  }
   std::cout<<manager.GetProviderDebugSnapshot()<<std::endl;
   return (healthy || no_reconnect)?0:4;
 }

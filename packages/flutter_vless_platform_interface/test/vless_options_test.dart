@@ -7,9 +7,28 @@ void main() {
     expect(value.isDefault, isTrue);
     expect(value.quickAccess.enabled, isFalse);
     expect(value.reconnect.enabled, isTrue);
+    expect(value.diagnostics.recordBalancerSelections, isFalse);
     expect(value.protection.killSwitch, KillSwitchPolicy.required);
     expect(value.protection.alwaysOn, AlwaysOnMode.system);
     expect(value.toMap()['version'], 1);
+  });
+
+  test('balancer recording is an explicit persisted capability and opt-in', () {
+    const value = VlessOptions(
+        diagnostics: DiagnosticsOptions(recordBalancerSelections: true));
+    expect(value.isDefault, isFalse);
+    expect(
+        VlessOptions.fromMap(value.toMap())
+            .diagnostics
+            .recordBalancerSelections,
+        isTrue);
+    expect(VlessOptions.fromMap(const {}).diagnostics.recordBalancerSelections,
+        isFalse);
+    expect(VlessCapabilities.fromMap(const {}).balancerSelections, isFalse);
+    expect(
+        VlessCapabilities.fromMap({'balancerSelections': true})
+            .balancerSelections,
+        isTrue);
   });
   test('all five options blocks serialize every public field', () {
     const value = VlessOptions(

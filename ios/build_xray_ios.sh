@@ -9,6 +9,14 @@ XRAY_CORE_REF="${XRAY_CORE_REF:-$(python3 -c 'import json,sys; print(json.load(o
 IOS_VERSION="${IOS_VERSION:-15.0}"
 BUILD_DIR="${BUILD_DIR:-$SCRIPT_DIR/build_xray_ios}"
 OUTPUT_XCFRAMEWORK="${OUTPUT_XCFRAMEWORK:-$SCRIPT_DIR/XRay.xcframework}"
+PREPARATION_FLAGS=(--vpn-routing)
+BIND_TAGS=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding,flutter_vless_managed_service_lifetimes
+case "${XRAY_BALANCER_DIAGNOSTICS:-0}" in
+    0) ;;
+    1) PREPARATION_FLAGS+=(--balancer-diagnostics)
+       BIND_TAGS+=,flutter_vless_balancer_diagnostics ;;
+    *) echo "Error: XRAY_BALANCER_DIAGNOSTICS must be 0 or 1." >&2; exit 1 ;;
+esac
 
 if ! command -v go >/dev/null 2>&1; then
     echo "Error: Go is required."
@@ -48,7 +56,7 @@ echo "Using vendored xray-mobile source from $XRAY_MOBILE_DIR"
 # Pin by the release commit so Go resolves it to the matching module pseudo-version.
 go get "github.com/xtls/xray-core@$XRAY_CORE_REF"
 python3 "$REPO_ROOT/tool/prepare_apple_classic_core.py" \
-    --mobile "$PWD" --destination "$PWD/../Core-classic" --go "$(command -v go)" --vpn-routing
+    --mobile "$PWD" --destination "$PWD/../Core-classic" --go "$(command -v go)" "${PREPARATION_FLAGS[@]}"
 MOBILE_VERSION="$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
 go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
 mkdir -p "$BUILD_DIR/tools"
@@ -120,9 +128,12 @@ export PATH="$GOROOT_PATCHED/bin:$PATH"
 grep -q "H2BUF patch" "$H2_FILE" || { echo "Error: H2BUF patch verification failed"; exit 1; }
 echo "H2BUF: building with $(go version) from patched GOROOT clone"
 
+if [[ "${XRAY_BALANCER_DIAGNOSTICS:-0}" == 1 ]]; then
+    go test -mod=readonly -tags="$BIND_TAGS" -run '^TestPrivateBalancerDiagnosticsRuntime$' -count=1 .
+fi
 rm -rf "$OUTPUT_XCFRAMEWORK"
 gomobile bind \
-    -tags=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding,flutter_vless_managed_service_lifetimes \
+    -tags="$BIND_TAGS" \
     -a \
     -ldflags="-s -w -extldflags -lresolv" \
     -target=ios \

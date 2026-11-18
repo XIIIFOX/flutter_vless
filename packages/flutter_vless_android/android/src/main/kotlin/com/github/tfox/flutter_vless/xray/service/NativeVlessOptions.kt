@@ -18,7 +18,10 @@ internal data class NativeVlessOptions(
         fun mayRetry(failures: Int) = enabled && (maxAttempts == 0 || failures < maxAttempts)
     }
     data class Protection(val killSwitch: String = "required", val onDemand: String = "platformDefault", val alwaysOn: String = "system")
-    data class Diagnostics(val enabled: Boolean = true, val maxBytes: Int = 128 * 1024, val maxLines: Int = 300)
+    data class Diagnostics(val enabled: Boolean = true, val maxBytes: Int = 128 * 1024, val maxLines: Int = 300,
+        val recordBalancerSelections: Boolean = false) {
+        val collectsBalancerSelections: Boolean get() = enabled && recordBalancerSelections
+    }
 
     companion object {
         fun parse(raw: Map<*, *>?): NativeVlessOptions {
@@ -68,7 +71,8 @@ internal data class NativeVlessOptions(
             require(reconnect.enabled || protection.onDemand != "enabled") { "On Demand requires recovery" }
             val bytes = number(d,"maxBytes",131072); val lines = number(d,"maxLines",300)
             require(bytes in 4096..131072 && lines in 1..300) { "Invalid diagnostics limits" }
-            return NativeVlessOptions(notice,quick,reconnect,protection,Diagnostics(flag(d,"enabled",true),bytes.toInt(),lines.toInt()))
+            return NativeVlessOptions(notice,quick,reconnect,protection,Diagnostics(flag(d,"enabled",true),bytes.toInt(),lines.toInt(),
+                flag(d,"recordBalancerSelections",false)))
         }
     }
 

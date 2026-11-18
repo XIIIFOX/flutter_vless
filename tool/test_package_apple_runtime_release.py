@@ -65,6 +65,17 @@ class CanonicalPackageTests(unittest.TestCase):
         bind_xhttp_cleanup(self.root, self.core, self.copied, self.report, self.report['source_sha256'])
         self.receipt = self.root/'producer.json'
         self.bad_symbol = None
+        self.exports = builder.EXPORTS
+
+    def diagnostic_framework(self, platform='ios'):
+        self.exports = (*builder.EXPORTS, *builder.BALANCER_DIAGNOSTICS_EXPORTS)
+        for name in builder.BALANCER_DIAGNOSTICS_INPUTS:
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('diagnostic input '+name)
+            self.report['source_sha256'][name] = builder.digest(path)
+        self.report['balancer_diagnostics_capability_expected'] = 1
+        return self.framework(platform)
 
     def framework(self, platform):
         path = self.root/(platform+'-XRay.xcframework');path.mkdir()
@@ -80,7 +91,7 @@ class CanonicalPackageTests(unittest.TestCase):
             if platform=='ios':binary=binary/'XRay'
             binary.parent.mkdir(parents=True);binary.write_bytes(b'inert fixture archive')
             header=binary.parent/'Headers/XRay.objc.h' if platform=='ios' else path/identifier/'Headers/XRay.objc.h'
-            header.parent.mkdir();header.write_text('\n'.join('int '+name+'(void);' for name in builder.EXPORTS))
+            header.parent.mkdir();header.write_text('\n'.join('int '+name+'(void);' for name in self.exports))
             libraries.append(library)
         (path/'Info.plist').write_bytes(plistlib.dumps({'AvailableLibraries':libraries}))
         return path
@@ -90,7 +101,7 @@ class CanonicalPackageTests(unittest.TestCase):
         if command[:3]==['xcrun','lipo','-archs']:
             return 'arm64\n' if '/ios-arm64/' in command[-1] else 'arm64 x86_64\n'
         if command[:2]==['xcrun','nm']:
-            return '\n'.join('---------------- (LTO,CODE) external _'+name for name in builder.EXPORTS if name!=self.bad_symbol)
+            return '\n'.join('---------------- (LTO,CODE) external _'+name for name in self.exports if name!=self.bad_symbol)
         self.fail('Unexpected real-tool boundary')
 
     def run_package(self, platform, framework):
@@ -134,6 +145,38 @@ class CanonicalPackageTests(unittest.TestCase):
         self.bad_symbol='XRayDarwinInterfaceBindingCapability'
         with self.assertRaisesRegex(ValueError,'strong ABI missing'):
             self.run_package('ios',self.framework('ios'))
+
+    def test_diagnostic_ios_archive_is_r2_with_strong_exports(self):
+        result = self.run_package('ios', self.diagnostic_framework())
+        self.assertEqual(result['runtime_revision'], 'r2')
+        self.assertEqual(result['balancer_diagnostics_capability_expected'], 1)
+        for exports in result['strong_exports'].values():
+            self.assertEqual(set(exports), set(self.exports))
+
+    def test_diagnostic_ios_archive_requires_actual_symbols_and_source_bindings(self):
+        framework = self.diagnostic_framework()
+        self.bad_symbol = 'XRayReadBalancerDiagnostics'
+        with self.assertRaisesRegex(ValueError, 'strong ABI missing'):
+            self.run_package('ios', framework)
+        self.bad_symbol = None
+        del self.report['source_sha256'][builder.BALANCER_DIAGNOSTICS_INPUTS[0]]
+        with self.assertRaisesRegex(ValueError, 'source set differs'):
+            self.run_package('ios', framework)
+
+    def test_diagnostic_macos_archive_has_strong_exports(self):
+        result = self.run_package('macos', self.diagnostic_framework('macos'))
+        self.assertEqual(result['runtime_revision'], 'r2')
+        self.assertEqual(result['balancer_diagnostics_capability_expected'], 1)
+        self.assertEqual(len(result['strong_exports']), 2)
+        for exports in result['strong_exports'].values():
+            self.assertEqual(set(exports), set(self.exports))
+
+    def test_diagnostic_exports_cannot_be_packaged_under_r1(self):
+        original = copy.deepcopy(self.report)
+        framework = self.diagnostic_framework()
+        self.report = original
+        with self.assertRaisesRegex(ValueError, 'requires the r2 producer receipt'):
+            self.run_package('ios', framework)
 
     def test_omitted_producer_source_cannot_be_hidden_in_receipt(self):
         del self.report['source_sha256']['third_party/xray-native-dns/h3_lifetime_patch.py']

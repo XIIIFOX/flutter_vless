@@ -226,20 +226,31 @@ class DiagnosticsOptions {
     this.enabled = true,
     this.maxBytes = 128 * 1024,
     this.maxLines = 300,
+    this.recordBalancerSelections = false,
   });
 
   /// Collect bounded diagnostics; disabling also clears retained native buffers.
   final bool enabled;
+
   /// Byte limit from 4096 to 131072; defaults to 131072 (128 KiB).
   final int maxBytes;
+
   /// Line limit from 1 to 300; defaults to 300. Native snapshots may be smaller.
   final int maxLines;
+
+  /// Retain recent balancer choices in memory during the active VPN session.
+  ///
+  /// Collection requires [enabled] and a backend advertising
+  /// [VlessCapabilities.balancerSelections]. It only records session-local
+  /// ordinals and is disabled by default.
+  final bool recordBalancerSelections;
 
   /// Encodes collection limits without enabling raw configuration logging.
   Map<String, Object?> toMap() => {
         'enabled': enabled,
         'maxBytes': maxBytes,
         'maxLines': maxLines,
+        if (recordBalancerSelections) 'recordBalancerSelections': true,
       };
 }
 
@@ -334,7 +345,8 @@ class VlessOptions {
       diagnostics: DiagnosticsOptions(
           enabled: flag(d, 'enabled', true),
           maxBytes: number(d, 'maxBytes', 131072),
-          maxLines: number(d, 'maxLines', 300)),
+          maxLines: number(d, 'maxLines', 300),
+          recordBalancerSelections: flag(d, 'recordBalancerSelections', false)),
     );
     result.validate();
     return result;
@@ -440,6 +452,7 @@ class VlessOptions {
       protection.onDemand == OnDemandMode.platformDefault &&
       protection.alwaysOn == AlwaysOnMode.system &&
       diagnostics.enabled &&
+      !diagnostics.recordBalancerSelections &&
       diagnostics.maxBytes == 128 * 1024 &&
       diagnostics.maxLines == 300;
 }
@@ -458,6 +471,7 @@ class VlessCapabilities {
     this.alwaysOnEnabled = false,
     this.lockdownEnabled = false,
     this.killSwitch = false,
+    this.balancerSelections = false,
   });
 
   /// Supported typed-options schema; zero means unavailable, currently one is used.
@@ -486,6 +500,9 @@ class VlessCapabilities {
   /// process/provider crash; system lockdown and platform limits still apply.
   final bool killSwitch;
 
+  /// Whether this backend supports private balancer selection diagnostics.
+  final bool balancerSelections;
+
   /// Decodes known native fields, ignoring unknown surfaces and using safe defaults.
   factory VlessCapabilities.fromMap(Map<Object?, Object?> map) {
     final rawSurfaces = map['quickAccessSurfaces'];
@@ -504,6 +521,7 @@ class VlessCapabilities {
       alwaysOnEnabled: map['alwaysOnEnabled'] == true,
       lockdownEnabled: map['lockdownEnabled'] == true,
       killSwitch: map['killSwitch'] == true,
+      balancerSelections: map['balancerSelections'] == true,
     );
   }
 }

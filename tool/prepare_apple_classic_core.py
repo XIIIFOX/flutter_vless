@@ -20,6 +20,10 @@ UPSTREAM = ('app/dns/dns.go', 'app/dns/nameserver_udp.go', 'transport/internet/u
             'transport/internet/xdrive/storage.go', 'app/geodata/geodata.go', 'app/geodata/download.go')
 HELPERS = ('native_classic_lifetime.go', 'native_classic_lifetime_test.go')
 LIFETIME_SCOPE = ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup']
+BALANCER_DIAGNOSTICS_INPUTS = (
+    'third_party/xray-balancer-diagnostics/apply.py',
+    'third_party/xray-balancer-diagnostics/overlay/app/dispatcher/balancer_diagnostics.go',
+)
 
 
 def digest(path):
@@ -98,7 +102,7 @@ def reference_hashes(source, parent, routing=False):
         return {relative: digest(reference / relative) for relative in UPSTREAM}
 
 
-def prepare(mobile, destination, go, *, routing=False):
+def prepare(mobile, destination, go, *, routing=False, balancer_diagnostics=False):
     mobile, destination = mobile.resolve(), destination.resolve()
     if mobile == ROOT / 'third_party/xray-mobile' or not (mobile / 'go.mod').is_file():
         raise ValueError('A copied build module is required')
@@ -122,11 +126,13 @@ def prepare(mobile, destination, go, *, routing=False):
               ROOT / 'third_party/xray-vpn-routing/pin-manifest.json', *copier.lifetime_input_paths()]
     if routing:
         inputs += sorted((ROOT / 'third_party/xray-vpn-routing/overlay').rglob('*.go'))
+    if balancer_diagnostics:
+        inputs += [ROOT / path for path in BALANCER_DIAGNOSTICS_INPUTS]
     input_hashes = {str(path.relative_to(ROOT)): digest(path) for path in inputs}
     replacement = selected.get('Replace')
     if replacement is not None:
-        if routing:
-            raise ValueError('Routing release preparation requires a fresh Core copy')
+        if routing or balancer_diagnostics:
+            raise ValueError('Routing and diagnostics release preparation require a fresh Core copy')
         if not isinstance(replacement, dict) or not replacement.get('Dir'):
             raise ValueError('Unsupported existing Core replacement')
         effective = Path(replacement['Dir'])
@@ -154,6 +160,8 @@ def prepare(mobile, destination, go, *, routing=False):
     else:
         effective = (copier.copy_and_apply(source, destination, go=go) if routing
                      else copier.copy_and_apply_lifetimes(source, destination, go=go))
+        if balancer_diagnostics:
+            load(ROOT / BALANCER_DIAGNOSTICS_INPUTS[0], 'apple_balancer_diagnostics').apply(source, effective, routing=routing)
         existing = tree(effective)
         run(go, ['mod', 'edit', '-replace=' + module + '=' + str(effective)], mobile, 30)
         mode = 'new-lifetime-copy'
@@ -184,6 +192,8 @@ def prepare(mobile, destination, go, *, routing=False):
               'replacement': str(effective), 'source_sha256': input_hashes,
               'upstream_cache_unchanged': True, 'replacement_unchanged_after_prepare': True,
               'core_copy_sha256': existing, 'runtime_executed': False}
+    if balancer_diagnostics:
+        report['balancer_diagnostics_capability_expected'] = 1
     (mobile.parent / 'classic-core-inputs.json').write_text(json.dumps(report, indent=2) + '\n')
     return report
 
@@ -228,6 +238,7 @@ def main():
     parser.add_argument('--destination', type=Path)
     parser.add_argument('--go', default='go')
     parser.add_argument('--vpn-routing', action='store_true')
+    parser.add_argument('--balancer-diagnostics', action='store_true')
     parser.add_argument('--verify', action='store_true')
     arguments = parser.parse_args()
     try:
@@ -236,7 +247,8 @@ def main():
         else:
             if arguments.destination is None:
                 parser.error('--destination is required for preparation')
-            prepare(arguments.mobile, arguments.destination, arguments.go, routing=arguments.vpn_routing)
+            prepare(arguments.mobile, arguments.destination, arguments.go, routing=arguments.vpn_routing,
+                    balancer_diagnostics=arguments.balancer_diagnostics)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
         raise SystemExit('Classic DNS/XHTTP H3 build preparation failed')
     print('APPLE_CLASSIC_DNS_PREPARED=1')

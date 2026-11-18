@@ -1,24 +1,58 @@
+import 'dart:async';
+
 import 'package:flutter_vless/flutter_vless.dart';
 import 'package:flutter_vless/url/xray_json.dart';
 
-typedef ProfileImporter =
-    ({String config, String? remark}) Function(String input);
+typedef ImportedProfile = ({
+  String config,
+  String? remark,
+  int? balancedNodeCount,
+});
+typedef ProfileImporter = FutureOr<ImportedProfile> Function(String input);
+
+/// A clipboard URL is a separate import action from pasted profile contents.
+Uri? subscriptionUrl(String text) {
+  if (!RegExp(r'^https?://\S+$', caseSensitive: false).hasMatch(text)) {
+    return null;
+  }
+  final url = Uri.tryParse(text);
+  if (url == null) throw const FormatException('Invalid subscription URL.');
+  return url;
+}
+
+Future<ImportedProfile> importClipboardProfile(String input) async {
+  final text = input.trim();
+  final url = subscriptionUrl(text);
+  if (url == null) return importProfile(text);
+  final profiles = await FlutterVless.fetchSubscription(url);
+  return importedProfile(profiles.first);
+}
+
+ImportedProfile importedProfile(FlutterVlessURL profile) => (
+  config: profile.getFullConfiguration(),
+  remark: profile.remark,
+  balancedNodeCount: null,
+);
 
 /// Keep full Xray JSON intact; share links use the existing protocol parser.
 ///
 /// Leading comments can belong to either JSON or a subscription list. Inspect
 /// the first payload token before choosing the JSON path. Multi-profile
 /// subscriptions retain the example's existing first-supported-profile policy.
-({String config, String? remark}) importProfile(String input) {
+ImportedProfile importProfile(String input) {
   final text = input.trim();
-  if (_startsWithJsonDocument(text)) {
+  if (startsWithJsonDocument(text)) {
     final decoded = decodeXrayJson(text);
     if (decoded is Map<String, dynamic>) {
       final titles = ['remarks', 'remark', 'ps']
           .map((key) => decoded[key])
           .whereType<String>()
           .where((value) => value.isNotEmpty);
-      return (config: text, remark: titles.firstOrNull);
+      return (
+        config: text,
+        remark: titles.firstOrNull,
+        balancedNodeCount: null,
+      );
     }
     if (decoded is! List || decoded.isEmpty) {
       throw const FormatException(
@@ -28,12 +62,12 @@ typedef ProfileImporter =
     // Subscription arrays keep the existing parser's first-profile behavior.
   }
   final parsed = FlutterVless.parse(text);
-  return (config: parsed.getFullConfiguration(), remark: parsed.remark);
+  return importedProfile(parsed);
 }
 
 // Classify only leading trivia; decodeXrayJson still owns JSON validation and
 // preserves the original document, including comments inside quoted strings.
-bool _startsWithJsonDocument(String text) {
+bool startsWithJsonDocument(String text) {
   var offset = 0;
   while (offset < text.length) {
     final char = text.codeUnitAt(offset);

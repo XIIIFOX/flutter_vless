@@ -14,10 +14,12 @@ std::wstring Wide(const std::string& value);
 std::string RandomHex(size_t bytes);
 bool IsAdministrator();
 // No shell, search path, global environment changes or inherited host handles.
-// Long-lived workers discard raw output; only fixed lifecycle events are logged.
+// Long-lived workers discard raw output. The optional private pipe is for
+// typed protocol replies only and is independent of the diagnostics log.
 std::unique_ptr<ProcessHandle> Launch(const fs::path& executable,
     const std::vector<std::wstring>& arguments, bool capture = false,
-    const asset_location::Root& assets = std::nullopt, bool parent_stdin = false);
+    const asset_location::Root& assets = std::nullopt, bool parent_stdin = false,
+    unsigned stdout_buffer_bytes = 0);
 bool Command(const fs::path& executable, const std::vector<std::wstring>& arguments,
     std::string& output, unsigned timeout_ms = 3000, const asset_location::Root& assets = std::nullopt);
 bool SystemCommand(const wchar_t* name, const std::vector<std::wstring>& arguments);
@@ -35,6 +37,15 @@ bool CheckConfig(const std::string& config, const fs::path& executable,
 // The caller owns the returned private file on both success and failure and
 // launches this same file with this same protected executable after success.
 class ProtectedRuntime;
+bool BalancerCapability(const ProtectedRuntime& runtime, const asset_location::Root& assets = std::nullopt);
+bool BundledBalancerCapability();
+// Called only by the worker owning the process. One request is outstanding;
+// a null reply permanently retires snapshots on that process.
+std::optional<std::string> ReadBalancerSelections(const ProcessHandle& process,
+    bool expect_started, size_t max_rows, size_t max_bytes,
+    const std::function<bool()>& cancelled = {},
+    std::chrono::milliseconds timeout = std::chrono::milliseconds(300));
+void DisableBalancerSelections(const ProcessHandle& process);
 bool CheckPreparedConfig(const std::string& config, ProtectedRuntime& runtime,
     fs::path& path, const asset_location::Root& assets = std::nullopt, preparation::Stage* failure = nullptr);
 bool RoutingCapability(const ProtectedRuntime& runtime, const asset_location::Root& assets = std::nullopt);

@@ -49,6 +49,16 @@ int main(void) { @autoreleasepool {
 #endif
     NSData *spec = [@"private-routing-spec-canary" dataUsingEncoding:NSUTF8StringEncoding];
     NSError *error = [NSError errorWithDomain:@"private-canary" code:42 userInfo:nil];
+#ifdef WITH_BALANCER_DIAGNOSTICS
+    assert(FLVlessHasCoreBalancerDiagnostics());
+    assert(FLVlessStartCoreBalancerDiagnostics(data, spec, @"managed", 32, nil, &error));
+    assert(error == nil);
+    assert([FLVlessReadCoreBalancerDiagnostics() isEqualToString:@"1,1,1\n"]);
+#else
+    assert(!FLVlessHasCoreBalancerDiagnostics());
+    assert(!FLVlessStartCoreBalancerDiagnostics(data, spec, @"managed", 32, nil, NULL));
+    assert(FLVlessReadCoreBalancerDiagnostics().length == 0);
+#endif
 #ifdef FLVLESS_TEST_CORE_ROUTING_DIAGNOSTICS
     int checkMissing, startMissing;
     int64_t rawCapability;
@@ -97,6 +107,16 @@ BOOL XRayStartPrivate(NSData *configuration, id<XRayLogger> logger, NSError **er
 }
 #ifdef WITH_RUNTIME
 int64_t XRayCheckPrivate(NSData *configuration) { return configuration.length == 3 ? 0 : 1; }
+#endif
+#ifdef WITH_BALANCER_DIAGNOSTICS
+int64_t XRayBalancerDiagnosticsCapability(void) { return 1; }
+BOOL XRayStartBalancerDiagnosticsPrivate(NSData *config, NSData *spec, NSString *tag,
+                                        int64_t maxLines, id<XRayLogger> logger, NSError **error) {
+    (void)logger;
+    if (error) *error = nil;
+    return config.length == 3 && spec.length > 0 && [tag isEqualToString:@"managed"] && maxLines == 32;
+}
+NSString *XRayReadBalancerDiagnostics(void) { return @"1,1,1\n"; }
 #endif
 static int checkCalls, startCalls;
 int MockRoutingCheckCalls(void) { return checkCalls; }
@@ -171,10 +191,11 @@ for suffix in ("Check", "Start"):
     assert entry == anchor + offset, (suffix, anchor, entry, offset)
 PY
     printf 'BRIDGE_ANCHOR_SHAPE arch=%s offset=%s\n' "$ARCH" "$ENTRY_OFFSET"
-for variant in legacy current routing cap0 unknown missing-cap missing-check missing-start binding binding0 binding-unknown managed-both managed-v1 managed0 managed-unknown geodata-only xdrive-only; do
+for variant in legacy current routing cap0 unknown missing-cap missing-check missing-start binding binding0 binding-unknown managed-both managed-v1 managed0 managed-unknown geodata-only xdrive-only balancer-diagnostics; do
     FLAGS=(-DLEGACY_RUNTIME)
     case "$variant" in
         current) FLAGS=(-DWITH_RUNTIME) ;;
+        balancer-diagnostics) FLAGS=(-DWITH_RUNTIME -DWITH_BALANCER_DIAGNOSTICS) ;;
         managed-both) FLAGS=(-DWITH_RUNTIME -DGEODATA_LIFETIME_CAP=1 -DXDRIVE_LIFETIME_CAP=2) ;;
         managed-v1) FLAGS=(-DWITH_RUNTIME -DGEODATA_LIFETIME_CAP=1 -DXDRIVE_LIFETIME_CAP=1) ;;
         managed0) FLAGS=(-DWITH_RUNTIME -DGEODATA_LIFETIME_CAP=0 -DXDRIVE_LIFETIME_CAP=0) ;;

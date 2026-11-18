@@ -15,19 +15,34 @@ ROOT = Path(__file__).resolve().parents[2]
 CORE_VERSION = '26.11.9'
 REVISION = f'{CORE_VERSION}-r1'
 CORE_COMMIT = '676eaf66f8f05d4d558ee7a74b4736623d3feeb9'
+MANAGED_TAGS = 'flutter_vless_vpn_routing_cli,flutter_vless_vpn_routing,flutter_vless_managed_service_lifetimes'
+BALANCER_TAGS = f'{MANAGED_TAGS},flutter_vless_balancer_diagnostics,flutter_vless_balancer_diagnostics_cli'
+BALANCER_INPUTS = (
+    'third_party/xray-balancer-diagnostics/apply.py',
+    'third_party/xray-balancer-diagnostics/overlay/app/dispatcher/balancer_diagnostics.go',
+    'third_party/xray-balancer-diagnostics/overlay/main/native_balancer_cli.go',
+    'third_party/xray-mobile/balancer_diagnostics.go',
+    'third_party/xray-mobile/balancer_diagnostics_enabled.go',
+    'third_party/xray-mobile/nativecli/balancer.go',
+    'third_party/xray-mobile/nativecli/balancer_backend.go',
+)
 
 
-def capabilities(executable):
+def capabilities(executable, command='native-services'):
     if sys.platform != 'win32':
         raise ValueError('Runtime execution is restricted to Windows CI')
-    child = subprocess.run([str(executable), 'native-services', 'capabilities'],
+    field, expected = {
+        'native-services': ('managed_service_lifetimes', 7),
+        'native-balancer': ('capability', 1),
+    }[command]
+    child = subprocess.run([str(executable), command, 'capabilities'],
                            capture_output=True, timeout=10, check=True)
     if len(child.stdout) > 4096 or child.stderr:
         raise ValueError('Unexpected capability output')
     value = json.loads(child.stdout)
-    if value != {'stage': 'capabilities', 'code': 0, 'managed_service_lifetimes': 7} \
-            or type(value.get('code')) is not int or type(value.get('managed_service_lifetimes')) is not int:
-        raise ValueError('Managed lifetime capabilities must equal 7')
+    if value != {'stage': 'capabilities', 'code': 0, field: expected} \
+            or type(value.get('code')) is not int or type(value.get(field)) is not int:
+        raise ValueError(f'Unexpected {command} capability value')
     return value
 
 
@@ -42,12 +57,19 @@ def package(directory, producer_path, destination, head, repository=ROOT):
     required = ('success', 'source_snapshot_unchanged', 'module_cache_source_unchanged',
                 'core_copy_unchanged', 'mobile_copy_unchanged', 'xdrive_lifetime_applied', 'geodata_lifetime_applied',
                 'xhttp_listener_cleanup_applied')
+    diagnostics = producer.get('tags') == BALANCER_TAGS
+    expected_diagnostics = producer.get('balancer_diagnostics_capability_expected')
     if any(producer.get(k) is not True for k in required) \
-            or producer.get('tags') != 'flutter_vless_vpn_routing_cli,flutter_vless_vpn_routing,flutter_vless_managed_service_lifetimes' \
+            or (not diagnostics and producer.get('tags') != MANAGED_TAGS) \
             or producer.get('goos') != 'windows' or producer.get('goarch') != 'amd64' \
             or producer.get('lifetime_patch_scope') != ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup']:
         raise ValueError('Incomplete managed Windows producer')
     sources = dict(producer['input_sha256'])
+    if diagnostics:
+        if type(expected_diagnostics) is not int or expected_diagnostics != 1 or not all(name in sources for name in BALANCER_INPUTS):
+            raise ValueError('Incomplete balancer diagnostic producer')
+    elif 'balancer_diagnostics_capability_expected' in producer:
+        raise ValueError('Ordinary producer cannot claim balancer diagnostics')
     for name in ('tool/windows/package_managed_runtime.py', 'tool/windows/test_package_managed_runtime.py',
                  'tool/package_apple_core_preview.py',
                  '.github/workflows/windows-runtime.yml', 'tool/fixtures/xdrive-v26.10.29/LICENSE'):
@@ -72,6 +94,8 @@ def package(directory, producer_path, destination, head, repository=ROOT):
     if not required_routes.issubset(routed) or sum(row.get('check') == 'owned traffic counter sample' for row in rows) != 2:
         raise ValueError('Windows reverse domain routing and traffic controls are incomplete')
     actual_capabilities = capabilities(executable)
+    if diagnostics:
+        actual_diagnostics = capabilities(executable, 'native-balancer')
     files = {'xray.exe': executable, 'LICENSE.xray-core': repository/'tool/fixtures/xdrive-v26.10.29/LICENSE'}
     for name in ('geoip.dat', 'geosite.dat'):
         path = directory/name
@@ -95,7 +119,8 @@ def package(directory, producer_path, destination, head, repository=ROOT):
     git_bindings(repository, head, sources)
     require_xhttp_listener_cleanup(producer, sources, Path(producer['core_source']),
                                    Path(producer['core_replacement']), repository)
-    manifest = dict(success=True, head=head, platform='windows-amd64', runtime_revision=REVISION,
+    revision = f'{CORE_VERSION}-r2' if diagnostics else REVISION
+    manifest = dict(success=True, head=head, platform='windows-amd64', runtime_revision=revision,
                     core=CORE_VERSION, core_commit=producer['core_commit'], producer_sha256=digest(producer_path),
                     acceptance_sha256=digest(directory/'proxy-results.json'),
                     capabilities=actual_capabilities, source_sha256=sources,
@@ -105,6 +130,8 @@ def package(directory, producer_path, destination, head, repository=ROOT):
                     xhttp_listener_cleanup_patch_sha256=producer['xhttp_listener_cleanup_patch_sha256'],
                     xhttp_listener_cleanup_source_sha256=producer['xhttp_listener_cleanup_source_sha256'],
                     published=False)
+    if diagnostics:
+        manifest['balancer_diagnostics_capabilities'] = actual_diagnostics
     (destination/'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
     (destination/'SHA256SUMS').write_text(digest(archive)+'  '+archive.name+'\n')
     return manifest

@@ -2,6 +2,7 @@ package XRay
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ type Logger interface {
 
 var coreInstance *core.Instance
 var coreRoutingOwner routingRevoker
+var coreBalancerDiagnostics *balancerDiagnostics
 var runtimeOperation sync.Mutex
 var coreState sync.RWMutex
 
@@ -33,13 +35,14 @@ func hasPublishedRuntime() bool {
 	return coreInstance != nil
 }
 
-func publishPrivateRuntime(instance *core.Instance, owner routingRevoker) error {
+func publishPrivateRuntime(instance *core.Instance, owner routingRevoker, diagnostics *balancerDiagnostics) error {
 	coreState.Lock()
 	defer coreState.Unlock()
 	if coreInstance != nil {
 		return fmt.Errorf("Xray runtime already active")
 	}
 	coreInstance, coreRoutingOwner = instance, owner
+	coreBalancerDiagnostics = diagnostics
 	return nil
 }
 
@@ -97,6 +100,10 @@ func SetMemoryLimit() {
 }
 
 func Start(config []byte, logger Logger) error {
+	return startPrivate(config, logger, nil)
+}
+
+func startPrivate(config []byte, logger Logger, configure configureBalancerDiagnostics) error {
 	runtimeOperation.Lock()
 	defer runtimeOperation.Unlock()
 	if hasPublishedRuntime() {
@@ -117,7 +124,8 @@ func Start(config []byte, logger Logger) error {
 	if err != nil {
 		return startupFailure(logger, "build configuration")
 	}
-	instance, err := core.New(pbConfig)
+	ctx, diagnostics := prepareBalancerDiagnostics(context.Background(), pbConfig, configure)
+	instance, err := core.NewWithContext(ctx, pbConfig)
 	if err != nil {
 		return startupFailure(logger, "create core")
 	}
@@ -127,7 +135,7 @@ func Start(config []byte, logger Logger) error {
 		instance.Close()
 		return startupFailure(logger, "start core")
 	}
-	if err := publishPrivateRuntime(instance, nil); err != nil {
+	if err := publishPrivateRuntime(instance, nil, diagnostics); err != nil {
 		_ = instance.Close()
 		return startupFailure(logger, "publish core")
 	}
@@ -142,9 +150,13 @@ func Stop() {
 	runtimeOperation.Lock()
 	defer runtimeOperation.Unlock()
 	coreState.Lock()
-	instance, owner := coreInstance, coreRoutingOwner
+	instance, owner, diagnostics := coreInstance, coreRoutingOwner, coreBalancerDiagnostics
 	coreInstance, coreRoutingOwner = nil, nil
+	coreBalancerDiagnostics = nil
 	coreState.Unlock()
+	if diagnostics != nil {
+		diagnostics.disable()
+	}
 	if owner != nil {
 		_ = owner.Close()
 	}

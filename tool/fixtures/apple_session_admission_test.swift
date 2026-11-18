@@ -25,6 +25,7 @@ struct TunnelEndpointSelection { let candidates: TunnelEndpointCandidates; let s
 struct TunnelPreparedConfig {
     var data = Data(), bootstrapAddresses = ["192.0.2.1"]
     var routingEnvelope: FixtureEnvelope? = nil
+    let managedInboundTag: String? = nil
     var endpointPath: TunnelEndpointPath? = TunnelEndpointPath()
     var endpointSelections: [TunnelEndpointSelection] = []
 }
@@ -236,7 +237,8 @@ final class FixtureProvider: @unchecked Sendable {
     var rejectRemoteHealth = false
     var inboundHealthHook: (() -> Void)?
     var connectHealthChecks = 0, httpHealthChecks = 0
-    func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data? = nil) throws {
+    func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data? = nil,
+                   options: Any? = nil, managedInboundTag: String? = nil) throws {
         coreStarts += 1
         startedPairs.append((xrayConfig, routingMetadata))
         coreHook?()

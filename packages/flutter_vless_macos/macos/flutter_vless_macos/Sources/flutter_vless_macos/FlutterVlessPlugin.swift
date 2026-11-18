@@ -760,7 +760,8 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         if controlCenterAvailable { surfaces.append("controlCenter") }
         return ["optionsVersion": 1, "quickAccessSurfaces": surfaces, "requestAddQuickTile": false,
             "controlCenterExtensionConfigured": controlsConfigured, "customReconnectBackoff": true,
-            "onDemand": true, "alwaysOn": false, "alwaysOnEnabled": false, "lockdownEnabled": false, "killSwitch": true, "certificateAssetsDirectory": true]
+            "onDemand": true, "alwaysOn": false, "alwaysOnEnabled": false, "lockdownEnabled": false, "killSwitch": true, "certificateAssetsDirectory": true,
+            "balancerSelections": FLVlessHasCoreBalancerDiagnostics()]
     }
 
 
@@ -1180,6 +1181,8 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         pluginLog.info("Method call: \(call.method, privacy: .public)")
         switch call.method {
+        case "getCapabilities":
+            result(capabilities())
         case "getSecurityCapabilities":
             result(["certificateAssetsDirectory": true, "vpnRouting": true])
         case "requestPermission":
@@ -1198,6 +1201,8 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             getServerDelay(call: call, result: result)
         case "getProviderDebugSnapshot":
             getProviderDebugSnapshot(result: result)
+        case "getBalancerSelections":
+            getBalancerSelections(result: result)
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -1280,6 +1285,23 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                     packetTunnelManager?.readSharedDebugLog() ?? ""
                 ))
             }
+        }
+    }
+
+    private func getBalancerSelections(result: @escaping FlutterResult) {
+        Task { @MainActor in
+            guard nativeOptions.diagnosticsEnabled, nativeOptions.recordBalancerSelections,
+                  FLVlessHasCoreBalancerDiagnostics(), !proxyOnlyRunner.isRunning,
+                  let manager = packetTunnelManager, manager.status == .connected,
+                  let connectedAt = manager.connectedDate else { result(""); return }
+            let command = Data(PrivateBalancerDiagnostics.snapshotCommand.utf8)
+            let response = try? await manager.sendProviderMessage(data: command)
+            guard packetTunnelManager === manager, manager.status == .connected,
+                  manager.connectedDate == connectedAt, !proxyOnlyRunner.isRunning,
+                  nativeOptions.diagnosticsEnabled, nativeOptions.recordBalancerSelections,
+                  let response else { result(""); return }
+            result(PrivateBalancerDiagnostics.snapshot(response,
+                maxBytes: nativeOptions.diagnosticsMaxBytes, maxLines: nativeOptions.diagnosticsMaxLines))
         }
     }
 

@@ -2,17 +2,22 @@
 # Build-only local artifacts. Never creates or uploads a GitHub release.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [[ "$#" -lt 2 || "$#" -gt 3 ]]; then
-    echo 'Usage: build_apple_core_preview.sh ios|macos OUTPUT_DIRECTORY [--vpn-routing]' >&2
+if [[ "$#" -lt 2 || "$#" -gt 4 ]]; then
+    echo 'Usage: build_apple_core_preview.sh ios|macos OUTPUT_DIRECTORY [--vpn-routing] [--balancer-diagnostics]' >&2
     exit 2
 fi
 PLATFORM="$1"
 OUTPUT="$2"
 ROUTING=0
-if [[ "$#" == 3 ]]; then
-    [[ "$3" == --vpn-routing ]] || { echo 'Expected --vpn-routing as the final argument' >&2; exit 2; }
-    ROUTING=1
-fi
+BALANCER_DIAGNOSTICS=0
+shift 2
+for option in "$@"; do
+    case "$option" in
+        --vpn-routing) ROUTING=1 ;;
+        --balancer-diagnostics) BALANCER_DIAGNOSTICS=1 ;;
+        *) echo "Unexpected option: $option" >&2; exit 2 ;;
+    esac
+done
 case "$PLATFORM" in ios|macos) ;; *) echo 'Expected ios or macos' >&2; exit 2 ;; esac
 test ! -e "$OUTPUT/XRay.xcframework" || { echo 'Output already exists; preserve or remove it explicitly' >&2; exit 2; }
 GO_VERSION="$(go env GOVERSION)"
@@ -32,11 +37,13 @@ if true; then
     # mobile module too, so no ambient -modfile propagation is required.
     unset GOFLAGS
     export GOTOOLCHAIN=local GOWORK=off
-    python3 - "$ROOT" "$OUTPUT" "$ROUTING" <<'PY'
+    python3 - "$ROOT" "$OUTPUT" "$ROUTING" "$BALANCER_DIAGNOSTICS" <<'PY'
 from pathlib import Path
 import hashlib, importlib.util, json, re, shutil, subprocess, sys
 root, output = map(Path, sys.argv[1:3])
 routing = sys.argv[3] == '1'
+diagnostics = sys.argv[4] == '1'
+balancer = root/'third_party/xray-balancer-diagnostics'
 mobile, capability = root/'third_party/xray-mobile', root/'third_party/xray-vpn-routing'
 work = output/('routing' if routing else 'classic')
 if work.exists() or work.is_symlink():
@@ -64,6 +71,7 @@ def inputs():
     paths += sorted((classic/'overlay/transport/internet/xdrive').glob('*_test.go')) + sorted((classic/'overlay/app/geodata').glob('native_*.go'))
     managed_core_test = classic/'overlay/core/native_managed_lifetime_test.go'
     if managed_core_test.exists(): paths.append(managed_core_test)
+    if diagnostics: paths += [balancer/'apply.py', *sorted((balancer/'overlay').rglob('*.go'))]
     if any(p.is_symlink() for p in paths): raise ValueError('Input symlinks are unsupported')
     return {str(p.relative_to(root)):digest(p) for p in paths}
 before, cache_before = inputs(), tree(source)
@@ -71,6 +79,10 @@ spec = importlib.util.spec_from_file_location('apple_routing_applier', capabilit
 applier = importlib.util.module_from_spec(spec); spec.loader.exec_module(applier)
 work.mkdir()
 core = applier.copy_and_apply(source, work/'Core') if routing else applier.copy_and_apply_lifetimes(source, work/'Core', routing=False)
+if diagnostics:
+    spec = importlib.util.spec_from_file_location('balancer_diagnostics_applier', balancer/'apply.py')
+    patch = importlib.util.module_from_spec(spec); spec.loader.exec_module(patch)
+    patch.apply(source, core, routing=routing)
 copied = work/'mobile'; copied.mkdir()
 for path in [mobile/'go.mod', mobile/'go.sum', *sorted(mobile.glob('*.go'))]:
     shutil.copyfile(path, copied/path.name)
@@ -94,6 +106,7 @@ state = {'success':False, 'core':version, 'core_module':module, 'core_sum':check
          'darwin_interface_binding_tag':'flutter_vless_darwin_interface_binding',
          'darwin_interface_binding_patch_sha256':before['third_party/xray-native-dns/darwin_interface_bind_patch.py'],
          'runtime_executed':False, 'published':False}
+if diagnostics: state['balancer_diagnostics_capability_expected'] = 1
 (work/'inputs.json').write_text(json.dumps(state,indent=2)+'\n')
 PY
     if [[ "$ROUTING" == 1 ]]; then
@@ -102,6 +115,9 @@ PY
     else
         MOBILE="$OUTPUT/classic/mobile"
     fi
+fi
+if [[ "$BALANCER_DIAGNOSTICS" == 1 ]]; then
+    BIND_TAG+=",flutter_vless_balancer_diagnostics"
 fi
 cd "$MOBILE"
 mkdir -p "$OUTPUT/tools"
@@ -122,10 +138,11 @@ else
     xcodebuild -create-xcframework -library "$OUTPUT/libXRay.a" \
         -headers "$OUTPUT/Headers" -output "$OUTPUT/XRay.xcframework"
 fi
-python3 - "$OUTPUT" "$PLATFORM" "$ROUTING" "$ROOT" <<'PY'
+python3 - "$OUTPUT" "$PLATFORM" "$ROUTING" "$ROOT" "$BALANCER_DIAGNOSTICS" <<'PY'
 from pathlib import Path
 import hashlib, json, subprocess, sys
 output, platform, routing, root = Path(sys.argv[1]), sys.argv[2], sys.argv[3] == '1', Path(sys.argv[4])
+diagnostics = sys.argv[5] == '1'
 pin = subprocess.check_output(['go','list','-m','-f','{{.Version}}','github.com/xtls/xray-core'],text=True).strip()
 expected_pin = json.loads((root/'third_party/xray-vpn-routing/pin-manifest.json').read_text())['module_version']
 assert pin == expected_pin, 'Unexpected Xray Core pin'
@@ -134,6 +151,9 @@ assert headers and all('XRayCheckPrivate' in p.read_text() for p in headers), 'M
 assert all('XRayDarwinInterfaceBindingCapability' in p.read_text() for p in headers), 'Missing mandatory Darwin binding bridge'
 for symbol in ('XRayXdriveLifetimeCapability','XRayGeodataLifetimeCapability'):
     assert all(symbol in p.read_text() for p in headers), 'Missing managed-service lifetime bridge: '+symbol
+if diagnostics:
+    for symbol in ('XRayBalancerDiagnosticsCapability','XRayStartBalancerDiagnosticsPrivate','XRayReadBalancerDiagnostics'):
+        assert all(symbol in p.read_text() for p in headers), 'Missing balancer diagnostics bridge: '+symbol
 if True:
     work = output/('routing' if routing else 'classic')
     state = json.loads((work/'inputs.json').read_text())
@@ -154,6 +174,8 @@ if True:
     paths += sorted((classic/'overlay/transport/internet/xdrive').glob('*_test.go')) + sorted((classic/'overlay/app/geodata').glob('native_*.go'))
     managed_core_test = classic/'overlay/core/native_managed_lifetime_test.go'
     if managed_core_test.exists(): paths.append(managed_core_test)
+    balancer = root/'third_party/xray-balancer-diagnostics'
+    if diagnostics: paths += [balancer/'apply.py', *sorted((balancer/'overlay').rglob('*.go'))]
     assert not any(p.is_symlink() for p in paths), 'Input became a symlink'
     assert state['source_sha256'] == {str(p.relative_to(root)):digest(p) for p in paths}, 'Build input changed'
     assert state['module_cache_before_sha256'] == tree(Path(state['core_source'])), 'Original Core cache changed'

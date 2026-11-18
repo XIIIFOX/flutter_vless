@@ -28,6 +28,10 @@ cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX %S%\native_options_test.cp
 if errorlevel 1 exit /b 1
 build\windows-runtime\native_options_test.exe
 if errorlevel 1 exit /b 1
+cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX %S%\balancer_selection_protocol_test.cpp /Fe:build\windows-runtime\balancer_selection_protocol_test.exe /Fo:build\windows-runtime\balancer_selection_protocol_test.obj
+if errorlevel 1 exit /b 1
+build\windows-runtime\balancer_selection_protocol_test.exe
+if errorlevel 1 exit /b 1
 cl /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /DNOMINMAX %S%\owned_address_test.cpp /Fe:build\windows-runtime\owned_address_test.exe /Fo:build\windows-runtime\owned_address_test.obj
 if errorlevel 1 exit /b 1
 build\windows-runtime\owned_address_test.exe

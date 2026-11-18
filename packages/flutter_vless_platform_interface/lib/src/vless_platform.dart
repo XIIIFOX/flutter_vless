@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
+import 'balancer_selection.dart';
 import 'vless_status.dart';
 import 'android_dns_policy.dart';
 import 'vpn_routing_options.dart';
@@ -230,4 +231,9 @@ abstract class VlessPlatform extends PlatformInterface {
       'getProviderDebugSnapshot() has not been implemented.',
     );
   }
+
+  /// Returns bounded, numeric-only balancer selections from the active session.
+  ///
+  /// Backends without this optional feature return an empty list.
+  Future<List<BalancerSelection>> getBalancerSelections() async => const [];
 }

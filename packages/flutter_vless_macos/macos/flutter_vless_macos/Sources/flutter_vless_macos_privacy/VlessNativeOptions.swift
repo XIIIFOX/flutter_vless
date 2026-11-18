@@ -24,6 +24,7 @@ public struct VlessNativeOptions {
     public let onDemand: String
     public let alwaysOn: String
     public let diagnosticsEnabled: Bool
+    public let recordBalancerSelections: Bool
     public let diagnosticsMaxBytes: Int
     public let diagnosticsMaxLines: Int
 
@@ -88,6 +89,7 @@ public struct VlessNativeOptions {
         alwaysOn = try choice(text(p,"alwaysOn","system"),["system","requireEnabled"],"alwaysOn")
         guard reconnectEnabled || onDemand != "enabled" else { throw Failure.invalid("onDemand/reconnect") }
         diagnosticsEnabled = try flag(d,"enabled",true)
+        recordBalancerSelections = try flag(d,"recordBalancerSelections",false)
         diagnosticsMaxBytes = try number(d,"maxBytes",131072)
         diagnosticsMaxLines = try number(d,"maxLines",300)
         guard diagnosticsMaxBytes >= 4096, diagnosticsMaxBytes <= 131072,
@@ -113,11 +115,13 @@ public struct VlessNativeOptions {
         var quick: [String: Any] = ["enabled":quickAccessEnabled,"surface":quickAccessSurface,"label":quickAccessLabel,
             "action":quickAccessAction,"requireUnlock":requireUnlock,"androidIconResourceName":androidIconName,"appleSymbol":appleSymbol]
         if let path = windowsIconPath { quick["windowsIconPath"] = path }
+        var diagnostics: [String: Any] = ["enabled":diagnosticsEnabled,"maxBytes":diagnosticsMaxBytes,"maxLines":diagnosticsMaxLines]
+        if recordBalancerSelections { diagnostics["recordBalancerSelections"] = true }
         return ["version":1,
             "notification":["iconResourceType":notificationIconType,"iconResourceName":notificationIconName,"buttonLabel":notificationButtonLabel,"action":notificationAction],
             "quickAccess":quick,
             "reconnect":["enabled":reconnectEnabled,"initialDelayMs":initialDelayMs,"maxDelayMs":maxDelayMs,"maxAttempts":maxAttempts],
             "protection":["killSwitch":killSwitch,"onDemand":onDemand,"alwaysOn":alwaysOn],
-            "diagnostics":["enabled":diagnosticsEnabled,"maxBytes":diagnosticsMaxBytes,"maxLines":diagnosticsMaxLines]]
+            "diagnostics":diagnostics]
     }
 }

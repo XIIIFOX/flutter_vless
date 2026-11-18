@@ -3,6 +3,7 @@
 
 import 'dart:convert';
 
+import 'package:flutter_vless/src/subscription_download.dart';
 import 'package:flutter_vless/url/hysteria2.dart';
 import 'package:flutter_vless/url/shadowsocks.dart';
 import 'package:flutter_vless/url/socks.dart';
@@ -375,6 +376,20 @@ class FlutterVless {
     return await VlessPlatform.instance.getProviderDebugSnapshot();
   }
 
+  /// Returns recent balancer choices ordered by their sequence number.
+  ///
+  /// Enable [DiagnosticsOptions.recordBalancerSelections] before starting the
+  /// VPN. A compatible runtime retains only bounded, session-local ordinals in
+  /// memory. The list is empty when collection is off,
+  /// the backend does not support it, or no choices have been recorded.
+  Future<List<BalancerSelection>> getBalancerSelections() async {
+    if (!options.diagnostics.enabled ||
+        !options.diagnostics.recordBalancerSelections) {
+      return const [];
+    }
+    return VlessPlatform.instance.getBalancerSelections();
+  }
+
   /// Parse a share link, raw Xray JSON config, or subscription payload.
   ///
   /// Supports vmess://, vless://, trojan://, ss://, socks://, hysteria2://,
@@ -415,6 +430,22 @@ class FlutterVless {
       parseUrl: parseFromURL,
       parseJson: (json) => XrayJsonConfig(url: json),
     );
+  }
+
+  /// Fetches an HTTPS subscription once and returns every supported profile.
+  ///
+  /// The request times out after 12 seconds and the decoded response is
+  /// limited to 2 MiB. Profiles may contain credentials. Keep their contents
+  /// and the subscription URL out of logs. Download and format errors omit them.
+  /// This call is supported on native platforms.
+  static Future<List<FlutterVlessURL>> fetchSubscription(Uri url) async {
+    final payload = await downloadSubscription(url);
+    try {
+      return List.unmodifiable(parseMany(payload));
+    } catch (_) {
+      throw const FormatException(
+          'The subscription contains no usable profiles.');
+    }
   }
 
   /// Parses a single share link into a typed [FlutterVlessURL] object.

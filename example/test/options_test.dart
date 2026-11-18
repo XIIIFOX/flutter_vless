@@ -52,6 +52,7 @@ void main() {
     await reach('Protection Options');
     expect(find.text('Kill Switch'), findsOneWidget);
     await reach('Diagnostics Options');
+    expect(find.text('Record balancer selections'), findsNothing);
     await reach('Apply options');
     await tester.tap(find.text('Apply options'));
     await tester.pumpAndSettle();
@@ -60,6 +61,46 @@ void main() {
     expect(applied?.reconnect.enabled, isTrue);
     expect(applied?.diagnostics.enabled, isTrue);
   });
+  testWidgets(
+    'supported diagnostics recording is off until explicitly enabled',
+    (tester) async {
+      VlessOptions? applied;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PluginOptionsPage(
+            initial: const VlessOptions(),
+            capabilities: const VlessCapabilities(
+              optionsVersion: 1,
+              balancerSelections: true,
+            ),
+            onApply: (value) async {
+              applied = value;
+            },
+            onAddTile: () async => QuickTileAddResult.unsupported,
+            onClearProfile: () async {},
+          ),
+        ),
+      );
+
+      final label = find.text('Record balancer selections');
+      final toggle = find.widgetWithText(
+        SwitchListTile,
+        'Record balancer selections',
+      );
+      await tester.scrollUntilVisible(
+        label,
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+      await tester.tap(label);
+      await tester.pump();
+      expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+      await tester.tap(find.text('Apply options'));
+      await tester.pumpAndSettle();
+      expect(applied?.diagnostics.recordBalancerSelections, isTrue);
+    },
+  );
   testWidgets('example refuses invalid bounds without applying or dismissing',
       (tester) async {
     int applications = 0;

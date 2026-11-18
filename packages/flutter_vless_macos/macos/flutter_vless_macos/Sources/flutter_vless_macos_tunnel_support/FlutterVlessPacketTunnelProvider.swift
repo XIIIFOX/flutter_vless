@@ -54,6 +54,12 @@ private final class TunnelDebugStore {
         group.flatMap { VlessSystemControl.options(group: $0) } ?? options
     }
 
+    func balancerDiagnosticsOptions() -> VlessNativeOptions? {
+        lock.lock(); defer { lock.unlock() }
+        let options = currentOptions()
+        return options.diagnosticsEnabled && options.recordBalancerSelections ? options : nil
+    }
+
     func append(_ message: NativeDiagnosticMessage) {
         lock.lock(); defer { lock.unlock() }
         let options = currentOptions()
@@ -200,6 +206,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         let geoAssetsDirectory: String?
         let credentials: LocalProxyCredentials
         let routingMetadata: Data?
+        let managedInboundTag: String?
         let token: TunnelEndpointPlanAdmission.Token
         let path: TunnelEndpointPath
         let selections: [TunnelEndpointSelection]
@@ -215,6 +222,7 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
             config = prepared.routingEnvelope?.configurationData ?? prepared.data
             self.port = port; geoAssetsDirectory = source.geoAssetsDirectory; credentials = source.credentials
             routingMetadata = prepared.routingEnvelope?.metadataData
+            managedInboundTag = prepared.managedInboundTag
             self.token = token; self.path = path
             selections = prepared.endpointSelections; bootstrapAddresses = prepared.bootstrapAddresses
             self.discovery = discovery; self.discoveryDeadline = discoveryDeadline; self.correctionID = correctionID; self.correctionPermit = correctionPermit; self.initialDeadline = initialDeadline
@@ -1146,7 +1154,8 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         guard admitted else { throw CancellationError() }
         nativeRuntimeEpoch = spec.epoch
         nativeRuntimeToken = spec.token
-        try startXRay(xrayConfig: spec.config, geoAssetsDirectory: spec.geoAssetsDirectory, routingMetadata: spec.routingMetadata)
+        try startXRay(xrayConfig: spec.config, geoAssetsDirectory: spec.geoAssetsDirectory, routingMetadata: spec.routingMetadata,
+                      options: spec.options, managedInboundTag: spec.managedInboundTag)
         guard sessionAdmission.permitsRuntime(spec.epoch), endpointAdmission.mayStart(spec.token), self.endpointSpecIsFresh(spec) else { throw CancellationError() }
         try startSocks5Tunnel(serverPort: spec.port, credentials: spec.credentials, epoch: spec.epoch, token: spec.token)
         if let discovery = spec.discovery, !discovery.finishAdmission() {
@@ -1237,6 +1246,8 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
                 var snapshot = TunnelDebugStore.shared.snapshot()
                 snapshot += "\nHEV diagnostic file bytes=\(hevLogSizeBytes()); raw contents omitted"
                 completionHandler?(snapshot.data(using: .utf8))
+            } else if message == PrivateBalancerDiagnostics.snapshotCommand {
+                readBalancerSelections(completionHandler: completionHandler)
             }else if (message.hasPrefix("xray_delay")){
                 let rawURL = String(message.dropFirst(10))
                 watchdogQueue.async {
@@ -1258,6 +1269,31 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         }else{
             tunnelLog.warning("Received non-UTF8 provider message bytes=\(messageData.count, privacy: .public)")
             completionHandler?(messageData)
+        }
+    }
+
+    private func readBalancerSelections(completionHandler: ((Data?) -> Void)?) {
+        guard let completionHandler else { return }
+        guard let epoch = sessionAdmission.currentEpoch else { completionHandler(nil); return }
+        // Serialize the read with Core start/stop. A pending request must not
+        // observe the singleton Core belonging to another VPN session.
+        runtimeQueue.async {
+            guard self.nativeRuntimeEpoch == epoch, let token = self.nativeRuntimeToken,
+                  self.sessionAdmission.permitsRuntime(epoch), self.endpointAdmission.mayStart(token),
+                  self.isForwardingReady(), let options = self.watchdogQueue.sync(execute: {
+                      self.runtimeSpec.flatMap { $0.token == token ? $0.options : nil }
+                  }), options.diagnosticsEnabled, options.recordBalancerSelections,
+                  let liveOptions = TunnelDebugStore.shared.balancerDiagnosticsOptions() else {
+                completionHandler(nil)
+                return
+            }
+            let data = Data(FLVlessReadCoreBalancerDiagnostics().utf8)
+            let snapshot = PrivateBalancerDiagnostics.snapshot(data,
+                maxBytes: min(options.diagnosticsMaxBytes, liveOptions.diagnosticsMaxBytes),
+                maxLines: min(options.diagnosticsMaxLines, liveOptions.diagnosticsMaxLines))
+            guard self.sessionAdmission.permitsRuntime(epoch), self.endpointAdmission.mayStart(token),
+                  self.isForwardingReady() else { completionHandler(nil); return }
+            completionHandler(Data(snapshot.utf8))
         }
     }
 
@@ -1400,7 +1436,8 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    private func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data? = nil) throws {
+    private func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data?,
+                           options: VlessNativeOptions, managedInboundTag: String?) throws {
         let coreTiming = NativeDiagnosticTimer()
         defer { rememberTunnelLog("Startup timing phase=core-start elapsedMs=\(coreTiming.elapsedMilliseconds())") }
         try ManagedServiceAssetPolicy.validate(xrayConfig, directory: geoAssetsDirectory, geodataCapability: FLVlessCoreGeodataLifetimeCapability(), xdriveCapability: FLVlessCoreXdriveLifetimeCapability())
@@ -1431,7 +1468,11 @@ open class FlutterVlessPacketTunnelProvider: NEPacketTunnelProvider {
         // Start XRay with the config data
         tunnelLog.info("Starting XRay version=\(XRayGetVersion(), privacy: .public) configBytes=\(xrayConfig.count, privacy: .public)")
         let started: Bool
-        if let routingMetadata {
+        if options.diagnosticsEnabled, options.recordBalancerSelections,
+           let managedInboundTag, FLVlessHasCoreBalancerDiagnostics() {
+            started = FLVlessStartCoreBalancerDiagnostics(xrayConfig, routingMetadata,
+                managedInboundTag, Int64(options.diagnosticsMaxLines), logger, &error)
+        } else if let routingMetadata {
             started = FLVlessStartCoreRoutingPrivate(xrayConfig, routingMetadata, logger, &error)
         } else {
             started = XRayStartPrivate(xrayConfig, logger, &error)

@@ -129,3 +129,33 @@ BOOL FLVlessStartCoreRoutingPrivate(NSData *configuration, NSData *specification
     }
     return XRayStartRoutingPrivate(configuration, specification, logger, error);
 }
+
+// The optional diagnostic ABI is additive to the existing private start path.
+__attribute__((weak, noinline)) int64_t XRayBalancerDiagnosticsCapability(void) { return -43; }
+__attribute__((weak, noinline)) BOOL XRayStartBalancerDiagnosticsPrivate(
+    NSData *configuration, NSData *specification, NSString *managedInbound, int64_t maxLines,
+    id<XRayLogger> logger, NSError **error) {
+    (void)configuration; (void)specification; (void)managedInbound; (void)maxLines; (void)logger;
+    if (error) {
+        *error = [NSError errorWithDomain:@"flutter_vless.core.balancer" code:1 userInfo:nil];
+    }
+    return NO;
+}
+__attribute__((weak, noinline)) NSString *XRayReadBalancerDiagnostics(void) { return nil; }
+
+BOOL FLVlessHasCoreBalancerDiagnostics(void) {
+    int64_t (*volatile capability)(void) = XRayBalancerDiagnosticsCapability;
+    return capability() == 1;
+}
+
+BOOL FLVlessStartCoreBalancerDiagnostics(NSData *configuration, NSData *specification,
+                                       NSString *managedInbound, int64_t maxLines,
+                                       id<XRayLogger> logger, NSError **error) {
+    if (!FLVlessHasCoreBalancerDiagnostics()) { return NO; }
+    return XRayStartBalancerDiagnosticsPrivate(configuration, specification, managedInbound, maxLines, logger, error);
+}
+
+NSString *FLVlessReadCoreBalancerDiagnostics(void) {
+    if (!FLVlessHasCoreBalancerDiagnostics()) { return @""; }
+    return XRayReadBalancerDiagnostics() ?: @"";
+}

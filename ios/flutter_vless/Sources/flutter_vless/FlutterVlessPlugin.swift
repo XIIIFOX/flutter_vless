@@ -385,7 +385,8 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         if controlCenterAvailable { surfaces.append("controlCenter") }
         return ["optionsVersion": 1, "quickAccessSurfaces": surfaces, "requestAddQuickTile": false,
             "controlCenterExtensionConfigured": controlsConfigured, "customReconnectBackoff": true,
-            "onDemand": true, "alwaysOn": false, "alwaysOnEnabled": false, "lockdownEnabled": false, "killSwitch": true, "certificateAssetsDirectory": true]
+            "onDemand": true, "alwaysOn": false, "alwaysOnEnabled": false, "lockdownEnabled": false, "killSwitch": true, "certificateAssetsDirectory": true,
+            "balancerSelections": FLVlessHasCoreBalancerDiagnostics()]
     }
 
 
@@ -716,6 +717,8 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             getServerDelay(call: call, result: result)
         case "getProviderDebugSnapshot":
             getProviderDebugSnapshot(result: result)
+        case "getBalancerSelections":
+            getBalancerSelections(result: result)
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -797,6 +800,20 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 let persisted = packetTunnelManager?.sharedProviderDebugSnapshot() ?? ""
                 result(configuredDiagnosticsSnapshot(persisted))
             }
+        }
+    }
+
+    private func getBalancerSelections(result: @escaping FlutterResult) {
+        let options = nativeOptions
+        guard options.diagnosticsEnabled, options.recordBalancerSelections,
+              FLVlessHasCoreBalancerDiagnostics(), let manager = packetTunnelManager else { result(""); return }
+        Task {
+            let command = Data(PrivateBalancerDiagnostics.snapshotCommand.utf8)
+            let response = try? await manager.sendProviderMessage(data: command)
+            guard self.packetTunnelManager === manager, self.nativeOptions.diagnosticsEnabled,
+                  self.nativeOptions.recordBalancerSelections, let response else { result(""); return }
+            result(PrivateBalancerDiagnostics.snapshot(response,
+                maxBytes: options.diagnosticsMaxBytes, maxLines: options.diagnosticsMaxLines))
         }
     }
 

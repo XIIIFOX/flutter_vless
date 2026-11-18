@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'vless_platform.dart';
 import 'vless_status.dart';
 import 'android_dns_policy.dart';
+import 'balancer_selection.dart';
 import 'vpn_routing_options.dart';
 import 'vless_options.dart';
 import 'vless_preparation_report.dart';
@@ -324,6 +325,48 @@ class VlessMethodChannelAdapter extends VlessPlatform {
           'getProviderDebugSnapshot',
         ) ??
         '';
+  }
+
+  static final _balancerRow =
+      RegExp(r'^([1-9][0-9]{0,18}),([1-9][0-9]{0,18}),([1-9][0-9]{0,18})$');
+
+  @override
+  Future<List<BalancerSelection>> getBalancerSelections() async {
+    Object? reply;
+    try {
+      reply =
+          await methodChannel.invokeMethod<Object?>('getBalancerSelections');
+    } on MissingPluginException {
+      return const [];
+    }
+
+    // Accept only bounded positive integers. Never surface native text or an
+    // echoed provider request through this diagnostic path.
+    if (reply is! String || reply.isEmpty || reply.length > 18000) {
+      return const [];
+    }
+    final rows = reply.split('\n');
+    if (rows.length > 300) return const [];
+    final selections = <BalancerSelection>[];
+    var lastSequence = 0;
+    for (final row in rows) {
+      final match = _balancerRow.firstMatch(row);
+      if (match == null || match.end != row.length) return const [];
+      final sequence = int.tryParse(match[1]!);
+      final group = int.tryParse(match[2]!);
+      final node = int.tryParse(match[3]!);
+      if (sequence == null ||
+          sequence <= lastSequence ||
+          group == null ||
+          node == null) {
+        return const [];
+      }
+      selections.add(
+        BalancerSelection(sequence: sequence, group: group, node: node),
+      );
+      lastSequence = sequence;
+    }
+    return List.unmodifiable(selections);
   }
 }
 

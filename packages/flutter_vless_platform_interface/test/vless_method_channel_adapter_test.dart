@@ -35,4 +35,47 @@ void main() {
 
     expect(await adapter.getProviderDebugSnapshot(), isEmpty);
   });
+
+  test('balancer diagnostics decode private numeric selections in order',
+      () async {
+    MethodCall? received;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      received = call;
+      return '4,1,2\n5,1,1\n6,1,2';
+    });
+    final adapter = VlessMethodChannelAdapter(methodChannel: channel);
+    final choices = await adapter.getBalancerSelections();
+
+    expect(received?.method, 'getBalancerSelections');
+    expect(received?.arguments, isNull);
+    expect(choices.map((row) => (row.sequence, row.group, row.node)),
+        [(4, 1, 2), (5, 1, 1), (6, 1, 2)]);
+    expect(choices.clear, throwsUnsupportedError);
+  });
+
+  test('balancer diagnostics reject untrusted text, invalid rows and overflow',
+      () async {
+    for (final reply in [
+      'balancer choices pending for secret.example',
+      '1,1,2\n2,1,secret.example',
+      '1,1,2\n1,1,1',
+      '1,1,0',
+      '1,1,9999999999999999999',
+      List.generate(301, (index) => '${index + 1},1,2').join('\n'),
+      {'unsolicited': 'secret.example'},
+    ]) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (_) async => reply);
+      final adapter = VlessMethodChannelAdapter(methodChannel: channel);
+
+      expect(await adapter.getBalancerSelections(), isEmpty);
+    }
+  });
+
+  test('older backends can omit the balancer diagnostics method', () async {
+    final adapter = VlessMethodChannelAdapter(methodChannel: channel);
+
+    expect(await adapter.getBalancerSelections(), isEmpty);
+  });
 }

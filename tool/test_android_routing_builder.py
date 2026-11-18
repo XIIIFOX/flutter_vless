@@ -16,6 +16,7 @@ CORE = 'github.com/xtls/xray-core'
 MOBILE = 'github.com/EbrahimTahernejad/xray-mobile'
 SUM = 'h1:fixture-core='
 TAGS = 'flutter_vless_vpn_routing_cli,flutter_vless_vpn_routing,flutter_vless_managed_service_lifetimes'
+BALANCER_TAGS = 'flutter_vless_balancer_diagnostics_cli,flutter_vless_balancer_diagnostics'
 
 GO = r'''
 import json,os,pathlib,sys
@@ -110,6 +111,15 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
         (capability/'overlay/main/native_routing_cli.go').write_text('package main\n')
         (capability/'pin-manifest.json').write_text(json.dumps({'module':CORE,'module_version':VERSION,'module_sum':SUM,'core_commit':'0afec66085a8','capability':'native-vpn-routing-source-preview-v1'}))
         (capability/'apply.py').write_text(ROUTING)
+        balancer = self.root/'third_party/xray-balancer-diagnostics'
+        (balancer/'overlay/main').mkdir(parents=True)
+        (balancer/'overlay/main/native_balancer_cli.go').write_text('package main\n')
+        (balancer/'apply.py').write_text('''
+def apply(source, destination, *, routing, cli):
+ assert cli and (destination/'protect-applied').is_file()
+ assert 'replace ' not in (destination/'go.mod').read_text()
+ (destination/'balancer-applied').write_text('routing' if routing else 'classic')
+''')
         classic=self.root/'third_party/xray-native-dns';(classic/'overlay/app/dns').mkdir(parents=True)
         for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','xhttp_listener_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go'):
             (classic/name).parent.mkdir(parents=True,exist_ok=True)
@@ -130,6 +140,7 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
                                 VERSION=VERSION,SUM=SUM,MOBILE=MOBILE,FAKE_CORE=str(self.cache),
                                 ANDROID_NDK_HOME=str(self.ndk),TARGET_DIR=str(self.output))
         self.environment.pop('XRAY_NATIVE_ROUTING',None)
+        self.environment.pop('XRAY_BALANCER_DIAGNOSTICS',None)
 
     def run_builder(self, *, routing=False, **extra):
         env=dict(self.environment,**({'XRAY_NATIVE_ROUTING':'1','EXPECT_ROUTING':'1'} if routing else {}),**extra)
@@ -214,6 +225,31 @@ class AndroidRoutingBuilderTest(unittest.TestCase):
         self.environment.pop('TARGET_DIR')
         self.assertNotEqual(self.run_builder(routing=True).returncode,0)
         self.assertEqual(self.recorded(),[])
+
+    def test_balancer_option_composes_with_either_runtime(self):
+        for routing in (False, True):
+            with self.subTest(routing=routing):
+                result = self.run_builder(routing=routing, XRAY_BALANCER_DIAGNOSTICS='1',
+                    XRAY_BUILD_ARMV7='0', XRAY_BUILD_X86='0', XRAY_BUILD_X86_64='0')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                command = [c for c in self.recorded() if c['tool'] == 'go' and c['args'][0] == 'build'][-1]
+                self.assertIn('-tags=' + (TAGS + ',' if routing else '') + BALANCER_TAGS, command['args'])
+                self.assertIn('-mod=readonly', command['args'])
+                self.assertEqual((Path(command['cwd'])/'balancer-applied').read_text(),
+                    'routing' if routing else 'classic')
+                label = 'routing' if routing else 'classic'
+                receipt, = self.output.glob(label + '-preview-*.json')
+                state = json.loads(receipt.read_text())
+                self.assertEqual(state['balancer_diagnostics_capability_expected'], 1)
+                self.assertIn('third_party/xray-balancer-diagnostics/overlay/main/native_balancer_cli.go',
+                    state['source_sha256'])
+                self.assertIsNotNone(state['mobile_copy_sha256'])
+
+    def test_balancer_option_requires_explicit_target_before_go(self):
+        self.environment.pop('TARGET_DIR')
+        result = self.run_builder(XRAY_BALANCER_DIAGNOSTICS='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.recorded(), [])
 
     def assert_ordinary_output_symlink_refused(self, file_link):
         self.output.mkdir()

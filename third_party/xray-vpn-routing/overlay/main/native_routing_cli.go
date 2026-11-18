@@ -46,7 +46,7 @@ func runNativeRoutingCommand(ctx context.Context, args []string, output io.Write
 }
 
 func restoreNativeRoutingStockLogger(args []string, register func(xlog.Handler)) {
-	if len(args) > 1 && args[1] == "native-routing" {
+	if len(args) > 1 && (args[1] == "native-routing" || args[1] == "native-balancer") {
 		return
 	}
 	// Importing the mobile bridge installs its private preflight handler. Stock

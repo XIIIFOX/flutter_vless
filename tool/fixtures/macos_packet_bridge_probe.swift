@@ -173,6 +173,7 @@ struct PacketBridgeProbe {
           log-level: error
         """
         let done = DispatchSemaphore(value: 0)
+        let startedAt = DispatchTime.now().uptimeNanoseconds
         bridge.start()
         DispatchQueue.global().async {
             let code = config.withCString { pointer in
@@ -183,9 +184,11 @@ struct PacketBridgeProbe {
             guard code == 0 else { fputs("FAIL HEV exit code=\(code)\n", stderr); exit(1) }
             done.signal()
         }
+        var firstPacketMs: UInt64
         do {
             try flow.send(tcp(sequence: 1000, ack: 0, flags: 2))
             let synack = try flow.receive { $0.count >= 40 && $0[9] == 6 && $0[33] & 0x12 == 0x12 }
+            firstPacketMs = (DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
             let serverSequence = synack[24..<28].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
             try flow.send(tcp(sequence: 1001, ack: serverSequence &+ 1, flags: 16))
             try flow.send(tcp(sequence: 1001, ack: serverSequence &+ 1, flags: 24, payload: payload))
@@ -269,6 +272,7 @@ struct PacketBridgeProbe {
             fputs("FAIL native TCP bulk transfer: \(error); HEV packets up=\(upPackets) down=\(downPackets)\n", stderr)
             exit(1)
         }
+        let stoppingAt = DispatchTime.now().uptimeNanoseconds
         bridge.pause()
         DispatchQueue.global().async { hev_socks5_tunnel_quit() }
         guard done.wait(timeout: .now() + 5) == .success else {
@@ -277,6 +281,9 @@ struct PacketBridgeProbe {
         bridge.shutdown()
         guard associationClosed.wait(timeout: .now() + 5) == .success,
               stubDone.wait(timeout: .now() + 5) == .success else { throw POSIXError(.ETIMEDOUT) }
+        let stoppedMs = (DispatchTime.now().uptimeNanoseconds - stoppingAt) / 1_000_000
+        print("APPLE_HEV_LIFECYCLE firstPacketMs=\(firstPacketMs) stoppedMs=\(stoppedMs)")
+        guard firstPacketMs < 5000, stoppedMs < 5000 else { throw POSIXError(.ETIMEDOUT) }
         print("PASS shipped HEV: packetFlow -> owned datagram bridge -> HEV TCP -> loopback SOCKS -> packetFlow; clean shutdown")
     }
 

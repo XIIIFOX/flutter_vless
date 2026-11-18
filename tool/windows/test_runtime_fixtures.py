@@ -56,6 +56,31 @@ class RuntimeFixtureTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 runtime.profile_dns_answer(bad, 7)
 
+    def test_round_robin_fixture_preserves_routes_and_direct_domains_without_observatory(self):
+        arguments = ("192.0.2.10", 15353, [24007, 24008])
+        reference = runtime.profile_balancer_config(*arguments)
+        diagnostics = runtime.profile_balancer_config(*arguments, round_robin=True)
+        self.assertNotIn("observatory", diagnostics)
+        self.assertEqual(diagnostics["routing"]["balancers"][0]["strategy"], {"type": "roundRobin"})
+        self.assertEqual(diagnostics["routing"]["rules"], reference["routing"]["rules"])
+        self.assertEqual(diagnostics["outbounds"], reference["outbounds"])
+
+    def test_native_timing_requires_one_bounded_measurement(self):
+        self.assertEqual(runtime.profile_timing("STOP_ELAPSED_MS=120\n", "STOP", 200), 120)
+        for log in ("", "STOP_ELAPSED_MS=200\n", "STOP_ELAPSED_MS=100\nSTOP_ELAPSED_MS=110\n"):
+            with self.subTest(log=log), self.assertRaises(AssertionError):
+                runtime.profile_timing(log, "STOP", 200)
+
+    def test_balancer_snapshot_admits_only_two_numeric_rows(self):
+        state = Mock()
+        for rows in ("", "3,1,2\n4,1,1"):
+            state.read_text.return_value = json.dumps(dict(running=True, protecting=True, balancer_selections=rows))
+            runtime.await_profile_selections(state, rows)
+        for rows in ("1,1,proxy.example", "1,1,1\n2,1,2\n3,1,1", "1,2,1", 101):
+            state.read_text.return_value = json.dumps(dict(running=True, protecting=True, balancer_selections=rows))
+            with self.subTest(rows=rows), self.assertRaisesRegex(AssertionError, "Invalid private balancer snapshot"):
+                runtime.await_profile_selections(state, "")
+
     def test_typed_profile_runner_scope_skips_external_https_control(self):
         args = ["runtime_smoke.py", "--directory", "unused", "--vpn", "--typed-profile-only"]
         def run_profile(*_):

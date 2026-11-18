@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_vless/flutter_vless.dart';
 import 'package:flutter_vless_example/balancer_example.dart';
 import 'package:flutter_vless_example/main.dart';
 import 'package:flutter_vless_example/options.dart';
+import 'package:flutter_vless_example/profile_import.dart';
 import 'package:flutter_vless_example/routing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -146,23 +148,53 @@ void main() {
     expect(find.text('VPN Diagnostics'), findsOneWidget);
   });
 
-  testWidgets('balancer demo imports two links and Connect sends the group', (
+  testWidgets('balancer shows the imported subscription size and sends all nodes', (
     tester,
   ) async {
-    clipboard = 'socks://127.0.0.1:12081\nsocks://127.0.0.1:12082';
+    clipboard = 'https://example.org/subscription';
+    final links = List.generate(34, (index) => 'socks://127.0.0.1:${12081 + index}');
     await tester.pumpWidget(
-      const MyApp(profileImporter: importBalancerProfile),
+      MyApp(profileImporter: (input) => importBalancerInput(
+        input,
+        fetch: (_) async => FlutterVless.parseMany(links.join('\n')),
+      )),
     );
     await tester.pumpAndSettle();
     await tap(tester, 'Import (clipboard)');
+    expect(find.text('Configuration (JSON) · 34 balancer nodes'), findsOneWidget);
     await tap(tester, 'Connect');
 
     final start = calls.singleWhere((call) => call.method == 'startVless');
     final config = jsonDecode((start.arguments as Map)['config'] as String);
     final group = config['routing']['balancers'].single;
     expect(group['strategy']['type'], 'roundRobin');
-    expect(group['selector'], hasLength(2));
+    expect(group['selector'], hasLength(34));
+    expect(config['outbounds'], hasLength(35));
     expect(config['routing']['rules'].last['balancerTag'], group['tag']);
+    await tester.enterText(find.byType(TextField).first, '{}');
+    await tester.pump();
+    expect(find.text('Configuration (JSON) · 34 balancer nodes'), findsNothing);
+  });
+
+  testWidgets('a slow subscription cannot replace a newer clipboard import', (
+    tester,
+  ) async {
+    final slow = Completer<ImportedProfile>();
+    const first = 'https://example.org/slow';
+    clipboard = first;
+    await tester.pumpWidget(MyApp(profileImporter: (input) {
+      if (input == first) return slow.future;
+      return (config: _profile, remark: 'New profile', balancedNodeCount: null);
+    }));
+    await tester.pumpAndSettle();
+    await tap(tester, 'Import (clipboard)');
+    clipboard = 'https://example.org/fast';
+    await tap(tester, 'Import (clipboard)');
+    slow.complete((config: '{}', remark: 'Old profile', balancedNodeCount: null));
+    await tester.pumpAndSettle();
+
+    final editor = tester.widget<TextField>(find.byType(TextField).first);
+    expect(editor.controller!.text, _profile);
   });
 
   for (final payload in <String, Object>{
@@ -331,6 +363,10 @@ void main() {
     await emit(tester, ['7', '2', '4', '128', '256', 'CONNECTED']);
     await tap(tester, 'VPN Diagnostics');
     expect(
+      calls.where((call) => call.method == 'getBalancerSelections'),
+      isEmpty,
+    );
+    expect(
       tester.widget<SelectableText>(find.byType(SelectableText)).data,
       'SESSION_START\nCOUNTERS_READY',
     );
@@ -371,6 +407,58 @@ void main() {
     expect(find.text('8 B/s'), findsOneWidget);
     expect(find.text('16 B/s'), findsOneWidget);
     await emit(tester, ['0', '0', '0', '0', '0', 'DISCONNECTED']);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('balancer ordinals stay separate from copied diagnostics', (
+    tester,
+  ) async {
+    var latestChoices = '1,1,1\n2,1,2';
+    messenger.setMockMethodCallHandler(methods, (call) async {
+      calls.add(call);
+      return switch (call.method) {
+        'getCapabilities' => {'optionsVersion': 1, 'balancerSelections': true},
+        'getCoreVersion' => '26.11.9',
+        'getProviderDebugSnapshot' => 'SESSION_START',
+        'getBalancerSelections' => latestChoices,
+        _ => null,
+      };
+    });
+    await tester.pumpWidget(
+      const MyApp(
+        options: VlessOptions(
+          diagnostics: DiagnosticsOptions(recordBalancerSelections: true),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await emit(tester, ['2', '0', '0', '0', '0', 'CONNECTED']);
+    await tap(tester, 'VPN Diagnostics');
+    expect(find.text('Recent balancer selections'), findsOneWidget);
+    expect(
+      find.text('#2 · Group 1 · Node 2\n#1 · Group 1 · Node 1'),
+      findsOneWidget,
+    );
+    expect(
+      tester.widget<SelectableText>(find.byType(SelectableText)).data,
+      'SESSION_START',
+    );
+    latestChoices = '2,1,2\n3,1,1';
+    await tap(tester, 'Refresh selections');
+    expect(
+      find.text('#3 · Group 1 · Node 1\n#2 · Group 1 · Node 2'),
+      findsOneWidget,
+    );
+    await emit(tester, ['0', '0', '0', '0', '0', 'DISCONNECTED']);
+    expect(find.textContaining('· Node'), findsNothing);
+    await emit(tester, ['1', '0', '0', '0', '0', 'CONNECTED']);
+    expect(find.textContaining('· Node'), findsNothing);
+    latestChoices = '1,1,2';
+    await tap(tester, 'Refresh selections');
+    expect(find.text('#1 · Group 1 · Node 2'), findsOneWidget);
+
+    await tap(tester, 'Copy');
+    expect(clipboard, 'SESSION_START');
     expect(tester.takeException(), isNull);
   });
 

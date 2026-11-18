@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 import 'package:flutter_vless/flutter_vless.dart';
+import 'package:flutter_vless/url/xray_config.dart';
+import 'package:flutter_vless/url/xray_json.dart';
 
 import 'main.dart' show runExample;
 import 'profile_import.dart';
@@ -11,6 +13,7 @@ Future<void> main() {
     defaultValue: 'roundRobin',
   );
   return runExample(
+    title: 'Flutter Vless — Balancer',
     profileImporter: (input) {
       final strategy = ExampleBalanceStrategy.values
           .where((value) => value.name == name)
@@ -20,7 +23,7 @@ Future<void> main() {
           'BALANCER_STRATEGY must be random, roundRobin, leastPing, or leastLoad.',
         );
       }
-      return importBalancerProfile(
+      return importBalancerInput(
         input,
         strategy: strategy,
         probeUrl: Uri.tryParse(
@@ -33,25 +36,74 @@ Future<void> main() {
 
 enum ExampleBalanceStrategy { random, roundRobin, leastPing, leastLoad }
 
-/// Builds a balancer from plain share links pasted one per line.
-/// Single profiles and other input formats use the standard Example importer.
-({String config, String? remark}) importBalancerProfile(
+/// Downloads a pasted HTTPS subscription or imports the clipboard payload.
+Future<ImportedProfile> importBalancerInput(
+  String input, {
+  ExampleBalanceStrategy strategy = ExampleBalanceStrategy.roundRobin,
+  Uri? probeUrl,
+  Future<List<FlutterVlessURL>> Function(Uri) fetch =
+      FlutterVless.fetchSubscription,
+}) async {
+  final text = input.trim();
+  final url = subscriptionUrl(text);
+  if (url != null) {
+    return _balanceProfiles(await fetch(url), strategy, probeUrl);
+  }
+  return importBalancerProfile(text, strategy: strategy, probeUrl: probeUrl);
+}
+
+/// Builds a balancer from separate proxies in a share-link subscription.
+/// A standalone complete JSON profile retains its original routing and DNS.
+ImportedProfile importBalancerProfile(
   String input, {
   ExampleBalanceStrategy strategy = ExampleBalanceStrategy.roundRobin,
   Uri? probeUrl,
 }) {
-  final links = const LineSplitter()
-      .convert(input)
-      .map((line) => line.trim())
-      .where((line) => line.isNotEmpty)
-      .toList();
-  if (links.length < 2 ||
-      !RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*://').hasMatch(links.first)) {
-    return importProfile(input);
+  final text = input.trim();
+  if (startsWithJsonDocument(text) && decodeXrayJson(text) is Map) {
+    return importProfile(text);
   }
-  final distinctLinks = links.toSet();
-  if (distinctLinks.length < 2) {
-    throw const FormatException('Paste at least two distinct share links.');
+  final List<FlutterVlessURL> profiles;
+  try {
+    profiles = FlutterVless.parseMany(text);
+  } catch (_) {
+    throw const FormatException(
+      'The subscription contains no usable profiles.',
+    );
+  }
+  return _balanceProfiles(profiles, strategy, probeUrl);
+}
+
+ImportedProfile _balanceProfiles(
+  List<FlutterVlessURL> profiles,
+  ExampleBalanceStrategy strategy,
+  Uri? probeUrl,
+) {
+  if (profiles.length == 1) {
+    return importedProfile(profiles.single);
+  }
+  if (profiles.isEmpty) {
+    throw const FormatException(
+      'The subscription contains no usable profiles.',
+    );
+  }
+  if (profiles.any((profile) => profile is XrayJsonConfig)) {
+    throw const FormatException(
+      'Use a share-link list to balance separate profiles with their own configuration.',
+    );
+  }
+  final proxies = <String, ProxyNode>{};
+  for (final profile in profiles) {
+    final outbound = Map<String, dynamic>.of(profile.outbound1)..remove('tag');
+    proxies.putIfAbsent(
+      jsonEncode(outbound),
+      () => ProxyNode.fromMap(outbound),
+    );
+  }
+  if (proxies.length < 2) {
+    throw const FormatException(
+      'The balancer needs at least two distinct proxies.',
+    );
   }
 
   final balance = switch (strategy) {
@@ -74,15 +126,7 @@ enum ExampleBalanceStrategy { random, roundRobin, leastPing, leastLoad }
   }
 
   final profile = XrayProfile.build((draft) {
-    final nodes = <NodeRef>[];
-    for (final (index, link) in distinctLinks.indexed) {
-      try {
-        nodes.add(draft.addNode(ProxyNode.fromLink(link)));
-      } catch (_) {
-        // Some protocol parsers attach the source link to the exception.
-        throw FormatException('Invalid share link at position ${index + 1}.');
-      }
-    }
+    final nodes = proxies.values.map(draft.addNode).toList();
     final group = draft.addGroup(
       nodes: nodes,
       strategy: balance,
@@ -109,6 +153,7 @@ enum ExampleBalanceStrategy { random, roundRobin, leastPing, leastLoad }
   });
   return (
     config: profile.toCoreJson(indent: '  '),
-    remark: 'Balancer · ${strategy.name} · ${distinctLinks.length} nodes',
+    remark: 'Balancer · ${strategy.name} · ${proxies.length} nodes',
+    balancedNodeCount: proxies.length,
   );
 }

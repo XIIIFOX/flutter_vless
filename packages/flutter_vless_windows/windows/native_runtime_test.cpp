@@ -1,6 +1,7 @@
 // Runs only child processes and private temporary files; no network settings.
 #include <winsock2.h>
 #include "native_runtime.h"
+#include "balancer_selection_protocol.h"
 #include "protected_runtime.h"
 #include "packet_path_probe.h"
 #include <aclapi.h>
@@ -15,6 +16,27 @@
 
 int main(int argc, char** argv) {
   using namespace flutter_vless::native;
+  if (argc == 3 && std::string_view(argv[1]) == "native-balancer" && std::string_view(argv[2]) == "capabilities") {
+    if (std::filesystem::exists(L"legacy-balancer-capability.fixture")) {
+      std::cout << "Unknown command: native-balancer\n";
+      return 2;
+    }
+    std::cout << R"({"stage":"capabilities","code":0,"capability":1})" << '\n';
+    return 0;
+  }
+  if (argc == 3 && std::string(argv[1]) == "child-balancer-control") {
+    std::cout << R"({"stage":"started","code":0})" << std::endl;
+    const bool malformed = std::string(argv[2]) == "malformed";
+    bool enabled = true;
+    std::string command;
+    while (std::getline(std::cin, command)) {
+      if (command == "disable") enabled = false;
+      else if (command != "snapshot") return 7;
+      const char* rows = !enabled ? "" : malformed ? "1,1,private-canary" : "1,1,2\n2,1,1";
+      std::cout << nlohmann::json{{"stage", "selections"}, {"code", 0}, {"rows", rows}}.dump() << std::endl;
+    }
+    return enabled ? 8 : 23; // The parent reads this exact child-owned EOF receipt.
+  }
   if (argc == 3 && std::string(argv[1]) == "child-parent-stdin") {
     int count = 0; auto arguments = CommandLineToArgvW(GetCommandLineW(), &count);
     if (!arguments || count != 3) return 8;
@@ -143,6 +165,38 @@ int main(int argc, char** argv) {
     } else assert(GetLastError() == ERROR_INVALID_PARAMETER);
     RemovePrivateConfig(receipt); assert(receipt.empty());
     std::cout << "WINDOWS_ROUTING_PARENT_STDIN_PASS=1\n";
+  }
+  for (const auto* fixture : {L"valid", L"malformed", L"cancelled"}) {
+    auto child = Launch(self, {L"child-balancer-control", fixture}, true, std::nullopt, true,
+        flutter_vless::balancer_selection::kPipeBufferBytes);
+    assert(child);
+    const auto rows = ReadBalancerSelections(*child, true, 1, 10,
+        [fixture] { return std::wstring_view(fixture) == L"cancelled"; }, std::chrono::seconds(3));
+    if (std::wstring_view(fixture) == L"valid") assert(rows == "2,1,1");
+    else assert(!rows);
+    DisableBalancerSelections(*child);
+    const auto pid = GetProcessId(reinterpret_cast<HANDLE>(child->hProcess));
+    const auto exited = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    assert(exited);
+    child.reset();
+    DWORD code = 0;
+    assert(GetExitCodeProcess(exited, &code) && code == 23);
+    CloseHandle(exited);
+  }
+  std::cout << "WINDOWS_BALANCER_PRIVATE_PIPE_PASS=3\n";
+  if (IsAdministrator()) {
+    ProtectedRuntime fixture;
+    assert(fixture.Create(self, false));
+    assert(BalancerCapability(fixture));
+    std::ofstream legacy(fixture.Directory() / L"legacy-balancer-capability.fixture");
+    legacy << "stock fixture";
+    legacy.close();
+    assert(legacy.good());
+    assert(!BalancerCapability(fixture));
+    std::cout << "WINDOWS_BALANCER_PROTECTED_CAPABILITIES_PASS=2\n";
+  } else {
+    assert(!BundledBalancerCapability());
+    std::cout << "WINDOWS_BALANCER_UNPRIVILEGED_CAPABILITY_PASS=1\n";
   }
   // CrossOver can run this process-only subset without Core, listeners, WFP,
   // TUN, administrator changes, system proxy or any VPN configuration.

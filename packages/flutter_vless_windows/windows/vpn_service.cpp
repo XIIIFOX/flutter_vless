@@ -1,5 +1,6 @@
 #include "vpn_service.h"
 #include "native_runtime.h"
+#include "balancer_selection_protocol.h"
 #include "diagnostics_log.h"
 #include "xray_config.h"
 #include "owned_address.h"
@@ -105,6 +106,8 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     Event("Xray configuration check rejected final VPN document; active session preserved");
     return false;
   }
+  const bool record_balancer = options.RecordsBalancerSelections() && !provenance.managed_tag.empty()
+      && native::BalancerCapability(*runtime, assets);
   if (admitted) admitted();
   if (requested_.load()) StopSession(false);
   bootstrap_cache_ = std::move(cache);
@@ -113,6 +116,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   routing_intent_ = std::move(routing); routing_provenance_ = std::move(provenance);
   xray_executable_path_ = private_runtime_->Executable(); tun2socks_executable_path_ = *tun;
   options_ = options;
+  record_balancer_selections_.store(record_balancer);
   current_config_ = *prepared; username_ = user; password_ = password;
   asset_directory_ = std::move(assets);
   socks_port_ = *managed_port;
@@ -145,6 +149,7 @@ void VpnService::StopSession(bool release) {
     std::lock_guard<std::mutex> lock(state_mutex_);
     requested_.store(false); ready_.store(false);
   }
+  DisableBalancerSelections();
   state_changed_.notify_all();
   if (vpn_thread_.joinable()) vpn_thread_.join();
   StopWorkers();
@@ -187,7 +192,10 @@ void VpnService::RunVpn(std::shared_ptr<flutter_vless::preparation::StartupCompl
       if (!xray_process_->IsRunning() || !tun2socks_process_->IsRunning()
           || !worker_candidate_ || !worker_candidate_->PacketProbe().Check(
               flutter_vless::PacketPathProbe::address, [this] { return !requested_.load(); })) break;
-      if (++ticks % 2 == 0) UpdateTrafficStats();
+      if (++ticks % 2 == 0) {
+        UpdateBalancerSelections();
+        UpdateTrafficStats();
+      } else if (!record_balancer_selections_.load()) UpdateBalancerSelections();
       std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
     ready_.store(false);
@@ -262,13 +270,26 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
       || current_identity != worker_candidate_->Identity()) return fail("Checked VPN underlay changed before launch");
   underlay_name_ = worker_candidate_->Underlay();
   underlay_luid_ = worker_candidate_->Identity();
-  const auto command = worker_candidate_->Routing()
+  const bool use_balancer_pipe = record_balancer_selections_.load();
+  const bool use_native_routing = worker_candidate_->Routing();
+  auto command = use_native_routing
       ? std::vector<std::wstring>{L"native-routing", L"run", L"--parent-stdin", L"--config", worker_candidate_->Path().wstring(),
           L"--spec", worker_candidate_->MetadataPath().wstring()}
       : std::vector<std::wstring>{L"run", L"-config", worker_candidate_->Path().wstring()};
+  if (use_balancer_pipe) {
+    command = {L"native-balancer", L"run", L"--config", worker_candidate_->Path().wstring(),
+        L"--managed-inbound", native::Wide(routing_provenance_.managed_tag),
+        L"--max-lines", std::to_wstring(options_.diagnostics_lines)};
+    if (use_native_routing) {
+      command.push_back(L"--spec");
+      command.push_back(worker_candidate_->MetadataPath().wstring());
+    }
+  }
   if (!requested_.load()) return fail("VPN startup cancelled");
-  xray_process_ = native::Launch(xray_executable_path_, command, false, asset_directory_, worker_candidate_->Routing());
+  xray_process_ = native::Launch(xray_executable_path_, command, use_balancer_pipe, asset_directory_,
+      use_balancer_pipe || use_native_routing, use_balancer_pipe ? balancer_selection::kPipeBufferBytes : 0);
   if (!xray_process_) return fail("Cannot launch the protected Xray process");
+  if (use_balancer_pipe) balancer_pipe_ = BalancerPipe::starting;
   const native::SocksReadinessBudget readiness_budget(std::chrono::milliseconds(6000), [this] { return !requested_.load(); });
   bool listening = false;
   for (int i = 0; i < 60 && readiness_budget.CanContinue() && requested_.load() && xray_process_->IsRunning(); ++i) {
@@ -378,6 +399,8 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
 }
 void VpnService::StopWorkers() {
   { std::lock_guard<std::mutex> lock(stats_mutex_); traffic_sample_ = {}; }
+  { std::lock_guard<std::mutex> lock(balancer_mutex_); balancer_selections_.clear(); }
+  balancer_pipe_ = BalancerPipe::none;
   // The separate WFP barrier remains installed, including during route removal.
   for (const auto& route : capture_routes_) DeleteIpForwardEntry2(&route);
   capture_routes_.clear();
@@ -414,4 +437,35 @@ flutter_vless::traffic::Sample VpnService::GetTrafficSample() {
 void VpnService::GetTrafficStats(int64_t& upload, int64_t& download) {
   const auto sample = GetTrafficSample();
   upload = sample.upload.value_or(0); download = sample.download.value_or(0);
+}
+
+void VpnService::UpdateBalancerSelections() {
+  if (!xray_process_ || balancer_pipe_ == BalancerPipe::none) return;
+  if (!record_balancer_selections_.load()) {
+    flutter_vless::native::DisableBalancerSelections(*xray_process_);
+    balancer_pipe_ = BalancerPipe::none;
+    return;
+  }
+  if (balancer_pipe_ == BalancerPipe::unavailable) return;
+  std::optional<std::string> rows;
+  try {
+    rows = flutter_vless::native::ReadBalancerSelections(*xray_process_, balancer_pipe_ == BalancerPipe::starting,
+        static_cast<size_t>(options_.diagnostics_lines), static_cast<size_t>(options_.diagnostics_bytes),
+        [this] { return !requested_.load(); });
+  } catch (...) {} // An optional diagnostic must not affect VPN forwarding.
+  balancer_pipe_ = rows ? BalancerPipe::active : BalancerPipe::unavailable;
+  std::lock_guard<std::mutex> lock(balancer_mutex_);
+  if (rows && record_balancer_selections_.load()) balancer_selections_ = std::move(*rows);
+  else balancer_selections_.clear();
+}
+
+std::string VpnService::GetBalancerSelections() {
+  std::lock_guard<std::mutex> lock(balancer_mutex_);
+  return ready_.load() && record_balancer_selections_.load() ? balancer_selections_ : std::string{};
+}
+
+void VpnService::DisableBalancerSelections() {
+  record_balancer_selections_.store(false);
+  std::lock_guard<std::mutex> lock(balancer_mutex_);
+  balancer_selections_.clear();
 }

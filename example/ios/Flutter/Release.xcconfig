@@ -1,5 +1,4 @@
 #include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"
 #include "Generated.xcconfig"
 
-// Keep Xcode Profile/Release builds on the normal application entrypoint.
-FLUTTER_TARGET=lib/main.dart
+// Flutter writes the selected entrypoint into Generated.xcconfig for this build.

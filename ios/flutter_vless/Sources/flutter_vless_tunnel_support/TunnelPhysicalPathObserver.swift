@@ -8,6 +8,14 @@ import Network
 public final class TunnelPhysicalPathObserver: @unchecked Sendable {
     public enum Failure: Error { case unavailable, cancelled, notStarted }
 
+    public struct TimeoutEvidence: Equatable, Sendable {
+        public let preferenceObserved: Bool
+        public let scopedObservations: Int
+        public let satisfiedObservations: Int
+        public let ownershipKnown: Bool
+        public let selectablePath: Bool
+    }
+
     private let queue = DispatchQueue(label: "dev.tfox.flutter-vless.underlay-path")
     private let excludedInterfaceIndex: @Sendable () -> UInt32?
     enum Event: Sendable {
@@ -73,7 +81,8 @@ public final class TunnelPhysicalPathObserver: @unchecked Sendable {
         }
     }
 
-    public func initialSnapshot(deadline: TimeInterval) async throws -> TunnelEndpointPath {
+    public func initialSnapshot(deadline: TimeInterval,
+                                onTimeout: (@Sendable (TimeoutEvidence) -> Void)? = nil) async throws -> TunnelEndpointPath {
         let id = UUID()
         let request = Request()
         return try await withTaskCancellationHandler {
@@ -88,7 +97,9 @@ public final class TunnelPhysicalPathObserver: @unchecked Sendable {
                     }
                     if let current { continuation.resume(returning: current); return }
                     let timer = DispatchWorkItem { [weak self] in
-                        self?.finish(id, result: .failure(Failure.unavailable))
+                        guard let self, self.waiters[id] != nil else { return }
+                        if let onTimeout { onTimeout(self.timeoutEvidence()) }
+                        self.finish(id, result: .failure(Failure.unavailable))
                     }
                     waiters[id] = Waiter(continuation: continuation, timer: timer)
                     queue.asyncAfter(deadline: .now() + (deadline - ProcessInfo.processInfo.systemUptime), execute: timer)
@@ -124,10 +135,8 @@ public final class TunnelPhysicalPathObserver: @unchecked Sendable {
     private func publish(force: Bool) {
         guard !cancelled, let preferred,
               paths.count == TunnelUnderlayPathSelection.Kind.allCases.count else { return }
-        let explicit = excludedInterfaceIndex()
-        let excluded = explicit.flatMap { $0 == 0 ? nil : Set([$0]) } ?? boundary.ownedIndexes()
         // Failure to identify our tunnel is unknown, not proof of no tunnel.
-        let choice = excluded.flatMap {
+        let choice = excludedIndexes().flatMap {
             TunnelUnderlayPathSelection.selection(preferred: preferred, scoped: paths, excluding: $0)
         }
         let selected = choice?.path
@@ -138,6 +147,20 @@ public final class TunnelPhysicalPathObserver: @unchecked Sendable {
             for id in Array(waiters.keys) { finish(id, result: .success(selected)) }
         }
         if changed || force { change?(selected) }
+    }
+
+    private func excludedIndexes() -> Set<UInt32>? {
+        excludedInterfaceIndex().flatMap { $0 == 0 ? nil : Set([$0]) } ?? boundary.ownedIndexes()
+    }
+
+    private func timeoutEvidence() -> TimeoutEvidence {
+        let excluded = excludedIndexes()
+        let selectablePath = excluded.flatMap {
+            TunnelUnderlayPathSelection.choose(preferred: preferred ?? [], scoped: paths, excluding: $0)
+        } != nil
+        return TimeoutEvidence(preferenceObserved: preferred != nil, scopedObservations: paths.count,
+            satisfiedObservations: paths.values.filter(\.satisfied).count, ownershipKnown: excluded != nil,
+            selectablePath: selectablePath)
     }
 
     private final class NetworkPaths: @unchecked Sendable {

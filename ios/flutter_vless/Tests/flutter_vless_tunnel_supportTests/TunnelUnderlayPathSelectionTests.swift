@@ -126,6 +126,30 @@ final class TunnelUnderlayPathSelectionTests: XCTestCase {
         value.cancel()
     }
 
+    func testTimeoutEvidenceSeparatesMissingMonitorFromNoSelectablePath() async {
+        let driver = Driver(), target = observer(driver)
+        target.start { _ in }
+        await fulfillment(of: [driver.installed], timeout: 1)
+        driver.initial(holding: .cellular)
+        let reported = XCTestExpectation(description: "bounded timeout evidence")
+
+        do {
+            _ = try await target.initialSnapshot(deadline: ProcessInfo.processInfo.systemUptime + 0.05, onTimeout: { evidence in
+                XCTAssertTrue(evidence.preferenceObserved)
+                XCTAssertEqual(evidence.scopedObservations, 3)
+                XCTAssertEqual(evidence.satisfiedObservations, 2)
+                XCTAssertTrue(evidence.ownershipKnown)
+                XCTAssertTrue(evidence.selectablePath)
+                reported.fulfill()
+            })
+            XCTFail("Missing scoped evidence must still fail startup")
+        } catch TunnelPhysicalPathObserver.Failure.unavailable {
+        } catch { XCTFail("Unexpected error") }
+
+        await fulfillment(of: [reported], timeout: 1)
+        target.cancel()
+    }
+
     func testCancelledWaitCannotAdoptALaterSnapshot() async {
         let driver = Driver(), target = observer(driver)
         target.start { _ in }

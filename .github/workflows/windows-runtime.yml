@@ -82,7 +82,7 @@ jobs:
         if: ${{ inputs.runtime_source != 'published' }}
         shell: pwsh
         run: |
-          python tool/build_native_routing_cli.py --output build/windows-routing-preview
+          python tool/build_native_routing_cli.py --balancer-diagnostics --output build/windows-routing-preview
           if ($LASTEXITCODE) { throw 'Optional routing runtime build failed' }
           Copy-Item build/windows-routing-preview/xray.exe build/windows-runtime/xray.exe -Force
           Copy-Item build/windows-routing-preview/result.json build/windows-runtime/native-routing-build-results.json
@@ -107,6 +107,9 @@ jobs:
           if ($log -notmatch 'WINDOWS_FINAL_CONFIG_PREFLIGHT_PASS=2') { throw 'Exact final VPN configuration preflight was not tested' }
           if ($log -notmatch 'WINDOWS_ROUTING_ADOPTION_PURE_PASS=36') { throw 'Native routing adoption controls were not tested' }
           if ($log -notmatch 'WINDOWS_ROUTING_PARENT_STDIN_PASS=1') { throw 'Owned routing parent pipe lifecycle was not tested' }
+          foreach ($marker in @('WINDOWS_BALANCER_PRIVATE_PIPE_PASS=3', 'WINDOWS_BALANCER_PROTECTED_CAPABILITIES_PASS=2')) {
+            if ([regex]::Matches($log, '(?m)^' + [regex]::Escape($marker) + '\r?$').Count -ne 1) { throw 'Private balancer pipe or executable capability proof is incomplete' }
+          }
           if ($log -notmatch 'WINDOWS_PRIVATE_PORT_ADMISSION_PURE_PASS=8') { throw 'Bounded private TCP port admission was not tested' }
           if ($log -notmatch 'WINDOWS_PRIVATE_PORT_AVAILABILITY_PASS=2') { throw 'Occupied TCP listener availability was not tested' }
           if ($log -notmatch 'WINDOWS_PACKET_PROBE_SOURCE_GUARD_PASS=4') { throw 'Actual packet-probe allocation source was not tested' }
@@ -205,7 +208,7 @@ jobs:
           Push-Location example
           flutter pub get
           if ($LASTEXITCODE) { throw 'Example dependencies failed' }
-          flutter test test/widget_test.dart
+          flutter test test/widget_test.dart test/balancer_example_test.dart test/status_controls_regression_test.dart
           if ($LASTEXITCODE) { throw 'Example diagnostics test failed' }
           Pop-Location
           Push-Location packages/flutter_vless_windows
@@ -236,7 +239,7 @@ jobs:
           Copy-Item "$($crt.FullName)/*.dll" $bundle
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-example-1.1.7-${{ matrix.os }}
+          name: windows-example-${{ matrix.os }}
           path: example/build/windows/x64/runner/Release
           retention-days: 7
 
@@ -273,6 +276,18 @@ jobs:
           if ($LASTEXITCODE) { throw 'Typed profile VPN runtime acceptance failed' }
           $log = Get-Content build/windows-runtime/typed-profile-runtime.log -Raw
           if ([regex]::Matches($log, '(?m)^WINDOWS_TYPED_PROFILE_RUNTIME_PASS=3\r?$').Count -ne 1) { throw 'Typed profile routing, DNS failover or cleanup acceptance is incomplete' }
+      - name: Exercise private balancer diagnostics, recovery and timed Stop through Wintun
+        if: ${{ inputs.validation != 'numeric-ipv6' && inputs.runtime_source != 'published' }}
+        shell: pwsh
+        run: |
+          python tool/windows/runtime_smoke.py --directory build/windows-runtime --vpn --balancer-diagnostics-only 2>&1 | Tee-Object -FilePath build/windows-runtime/balancer-diagnostics-runtime.log
+          if ($LASTEXITCODE) { throw 'Balancer diagnostics VPN runtime acceptance failed' }
+          $log = Get-Content build/windows-runtime/balancer-diagnostics-runtime.log -Raw
+          if ([regex]::Matches($log, '(?m)^WINDOWS_BALANCER_DIAGNOSTICS_RUNTIME_PASS=4\r?$').Count -ne 1) { throw 'Balancer diagnostics or teardown acceptance is incomplete' }
+          $proof = @(Get-Content build/windows-runtime/balancer-diagnostics-results.json -Raw | ConvertFrom-Json)
+          $lifecycle = $proof | Where-Object { $_.PSObject.Properties.Name -contains 'stop_ms' }
+          $recovery = $proof | Where-Object { $_.PSObject.Properties.Name -contains 'recovery_ms' }
+          "Windows Wintun start $($lifecycle.start_ms) ms, stop $($lifecycle.stop_ms) ms, recovery $($recovery.recovery_ms) ms." | Add-Content $env:GITHUB_STEP_SUMMARY
       - name: Exercise native WFP, Wintun, routing, DNS and recovery
         if: ${{ inputs.validation != 'numeric-ipv6' && inputs.validation != 'typed-profile' }}
         shell: pwsh

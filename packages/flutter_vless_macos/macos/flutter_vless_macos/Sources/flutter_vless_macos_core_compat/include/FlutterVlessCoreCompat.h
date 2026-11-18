@@ -16,4 +16,9 @@ FOUNDATION_EXPORT int64_t FLVlessCoreXdriveLifetimeCapability(void);
 FOUNDATION_EXPORT int64_t FLVlessCheckCoreRoutingPrivate(NSData * _Nullable configuration, NSData * _Nullable specification);
 FOUNDATION_EXPORT BOOL FLVlessStartCoreRoutingPrivate(NSData * _Nullable configuration, NSData * _Nullable specification,
                                                     id<XRayLogger> _Nullable logger, NSError * _Nullable * _Nullable error);
+FOUNDATION_EXPORT BOOL FLVlessHasCoreBalancerDiagnostics(void);
+FOUNDATION_EXPORT BOOL FLVlessStartCoreBalancerDiagnostics(NSData *configuration, NSData * _Nullable specification,
+                                                          NSString *managedInbound, int64_t maxLines,
+                                                          id<XRayLogger> _Nullable logger, NSError * _Nullable * _Nullable error);
+FOUNDATION_EXPORT NSString *FLVlessReadCoreBalancerDiagnostics(void);
 NS_ASSUME_NONNULL_END

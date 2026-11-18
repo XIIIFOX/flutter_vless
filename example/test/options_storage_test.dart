@@ -15,7 +15,8 @@ void main() {
       quickAccess: QuickAccessOptions(enabled: true, label: 'Saved VPN'),
       reconnect: ReconnectOptions(maxAttempts: 3),
       protection: ProtectionOptions(onDemand: OnDemandMode.disabled),
-      diagnostics: DiagnosticsOptions(maxBytes: 4096, maxLines: 7));
+      diagnostics: DiagnosticsOptions(
+          maxBytes: 4096, maxLines: 7, recordBalancerSelections: true));
   test(
       'all five blocks survive a fresh preferences instance without configuration data',
       () async {

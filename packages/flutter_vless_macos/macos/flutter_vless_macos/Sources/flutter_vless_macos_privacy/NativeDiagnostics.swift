@@ -82,3 +82,31 @@ public enum NativeLogPrivacy {
         try? FileManager.default.removeItem(at: directory.appendingPathComponent("flutter_vless_tunnel_debug.log"))
     }
 }
+
+/// Separate provider IPC for connection choices. Only ordinals can enter the reply.
+public enum PrivateBalancerDiagnostics {
+    public static let snapshotCommand = "xray_balancer_selections_v1"
+
+    public static func snapshot(_ data: Data, maxBytes: Int, maxLines: Int) -> String {
+        guard maxLines > 0, maxBytes > 0, data.count <= 18_000,
+              let value = String(data: data, encoding: .utf8) else { return "" }
+        let payload = value.last == "\n" ? value.dropLast() : value[...]
+        let rows = payload.split(separator: "\n", omittingEmptySubsequences: false)
+        guard rows.count <= 300 else { return "" }
+        var previous: UInt64 = 0
+        for row in rows {
+            let fields = row.split(separator: ",", omittingEmptySubsequences: false)
+            guard fields.count == 3, fields.allSatisfy({ field in
+                !field.isEmpty && field.utf8.first != 48 && field.utf8.allSatisfy { (48...57).contains($0) }
+                    && UInt64(field).map { $0 <= UInt64(Int64.max) } == true
+            }), let sequence = UInt64(fields[0]), sequence > previous else { return "" }
+            previous = sequence
+        }
+        var remaining = min(maxBytes, 18_000) + 1
+        let bounded = rows.suffix(maxLines).reversed().prefix { row in
+            remaining -= row.utf8.count + 1
+            return remaining >= 0
+        }
+        return bounded.reversed().joined(separator: "\n")
+    }
+}

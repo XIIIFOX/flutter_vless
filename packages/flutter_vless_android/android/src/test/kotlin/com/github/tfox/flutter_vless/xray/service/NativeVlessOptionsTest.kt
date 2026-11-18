@@ -11,7 +11,15 @@ class NativeVlessOptionsTest {
         assertFalse(o.quickAccess.enabled); assertTrue(o.reconnect.enabled)
         assertEquals("required",o.protection.killSwitch); assertEquals("system",o.protection.alwaysOn)
         assertEquals("DISCONNECT",o.notification.buttonLabel); assertTrue(o.diagnostics.enabled)
+        assertFalse(o.diagnostics.collectsBalancerSelections)
         o.validateAndroid(23)
+    }
+    @Test fun balancerTelemetryRequiresBothOptions() {
+        assertTrue(parse("diagnostics", "recordBalancerSelections", true).diagnostics.collectsBalancerSelections)
+        val disabled = NativeVlessOptions.parse(mapOf("diagnostics" to mapOf(
+            "enabled" to false, "recordBalancerSelections" to true)))
+        assertFalse(disabled.diagnostics.collectsBalancerSelections)
+        rejects { parse("diagnostics", "recordBalancerSelections", "true") }
     }
     @Test fun allBlocksDecodeNativeWireValues() {
         val o = NativeVlessOptions.parse(mapOf("version" to 1,

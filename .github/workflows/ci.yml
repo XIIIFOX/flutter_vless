@@ -737,7 +737,7 @@ jobs:
       - name: Build unpublished macOS Core preview
         if: ${{ inputs.apple_runtime_source != 'published' }}
         run: |
-          tool/build_apple_core_preview.sh macos build/apple-core-preview/macos --vpn-routing
+          tool/build_apple_core_preview.sh macos build/apple-core-preview/macos --vpn-routing --balancer-diagnostics
           rm -rf packages/flutter_vless_macos/macos/XRay.xcframework
           cp -R build/apple-core-preview/macos/XRay.xcframework packages/flutter_vless_macos/macos/XRay.xcframework
       - name: Build example macOS app
@@ -752,9 +752,11 @@ jobs:
         env:
           EXPECTED_XRAY_CORE_VERSION: ${{ inputs.apple_runtime_source != 'published' && '26.11.9' || '' }}
           REQUIRE_MANAGED_SERVICE_LIFETIMES: ${{ inputs.apple_runtime_source == 'published' && '1' || '0' }}
+          REQUIRE_BALANCER_DIAGNOSTICS: ${{ inputs.apple_runtime_source != 'published' && '1' || '0' }}
         run: |
           bash tool/test_macos_tunnel_support.sh
           bash tool/test_macos_manager_policy.sh
+          python3 tool/test_macos_startup_timing.py
           REQUIRE_CORE_PREFLIGHT=1 REQUIRE_VPN_ROUTING=1 REQUIRE_DARWIN_INTERFACE_BINDING=1 bash tool/test_macos_privacy_runtime.sh
           HEV=ios/flutter_vless/.build/artifacts/tun2sockskit/HevSocks5Tunnel/HevSocks5Tunnel.xcframework
           bash tool/test_macos_packet_bridge.sh "$HEV/macos-arm64_x86_64"
@@ -795,6 +797,8 @@ jobs:
             build/macos_privacy_runtime_probe/runtime.log
             build/ios_packet_bridge_probe/runtime.log
             build/macos_packet_bridge_probe/runtime.log
+            build/macos-startup-timing-current/result.json
+            build/macos-startup-timing-current/*.log
             build/published_apple_runtime/**/*.json
 
   windows:

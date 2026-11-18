@@ -117,13 +117,19 @@ struct TunnelPreparedConfig {
     var data = Data("{}".utf8)
     var bootstrapAddresses = Kernel.preparedAddresses
     let routingEnvelope: Envelope? = nil
+    let managedInboundTag: String? = nil
     var endpointPath: TunnelEndpointPath?
     var endpointSelections: [TunnelEndpointSelection] = []
 }
 final class TunnelPhysicalPathObserver {
+    struct TimeoutEvidence {
+        let preferenceObserved = true, ownershipKnown = true, selectablePath = true
+        let scopedObservations = 4, satisfiedObservations = 1
+    }
     var onChange: ((TunnelEndpointPath?) -> Void)?
     func start(onChange: @escaping (TunnelEndpointPath?) -> Void) { self.onChange = onChange }
-    func initialSnapshot(deadline: TimeInterval) async throws -> TunnelEndpointPath { TunnelEndpointPath() }
+    func initialSnapshot(deadline: TimeInterval,
+                         onTimeout: ((TimeoutEvidence) -> Void)? = nil) async throws -> TunnelEndpointPath { TunnelEndpointPath() }
     func cancel() {}
 }
 enum TunnelSecretProfile { static func load(_ data: [String: Any], providerBundleIdentifier: String) throws -> Data { Data("{}".utf8) } }
@@ -356,7 +362,10 @@ final class Provider {
     var recoveryFailures = 0, nativeOptions = try! VlessNativeOptions()
     var nativeRuntimeEpoch: TunnelSessionAdmission.Epoch?, nativeRuntimeToken: TunnelEndpointPlanAdmission.Token?
     enum EndpointTransitionFailure: Error { case drainPending }
-    func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data?) throws { Kernel.record("Core-start"); Kernel.recordCore(xrayConfig) }
+    func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data?,
+                   options: VlessNativeOptions? = nil, managedInboundTag: String? = nil) throws {
+        Kernel.record("Core-start"); Kernel.recordCore(xrayConfig)
+    }
     func startSocks5Tunnel(serverPort: Int, credentials: LocalProxyCredentials, epoch: TunnelSessionAdmission.Epoch, token: TunnelEndpointPlanAdmission.Token) throws { Kernel.record("HEV-start"); Kernel.onHEVStart?() }
     func performTunnelHealthCheck(trigger: String, epoch: TunnelSessionAdmission.Epoch) -> Bool {
         Kernel.record("health-" + trigger)

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 import zipfile
 
 import package_managed_runtime as subject
@@ -44,13 +44,18 @@ class Packaging(unittest.TestCase):
         self.producer = self.root/'producer.json'
         self.producer.write_text(json.dumps(self.report))
         self.capability = {'stage':'capabilities','code':0,'managed_service_lifetimes':7}
+        self.balancer_capability = {'stage':'capabilities','code':0,'capability':1}
 
     def package(self):
         self.producer.write_text(json.dumps(self.report))
-        with patch.object(subject, 'git_bindings') as binding, patch.object(subject, 'capabilities', return_value=self.capability) as probe:
+        with patch.object(subject, 'git_bindings') as binding, patch.object(
+                subject, 'capabilities', side_effect=[self.capability, self.balancer_capability]) as probe:
             value = subject.package(self.runtime, self.producer, self.output, 'b'*40, self.root)
             self.assertEqual(binding.call_count, 2)
-            probe.assert_called_once_with(self.runtime/'xray.exe')
+            expected = [call(self.runtime/'xray.exe')]
+            if self.report['tags'] == subject.BALANCER_TAGS:
+                expected.append(call(self.runtime/'xray.exe', 'native-balancer'))
+            self.assertEqual(probe.call_args_list, expected)
             return value
 
     def test_exact_core_and_full_geodata_archive(self):
@@ -71,6 +76,27 @@ class Packaging(unittest.TestCase):
     def test_old_core_producer_cannot_be_relabelled(self):
         self.report['core_commit'] = 'a4a3dff5b20c2faae567b742c172c7b95e75c083'
         with self.assertRaisesRegex(ValueError, 'release Core commit'):
+            self.package()
+        self.assertFalse(self.output.exists())
+
+    def test_balancer_candidate_has_separate_revision_and_verified_capability(self):
+        self.report.update(tags=subject.BALANCER_TAGS, balancer_diagnostics_capability_expected=1)
+        self.report['input_sha256'].update(dict.fromkeys(subject.BALANCER_INPUTS, 'b'*64))
+        value = self.package()
+        self.assertEqual(value['runtime_revision'], '26.11.9-r2')
+        self.assertEqual(value['balancer_diagnostics_capabilities'], self.balancer_capability)
+        self.assertFalse(value['published'])
+
+    def test_balancer_candidate_requires_provenance_and_exact_claim(self):
+        self.report['balancer_diagnostics_capability_expected'] = 1
+        with self.assertRaisesRegex(ValueError, 'Ordinary producer'):
+            self.package()
+        self.report['tags'] = subject.BALANCER_TAGS
+        with self.assertRaisesRegex(ValueError, 'Incomplete balancer'):
+            self.package()
+        self.report['input_sha256'].update(dict.fromkeys(subject.BALANCER_INPUTS, 'b'*64))
+        self.report['balancer_diagnostics_capability_expected'] = True
+        with self.assertRaisesRegex(ValueError, 'Incomplete balancer'):
             self.package()
         self.assertFalse(self.output.exists())
 
@@ -99,6 +125,19 @@ class Packaging(unittest.TestCase):
             with self.subTest(payload=payload[:50]), patch.object(subject.sys, 'platform', 'win32'), patch.object(subject.subprocess, 'run', return_value=CompletedProcess([],0,payload,b'')) as child:
                 with self.assertRaises(ValueError): subject.capabilities(self.runtime/'xray.exe')
                 self.assertEqual(child.call_args.kwargs['timeout'], 10)
+
+    def test_balancer_capability_requires_exact_private_abi(self):
+        from subprocess import CompletedProcess
+        for entry in (True, 0, 1):
+            payload = json.dumps(dict(stage='capabilities', code=0, capability=entry)).encode()
+            with self.subTest(entry=entry), patch.object(subject.sys, 'platform', 'win32'), patch.object(
+                    subject.subprocess, 'run', return_value=CompletedProcess([], 0, payload, b'')) as child:
+                if type(entry) is int and entry == 1:
+                    self.assertEqual(subject.capabilities(self.runtime/'xray.exe', 'native-balancer')['capability'], 1)
+                else:
+                    with self.assertRaises(ValueError):
+                        subject.capabilities(self.runtime/'xray.exe', 'native-balancer')
+                self.assertEqual(child.call_args.args[0][1:], ['native-balancer', 'capabilities'])
 
 
 if __name__ == '__main__': unittest.main()

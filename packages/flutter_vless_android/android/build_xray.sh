@@ -7,9 +7,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 XRAY_VERSION="${XRAY_VERSION:-v26.11.9}"
 XRAY_NATIVE_ROUTING="${XRAY_NATIVE_ROUTING:-0}"
+export XRAY_BALANCER_DIAGNOSTICS="${XRAY_BALANCER_DIAGNOSTICS:-0}"
 case "$XRAY_NATIVE_ROUTING" in 0|1) ;; *) echo 'XRAY_NATIVE_ROUTING must be 0 or 1' >&2; exit 2 ;; esac
+case "$XRAY_BALANCER_DIAGNOSTICS" in 0|1) ;; *) echo 'XRAY_BALANCER_DIAGNOSTICS must be 0 or 1' >&2; exit 2 ;; esac
 if [ "$XRAY_NATIVE_ROUTING" = 1 ] && [ -z "${TARGET_DIR:-}" ]; then
     echo 'The optional routing build requires an explicit TARGET_DIR' >&2
+    exit 2
+fi
+if [ "$XRAY_BALANCER_DIAGNOSTICS" = 1 ] && [ -z "${TARGET_DIR:-}" ]; then
+    echo 'The optional balancer diagnostics build requires an explicit TARGET_DIR' >&2
     exit 2
 fi
 TARGET_DIR="${TARGET_DIR:-../../../android_runtime/xray_android/src/main/jniLibs}"
@@ -45,6 +51,7 @@ fi
 
 # Never patch a developer checkout or the shared Go module cache.
 BUILD_FLAGS=()
+BALANCER_TAGS='flutter_vless_balancer_diagnostics_cli,flutter_vless_balancer_diagnostics'
 if [ "$XRAY_NATIVE_ROUTING" = 1 ]; then
     unset GOFLAGS
     export GOTOOLCHAIN=local GOWORK=off
@@ -53,12 +60,15 @@ if [ "$XRAY_NATIVE_ROUTING" = 1 ]; then
     ROUTING_WORK="$(cd "$ROUTING_WORK" && pwd)"
     SOURCE_DIR="$ROUTING_WORK/Core"
     ROUTING_TAGS='flutter_vless_vpn_routing_cli,flutter_vless_vpn_routing,flutter_vless_managed_service_lifetimes'
+    if [ "$XRAY_BALANCER_DIAGNOSTICS" = 1 ]; then ROUTING_TAGS="$ROUTING_TAGS,$BALANCER_TAGS"; fi
     BUILD_FLAGS=(-mod=readonly "-tags=$ROUTING_TAGS")
     python3 - "$SCRIPT_DIR/../../.." "$ROUTING_WORK" "$ROUTING_TAGS" "$TARGET_DIR" <<'PY'
 from pathlib import Path
 import hashlib, importlib.util, json, os, re, shutil, subprocess, sys
 root, work, tags, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]).resolve()
 mobile, capability, protect = root/'third_party/xray-mobile', root/'third_party/xray-vpn-routing', root/'packages/flutter_vless_android/android/xray-protect'
+balancer = root/'third_party/xray-balancer-diagnostics'
+with_balancer = os.environ['XRAY_BALANCER_DIAGNOSTICS'] == '1'
 manifest = json.loads((capability/'pin-manifest.json').read_text())
 module, version, checksum = (manifest[k] for k in ('module', 'module_version', 'module_sum'))
 mobile_module = 'github.com/EbrahimTahernejad/xray-mobile'
@@ -72,7 +82,7 @@ source = Path(metadata['Dir']).resolve()
 cache_path = subprocess.check_output(['go','env','GOMODCACHE'], cwd=mobile, text=True, timeout=30).strip()
 if not cache_path or not Path(cache_path).is_absolute(): raise SystemExit('Cannot determine the Go module cache')
 cache_root = Path(cache_path).resolve()
-for protected in [cache_root, source, mobile, capability, protect]:
+for protected in [cache_root, source, mobile, capability, protect, balancer]:
     protected = protected.resolve()
     if output == protected or protected in output.parents:
         raise SystemExit('Routing output must be outside build inputs and the Go module cache')
@@ -91,6 +101,8 @@ def tree(path):
 paths = [root/'packages/flutter_vless_android/android/build_xray.sh', mobile/'go.mod', mobile/'go.sum', capability/'apply.py', capability/'pin-manifest.json']
 paths += sorted(mobile.glob('*.go')) + sorted((mobile/'nativecli').rglob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
 paths += sorted(protect.glob('*.py')) + sorted(protect.glob('*.go'))
+if with_balancer:
+    paths += [balancer/'apply.py', *sorted((balancer/'overlay').rglob('*.go'))]
 classic = root/'third_party/xray-native-dns'
 paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','xhttp_listener_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
 paths += sorted((classic/'overlay/transport/internet/xdrive').glob('*_test.go')) + sorted((classic/'overlay/app/geodata').glob('native_*.go')) + sorted((classic/'overlay/core').glob('native_managed_lifetime_test.go'))
@@ -102,6 +114,10 @@ applier = importlib.util.module_from_spec(spec); spec.loader.exec_module(applier
 core = applier.copy_and_apply(source, work/'Core')
 # Protection's pinned replacements must compose before any module-file edits.
 subprocess.run([sys.executable, str(protect/'apply.py'), str(core)], check=True, timeout=30)
+if with_balancer:
+    spec = importlib.util.spec_from_file_location('android_balancer_applier', balancer/'apply.py')
+    diagnostics = importlib.util.module_from_spec(spec); spec.loader.exec_module(diagnostics)
+    diagnostics.apply(source, core, routing=True, cli=True)
 copied = work/'mobile'; copied.mkdir()
 for path in [mobile/'go.mod', mobile/'go.sum', *sorted(mobile.glob('*.go'))]: shutil.copyfile(path, copied/path.name)
 shutil.copytree(mobile/'nativecli', copied/'nativecli')
@@ -130,7 +146,7 @@ state = {'success':False, 'core_module':module, 'core':version, 'core_sum':check
          'output_directory':str(output), 'core_replacement':str(core), 'mobile_replacement':str(copied),
          'source_sha256':before, 'module_cache_before_sha256':cache_before, 'core_copy_sha256':tree(core), 'mobile_copy_sha256':tree(copied),
          'routing_tags':tags.split(','), 'selected_abis':selected_abis, 'protection_overlay':'ordinary H/P/D',
-         'routing_capability_expected':1, 'classic_dns_lifetime_applied':True,
+         'routing_capability_expected':1, 'balancer_diagnostics_capability_expected': int(with_balancer), 'classic_dns_lifetime_applied':True,
          'h3_lifetime_applied':True, 'xdrive_lifetime_applied':True, 'geodata_lifetime_applied':True, 'lifetime_patch_scope':['classic_dns','xhttp_h3_dial','xdrive_services','geodata_updater','xhttp_h2_listener_cleanup'],
          'h3_lifetime_patch_sha256':before['third_party/xray-native-dns/h3_lifetime_patch.py'],
          'xdrive_lifetime_patch_sha256':before['third_party/xray-native-dns/xdrive_lifetime_patch.py'],
@@ -144,15 +160,22 @@ state = {'success':False, 'core_module':module, 'core':version, 'core_sum':check
 (work/'inputs.json').write_text(json.dumps(state,indent=2)+'\n')
 PY
 else
+if [ "$XRAY_BALANCER_DIAGNOSTICS" = 1 ]; then
+    unset GOFLAGS
+    export GOWORK=off
+    BUILD_FLAGS=(-mod=readonly "-tags=$BALANCER_TAGS")
+fi
 mkdir -p "$SCRIPT_DIR/../../../build"
 ROUTING_WORK="$(mktemp -d "$SCRIPT_DIR/../../../build/security-android-classic.XXXXXXXX")"
 ROUTING_WORK="$(cd "$ROUTING_WORK" && pwd)"
 SOURCE_DIR="$ROUTING_WORK/Core"
-python3 - "$SCRIPT_DIR/../../.." "$ROUTING_WORK" "$TARGET_DIR" <<'PYCLASSIC'
+python3 - "$SCRIPT_DIR/../../.." "$ROUTING_WORK" "$TARGET_DIR" "$BALANCER_TAGS" <<'PYCLASSIC'
 from pathlib import Path
-import hashlib, importlib.util, json, os, subprocess, sys
-root, work, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]), Path(sys.argv[3]).resolve()
+import hashlib, importlib.util, json, os, shutil, subprocess, sys
+root, work, output, tags = Path(sys.argv[1]).resolve(), Path(sys.argv[2]), Path(sys.argv[3]).resolve(), sys.argv[4]
 mobile, capability, protect = root/'third_party/xray-mobile', root/'third_party/xray-vpn-routing', root/'packages/flutter_vless_android/android/xray-protect'
+balancer = root/'third_party/xray-balancer-diagnostics'
+with_balancer = os.environ['XRAY_BALANCER_DIAGNOSTICS'] == '1'
 manifest = json.loads((capability/'pin-manifest.json').read_text())
 module, version, checksum = (manifest[k] for k in ('module','module_version','module_sum'))
 metadata = json.loads(subprocess.check_output(['go','mod','download','-json',module+'@'+version],cwd=mobile,text=True,timeout=180))
@@ -171,6 +194,8 @@ def tree(path):
 paths=[root/'packages/flutter_vless_android/android/build_xray.sh',mobile/'go.mod',mobile/'go.sum',capability/'apply.py',capability/'pin-manifest.json']
 paths += sorted(mobile.glob('*.go')) + sorted((mobile/'nativecli').rglob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
 paths += sorted(protect.glob('*.py')) + sorted(protect.glob('*.go'))
+if with_balancer:
+    paths += [balancer/'apply.py', *sorted((balancer/'overlay').rglob('*.go'))]
 classic=root/'third_party/xray-native-dns'
 paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','xhttp_listener_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
 paths += sorted((classic/'overlay/transport/internet/xdrive').glob('*_test.go')) + sorted((classic/'overlay/app/geodata').glob('native_*.go')) + sorted((classic/'overlay/core').glob('native_managed_lifetime_test.go'))
@@ -180,6 +205,21 @@ spec=importlib.util.spec_from_file_location('ordinary_classic_applier',capabilit
 applier=importlib.util.module_from_spec(spec);spec.loader.exec_module(applier)
 core=applier.copy_and_apply_lifetimes(source,work/'Core',caches=[cache],routing=False)
 subprocess.run([sys.executable,str(protect/'apply.py'),str(core)],check=True,timeout=30)
+mobile_hashes = None
+if with_balancer:
+    spec = importlib.util.spec_from_file_location('android_balancer_applier', balancer/'apply.py')
+    diagnostics = importlib.util.module_from_spec(spec); spec.loader.exec_module(diagnostics)
+    diagnostics.apply(source, core, routing=False, cli=True)
+    copied = work/'mobile'; copied.mkdir()
+    for path in [mobile/'go.mod', mobile/'go.sum', *sorted(mobile.glob('*.go'))]:
+        shutil.copyfile(path, copied/path.name)
+    tree(mobile/'nativecli')
+    shutil.copytree(mobile/'nativecli', copied/'nativecli')
+    mobile_module = 'github.com/EbrahimTahernejad/xray-mobile'
+    subprocess.run(['go','mod','edit','-require='+mobile_module+'@v0.0.0','-replace='+mobile_module+'='+str(copied)],cwd=core,check=True,timeout=30)
+    subprocess.run(['go','mod','edit','-replace='+module+'='+str(core)],cwd=copied,check=True,timeout=30)
+    subprocess.run(['go','list','-mod=readonly','-tags='+tags,'-deps','./main'],cwd=core,stdout=subprocess.DEVNULL,check=True,timeout=180)
+    mobile_hashes = tree(copied)
 abis=[arch for arch,key in [('arm64-v8a','XRAY_BUILD_ARM64'),('armeabi-v7a','XRAY_BUILD_ARMV7'),('x86','XRAY_BUILD_X86'),('x86_64','XRAY_BUILD_X86_64')] if os.environ.get(key,'1')=='1']
 if not abis: raise SystemExit('Classic build requires an ABI')
 for arch in abis:
@@ -188,8 +228,8 @@ for arch in abis:
             raise SystemExit('Classic ABI output must remain within the admitted output directory without symlinks')
 state={'success':False,'core_module':module,'core':version,'core_sum':checksum,'core_commit':manifest['core_commit'],
        'core_source':str(source),'source_sha256':before,'module_cache_before_sha256':cache_before,
-       'core_copy_sha256':tree(core),'mobile_copy_sha256':None,'selected_abis':abis,
-       'classic_dns_lifetime_applied':True,'routing_capability_expected':0,
+       'core_copy_sha256':tree(core),'mobile_copy_sha256':mobile_hashes,'selected_abis':abis,
+       'classic_dns_lifetime_applied':True,'routing_capability_expected':0,'balancer_diagnostics_capability_expected':int(with_balancer),
        'h3_lifetime_applied':True, 'xdrive_lifetime_applied':True, 'geodata_lifetime_applied':True,'lifetime_patch_scope':['classic_dns','xhttp_h3_dial','xdrive_services','geodata_updater','xhttp_h2_listener_cleanup'],
        'h3_lifetime_patch_sha256':before['third_party/xray-native-dns/h3_lifetime_patch.py'],
          'xdrive_lifetime_patch_sha256':before['third_party/xray-native-dns/xdrive_lifetime_patch.py'],
@@ -291,6 +331,9 @@ mobile, capability, protect = root/'third_party/xray-mobile', root/'third_party/
 paths = [root/'packages/flutter_vless_android/android/build_xray.sh', mobile/'go.mod', mobile/'go.sum', capability/'apply.py', capability/'pin-manifest.json']
 paths += sorted(mobile.glob('*.go')) + sorted((mobile/'nativecli').rglob('*.go')) + sorted((capability/'overlay').rglob('*.go'))
 paths += sorted(protect.glob('*.py')) + sorted(protect.glob('*.go'))
+if state['balancer_diagnostics_capability_expected']:
+    balancer = root/'third_party/xray-balancer-diagnostics'
+    paths += [balancer/'apply.py', *sorted((balancer/'overlay').rglob('*.go'))]
 classic = root/'third_party/xray-native-dns'
 paths += [classic/name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','xhttp_listener_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go')]
 paths += sorted((classic/'overlay/transport/internet/xdrive').glob('*_test.go')) + sorted((classic/'overlay/app/geodata').glob('native_*.go')) + sorted((classic/'overlay/core').glob('native_managed_lifetime_test.go'))

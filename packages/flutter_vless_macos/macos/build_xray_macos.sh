@@ -8,6 +8,12 @@ XRAY_CORE_REF="${XRAY_CORE_REF:-$(python3 -c 'import json,sys; print(json.load(o
 XRAY_MACOS_DEPLOYMENT_TARGET="${XRAY_MACOS_DEPLOYMENT_TARGET:-13.0}"
 BUILD_DIR="${BUILD_DIR:-$REPO_ROOT/build/xray_macos}"
 OUTPUT_XCFRAMEWORK="${OUTPUT_XCFRAMEWORK:-$SCRIPT_DIR/XRay.xcframework}"
+PREPARATION_FLAGS=(--vpn-routing)
+BIND_TAGS=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding,flutter_vless_managed_service_lifetimes
+if [ "${XRAY_BALANCER_DIAGNOSTICS:-0}" = "1" ]; then
+    PREPARATION_FLAGS+=(--balancer-diagnostics)
+    BIND_TAGS+=,flutter_vless_balancer_diagnostics
+fi
 export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.3}"
 
 export MACOSX_DEPLOYMENT_TARGET="$XRAY_MACOS_DEPLOYMENT_TARGET"
@@ -55,7 +61,7 @@ echo "Using vendored xray-mobile source from $XRAY_MOBILE_DIR"
 # Xray-core uses calendar release tags but keeps the original module path.
 go get "github.com/xtls/xray-core@$XRAY_CORE_REF"
 python3 "$REPO_ROOT/tool/prepare_apple_classic_core.py" \
-    --mobile "$PWD" --destination "$PWD/../Core-classic" --go "$(command -v go)" --vpn-routing
+    --mobile "$PWD" --destination "$PWD/../Core-classic" --go "$(command -v go)" "${PREPARATION_FLAGS[@]}"
 MOBILE_VERSION="$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
 go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
 mkdir -p "$BUILD_DIR/tools"
@@ -113,10 +119,10 @@ echo "H2BUF: building with $(go version) from patched GOROOT clone"
 
 # Verify our file compiles before proceeding
 echo "Verifying Go compilation..."
-go build -tags=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding,flutter_vless_managed_service_lifetimes ./... && echo "Go build OK" || { echo "ERROR: Go build failed"; exit 1; }
+go build "-tags=$BIND_TAGS" ./... && echo "Go build OK" || { echo "ERROR: Go build failed"; exit 1; }
 
 gomobile bind \
-    -tags=flutter_vless_vpn_routing,flutter_vless_darwin_interface_binding,flutter_vless_managed_service_lifetimes \
+    "-tags=$BIND_TAGS" \
     -a \
     -ldflags="-s -w -extldflags -lresolv" \
     -target=macos \

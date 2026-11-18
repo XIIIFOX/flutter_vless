@@ -169,6 +169,32 @@ class XrayVPNService : VpnService() {
             }
             return if (recovery.authorized) START_STICKY else START_NOT_STICKY
         }
+        if (intent?.action == ACTION_BALANCER_SELECTIONS || intent?.action == ACTION_DISABLE_BALANCER_SELECTIONS) {
+            @Suppress("DEPRECATION")
+            val receiver = intent.getParcelableExtra<ResultReceiver>("receiver")
+            worker.execute {
+                if (intent.action == ACTION_DISABLE_BALANCER_SELECTIONS) {
+                    val disabled = XrayCoreManager.disableBalancerSelections()
+                    if (disabled) sessionOptions = sessionOptions.copy(diagnostics =
+                        sessionOptions.diagnostics.copy(recordBalancerSelections = false))
+                    receiver?.send(if (disabled) 0 else 1, Bundle())
+                } else {
+                    val owner = recovery.generation
+                    val selected = runCatching {
+                        check(recovery.owns(owner) && sessionOptions.diagnostics.collectsBalancerSelections &&
+                            AppConfigs.V2RAY_STATE == AppConfigs.V2RAY_STATES.V2RAY_CONNECTED)
+                        val options = NativeOptionsStore(this).read().diagnostics
+                        if (options.collectsBalancerSelections) XrayCoreManager.balancerSelections(options.maxLines, options.maxBytes)
+                        else ""
+                    }.getOrDefault("")
+                    receiver?.send(0, Bundle().apply {
+                        putString("rows", selected.takeIf { recovery.owns(owner) }.orEmpty())
+                    })
+                }
+                if (requests.get() == 0L && !recovery.authorized) stopSelfResult(startId)
+            }
+            return if (recovery.authorized) START_STICKY else START_NOT_STICKY
+        }
         if (intent?.action == ACTION_MEASURE_DELAY) {
             @Suppress("DEPRECATION")
             val receiver = intent.getParcelableExtra<ResultReceiver>("receiver")
@@ -469,8 +495,13 @@ class XrayVPNService : VpnService() {
             val runtime = candidate.configuration
             readinessProbe = candidate.takeProbe()
             candidate.close(); candidate = null
+            val diagnosticLines = sessionOptions.diagnostics.takeIf { it.collectsBalancerSelections }?.let { session ->
+                runCatching { NativeOptionsStore(this).read().diagnostics }.getOrNull()
+                    ?.takeIf { it.collectsBalancerSelections }?.let { minOf(it.maxLines, session.maxLines) }
+            }
             val started = XrayCoreManager.startCore(this, current, runtime, protector, owner,
-                admitStart = if (quick == null) null else { launch -> launchQuickStart(quick, owner, launch) }) { generation, code ->
+                admitStart = if (quick == null) null else { launch -> launchQuickStart(quick, owner, launch) },
+                balancerMaxLines = diagnosticLines) { generation, code ->
                 worker.execute { if (recovery.owns(generation)) { event(Event.WORKER_EXIT, code.toLong()); recover(Event.WORKER_EXIT) } }
             }
             if (!started) {
@@ -783,6 +814,8 @@ class XrayVPNService : VpnService() {
         const val ACTION_CLEAR_QUICK_ACCESS = "com.github.tfox.flutter_vless.CLEAR_QUICK_ACCESS"
         const val ACTION_QUICK_ACCESS_TOGGLE = "com.github.tfox.flutter_vless.QUICK_ACCESS_TOGGLE"
         const val ACTION_MEASURE_DELAY = "com.github.tfox.flutter_vless.MEASURE_DELAY"
+        internal const val ACTION_BALANCER_SELECTIONS = "com.github.tfox.flutter_vless.BALANCER_SELECTIONS"
+        internal const val ACTION_DISABLE_BALANCER_SELECTIONS = "com.github.tfox.flutter_vless.DISABLE_BALANCER_SELECTIONS"
         private const val DEFAULT_DELAY_URL = "https://www.gstatic.com/generate_204"
     }
 }

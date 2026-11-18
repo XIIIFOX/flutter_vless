@@ -10,20 +10,25 @@ import 'vpn_routing.dart';
 
 Future<void> main() => runExample();
 
-Future<void> runExample({ProfileImporter profileImporter = importProfile}) async {
+Future<void> runExample({
+  ProfileImporter profileImporter = importClipboardProfile,
+  String title = 'Flutter Vless — Example',
+}) async {
   WidgetsFlutterBinding.ensureInitialized();
   final options = await ExampleOptionsStorage.load();
-  runApp(MyApp(options: options, profileImporter: profileImporter));
+  runApp(MyApp(options: options, profileImporter: profileImporter, title: title));
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({
     super.key,
     this.options = const VlessOptions(),
-    this.profileImporter = importProfile,
+    this.profileImporter = importClipboardProfile,
+    this.title = 'Flutter Vless — Example',
   });
   final VlessOptions options;
   final ProfileImporter profileImporter;
+  final String title;
 
   @override
   Widget build(BuildContext context) {
@@ -40,7 +45,11 @@ class MyApp extends StatelessWidget {
           border: OutlineInputBorder(),
         ),
       ),
-      home: HomePage(options: options, profileImporter: profileImporter),
+      home: HomePage(
+        options: options,
+        profileImporter: profileImporter,
+        title: title,
+      ),
     );
   }
 }
@@ -49,10 +58,12 @@ class HomePage extends StatefulWidget {
   const HomePage({
     super.key,
     this.options = const VlessOptions(),
-    this.profileImporter = importProfile,
+    this.profileImporter = importClipboardProfile,
+    this.title = 'Flutter Vless — Example',
   });
   final VlessOptions options;
   final ProfileImporter profileImporter;
+  final String title;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -61,16 +72,17 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final ValueNotifier<VlessStatus> vlessStatus =
       ValueNotifier<VlessStatus>(VlessStatus());
+  final ValueNotifier<int> _balancerSession = ValueNotifier(0);
 
   late VlessOptions pluginOptions = widget.options;
   int preparationRequest = 0;
+  int _importRequest = 0;
+  int? _importedBalancerNodes;
   int? pendingConnectionRequest;
   late String reportEditorText;
   late FlutterVless flutterVless = FlutterVless(
     options: pluginOptions,
-    onStatusChanged: (status) {
-      vlessStatus.value = status;
-    },
+    onStatusChanged: _onStatusChanged,
   );
 
   final TextEditingController config = TextEditingController(text: '{}');
@@ -100,10 +112,25 @@ class _HomePageState extends State<HomePage> {
     preparationRequest++;
   }
 
+  bool get _isConnected =>
+      vlessStatus.value.connectionState == VlessConnectionState.connected;
+
+  void _onStatusChanged(VlessStatus status) {
+    if (!mounted) return;
+    if (_isConnected &&
+        status.connectionState != VlessConnectionState.connected) {
+      _balancerSession.value++;
+    }
+    vlessStatus.value = status;
+  }
+
   void _configurationEdited() {
     if (reportEditorText == config.text) return;
     reportEditorText = config.text;
     _invalidatePreparation();
+    if (_importedBalancerNodes != null) {
+      setState(() => _importedBalancerNodes = null);
+    }
   }
 
   Future<void> _initializePlugin(FlutterVless plugin) async {
@@ -132,9 +159,7 @@ class _HomePageState extends State<HomePage> {
                   _invalidatePreparation();
                   final replacement = FlutterVless(
                       options: options,
-                      onStatusChanged: (status) {
-                        if (mounted) vlessStatus.value = status;
-                      });
+                      onStatusChanged: _onStatusChanged);
                   await replacement.initializeVless(
                       providerBundleIdentifier: 'dev.tfox.flutterXrayExample',
                       groupIdentifier: 'group.dev.tfox.flutterXray');
@@ -158,6 +183,7 @@ class _HomePageState extends State<HomePage> {
     certificateDirectory.removeListener(_invalidatePreparation);
     certificateDirectory.dispose();
     vlessStatus.dispose();
+    _balancerSession.dispose();
     super.dispose();
   }
 
@@ -241,55 +267,118 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _showProviderDiagnostics() async {
     try {
-      final snapshot = await flutterVless.getProviderDebugSnapshot();
-      if (!mounted) return;
+      final controller = flutterVless;
+      final showSelections =
+          pluginOptions.diagnostics.enabled &&
+          pluginOptions.diagnostics.recordBalancerSelections;
+
+      Future<List<BalancerSelection>> readSelections() async {
+        try {
+          return await controller.getBalancerSelections();
+        } on PlatformException {
+          return const [];
+        }
+      }
+
+      var selectionSession = _balancerSession.value;
+      final pendingSelections = showSelections && _isConnected
+          ? readSelections()
+          : null;
+      final snapshot = await controller.getProviderDebugSnapshot();
+      var selections = await pendingSelections ?? const <BalancerSelection>[];
+      if (!mounted || !identical(controller, flutterVless)) return;
 
       final content = snapshot.trim().isEmpty
           ? !pluginOptions.diagnostics.enabled
-              ? 'Diagnostics are disabled in Plugin options.'
-              : 'No provider diagnostics have been recorded yet.'
+                ? 'Diagnostics are disabled in Plugin options.'
+                : 'No provider diagnostics have been recorded yet.'
           : snapshot;
+      var refreshingSelections = false;
       await showDialog<void>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('VPN diagnostics'),
-          content: SizedBox(
-            width: double.maxFinite,
-            height: 420,
-            child: Scrollbar(
-              thumbVisibility: true,
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.only(right: 12),
-                child: SelectableText(
-                  content,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 12,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (dialogBodyContext, updateDialog) => AlertDialog(
+            title: const Text('VPN diagnostics'),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 420,
+              child: Scrollbar(
+                thumbVisibility: true,
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (showSelections) ...[
+                        const Text('Recent balancer selections'),
+                        ValueListenableBuilder<int>(
+                          valueListenable: _balancerSession,
+                          builder: (_, session, child) => Text(
+                            selectionSession != session || selections.isEmpty
+                                ? 'No selections recorded in the active VPN session.'
+                                : selections.reversed
+                                      .map(
+                                        (choice) =>
+                                            '#${choice.sequence} · Group ${choice.group} · Node ${choice.node}',
+                                      )
+                                      .join('\n'),
+                          ),
+                        ),
+                        const Divider(),
+                      ],
+                      SelectableText(
+                        content,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
+            actions: [
+              if (showSelections)
+                TextButton(
+                  onPressed: refreshingSelections
+                      ? null
+                      : () async {
+                          if (!_isConnected) return;
+                          final requestedSession = _balancerSession.value;
+                          updateDialog(() => refreshingSelections = true);
+                          final latest = await readSelections();
+                          if (!dialogBodyContext.mounted) return;
+                          updateDialog(() {
+                            selectionSession = requestedSession;
+                            selections = latest;
+                            refreshingSelections = false;
+                          });
+                        },
+                  child: const Text('Refresh selections'),
+                ),
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Close'),
+              ),
+              ElevatedButton.icon(
+                onPressed: snapshot.trim().isEmpty
+                    ? null
+                    : () async {
+                        await Clipboard.setData(ClipboardData(text: snapshot));
+                        if (!dialogContext.mounted || !mounted) return;
+                        Navigator.of(dialogContext).pop();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('VPN diagnostics copied'),
+                          ),
+                        );
+                      },
+                icon: const Icon(Icons.copy),
+                label: const Text('Copy'),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Close'),
-            ),
-            ElevatedButton.icon(
-              onPressed: snapshot.trim().isEmpty
-                  ? null
-                  : () async {
-                      await Clipboard.setData(ClipboardData(text: snapshot));
-                      if (!dialogContext.mounted || !mounted) return;
-                      Navigator.of(dialogContext).pop();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('VPN diagnostics copied')),
-                      );
-                    },
-              icon: const Icon(Icons.copy),
-              label: const Text('Copy'),
-            ),
-          ],
         ),
       );
     } on PlatformException catch (error) {
@@ -301,21 +390,34 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _importFromClipboard() async {
-    if (await Clipboard.hasStrings()) {
-      try {
-        final text =
-            (await Clipboard.getData('text/plain'))?.text?.trim() ?? '';
-        if (!mounted) return;
-        final imported = widget.profileImporter(text);
-        remark = imported.remark ?? 'Imported profile';
-        config.text = imported.config;
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Imported')));
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Import error: $e')));
-      }
+    final request = ++_importRequest;
+    final preparation = preparationRequest;
+    bool isCurrent() =>
+        request == _importRequest && preparation == preparationRequest;
+    try {
+      if (!await Clipboard.hasStrings() || !mounted || !isCurrent()) return;
+      final text = (await Clipboard.getData('text/plain'))?.text?.trim() ?? '';
+      if (!mounted || !isCurrent()) return;
+      final imported = await widget.profileImporter(text);
+      if (!mounted || !isCurrent()) return;
+      remark = imported.remark ?? 'Imported profile';
+      config.text = imported.config;
+      setState(() => _importedBalancerNodes = imported.balancedNodeCount);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Imported')));
+    } on FormatException catch (error) {
+      if (!mounted || !isCurrent()) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Import error: ${error.message}')));
+    } catch (_) {
+      if (!mounted || !isCurrent()) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to import the clipboard profile.'),
+        ),
+      );
     }
   }
 
@@ -392,7 +494,7 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Flutter Vless — Example'),
+        title: Text(widget.title),
         actions: [
           IconButton(
               icon: const Icon(Icons.tune),
@@ -491,6 +593,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildConfigCard() {
+    final nodeCount = _importedBalancerNodes;
     return Card(
       color: Colors.grey[900],
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -499,8 +602,12 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Configuration (JSON)',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            Text(
+              nodeCount == null
+                  ? 'Configuration (JSON)'
+                  : 'Configuration (JSON) · $nodeCount balancer nodes',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
             const SizedBox(height: 8),
             SizedBox(
               height: 140,

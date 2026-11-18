@@ -47,10 +47,14 @@ def check_wiring(source):
     assert 'installedSettingsKey = nil' in install
     assert 'config = prepared.routingEnvelope?.configurationData ?? prepared.data' in spec
     assert 'routingMetadata = prepared.routingEnvelope?.metadataData' in spec
-    pair = 'try startXRay(xrayConfig: spec.config, geoAssetsDirectory: spec.geoAssetsDirectory, routingMetadata: spec.routingMetadata)'
-    assert pair in native and native.index(pair) < native.index('startSocks5Tunnel(')
+    pair = 'try startXRay(xrayConfig: spec.config, geoAssetsDirectory: spec.geoAssetsDirectory, routingMetadata: spec.routingMetadata'
+    native_line = ' '.join(native.split())
+    assert pair in native_line and native_line.index(pair) < native_line.index('startSocks5Tunnel(')
     assert start.index('NativeRoutingSpec.requireRuntime') < start.index('XRaySetMemoryLimit()')
     assert 'FLVlessStartCoreRoutingPrivate(xrayConfig, routingMetadata, logger, &error)' in start
+    if 'FLVlessHasCoreBalancerDiagnostics()' in start:
+        assert 'FLVlessStartCoreBalancerDiagnostics(xrayConfig, routingMetadata,' in start
+        assert 'options.diagnosticsEnabled, options.recordBalancerSelections' in start
     return entry, initial, preflight, install, spec, native, start
 
 
@@ -68,7 +72,7 @@ def mutation_controls(source):
         'physical-dns-binding-gate-dropped': source.replace(preflight, preflight.replace('TunnelDNSPolicy.requiresPhysicalInterfaceBinding(in: prepared.data)', 'false', 1), 1),
         'routing-config-unpaired': source.replace(spec, spec.replace('prepared.routingEnvelope?.configurationData ?? prepared.data', 'prepared.data', 1), 1),
         'routing-metadata-dropped': source.replace(spec, spec.replace('routingMetadata = prepared.routingEnvelope?.metadataData', 'routingMetadata = nil', 1), 1),
-        'runtime-metadata-dropped': source.replace(native, native.replace('routingMetadata: spec.routingMetadata)', 'routingMetadata: nil)', 1), 1),
+        'runtime-metadata-dropped': source.replace(native, native.replace('routingMetadata: spec.routingMetadata', 'routingMetadata: nil', 1), 1),
         'routing-start-falls-back': source.replace(start, start.replace('FLVlessStartCoreRoutingPrivate(xrayConfig, routingMetadata, logger, &error)', 'XRayStartPrivate(xrayConfig, logger, &error)', 1), 1),
     }
     for name, mutated in controls.items():
@@ -117,12 +121,13 @@ def main():
         parts += [block(source, '    private func ' + name) for name in ['prepareInitialRuntimeSpec(', 'endpointSpecIsFresh(', 'checkEndpointPreflight(', 'installProtectedSettings(', 'onRuntimeQueue<']]
         actual = '\n'.join(parts).replace('private final class', 'final class').replace('private struct', 'struct').replace('private func', 'func')
         capability = [line for line in entry.splitlines() if 'if routingIntent != nil { try NativeRoutingSpec.requireRuntime' in line]
-        start_pair = [line for line in native.splitlines() if 'try startXRay(xrayConfig:' in line]
-        assert len(capability) == len(start_pair) == 1
+        native_lines = ' '.join(native.split())
+        start_pair = native_lines[native_lines.index('try startXRay('):native_lines.index(' guard sessionAdmission.permitsRuntime(spec.epoch)', native_lines.index('try startXRay('))]
+        assert len(capability) == 1
         generated = fixture.replace('    // SOURCE_ADMISSION_HELPERS', actual)
         generated = generated.replace('    // SOURCE_DNS_BINDING_REQUIREMENT', dns_binding)
         generated = generated.replace('        // SOURCE_CAPABILITY_ENTRY', capability[0])
-        generated = generated.replace('        // SOURCE_RUNTIME_START_PAIR', start_pair[0])
+        generated = generated.replace('        // SOURCE_RUNTIME_START_PAIR', '        ' + start_pair)
         generated = generated.replace('    // SOURCE_START', start_method.replace('private func', 'func'))
         destination = output / (platform + '.swift')
         destination.write_text("import Foundation\n" + timer + "\n" + generated)

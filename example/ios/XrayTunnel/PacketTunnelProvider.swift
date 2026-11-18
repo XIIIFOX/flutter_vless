@@ -270,6 +270,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let geoAssetsDirectory: String?
         let credentials: LocalProxyCredentials
         let routingMetadata: Data?
+        let managedInboundTag: String?
         let token: TunnelEndpointPlanAdmission.Token
         let path: TunnelEndpointPath
         let selections: [TunnelEndpointSelection]
@@ -285,6 +286,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             config = prepared.routingEnvelope?.configurationData ?? prepared.data
             self.port = port; geoAssetsDirectory = source.geoAssetsDirectory; credentials = source.credentials
             routingMetadata = prepared.routingEnvelope?.metadataData
+            managedInboundTag = prepared.managedInboundTag
             self.token = token; self.path = path
             selections = prepared.endpointSelections; bootstrapAddresses = prepared.bootstrapAddresses
             self.discovery = discovery; self.discoveryDeadline = discoveryDeadline; self.correctionID = correctionID; self.correctionPermit = correctionPermit; self.initialDeadline = initialDeadline
@@ -377,7 +379,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         observer.start { [weak self] path in
             self?.watchdogQueue.async { [weak self] in self?.physicalPathChanged(path, epoch: epoch) }
         }
-        let snapshot = try await observer.initialSnapshot(deadline: ProcessInfo.processInfo.systemUptime + 5)
+        let snapshot = try await observer.initialSnapshot(deadline: ProcessInfo.processInfo.systemUptime + 5, onTimeout: { evidence in
+            rememberTunnelLog("Physical network path timed out before VPN routes: preference=\(evidence.preferenceObserved) scoped=\(evidence.scopedObservations) satisfied=\(evidence.satisfiedObservations) ownershipKnown=\(evidence.ownershipKnown) selectable=\(evidence.selectablePath)")
+        })
         rememberTunnelLog("Startup timing phase=physical-path elapsedMs=\(physicalTiming.elapsedMilliseconds())")
         guard sessionAdmission.isCurrent(epoch) else { throw CancellationError() }
         try watchdogQueue.sync {
@@ -1224,7 +1228,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         guard admitted else { throw CancellationError() }
         nativeRuntimeEpoch = spec.epoch
         nativeRuntimeToken = spec.token
-        try startXRay(xrayConfig: spec.config, geoAssetsDirectory: spec.geoAssetsDirectory, routingMetadata: spec.routingMetadata)
+        try startXRay(xrayConfig: spec.config, geoAssetsDirectory: spec.geoAssetsDirectory,
+                      routingMetadata: spec.routingMetadata, options: spec.options, managedInboundTag: spec.managedInboundTag)
         guard sessionAdmission.permitsRuntime(spec.epoch), endpointAdmission.mayStart(spec.token), self.endpointSpecIsFresh(spec) else { throw CancellationError() }
         try startSocks5Tunnel(serverPort: spec.port, credentials: spec.credentials, epoch: spec.epoch, token: spec.token)
         if let discovery = spec.discovery, !discovery.finishAdmission() {
@@ -1353,6 +1358,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 var snapshot = TunnelDebugStore.shared.snapshot()
                 snapshot += "\nHEV diagnostic file bytes=\(hevLogSizeBytes()); raw contents omitted"
                 completionHandler?(snapshot.data(using: .utf8))
+            } else if message == PrivateBalancerDiagnostics.snapshotCommand {
+                guard isForwardingReady(), nativeOptions.diagnosticsEnabled, nativeOptions.recordBalancerSelections else {
+                    completionHandler?(nil)
+                    return
+                }
+                let data = Data(FLVlessReadCoreBalancerDiagnostics().utf8)
+                let snapshot = PrivateBalancerDiagnostics.snapshot(data,
+                    maxBytes: nativeOptions.diagnosticsMaxBytes, maxLines: nativeOptions.diagnosticsMaxLines)
+                completionHandler?(isForwardingReady() ? Data(snapshot.utf8) : nil)
             }else if (message.hasPrefix("xray_delay")){
                 let rawURL = String(message.dropFirst(10))
                 watchdogQueue.async {
@@ -1492,7 +1506,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    private func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data? = nil) throws {
+    private func startXRay(xrayConfig: Data, geoAssetsDirectory: String?, routingMetadata: Data?,
+                           options: VlessNativeOptions, managedInboundTag: String?) throws {
         let coreTiming = NativeDiagnosticTimer()
         defer { rememberTunnelLog("Startup timing phase=core-start elapsedMs=\(coreTiming.elapsedMilliseconds())") }
         try ManagedServiceAssetPolicy.validate(xrayConfig, directory: geoAssetsDirectory, geodataCapability: FLVlessCoreGeodataLifetimeCapability(), xdriveCapability: FLVlessCoreXdriveLifetimeCapability())
@@ -1523,7 +1538,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // Start XRay with the config data
         tunnelLog.info("Starting XRay version=\(XRayGetVersion(), privacy: .public) configBytes=\(xrayConfig.count, privacy: .public)")
         let started: Bool
-        if let routingMetadata {
+        if options.diagnosticsEnabled, options.recordBalancerSelections,
+           let managedInboundTag, FLVlessHasCoreBalancerDiagnostics() {
+            started = FLVlessStartCoreBalancerDiagnostics(xrayConfig, routingMetadata,
+                managedInboundTag, Int64(options.diagnosticsMaxLines), logger, &error)
+        } else if let routingMetadata {
             started = FLVlessStartCoreRoutingPrivate(xrayConfig, routingMetadata, logger, &error)
         } else {
             started = XRayStartPrivate(xrayConfig, logger, &error)

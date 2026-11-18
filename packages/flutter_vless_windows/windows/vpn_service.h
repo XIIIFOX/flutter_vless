@@ -90,6 +90,8 @@ class VpnService {
    */
   void GetTrafficStats(int64_t& upload, int64_t& download);
   flutter_vless::traffic::Sample GetTrafficSample();
+  std::string GetBalancerSelections();
+  void DisableBalancerSelections();
 
  private:
   void RunVpn(std::shared_ptr<flutter_vless::preparation::StartupCompletion> startup);
@@ -106,6 +108,7 @@ class VpnService {
   bool RetireIPv6Address();
   void StopSession(bool release_protection);
   void UpdateTrafficStats();
+  void UpdateBalancerSelections();
   std::atomic<bool> requested_{false};
   std::atomic<bool> ready_{false};
   std::thread vpn_thread_;
@@ -140,6 +143,11 @@ class VpnService {
   std::optional<MIB_UNICASTIPADDRESS_ROW> ipv6_address_;
   std::mutex stats_mutex_;
   flutter_vless::traffic::Sample traffic_sample_;
+  enum class BalancerPipe { none, starting, active, unavailable };
+  BalancerPipe balancer_pipe_ = BalancerPipe::none; // VPN worker only.
+  std::atomic<bool> record_balancer_selections_{false};
+  std::mutex balancer_mutex_;
+  std::string balancer_selections_;
  public:
   bool IsProtecting() const { return protection_.Active(); }
 };

@@ -6,7 +6,8 @@ set -euo pipefail
 case "$#:${1-}" in
     0:) APPLE_RUNTIME_PROBE_MODE=full ;;
     1:--fakedns-only) APPLE_RUNTIME_PROBE_MODE=fakedns-only ;;
-    *) echo 'Usage: test_macos_privacy_runtime.sh [--fakedns-only]' >&2; exit 2 ;;
+    1:--balancer-diagnostics-only) APPLE_RUNTIME_PROBE_MODE=balancer-diagnostics-only; export REQUIRE_BALANCER_DIAGNOSTICS=1 ;;
+    *) echo 'Usage: test_macos_privacy_runtime.sh [--fakedns-only|--balancer-diagnostics-only]' >&2; exit 2 ;;
 esac
 export APPLE_RUNTIME_PROBE_MODE
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -14,6 +15,7 @@ FRAMEWORK="${XRAY_RUNTIME_FRAMEWORK:-$ROOT/packages/flutter_vless_macos/macos/XR
 EXPECTED_XRAY_CORE_VERSION="${EXPECTED_XRAY_CORE_VERSION:-$(sed -nE 's/^let xrayReleaseTag = "xray-macos-v([0-9.]+)-r[0-9]+"$/\1/p' "$ROOT/packages/flutter_vless_macos/macos/flutter_vless_macos/Package.swift")}"
 : "${EXPECTED_XRAY_CORE_VERSION:?Expected a pinned macos Core version}"
 OUT="$ROOT/build/macos_privacy_runtime_probe"
+if [ "$APPLE_RUNTIME_PROBE_MODE" = balancer-diagnostics-only ]; then OUT="${OUT}_balancer"; fi
 SOURCE="$ROOT/packages/flutter_vless_macos/macos/flutter_vless_macos/Sources"
 mkdir -p "$OUT/modules"
 python3 - "$ROOT" "$OUT" <<'PY'
@@ -32,8 +34,18 @@ head=head[:begin]+'''private struct SystemProxyHelper {
 asset=source[source.index('private func configureXrayAssetLocation'):]
 harness='\n'.join((root/'tool/fixtures'/name).read_text() for name in ['ios_local_auth_probe.swift','ios_dns_runtime_probe.swift','apple_fakedns_runtime.swift','apple_native_routing_runtime.swift','ios_privacy_probe.swift'])
 harness=(root/'tool/fixtures/macos_runtime_regressions.swift').read_text()+'\n'+harness
-harness=harness.replace('    let markers = [', '    do { try await runAppleProxyCounterChecks() } catch { print("MACOS_COUNTERS_FAILED"); exit(1) }\n    do { try runAppleFakeDNSRuntimeChecks() } catch { print("APPLE_FAKEDNS_SDK_FAILED"); exit(1) }\n    let markers = [')
-if os.environ.get('APPLE_RUNTIME_PROBE_MODE') == 'fakedns-only':
+harness=harness.replace('    let markers = [', '    do { try await runAppleProxyCounterChecks() } catch { print("MACOS_COUNTERS_FAILED"); exit(1) }\n    do { try runAppleFakeDNSRuntimeChecks() } catch { print("APPLE_FAKEDNS_SDK_FAILED"); exit(1) }\n    do { try runAppleBalancerDiagnosticsChecks() } catch { print("APPLE_BALANCER_DIAGNOSTICS_SDK_FAILED"); exit(1) }\n    let markers = [')
+mode = os.environ.get('APPLE_RUNTIME_PROBE_MODE')
+if mode == 'balancer-diagnostics-only':
+    begin, end = harness.index('func runModes() async {'), harness.index('class ModeDelegate:')
+    harness = harness[:begin] + r'''func runModes() async {
+    setbuf(stdout, nil)
+    print("RUNTIME=\(XRayGetVersion())")
+    do { try runAppleBalancerDiagnosticsChecks() } catch { print("APPLE_BALANCER_DIAGNOSTICS_SDK_FAILED"); exit(1) }
+    exit(0)
+}
+''' + harness[end:]
+elif mode == 'fakedns-only':
     begin, end = harness.index('func runModes() async {'), harness.index('class ModeDelegate:')
     harness = harness[:begin] + r'''func runModes() async {
     requireManagedServiceLifetimeCapabilities()
@@ -68,9 +80,22 @@ python3 "$ROOT/tool/run_apple_runtime_probe.py" --timeout 600 -- "$OUT/probe" 2>
 echo 'PROBE_PHASE=macos-runtime-complete'
 python3 - "$OUT/runtime.log" "$EXPECTED_XRAY_CORE_VERSION" <<'PY'
 from pathlib import Path
-import os, sys
+import os, re, sys
 text=Path(sys.argv[1]).read_text()
 assert text.splitlines().count('RUNTIME='+sys.argv[2]) == 1, 'Unexpected embedded Xray version'
+if os.environ.get('REQUIRE_BALANCER_DIAGNOSTICS') == '1' and os.environ.get('APPLE_RUNTIME_PROBE_MODE') != 'fakedns-only':
+    assert text.splitlines().count('APPLE_BALANCER_DIAGNOSTICS_SDK_PASS=3') == 1, 'Missing or duplicate Apple SDK balancer diagnostics gate'
+    timing = re.findall(r'^APPLE_CORE_LIFECYCLE firstReadyMs=([0-9]+) stoppedMs=([0-9]+)$', text, re.M)
+    assert len(timing) == 1, 'Missing or duplicate macOS Core lifecycle timing'
+    first, stopped = map(int, timing[0])
+    assert first < 5000 and stopped < 3000, 'Local Core lifecycle exceeded its deadline'
+    for marker in ('balanced.invalid', 'diag-node-a!', 'diag-node-b!', 'diag-group'):
+        assert marker not in text, 'A private balancer marker reached the runtime log'
+    if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
+        with Path(summary).open('a', encoding='utf-8') as stream:
+            stream.write(f'\n- macOS local Xray Core reached verified HTTP in {first} ms and stopped in {stopped} ms.\n')
+if os.environ.get('APPLE_RUNTIME_PROBE_MODE') == 'balancer-diagnostics-only':
+    raise SystemExit(0)
 if os.environ.get('REQUIRE_MANAGED_SERVICE_LIFETIMES') == '1':
     for marker in ['APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1', 'APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=2']:
         assert text.splitlines().count(marker) == 1, 'Missing or duplicate managed lifetime capability value'

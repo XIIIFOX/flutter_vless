@@ -15,18 +15,22 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 MOBILE = ROOT / 'third_party/xray-mobile'
 CAPABILITY = ROOT / 'third_party/xray-vpn-routing'
+BALANCER = ROOT / 'third_party/xray-balancer-diagnostics'
 spec = importlib.util.spec_from_file_location('desktop_routing_cli_helpers', ROOT / 'tool/test_native_routing_cli.py')
 cli = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cli)
 core_runner = cli.core_runner
 TAGS = cli.CLI_TAG + ',' + cli.FACTORY_TAG + ',' + cli.MANAGED_TAG
+BALANCER_TAGS = ',flutter_vless_balancer_diagnostics,flutter_vless_balancer_diagnostics_cli'
 
 
-def inputs():
+def inputs(balancer=False):
     result = cli.inputs()
     paths = [Path(__file__).resolve(), ROOT / 'tool/test_build_native_routing_cli.py',
              CAPABILITY / 'apply.py', CAPABILITY / 'pin-manifest.json', MOBILE / 'go.mod', MOBILE / 'go.sum']
     paths += sorted((CAPABILITY / 'overlay').rglob('*.go')) + sorted(MOBILE.glob('*.go'))
+    if balancer:
+        paths += [BALANCER / 'apply.py', *sorted((BALANCER / 'overlay').rglob('*.go'))]
     if MOBILE.is_symlink() or (MOBILE / 'nativecli').is_symlink():
         raise ValueError('Mobile source symlinks are unsupported')
     paths += [path for path in sorted((MOBILE / 'nativecli').rglob('*')) if path.is_file() or path.is_symlink()]
@@ -53,7 +57,7 @@ def validate_output(output, source, cache):
     if output.exists() or output.is_symlink():
         raise ValueError('Output directory must be new')
     resolved = output.resolve()
-    for parent in (source, cache, MOBILE, CAPABILITY):
+    for parent in (source, cache, MOBILE, CAPABILITY, BALANCER):
         if resolved == parent.resolve() or parent.resolve() in resolved.parents:
             raise ValueError('Build output must be outside source and module cache directories')
 
@@ -64,6 +68,7 @@ def main(argv=None):
     parser.add_argument('--go', default='go', help='Existing Go 1.27+; no toolchain installation')
     parser.add_argument('--goos', choices=('darwin', 'linux', 'windows'))
     parser.add_argument('--goarch', choices=('amd64', 'arm64', '386'))
+    parser.add_argument('--balancer-diagnostics', action='store_true', help='Include private per-session node history')
     args = parser.parse_args(argv)
     output = args.output.absolute()
     if output.exists() or output.is_symlink():
@@ -71,9 +76,11 @@ def main(argv=None):
     go = str(Path(shutil.which(args.go) or args.go).resolve())
     if not Path(go).is_file():
         parser.error('Existing Go toolchain is unavailable')
+    tags = TAGS + BALANCER_TAGS if args.balancer_diagnostics else TAGS
+    source_inputs = (lambda: inputs(True)) if args.balancer_diagnostics else inputs
     report = {'success': False, 'runtime_executed': False, 'binary_executed': False, 'published': False,
               'production_enabled': False, 'host_qualified': False, 'routing_capability_expected': 1,
-              'tags': TAGS, 'go_binary': go, 'results': []}
+              'tags': tags, 'go_binary': go, 'results': []}
     before = source = source_before = core = mobile = core_initial = mobile_initial = core_ready = mobile_ready = None
     admitted = False
     stage = None
@@ -87,7 +94,7 @@ def main(argv=None):
     try:
         for sig in (signal.SIGINT, signal.SIGTERM):
             handlers[sig] = signal.signal(sig, interrupted)
-        before = inputs()
+        before = source_inputs()
         report['input_sha256'] = before
         manifest = json.loads((CAPABILITY / 'pin-manifest.json').read_text())
         core_runner.validate_mobile_pin(manifest, (MOBILE / 'go.mod').read_text(), (MOBILE / 'go.sum').read_text())
@@ -135,6 +142,10 @@ def main(argv=None):
         evidence = output
         applier = core_runner.load_module(CAPABILITY / 'apply.py', 'desktop_routing_applier')
         core = applier.copy_and_apply(source, output / 'Core', go=go, caches=[cache])
+        if args.balancer_diagnostics:
+            observer = core_runner.load_module(BALANCER / 'apply.py', 'desktop_balancer_applier')
+            observer.apply(source, core, routing=True, cli=True)
+            report['balancer_diagnostics_capability_expected'] = 1
         report['core_replacement'] = str(core)
         report['classic_dns_lifetime_applied'] = True
         report['h3_lifetime_applied'] = True
@@ -153,7 +164,7 @@ def main(argv=None):
         run('select-copied-mobile', [go, 'mod', 'edit', '-require=' + cli.MODULE + '@v0.0.0', '-replace=' + cli.MODULE + '=' + str(mobile)], cwd=core, seconds=20)
         run('select-copied-core', [go, 'mod', 'edit', '-replace=' + manifest['module'] + '=' + str(core)], cwd=mobile, seconds=20)
         build_environment = dict(environment, CGO_ENABLED='0', GOOS=goos, GOARCH=goarch)
-        run('readonly-graph', [go, 'list', '-mod=readonly', '-tags=' + TAGS, '-deps', './main'], cwd=core, env=build_environment, seconds=180)
+        run('readonly-graph', [go, 'list', '-mod=readonly', '-tags=' + tags, '-deps', './main'], cwd=core, env=build_environment, seconds=180)
         for name, directory, module, replacement, selected_version in [
             ('verify-mobile-selection', core, cli.MODULE, mobile, 'v0.0.0'),
             ('verify-core-selection', mobile, manifest['module'], core, manifest['module_version']),
@@ -169,7 +180,7 @@ def main(argv=None):
         report['intended_module_sha256'] = {name: {path: snapshot.get(path) for path in ('go.mod', 'go.sum')}
                                             for name, snapshot in [('core_before', core_initial), ('core_after', core_ready), ('mobile_before', mobile_initial), ('mobile_after', mobile_ready)]}
         artifact = output / ('xray.exe' if goos == 'windows' else 'xray')
-        run('cli-build', [go, 'build', '-mod=readonly', '-trimpath', '-buildvcs=false', '-tags=' + TAGS,
+        run('cli-build', [go, 'build', '-mod=readonly', '-trimpath', '-buildvcs=false', '-tags=' + tags,
                           '-ldflags=-s -w -buildid=', '-o', str(artifact), './main'], cwd=core, env=build_environment, seconds=600)
         if artifact.is_symlink() or not artifact.is_file() or artifact.stat().st_size == 0:
             raise ValueError('Compiler did not produce a regular nonempty artifact')
@@ -180,7 +191,7 @@ def main(argv=None):
         report['error'] = str(error)
         print('Native routing CLI build failed: ' + str(error), file=sys.stderr)
     finally:
-        checks = [('source_snapshot_unchanged', lambda: inputs() == before, before is not None),
+        checks = [('source_snapshot_unchanged', lambda: source_inputs() == before, before is not None),
                   ('module_cache_source_unchanged', lambda: core_runner.tree_snapshot(source) == source_before, source_before is not None),
                   ('core_non_module_sources_unchanged', lambda: cli.non_module_sources(core_runner.tree_snapshot(core)) == cli.non_module_sources(core_initial), core_initial is not None),
                   ('mobile_non_module_sources_unchanged', lambda: cli.non_module_sources(core_runner.tree_snapshot(mobile)) == cli.non_module_sources(mobile_initial), mobile_initial is not None),

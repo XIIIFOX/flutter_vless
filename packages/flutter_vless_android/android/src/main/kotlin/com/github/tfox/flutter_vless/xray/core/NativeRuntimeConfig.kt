@@ -16,6 +16,10 @@ internal class NativeRuntimeConfig private constructor(private val frozen: ByteA
         fun command(executable: String, check: Boolean): List<String> = if (spec == null)
             listOf(executable, "run") + (if (check) listOf("-test") else emptyList()) + listOf("-config", config.absolutePath)
         else listOf(executable, "native-routing", if (check) "check" else "run", "--config", config.absolutePath, "--spec", spec.absolutePath)
+        fun balancerCommand(executable: String, inbound: String, maxLines: Int): List<String> =
+            listOf(executable, "native-balancer", "run", "--config", config.absolutePath,
+                "--managed-inbound", inbound, "--max-lines", maxLines.toString()) +
+                (spec?.let { listOf("--spec", it.absolutePath) } ?: emptyList())
         override fun close() {
             var failed=false
             for(file in listOfNotNull(spec,config)) if(!file.delete() && file.exists()) failed=true

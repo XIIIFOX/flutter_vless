@@ -12,6 +12,8 @@ PARTS = (
     ("proxy_service.cpp", "bool ApiClient::GetStats(", "\nint ApiClient::MeasureDelay("),
     ("proxy_service.cpp", "void ProxyService::UpdateTrafficStats() {", "\nint ProxyService::GetServerDelay("),
     ("vpn_service.cpp", "void VpnService::UpdateTrafficStats() {", None),
+    ("vpn_service.cpp", "flutter_vless::traffic::Sample VpnService::GetTrafficSample() {", None),
+    ("vpn_service.cpp", "void VpnService::GetTrafficStats(int64_t& upload, int64_t& download) {", None),
     ("v2ray_manager.cpp", "flutter_vless::traffic::Sample V2rayManager::GetTrafficSample() {", "\nbool V2rayManager::ValidateConfig("),
     ("flutter_vless_plugin.cpp", "void FlutterVlessPlugin::UpdateStatus() {", "\n// EventSink delivery belongs"),
 )
@@ -24,7 +26,9 @@ def extracted(sources):
         if source.count(begin) != 1 or end is not None and source.count(end) != 1:
             raise ValueError("Actual traffic consumer boundary changed")
         first = source.index(begin)
-        last = source.index(end) if end else len(source)
+        # The VPN traffic bodies have a column-zero closing brace. Extract
+        # only those bodies so unrelated workers added later are never copied.
+        last = source.index(end) if end else source.index("\n}", first) + 2
         if first >= last:
             raise ValueError("Actual traffic consumer boundary changed")
         output.append(source[first:last])
@@ -268,7 +272,7 @@ class Guards(unittest.TestCase):
 
     def test_no_native_process_worker_or_socket_body_is_copied(self):
         body = extracted(sources())
-        for forbidden in ("CreateProcess", "std::thread", "WSAStartup", "bind(", "RunV2ray()"):
+        for forbidden in ("CreateProcess", "std::thread", "WSAStartup", "bind(", "RunV2ray()", "VpnService::UpdateBalancerSelections"):
             self.assertNotIn(forbidden, body)
 
 

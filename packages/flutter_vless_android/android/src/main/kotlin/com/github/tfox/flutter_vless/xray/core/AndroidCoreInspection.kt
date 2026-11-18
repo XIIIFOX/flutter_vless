@@ -37,7 +37,8 @@ internal object AndroidCoreInspection {
         }
     }
 
-    fun validate(context: Context, json: String, geoDirectory: String?, certificateDirectory: String?): Map<String, String> =
+    fun validate(context: Context, json: String, geoDirectory: String?, certificateDirectory: String?,
+        beforeCoreCheck: () -> Unit = {}): Map<String, String> =
         validate(json, geoDirectory, certificateDirectory, context.noBackupFilesDir,
             availability = {
                 val executable = XrayCoreManager.runtimeExecutable(context, routing = false)
@@ -45,6 +46,7 @@ internal object AndroidCoreInspection {
             },
             serviceCapabilities = { XrayCoreManager.managedServiceCapabilities(context) },
             check = { input, assets, prepared, needsGeoData ->
+                beforeCoreCheck()
                 withAssets(context, assets) { directory ->
                     if (needsGeoData) XrayGeodataAssets.validateWritableRoot(prepared, directory, checkAtomicReplace = false)
                     // convert pb calls LoadConfig/Build, without constructing
@@ -87,17 +89,23 @@ internal object AndroidCoreInspection {
         if (support != Status.VALID) return support.result()
         if (required != 0 && (required and serviceCapabilities()) != required) return Status.UNSUPPORTED.result()
         val snapshot = NativeRuntimeConfig.freeze(configuration)
-        val input = try { snapshot.createInputs(privateDirectory, "validate") }
-        catch (_: Exception) { return Status.UNAVAILABLE.result() }
+        // The VPN daemon sweeps abandoned runtime files in the root of noBackupFilesDir.
+        // An inspection's parser input is app-owned before the child has a /proc entry.
+        val directory = File(privateDirectory, "inspect-profile-${UUID.randomUUID()}")
         return try {
-            input.use {
-                val result = check(it.config, assets, configuration.toString(), (required and ManagedServiceCapabilities.GEODATA) != 0)
-                when {
-                    result?.exitCode == 0 -> Status.VALID.result()
-                    result?.exitCode == 1 && result.output.toString(Charsets.UTF_8).lineSequence()
-                        .any { line -> line.startsWith("failed to load config:") } -> Status.INVALID.result("coreCheck")
-                    else -> Status.UNAVAILABLE.result()
+            if (!directory.mkdir()) return Status.UNAVAILABLE.result()
+            try {
+                snapshot.createInputs(directory, "validate").use {
+                    val result = check(it.config, assets, configuration.toString(), (required and ManagedServiceCapabilities.GEODATA) != 0)
+                    when {
+                        result?.exitCode == 0 -> Status.VALID.result()
+                        result?.exitCode == 1 && result.output.toString(Charsets.UTF_8).lineSequence()
+                            .any { line -> line.startsWith("failed to load config:") } -> Status.INVALID.result("coreCheck")
+                        else -> Status.UNAVAILABLE.result()
+                    }
                 }
+            } finally {
+                if (!directory.delete()) throw IOException("Private inspection directory could not be removed")
             }
         } catch (_: IllegalArgumentException) {
             Status.INVALID.result("prepare")

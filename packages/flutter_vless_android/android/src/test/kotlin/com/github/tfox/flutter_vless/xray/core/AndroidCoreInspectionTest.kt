@@ -20,7 +20,8 @@ class AndroidCoreInspectionTest {
             "inbounds":[{"protocol":"socks","listen":"127.0.0.1","port":10808}],
             "future":{"nested":null}}"""
         val result = validate(config) { input, assets, _, needsGeoData ->
-            assertEquals(temporary.root, input.parentFile)
+            assertEquals(temporary.root, input.parentFile?.parentFile)
+            assertTrue(input.parentFile?.name?.startsWith("inspect-profile-") == true)
             assertFalse(input == runningProfile)
             assertNull(assets)
             assertFalse(needsGeoData)

@@ -44,7 +44,8 @@ def extract(sources):
     if helper.count("WorkerCandidate::Prepare(") != 1 or helper.count("return candidate;") != 1:
         raise ValueError("actual Windows final candidate no longer owns check")
     workers = part(cpp, "bool VpnService::StartWorkers(", "\nvoid VpnService::StopWorkers(", "StartWorkers")
-    recovery = part(workers, "  worker_candidate_ = pending_candidate_ ?", "  const auto command = worker_candidate_->Routing()", "recovery")
+    identity_commit = "  underlay_luid_ = worker_candidate_->Identity();\n"
+    recovery = part(workers, "  worker_candidate_ = pending_candidate_ ?", identity_commit, "recovery") + identity_commit
     if recovery.count("PrepareWorkerCandidate(") != 1 or recovery.count("current_identity != worker_candidate_->Identity()") != 1:
         raise ValueError("actual Windows recovery identity/check boundary changed")
     header = sources["vpn_service.h"]
@@ -64,6 +65,7 @@ HEADER = r'''
 #include <winsock2.h>
 #endif
 #include "ipv6_tcp_scope.h"
+#include "native_options.h"
 #include "vpn_worker_candidate.h"
 #include "native_routing_spec.h"
 #include <atomic>
@@ -100,6 +102,7 @@ struct PacketPathProbe {
 namespace flutter_vless::native {
 struct ProtectedRuntime {};
 bool RoutingCapability(ProtectedRuntime&, const Root&) { return true; }
+bool BalancerCapability(ProtectedRuntime&, const Root&) { return false; }
 bool CheckPreparedConfig(const std::string& bytes, ProtectedRuntime&, fs::path& path,
     const Root&, preparation::Stage*) {
   ++boundary.checks; boundary.checked = bytes; path = "inert-checked-file";
@@ -151,6 +154,7 @@ bool VpnService::Fresh(const std::string& base, const Provenance& provenance) {
   const std::optional<std::string> prepared = base;
   auto runtime = std::make_unique<native::ProtectedRuntime>();
   Root assets; std::optional<Intent> routing;
+  const NativeOptions options;
   const std::string user = "inert-auth";
   preparation::Report changes;
   preparation::StartupOutcome failed;
@@ -158,6 +162,7 @@ bool VpnService::Fresh(const std::string& base, const Provenance& provenance) {
   const std::function<void()> admitted = [this] { ++admissions; };
 '''
 FRESH_SUFFIX = r'''
+  (void)record_balancer;
   accepted_ = std::move(candidate);
   return true;
 }
@@ -275,7 +280,7 @@ def load_sources(source_root):
 
 
 DEPENDENCIES = ("vpn_service.cpp", "vpn_service.h", "vpn_worker_candidate.h", "xray_config.h",
-                "ipv6_tcp_scope.h", "preparation_report.h", "asset_location.h", "native_routing_spec.h",
+                "ipv6_tcp_scope.h", "preparation_report.h", "asset_location.h", "native_options.h", "native_routing_spec.h",
                 "third_party/nlohmann/json.hpp")
 
 

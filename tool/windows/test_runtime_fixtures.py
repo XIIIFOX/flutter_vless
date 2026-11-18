@@ -61,7 +61,9 @@ class RuntimeFixtureTest(unittest.TestCase):
         reference = runtime.profile_balancer_config(*arguments)
         diagnostics = runtime.profile_balancer_config(*arguments, round_robin=True)
         self.assertNotIn("observatory", diagnostics)
-        self.assertEqual(diagnostics["routing"]["balancers"][0]["strategy"], {"type": "roundRobin"})
+        group = diagnostics["routing"]["balancers"][0]
+        self.assertNotIn("fallbackTag", group)
+        self.assertEqual(group["strategy"], {"type": "roundRobin"})
         self.assertEqual(diagnostics["routing"]["rules"], reference["routing"]["rules"])
         self.assertEqual(diagnostics["outbounds"], reference["outbounds"])
 

@@ -647,7 +647,11 @@ def profile_balancer_config(address, dns_port, peers, round_robin=False):
     ]
     if round_robin:
         profile.pop("observatory")
-        profile["routing"]["balancers"][0]["strategy"] = {"type": "roundRobin"}
+        group = profile["routing"]["balancers"][0]
+        # A fallback on roundRobin requires Observatory in this Core. This
+        # fixture observes deterministic rotation without health filtering.
+        group.pop("fallbackTag")
+        group["strategy"] = {"type": "roundRobin"}
     return profile
 
 

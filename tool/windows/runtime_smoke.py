@@ -772,7 +772,7 @@ def request(host, vpn, loopback=False, proxy_port=None, diagnostic=None):
             diagnostic.update(response_bytes=len(data), header_present=b"\r\n\r\n" in data, read_end=read_end)
 
 
-def external_http(address, vpn=False):
+def external_http(address, vpn=False, *, verify_body=False):
     # Direct baseline and in-tunnel request use the same address and HTTP Host.
     # This detects a freedom outbound looping back into the TUN default route.
     with socket.create_connection((address, 443), timeout=4) as connection, \
@@ -781,10 +781,53 @@ def external_http(address, vpn=False):
         if vpn:
             assert sock.getsockname()[0] == "10.0.85.2", "External HTTPS bypassed the TUN"
         sock.sendall(b"GET / HTTP/1.1\r\nHost: api.ipify.org\r\nConnection: close\r\n\r\n")
-        data = sock.recv(4096)
-        if not data.startswith(b"HTTP/1.1 200") and not data.startswith(b"HTTP/1.0 200"):
-            raise RuntimeError("public HTTP control did not return 200")
+        if verify_body:
+            with http.client.HTTPResponse(sock) as response:
+                response.begin()
+                if response.status != 200:
+                    raise RuntimeError("public HTTP control did not return 200")
+                body = response.read(65)
+                if response.length not in (0, None):
+                    raise RuntimeError("public HTTPS control returned an incomplete body")
+            try:
+                observed_ip = ipaddress.ip_address(body.strip().decode("ascii"))
+            except ValueError:
+                raise RuntimeError("public HTTPS control did not return an IP address") from None
+            if len(body) > 64 or not observed_ip.is_global:
+                raise RuntimeError("public HTTPS control did not return a public IP address")
+        else:
+            data = sock.recv(4096)
+            if not data.startswith(b"HTTP/1.1 200") and not data.startswith(b"HTTP/1.0 200"):
+                raise RuntimeError("public HTTP control did not return 200")
         return "HTTP 200"
+
+
+def windows_qpc_ticks():
+    # Same system-wide counter as the C++ Start and Stop markers.
+    import ctypes
+    ticks = ctypes.c_longlong()
+    if not ctypes.windll.kernel32.QueryPerformanceCounter(ctypes.byref(ticks)):
+        raise RuntimeError("Windows performance counter is unavailable")
+    return ticks.value
+
+
+def vpn_https_timing(log, https_ticks):
+    start = re.findall(r"(?m)^VPN_HTTPS_START_QPC=([0-9]+),([0-9]+),([0-9]+)$", log)
+    stop = re.findall(r"(?m)^VPN_HTTPS_STOP_QPC=([0-9]+),([0-9]+)$", log)
+    assert len(start) == len(stop) == 1, "Missing or duplicated VPN HTTPS clock markers"
+    started, ready, frequency = map(int, start[0])
+    stopping, stopped = map(int, stop[0])
+    assert 0 < started <= ready <= https_ticks <= stopping <= stopped and frequency > 0, "Invalid VPN HTTPS clock sequence"
+
+    def elapsed_ms(begin, end):
+        return (end - begin) * 1000 // frequency
+
+    return dict(start_to_ready_ms=elapsed_ms(started, ready),
+                start_to_first_verified_https_ms=elapsed_ms(started, https_ticks),
+                ready_to_first_verified_https_ms=elapsed_ms(ready, https_ticks),
+                start_to_stop_called_ms=elapsed_ms(started, stopping),
+                stop_ms=elapsed_ms(stopping, stopped),
+                start_to_stopped_ms=elapsed_ms(started, stopped))
 
 
 def config(reverse, external_address=None, direct_address="127.0.0.1", caller_api_port=None, asset_fixture=None, ipv6_payload=False):
@@ -2254,24 +2297,30 @@ def main():
             guard_stop = directory / (label + ".guard-stop")
             guard_stop.unlink(missing_ok=True)
             guard = None
-            with (directory / (label + ".log")).open("w") as log:
+            measure_https = args.vpn and ending == "stop"
+            log_path = directory / (label + ".log")
+            with log_path.open("w") as log:
                 windows_path = lambda path: "Z:" + str(path).replace("/", "\\") if args.wine_bottle else str(path)
                 command = (["/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine",
                             "--bottle", args.wine_bottle] if args.wine_bottle else [])
                 command += [str(probe), ("run-vpn-no-reconnect" if ending == "no-reconnect" else "run-vpn") if args.vpn else "run-proxy", windows_path(profile), "240", windows_path(stop_file), windows_path(state_file)]
                 if assets is not None:
                     command.append(windows_path(assets))
-                process = subprocess.Popen(command, cwd=directory, stdout=log, stderr=log)
+                env = dict(os.environ, FLUTTER_VLESS_TEST_HTTPS_TIMING="1") if measure_https else None
+                process = subprocess.Popen(command, cwd=directory, stdout=log, stderr=log, env=env)
                 if args.vpn:
                     guard = subprocess.Popen([str(probe), "guard", str(process.pid), "240", str(guard_stop)],
                                              cwd=directory, stdout=log, stderr=log)
                 try:
                     if args.vpn:
                         deadline = time.monotonic() + 65
-                        while "START_RETURN=1" not in (directory / (label + ".log")).read_text(errors="replace"):
+                        while "START_RETURN=1" not in log_path.read_text(errors="replace"):
                             if process.poll() is not None or time.monotonic() >= deadline:
                                 raise RuntimeError("VPN network setup did not become ready")
-                            time.sleep(0.25)
+                            time.sleep(0.025 if measure_https else 0.25)
+                        if measure_https:
+                            assert external_http(external_address, vpn=True, verify_body=True) == "HTTP 200"
+                            first_https_ticks = windows_qpc_ticks()
                         routes = subprocess.check_output([
                             "powershell", "-NoProfile", "-Command",
                             "Get-NetRoute -InterfaceAlias flutter_vless_tun | Select-Object DestinationPrefix,NextHop,RouteMetric | ConvertTo-Json"], text=True, timeout=25)
@@ -2453,6 +2502,12 @@ def main():
                                 for ipv6 in (False, True):
                                     actual = adapter_datagram(directory, subnet, ipv6, False)
                                     results.append(dict(mode=label, check=f"adapter {subnet} {'IPv6' if ipv6 else 'IPv4'} restored", actual=actual, passed=True))
+                    if measure_https:
+                        timing_log = log_path.read_text(errors="replace")
+                        assert code == 0 and "STOPPED=1" in timing_log.splitlines(), "Measured native VPN did not stop"
+                        timing = vpn_https_timing(timing_log, first_https_ticks)
+                        results.append(dict(mode=label, check="first verified HTTPS through Wintun and native Stop",
+                                            clock="Windows QPC, floor ms", passed=True, **timing))
                     results.append(dict(mode=label, check="requested termination", passed=ending == "crash" or code == 0, exit_code=code))
                 finally:
                     if process.poll() is None:

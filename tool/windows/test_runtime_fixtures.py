@@ -104,6 +104,21 @@ class RuntimeFixtureTest(unittest.TestCase):
             with self.subTest(log=log), self.assertRaises(AssertionError):
                 runtime.profile_timing(log, "STOP", 200)
 
+    def test_vpn_https_timing_requires_one_ordered_native_clock(self):
+        start = "VPN_HTTPS_START_QPC=10000,14003,2000\n"
+        stop = "VPN_HTTPS_STOP_QPC=25804,27015\n"
+        self.assertEqual(runtime.vpn_https_timing(start + stop, 16007), dict(
+            start_to_ready_ms=2001, start_to_first_verified_https_ms=3003,
+            ready_to_first_verified_https_ms=1002, start_to_stop_called_ms=7902,
+            stop_ms=605, start_to_stopped_ms=8507))
+        for bad_log, https_tick in (("START_ELAPSED_MS=2001\nSTOP_ELAPSED_MS=605\n", 16007),
+                                    (start, 16007), (start + stop + start, 16007),
+                                    (start + stop + stop, 16007), (start + stop, 14002),
+                                    (start + stop, 25805), (start.replace(",2000", ",0") + stop, 16007),
+                                    (start + stop.replace("27015", "25000"), 16007)):
+            with self.subTest(log=bad_log, https_tick=https_tick), self.assertRaises(AssertionError):
+                runtime.vpn_https_timing(bad_log, https_tick)
+
     def test_balancer_snapshot_admits_only_two_numeric_rows(self):
         state = Mock()
         for rows in ("", "3,1,2\n4,1,1"):

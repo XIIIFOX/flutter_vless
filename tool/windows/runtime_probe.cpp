@@ -343,12 +343,27 @@ int main(int argc,char** argv) {
   }
   std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing;
   if (routing_requested) routing = flutter_vless::native_routing::NativeRoutingIntent{0, "selected-default"};
-  const auto start = std::chrono::steady_clock::now();
-  bool started=manager.Start(config,!vpn,options,assets,routing);
+  const bool measure_https = vpn && [] {
+    wchar_t value[4]{};
+    return GetEnvironmentVariableW(L"FLUTTER_VLESS_TEST_HTTPS_TIMING", value, 4) == 1 && value[0] == L'1';
+  }();
+  LARGE_INTEGER qpc_frequency{};
+  if (measure_https && !QueryPerformanceFrequency(&qpc_frequency)) return 30;
+  const auto qpc_ticks = [] {
+    LARGE_INTEGER ticks{};
+    return QueryPerformanceCounter(&ticks) ? ticks.QuadPart : 0;
+  };
   const auto elapsed_ms = [](auto since) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - since).count();
   };
-  std::cout<<"START_ELAPSED_MS="<<elapsed_ms(start)<<'\n'<<"START_RETURN="<<started<<std::endl;
+  const auto start = std::chrono::steady_clock::now();
+  const auto start_ticks = measure_https ? qpc_ticks() : 0;
+  bool started=manager.Start(config,!vpn,options,assets,routing);
+  const auto ready_ticks = measure_https ? qpc_ticks() : 0;
+  const auto start_ms = elapsed_ms(start);
+  if (measure_https)
+    std::cout << "VPN_HTTPS_START_QPC=" << start_ticks << ',' << ready_ticks << ',' << qpc_frequency.QuadPart << '\n';
+  std::cout<<"START_ELAPSED_MS="<<start_ms<<'\n'<<"START_RETURN="<<started<<std::endl;
   if(!started){manager.Stop();std::cout<<manager.GetProviderDebugSnapshot()<<std::endl;return 3;}
   int seconds=argc>3?std::stoi(argv[3]):20;
   const std::filesystem::path stop_file = arguments.size() > 4 ? arguments[4] : L"";
@@ -407,8 +422,13 @@ int main(int argc,char** argv) {
   if (!stop_file.empty()) { std::ifstream signal(stop_file); signal >> control; }
   if (control == "shutdown") { manager.Shutdown(); std::cout << "SHUTDOWN_PROTECTING=" << manager.IsProtecting() << std::endl; return 0; }
   const auto stop = std::chrono::steady_clock::now();
+  const auto stop_ticks = measure_https ? qpc_ticks() : 0;
   manager.Stop();
-  std::cout<<"STOP_ELAPSED_MS="<<elapsed_ms(stop)<<'\n'<<"STOPPED="<<!manager.IsRunning()<<std::endl;
+  const auto stopped_ticks = measure_https ? qpc_ticks() : 0;
+  const auto stop_ms = elapsed_ms(stop);
+  if (measure_https)
+    std::cout << "VPN_HTTPS_STOP_QPC=" << stop_ticks << ',' << stopped_ticks << '\n';
+  std::cout<<"STOP_ELAPSED_MS="<<stop_ms<<'\n'<<"STOPPED="<<!manager.IsRunning()<<std::endl;
   if (balancer_diagnostics) {
     const bool empty_history = manager.GetBalancerSelections().empty();
     std::cout << "BALANCER_EMPTY_AFTER_STOP=" << empty_history << std::endl;

@@ -348,6 +348,18 @@ jobs:
           if ($log -notmatch 'WINDOWS_PRIVATE_PORT_OCCUPIED_RUNTIME_PASS=2') { throw 'VPN traffic with occupied preferred TCP ports was not tested' }
           if ([regex]::Matches($log, '(?m)^WINDOWS_TRAFFIC_COUNTER_RUNTIME_PASS=4\r?$').Count -ne 1) { throw 'VPN owned-counter acceptance is incomplete' }
           if ([regex]::Matches($log, '(?m)^WINDOWS_FAKEDNS_RUNTIME_PASS=2\r?$').Count -ne 1) { throw 'FakeDNS TCP/UDP and restart acceptance is incomplete' }
+          $results = Get-Content build/windows-runtime/vpn-results.json -Raw | ConvertFrom-Json
+          $timing = @($results | Where-Object { $_.check -eq 'first verified HTTPS through Wintun and native Stop' })
+          if ($timing.Count -ne 2) { throw 'Expected one HTTPS timing result per VPN routing direction' }
+          foreach ($mode in @('vpn', 'vpn-reverse')) {
+            $samples = @($timing | Where-Object { $_.mode -eq $mode })
+            if ($samples.Count -ne 1 -or $samples[0].passed -ne $true) { throw "Missing successful HTTPS timing for $mode" }
+            $sample = $samples[0]
+            foreach ($field in @('start_to_ready_ms', 'start_to_first_verified_https_ms', 'stop_ms')) {
+              if ($sample.$field -isnot [long] -and $sample.$field -isnot [int]) { throw "Missing or invalid $field for $mode" }
+            }
+            "- $($mode): ready $($sample.start_to_ready_ms) ms, first verified HTTPS $($sample.start_to_first_verified_https_ms) ms from Start, Stop $($sample.stop_ms) ms." | Add-Content $env:GITHUB_STEP_SUMMARY
+          }
       - name: Exercise numeric IPv6 routing runtime
         if: ${{ inputs.validation == 'numeric-ipv6' }}
         shell: pwsh

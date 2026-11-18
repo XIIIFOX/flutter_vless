@@ -21,6 +21,12 @@ from fixtures.xhttp_listener_provenance import bind as bind_xhttp_cleanup
 
 
 HEAD = 'a' * 40
+TRANSPORT_LIFETIME_INPUTS = (
+    'third_party/xray-native-dns/ws_tls_lifetime_patch.py',
+    'third_party/xray-native-dns/tcp_dns_lifetime_patch.py',
+    'third_party/xray-native-dns/overlay/transport/internet/websocket/native_ws_lifetime_test.go',
+    'third_party/xray-native-dns/overlay/app/dns/native_tcp_lifetime_test.go',
+)
 
 
 def elf(abi, tag=b'fresh H3 v26.11.9'):
@@ -357,25 +363,37 @@ class AndroidPreviewControls(unittest.TestCase):
             self.validate()
 
     def test_omitting_input_from_both_source_maps_is_rejected(self):
-        name = 'packages/flutter_vless_android/android/build_xray.sh'
-        del self.receipt['source_sha256'][name]
-        del self.result['source_sha256'][name]
-        self.save()
-        with self.assertRaisesRegex(ValueError, 'sources|source provenance'):
-            self.validate()
+        receipt_sources = self.receipt['source_sha256']
+        result_sources = self.result['source_sha256']
+        for name in ('packages/flutter_vless_android/android/build_xray.sh', *TRANSPORT_LIFETIME_INPUTS):
+            with self.subTest(name=name), mock.patch.dict(receipt_sources), mock.patch.dict(result_sources):
+                del receipt_sources[name]
+                del result_sources[name]
+                self.save()
+                with self.assertRaisesRegex(ValueError, 'sources|source provenance'):
+                    self.validate()
 
     def test_dynamic_input_vector_matches_actual_ordinary_producer(self):
         source = (Path(builder.__file__).resolve().parents[1] /
                   'packages/flutter_vless_android/android/build_xray.sh').read_text()
         block = source.split("<<'PYCLASSIC'", 1)[1].split('\nPYCLASSIC', 1)[0]
         vector = block[block.index('paths=[root/'):block.index('if any(p.is_symlink()')]
-        # Execute only the existing file-enumeration assignments, never the
+        # Execute only the file-enumeration block in ordinary mode, never the
         # embedded module download, patcher, compiler, or executable.
         parsed = ast.parse(vector)
-        self.assertTrue(all(isinstance(node, (ast.Assign, ast.AugAssign)) for node in parsed.body))
+        assignments = (ast.Assign, ast.AugAssign)
+        for node in parsed.body:
+            if isinstance(node, ast.If):
+                self.assertIsInstance(node.test, ast.Name)
+                self.assertEqual(node.test.id, 'with_balancer')
+                self.assertFalse(node.orelse)
+                self.assertTrue(all(isinstance(statement, assignments) for statement in node.body))
+            else:
+                self.assertIsInstance(node, assignments)
         namespace = {'root': self.root, 'mobile': self.root / 'third_party/xray-mobile',
                      'capability': self.root / 'third_party/xray-vpn-routing',
-                     'protect': self.root / 'packages/flutter_vless_android/android/xray-protect'}
+                     'protect': self.root / 'packages/flutter_vless_android/android/xray-protect',
+                     'with_balancer': False}
         exec(compile(parsed, '<ordinary-input-vector-only>', 'exec'), namespace)
         self.assertEqual(builder.ordinary_inputs(self.root),
                          sorted({p.relative_to(self.root).as_posix() for p in namespace['paths']}))

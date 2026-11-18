@@ -17,6 +17,11 @@ MOBILE = 'github.com/EbrahimTahernejad/xray-mobile'
 SUM = 'h1:fixture-core='
 TAGS = 'flutter_vless_vpn_routing_cli,flutter_vless_vpn_routing,flutter_vless_managed_service_lifetimes'
 BALANCER_TAGS = 'flutter_vless_balancer_diagnostics_cli,flutter_vless_balancer_diagnostics'
+TRANSPORT_LIFETIME_INPUTS = (
+    'ws_tls_lifetime_patch.py', 'tcp_dns_lifetime_patch.py',
+    'overlay/transport/internet/websocket/native_ws_lifetime_test.go',
+    'overlay/app/dns/native_tcp_lifetime_test.go',
+)
 
 GO = r'''
 import json,os,pathlib,sys
@@ -121,7 +126,12 @@ def apply(source, destination, *, routing, cli):
  (destination/'balancer-applied').write_text('routing' if routing else 'classic')
 ''')
         classic=self.root/'third_party/xray-native-dns';(classic/'overlay/app/dns').mkdir(parents=True)
-        for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py','xdrive_lifetime_patch.py','geodata_lifetime_patch.py','xhttp_listener_lifetime_patch.py','pin-manifest.json','overlay/main/native_services_cli.go','overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go','overlay/app/dns/native_classic_lifetime.go','overlay/app/dns/native_classic_lifetime_test.go'):
+        for name in ('classic_lifetime_patch.py', 'h3_lifetime_patch.py', 'darwin_interface_bind_patch.py',
+                     'xdrive_lifetime_patch.py', 'geodata_lifetime_patch.py', 'xhttp_listener_lifetime_patch.py',
+                     'pin-manifest.json', 'overlay/main/native_services_cli.go',
+                     'overlay/transport/internet/xdrive/native_lifetime.go', 'overlay/transport/internet/native_service_lifetime.go',
+                     'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go',
+                     *TRANSPORT_LIFETIME_INPUTS):
             (classic/name).parent.mkdir(parents=True,exist_ok=True)
             (classic/name).write_text('shared classic fixture')
         self.cache = self.root/'module-cache/Core';self.cache.mkdir(parents=True)
@@ -203,6 +213,9 @@ def apply(source, destination, *, routing, cli):
         self.assertEqual(receipt['lifetime_patch_scope'], ['classic_dns', 'xhttp_h3_dial', 'xdrive_services', 'geodata_updater', 'xhttp_h2_listener_cleanup'])
         self.assertEqual(receipt['h3_lifetime_patch_sha256'], hashlib.sha256((self.root/key).read_bytes()).hexdigest())
         self.assertEqual(receipt['source_sha256'][key], receipt['h3_lifetime_patch_sha256'])
+        for name in TRANSPORT_LIFETIME_INPUTS:
+            key = 'third_party/xray-native-dns/' + name
+            self.assertEqual(receipt['source_sha256'][key], hashlib.sha256((self.root/key).read_bytes()).hexdigest())
 
     def test_h3_patch_mutation_refuses_both_ordinary_and_routing_receipts(self):
         patch = self.root/'third_party/xray-native-dns/h3_lifetime_patch.py'

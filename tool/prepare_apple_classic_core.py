@@ -13,8 +13,9 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-UPSTREAM = ('app/dns/dns.go', 'app/dns/nameserver_udp.go', 'transport/internet/udp/dispatcher.go',
-            'transport/internet/splithttp/dialer.go', 'transport/internet/splithttp/hub.go', 'transport/internet/sockopt_darwin.go',
+UPSTREAM = ('app/dns/dns.go', 'app/dns/nameserver_udp.go', 'app/dns/nameserver_tcp.go', 'transport/internet/udp/dispatcher.go',
+            'transport/internet/splithttp/dialer.go', 'transport/internet/splithttp/hub.go',
+            'transport/internet/websocket/dialer.go', 'transport/internet/sockopt_darwin.go',
             'core/xray.go', 'transport/internet/xdrive/xdrive.go', 'transport/internet/xdrive/client.go',
             'transport/internet/xdrive/drive.go', 'transport/internet/xdrive/s3.go',
             'transport/internet/xdrive/storage.go', 'app/geodata/geodata.go', 'app/geodata/download.go')
@@ -67,8 +68,9 @@ def metadata(go, arguments, mobile, timeout=60):
 
 
 def reference_hashes(source, parent, routing=False):
-    # A routing replacement may contain other intentional overlay files. Only
-    # compare the three Classic upstream edits, H3 dial edit and two helpers.
+    # Recompose the exact lifetime edits in the guarded upstream files. A
+    # routing replacement may also contain other intentional overlay files.
+    copier = applier()
     with tempfile.TemporaryDirectory(prefix='classic-reference-', dir=parent) as directory:
         reference = Path(directory)
         for relative in UPSTREAM:
@@ -88,7 +90,7 @@ def reference_hashes(source, parent, routing=False):
         if routing:
             # The routing composition changes NewWithContext in the same file
             # as XDRIVE ownership. Accept only that exact known composition.
-            for relative, before, after in applier().patches():
+            for relative, before, after in copier.patches():
                 if relative == 'core/xray.go':
                     replace(relative, before, after)
         patch = load(ROOT / 'third_party/xray-native-dns/classic_lifetime_patch.py', 'ordinary_classic_reference')
@@ -97,8 +99,8 @@ def reference_hashes(source, parent, routing=False):
         h3.apply(reference, replace)
         binding = load(ROOT / 'third_party/xray-native-dns/darwin_interface_bind_patch.py', 'ordinary_darwin_binding_reference')
         binding.apply(reference, replace)
-        for name in ('xdrive_lifetime_patch', 'geodata_lifetime_patch', 'xhttp_listener_lifetime_patch'):
-            load(ROOT / 'third_party/xray-native-dns' / (name + '.py'), 'ordinary_' + name).apply(reference, replace)
+        for module in copier.managed_service_modules():
+            module.apply(reference, replace)
         return {relative: digest(reference / relative) for relative in UPSTREAM}
 
 
@@ -173,7 +175,8 @@ def prepare(mobile, destination, go, *, routing=False, balancer_diagnostics=Fals
     if tree(source) != before or tree(effective) != existing or any(digest(ROOT / name) != value for name, value in input_hashes.items()):
         raise ValueError('Core source or patch inputs changed')
     report = {'success': False, 'stage': 'pre-build-preparation', 'mode': mode, 'module': module, 'version': version, 'sum': checksum,
-              'scope': 'Classic DNS/XHTTP H3/XDRIVE/GeoDAT lifetime, XHTTP H2 failed-listener cleanup and mandatory Darwin interface binding; no full native-DNS context overlay',
+              'scope': ('Classic DNS/XHTTP H3/XDRIVE/GeoDAT/WebSocket TLS/routed TCP DNS lifetime, '
+                        'XHTTP H2 failed-listener cleanup and mandatory Darwin interface binding; no full native-DNS context overlay'),
               'routing_capability_expected': 1 if routing else 0,
               'core_commit': pin.get('core_commit'), 'core_source': str(source),
               'module_cache_before_sha256': before,

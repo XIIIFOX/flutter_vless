@@ -14,6 +14,13 @@ MANIFEST = json.loads((HERE / 'pin-manifest.json').read_text())
 CLASSIC = HERE.parent / 'xray-native-dns'
 H3_PATH = 'transport/internet/splithttp/dialer.go'
 DARWIN_PATH = 'transport/internet/sockopt_darwin.go'
+MANAGED_LIFETIME_PATCHES = (
+    'xdrive_lifetime_patch',
+    'geodata_lifetime_patch',
+    'xhttp_listener_lifetime_patch',
+    'ws_tls_lifetime_patch',
+    'tcp_dns_lifetime_patch',
+)
 
 
 def classic_input_paths():
@@ -29,7 +36,7 @@ def lifetime_input_paths():
 
 def managed_service_modules():
     result = []
-    for name in ('xdrive_lifetime_patch', 'geodata_lifetime_patch', 'xhttp_listener_lifetime_patch'):
+    for name in MANAGED_LIFETIME_PATCHES:
         spec = importlib.util.spec_from_file_location('routing_' + name, CLASSIC / (name + '.py'))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -42,6 +49,8 @@ def managed_service_helpers():
     paths = [overlay / 'main/native_services_cli.go',
              overlay / 'transport/internet/native_service_lifetime.go',
              overlay / 'transport/internet/xdrive/native_lifetime.go',
+             overlay / 'transport/internet/websocket/native_ws_lifetime_test.go',
+             overlay / 'app/dns/native_tcp_lifetime_test.go',
              *sorted((overlay / 'transport/internet/xdrive').glob('*_test.go')),
              *sorted((overlay / 'app/geodata').glob('native_*.go'))]
     core_test = overlay / 'core/native_managed_lifetime_test.go'
@@ -51,8 +60,7 @@ def managed_service_helpers():
 
 
 def managed_service_input_paths():
-    return [CLASSIC / 'xdrive_lifetime_patch.py', CLASSIC / 'geodata_lifetime_patch.py',
-            CLASSIC / 'xhttp_listener_lifetime_patch.py',
+    return [*(CLASSIC / (name + '.py') for name in MANAGED_LIFETIME_PATCHES),
             *managed_service_helpers()]
 
 

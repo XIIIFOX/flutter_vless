@@ -23,6 +23,12 @@ XDRIVE_PATCH = 'third_party/xray-native-dns/xdrive_lifetime_patch.py'
 GEODATA_PATCH = 'third_party/xray-native-dns/geodata_lifetime_patch.py'
 XHTTP_LISTENER_PATCH = 'third_party/xray-native-dns/xhttp_listener_lifetime_patch.py'
 XHTTP_HUB = 'transport/internet/splithttp/hub.go'
+TRANSPORT_DEADLINE_INPUTS = (
+    'third_party/xray-native-dns/ws_tls_lifetime_patch.py',
+    'third_party/xray-native-dns/tcp_dns_lifetime_patch.py',
+    'third_party/xray-native-dns/overlay/transport/internet/websocket/native_ws_lifetime_test.go',
+    'third_party/xray-native-dns/overlay/app/dns/native_tcp_lifetime_test.go',
+)
 PRODUCER_INPUTS = ('tool/build_apple_core_preview.sh', 'third_party/xray-mobile/go.mod',
                    'third_party/xray-mobile/go.sum', 'third_party/xray-vpn-routing/apply.py',
                    'third_party/xray-vpn-routing/pin-manifest.json',
@@ -32,7 +38,8 @@ PRODUCER_INPUTS = ('tool/build_apple_core_preview.sh', 'third_party/xray-mobile/
                    'third_party/xray-native-dns/overlay/transport/internet/xdrive/native_lifetime.go',
                            'third_party/xray-native-dns/overlay/transport/internet/native_service_lifetime.go',
                    'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime.go',
-                   'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime_test.go')
+                   'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime_test.go',
+                   *TRANSPORT_DEADLINE_INPUTS)
 
 
 def digest(path):

@@ -59,6 +59,12 @@ def source_snapshot():
              CAPABILITY / 'pin-manifest.json', MOBILE / 'go.mod', MOBILE / 'go.sum']
     classic = ROOT / 'third_party/xray-native-dns'
     paths.extend(classic / name for name in ('classic_lifetime_patch.py','h3_lifetime_patch.py','darwin_interface_bind_patch.py', 'pin-manifest.json', 'overlay/app/dns/native_classic_lifetime.go', 'overlay/app/dns/native_classic_lifetime_test.go'))
+    paths.extend(classic / name for name in (
+        'ws_tls_lifetime_patch.py',
+        'tcp_dns_lifetime_patch.py',
+        'overlay/transport/internet/websocket/native_ws_lifetime_test.go',
+        'overlay/app/dns/native_tcp_lifetime_test.go',
+    ))
     paths.extend(sorted((CAPABILITY / 'overlay').rglob('*.go')))
     return {str(path.relative_to(ROOT)).replace(os.sep, '/'): digest(path) for path in paths}
 
@@ -225,6 +231,14 @@ def main(argv=None):
                     cwd=core, environment=environment, seconds=45, results=results)
             require_pass(name + '-pure', selections[name], results)
         if arguments.run_runtime:
+            for name, package, test in (
+                ('websocket-lifetime', './transport/internet/websocket', 'TestNativeWebSocketHandshakeLifetime'),
+                ('tcp-dns-lifetime', './app/dns', 'TestNativeRoutedTCPDNSLifetime'),
+            ):
+                checked(name, [str(go), 'test', '-mod=readonly', '-count=1', '-v',
+                               '-timeout=20s', '-run', test_pattern([test]), package],
+                        cwd=core, environment=environment, seconds=120, results=results)
+                require_pass(name, [test], results)
             checked('runtime', [str(binaries['dispatcher']), '-test.run', test_pattern(runtime_selection), '-test.v', '-test.timeout=75s'],
                     cwd=core, environment=environment, seconds=90, results=results)
             require_pass('runtime', runtime_selection, results)

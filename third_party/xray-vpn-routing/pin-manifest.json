@@ -16,9 +16,11 @@
     "common/mux/session.go": "e47da02c861acbfb02712177e28e852d682d7d8c157dec94ef38a3dc6c604392",
     "core/xray.go": "66edf1a9ed6b9683b4f668612e6c6e876830cffb07521517f03a21e630f7ef15",
     "app/dns/dns.go": "51675585d892f1dceeb0d2520303ac73ef0084e58af4414e52f86bf9b2bd5fef",
+    "app/dns/nameserver_tcp.go": "0c6cd445ace96944fe04fcddfdd4e64b9553eb3802c6003504ac7880dcbf7765",
     "app/dns/nameserver_udp.go": "d5f53d45c9170c6b6c6a91af6f078b6c2f453b22a7679df818c643a23cf59a7f",
     "transport/internet/udp/dispatcher.go": "76bdf02b75c5c71c424bc177c4f6284d15b4b23c271b2b5653de0ced61b86dfe",
     "transport/internet/system_listener.go": "b822d00bb6c6538e96c969db05b1e970f40bf7f0908299dbde1b4b6f9b201e4e",
+    "transport/internet/websocket/dialer.go": "247b1512b2c868f7766a7f40dca88ab69ce248ddc5a58bd9ae57d06deaa01c56",
     "transport/internet/splithttp/hub.go": "a651b04643dde70653955a55501f4607d7ed6bb647ea3d39596fb63f7d734aaa"
   }
 }

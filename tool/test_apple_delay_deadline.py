@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Actual shared Swift delay sockets against owned, slow loopback peers.
+"""Actual Apple delay sockets and provider reply deadlines.
 
-No Core, native SDK, system VPN, public network or credentials are used.
+Uses owned loopback peers and synthetic provider callbacks without a system VPN.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
 import hashlib
 from pathlib import Path
+import re
 import socket
 import subprocess
 import threading
@@ -19,7 +20,150 @@ PLATFORMS = {
     'ios': ROOT / 'ios/flutter_vless/Sources/flutter_vless_privacy',
     'macos': ROOT / 'packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_privacy',
 }
-CASES = ('http-connect', 'socks-connect', 'http-response', 'tls-record')
+SOCKET_CASES = ('http-connect', 'socks-connect', 'http-response', 'tls-record')
+PROVIDER_CASES = ('provider-slow', 'provider-late', 'provider-default', 'provider-error')
+CASES = SOCKET_CASES + PROVIDER_CASES
+
+PROVIDER_FIXTURE = r'''
+import OSLog
+
+typealias FlutterResult = (Any?) -> Void
+struct FlutterMethodCall { let arguments: Any? }
+struct FlutterError { let code: String; let message: String; let details: Any? }
+enum NativeLogPrivacy { static func operationError(_ error: Error) -> Error { error } }
+let pluginLog = Logger(subsystem: "flutter-vless-fixture", category: "provider-delay")
+
+enum ProviderStatus { case connected, reasserting }
+struct FixtureProviderManager { let connection: Any }
+struct FixtureProxyOnlyRunner {
+    let isRunning = false
+    func measureConnectedDelay(url: String) async -> Int { fatalError("unexpected proxy-only request") }
+}
+
+final class NETunnelProviderSession {
+    let status = ProviderStatus.connected
+    let replies = DispatchGroup()
+    let expectedMessage: String
+    let delay: TimeInterval
+
+    init(message: String, delay: TimeInterval) {
+        self.expectedMessage = message
+        self.delay = delay
+    }
+
+    func sendProviderMessage(_ data: Data, responseHandler: @escaping (Data?) -> Void) throws {
+        precondition(String(decoding: data, as: UTF8.self) == expectedMessage)
+        if delay < 0 { throw NSError(domain: "fixture", code: 23) }
+        replies.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            Thread.sleep(forTimeInterval: self.delay)
+            responseHandler(Data("173".utf8))
+            responseHandler(Data("174".utf8))
+            self.replies.leave()
+        }
+    }
+}
+
+struct FixtureTimeoutQueue {
+    let queue: DispatchQueue
+    static func global(qos: DispatchQoS.QoSClass) -> Self { .init(queue: .global(qos: qos)) }
+    func asyncAfter(deadline: DispatchTime, execute: @escaping @Sendable () -> Void) {
+        // Force the late provider callback to reach the host before its timer
+        // callback even though the monotonic deadline has already passed.
+        let schedulingDelay: TimeInterval = CommandLine.arguments[1] == "provider-late" ? 2 : 0
+        queue.asyncAfter(deadline: deadline + schedulingDelay, execute: execute)
+    }
+}
+
+final class ProviderHost {
+    let manager: FixtureProviderManager?
+    let proxyOnlyRunner = FixtureProxyOnlyRunner()
+    var packetTunnelManager: ProviderHost? { self }
+
+    init(session: NETunnelProviderSession) {
+        manager = FixtureProviderManager(connection: session)
+    }
+
+    func measureDelay(url: String, result: @escaping FlutterResult) {
+        getConnectedServerDelay(call: FlutterMethodCall(arguments: ["url": url]), result: result)
+    }
+}
+
+func exerciseProvider(_ scenario: String) {
+    let sdkError = scenario == "provider-error"
+    let ordinary = scenario == "provider-default" || sdkError
+    let late = scenario == "provider-late"
+    let url = "https://deadline.invalid/"
+    let replyDelays: [String: TimeInterval] = [
+        "provider-slow": 10.3, "provider-late": 11.7,
+        "provider-default": 3.6, "provider-error": -1,
+    ]
+    let session = NETunnelProviderSession(message: ordinary ? "xray_runtime_state" : "xray_delay" + url,
+                                          delay: replyDelays[scenario]!)
+    let host = ProviderHost(session: session)
+    let result = DispatchGroup()
+    let started = ProcessInfo.processInfo.systemUptime
+    result.enter()
+    func finish(_ value: Int) {
+        let elapsed = ProcessInfo.processInfo.systemUptime - started
+        print("PROVIDER_RESULT=\(value) ELAPSED=\(elapsed)")
+        result.leave()
+    }
+    if ordinary {
+        Task {
+            do {
+                _ = try await host.sendProviderMessage(data: Data("xray_runtime_state".utf8))
+                finish(0)
+            } catch {
+                let failure = error as NSError
+                finish(failure.domain == (sdkError ? "fixture" : "VPN") ? failure.code : 0)
+            }
+        }
+    } else {
+        host.measureDelay(url: url) { finish(($0 as? Int) ?? 0) }
+    }
+    let watchdog = DispatchTime.now() + 14
+    precondition(result.wait(timeout: watchdog) == .success, "missing provider result")
+    precondition(session.replies.wait(timeout: watchdog) == .success, "missing provider callbacks")
+    // Keep the successful delay request alive beyond its scheduled timeout so
+    // CheckedContinuation also detects a second completion from that direction.
+    if sdkError || (!ordinary && !late) {
+        let keepAlive = sdkError ? 3.6 : 12.5
+        let remaining = keepAlive - (ProcessInfo.processInfo.systemUptime - started)
+        if remaining > 0 { Thread.sleep(forTimeInterval: remaining) }
+    }
+}
+'''
+
+
+def provider_methods(source):
+    methods = []
+    for signature in ('private func getConnectedServerDelay', 'func sendProviderMessage'):
+        match = re.search(rf'^    {signature}\([^\n]*\n.*?^    }}$', source, re.M | re.S)
+        assert match, signature
+        method = match.group()
+        if signature == 'func sendProviderMessage':
+            assert method.count('DispatchQueue.global') == 1
+            method = method.replace('DispatchQueue.global', 'FixtureTimeoutQueue.global')
+        methods.append(method)
+    return 'extension ProviderHost {\n' + '\n'.join(methods) + '\n}'
+
+
+def run_provider_case(binary, case):
+    child = subprocess.run([str(binary), case], capture_output=True, text=True, timeout=15)
+    matches = re.findall(r'^PROVIDER_RESULT=(-?\d+) ELAPSED=([\d.eE+-]+)$', child.stdout, re.M)
+    assert child.returncode == 0 and len(matches) == 1, (case, child.stdout, child.stderr)
+    (value, elapsed), = matches
+    expected, lower, upper = {
+        'provider-slow': (173, 10.1, 11.5),
+        'provider-late': (-1, 11.5, 13),
+        'provider-default': (3, 2.8, 4.5),
+        'provider-error': (23, 0, 2),
+    }[case]
+    result = {'case': case, 'elapsed_seconds': float(elapsed), 'result': int(value)}
+    assert result['result'] == expected and lower <= result['elapsed_seconds'] <= upper, result
+    print('PASS', binary.parent.name, json.dumps(result), flush=True)
+    return result
 
 
 def exact(connection, length):
@@ -149,7 +293,13 @@ def main():
         folder = OUT / platform
         folder.mkdir(parents=True, exist_ok=True)
         main_source = folder / 'main.swift'
-        main_source.write_text('''import Foundation
+        plugin = source.with_name(source.name.removesuffix('_privacy'))
+        methods = provider_methods((plugin / 'FlutterVlessPlugin.swift').read_text())
+        main_source.write_text('import Foundation\n' + PROVIDER_FIXTURE + methods + '''
+if CommandLine.arguments[1].hasPrefix("provider-") {
+    exerciseProvider(CommandLine.arguments[1])
+    exit(0)
+}
 let credentials = try LocalProxyCredentials(username: "deadline-user", password: "deadline-password")
 let group = DispatchGroup()
 group.enter()
@@ -161,18 +311,21 @@ if group.wait(timeout: .now() + 12) != .success { print("DELAY_WORKER_EXCEEDED_T
 ''')
         files = ['LocalProxyAccessPolicy.swift', 'XrayServiceTags.swift', 'LocalProxyIOBudget.swift',
                  'LocalSOCKS5Client.swift', 'LocalHTTPProxyClient.swift', 'LocalProxyDelayClient.swift']
+        sources = [source / name for name in files] + [plugin / 'NativeOperationQueue.swift']
         binary = folder / 'probe'
         with (folder / 'compiler.log').open('w') as compiler_log:
-            subprocess.run(['xcrun', 'swiftc', '-O', *[str(source / name) for name in files],
+            subprocess.run(['xcrun', 'swiftc', '-O', *map(str, sources),
                             str(main_source), '-o', str(binary)], check=True, timeout=90,
                            stdout=subprocess.DEVNULL, stderr=compiler_log)
         cases = [args.case] if args.case else CASES
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            results = list(pool.map(lambda case: run_case(binary, case), cases))
+        with ThreadPoolExecutor(max_workers=len(cases)) as pool:
+            jobs = [pool.submit(run_provider_case if case in PROVIDER_CASES else run_case, binary, case)
+                    for case in cases]
+            results = [job.result() for job in jobs]
         report = {'platform': platform, 'scope': 'owned_loopback_no_vpn_or_core',
                   'results': results, 'source_sha256': {
-                      str((source / name).relative_to(ROOT)): hashlib.sha256((source / name).read_bytes()).hexdigest()
-                      for name in files},
+                      str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+                      for path in [*sources, plugin / 'FlutterVlessPlugin.swift']},
                   'fixture_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
         (folder / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
 

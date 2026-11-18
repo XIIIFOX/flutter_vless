@@ -5,9 +5,12 @@ import Darwin
 /// Uses an explicitly authenticated socket: CFNetwork's SOCKS dictionary offers
 /// noauth even with credentials. There is no origin connection or auth fallback.
 public enum LocalProxyDelayClient {
+    /// Total I/O budget, including SOCKS or HTTP CONNECT, TLS and response headers.
+    public static let timeoutSeconds: TimeInterval = 10
+
     public static func measure(url: URL, port: Int, credentials: LocalProxyCredentials?,
                                proxyProtocol: String = "socks", completion: @escaping (Int64) -> Void) {
-        let budget = LocalProxyIOBudget(timeout: 10)
+        let budget = LocalProxyIOBudget(timeout: timeoutSeconds)
         DispatchQueue.global(qos: .utility).async {
             completion(measureResponse(url: url, port: port, credentials: credentials,
                                        proxyProtocol: proxyProtocol, budget: budget))

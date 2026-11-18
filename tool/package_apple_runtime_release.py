@@ -9,7 +9,7 @@ import re
 import subprocess
 import zipfile
 
-from package_apple_core_preview import (EXPORTS, XDRIVE_PATCH, GEODATA_PATCH, XHTTP_LISTENER_PATCH,
+from package_apple_core_preview import (EXPORTS, TRANSPORT_DEADLINE_INPUTS, XDRIVE_PATCH, GEODATA_PATCH, XHTTP_LISTENER_PATCH,
                                        digest, git_bindings, require_managed_lifetimes,
                                        require_xhttp_listener_cleanup, safe_name, tree)
 from prepare_apple_classic_core import BALANCER_DIAGNOSTICS_INPUTS
@@ -72,7 +72,7 @@ def package(platform, framework, preparation, destination, head, repository=ROOT
                        'third_party/xray-native-dns/pin-manifest.json',
                        'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime.go',
                        'third_party/xray-native-dns/overlay/app/dns/native_classic_lifetime_test.go'}
-    expected_inputs.update({XDRIVE_PATCH, GEODATA_PATCH, XHTTP_LISTENER_PATCH,
+    expected_inputs.update({XDRIVE_PATCH, GEODATA_PATCH, XHTTP_LISTENER_PATCH, *TRANSPORT_DEADLINE_INPUTS,
                            'third_party/xray-native-dns/overlay/main/native_services_cli.go',
                            'third_party/xray-native-dns/overlay/transport/internet/xdrive/native_lifetime.go',
                            'third_party/xray-native-dns/overlay/transport/internet/native_service_lifetime.go'})

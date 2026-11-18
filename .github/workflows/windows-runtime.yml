@@ -93,6 +93,23 @@ jobs:
           Copy-Item build/windows-routing-preview/xray.exe build/windows-runtime/xray.exe -Force
           Copy-Item build/windows-routing-preview/result.json build/windows-runtime/native-routing-build-results.json
           Get-FileHash build/windows-runtime/xray.exe | Format-Table | Out-File -Append build/windows-runtime/binary-checksums.log
+      - name: Check WebSocket and TCP DNS cancellation in the candidate source
+        if: ${{ inputs.runtime_source != 'published' }}
+        shell: pwsh
+        run: |
+          $log = Join-Path $PWD 'build/windows-runtime/transport-lifetime.log'
+          Push-Location build/windows-routing-preview/Core
+          try {
+            go test -mod=readonly -count=1 -timeout=20s -v -run '^TestNative(WebSocketHandshakeLifetime|RoutedTCPDNSLifetime)$' ./transport/internet/websocket ./app/dns 2>&1 | Tee-Object -FilePath $log
+            if ($LASTEXITCODE) { throw 'Transport lifetime tests failed' }
+          } finally {
+            Pop-Location
+          }
+          foreach ($test in @('TestNativeWebSocketHandshakeLifetime', 'TestNativeRoutedTCPDNSLifetime')) {
+            if (-not (Select-String -Path $log -Pattern "^--- PASS: $test ")) {
+              throw "Transport lifetime test was omitted: $test"
+            }
+          }
       - name: Build and run native configuration, WFP policy, process and ACL tests
         shell: cmd
         run: |

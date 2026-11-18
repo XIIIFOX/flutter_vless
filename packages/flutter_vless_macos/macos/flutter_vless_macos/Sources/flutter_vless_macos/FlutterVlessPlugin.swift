@@ -1250,7 +1250,11 @@ public class FlutterVlessPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                     result(Int(delay))
                     return
                 }
-                let delay = try await packetTunnelManager?.sendProviderMessage(data: "xray_delay\(url)".data(using: .utf8)!) ?? "-1".data(using: .utf8)!
+                // Let the worker use its full I/O budget and deliver its reply.
+                let delay = try await packetTunnelManager?.sendProviderMessage(
+                    data: Data("xray_delay\(url)".utf8),
+                    replyTimeout: LocalProxyDelayClient.timeoutSeconds + 1
+                ) ?? Data("-1".utf8)
                 pluginLog.info("Connected delay response: \(String(decoding: delay, as: UTF8.self), privacy: .public)")
                 result(Int(String(decoding: delay, as: UTF8.self)))
             }catch{
@@ -2027,7 +2031,7 @@ final class PacketTunnelManager: ObservableObject {
     }
 
     @discardableResult
-    func sendProviderMessage(data: Data) async throws -> Data? {
+    func sendProviderMessage(data: Data, replyTimeout: TimeInterval = 3) async throws -> Data? {
         guard let manager = manager else {
             pluginLog.warning("sendProviderMessage skipped: manager is nil")
             return nil
@@ -2044,13 +2048,19 @@ final class PacketTunnelManager: ObservableObject {
 
         return try await withCheckedThrowingContinuation { continuation in
             let reply = NativeReplyGate<Data?> { continuation.resume(with: $0) }
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) {
-                reply.resolve(.failure(NSError(domain: "VPN", code: 3,
-                    userInfo: [NSLocalizedDescriptionKey: "Provider reply timed out"])))
+            let deadline = DispatchTime.now() + replyTimeout
+            let timeoutError = NSError(domain: "VPN", code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Provider reply timed out"])
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: deadline) {
+                reply.resolve(.failure(timeoutError))
             }
             do {
                 try session.sendProviderMessage(data) { response in
-                    reply.resolve(.success(response))
+                    if DispatchTime.now() < deadline {
+                        reply.resolve(.success(response))
+                    } else {
+                        reply.resolve(.failure(timeoutError))
+                    }
                 }
             } catch {
                 reply.resolve(.failure(error))

@@ -210,6 +210,25 @@ jobs:
         with:
           name: windows-runtime-${{ matrix.os }}
           path: build/windows-runtime
+      - name: Test typed split DNS and route conditions with the verified Core
+        shell: pwsh
+        run: |
+          @'
+          dependency_overrides:
+            flutter_vless_platform_interface:
+              path: packages/flutter_vless_platform_interface
+            flutter_vless_android:
+              path: packages/flutter_vless_android
+            flutter_vless_macos:
+              path: packages/flutter_vless_macos
+            flutter_vless_windows:
+              path: packages/flutter_vless_windows
+          '@ | Set-Content pubspec_overrides.yaml
+          flutter pub get
+          if ($LASTEXITCODE) { throw 'Plugin dependencies failed' }
+          $env:XRAY_PROFILE_TEST_NEW_CORE = (Resolve-Path build/windows-runtime/xray.exe -ErrorAction Stop).Path
+          flutter test --no-pub --reporter expanded test/xray_profile_core_integration_test.dart --plain-name 'typed split DNS and combined route conditions work on Core 26.11.9'
+          if ($LASTEXITCODE) { throw 'Typed split DNS or routing failed' }
       - name: Test example and Windows wrapper
         shell: pwsh
         run: |

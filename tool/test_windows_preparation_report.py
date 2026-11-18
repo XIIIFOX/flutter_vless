@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,17 +12,25 @@ WINDOWS = ROOT / "packages/flutter_vless_windows/windows"
 
 
 def extract(sources):
-    def part(name, begin, end):
+    def function(name, signature):
         text = sources[name]
-        if text.count(begin) != 1 or text.count(end) != 1:
+        anchor = "\n" + signature
+        if text.count(anchor) != 1:
             raise ValueError("Windows startup consumer boundary changed")
-        first, last = text.index(begin), text.index(end)
-        if first >= last:
+        body = text[text.index(anchor) + 1:]
+        # These consumers are top-level functions with an unindented closing
+        # brace. The runtime checks use a function-try-block on that line.
+        end = re.search(r"(?m)^}(?: catch .*\})?$", body)
+        if end is None:
             raise ValueError("Windows startup consumer boundary changed")
-        return text[first:last]
-    manager = part("v2ray_manager.cpp", "bool V2rayManager::Start(", "\nvoid V2rayManager::Stop()")
-    codec = part("flutter_vless_plugin.cpp", "flutter::EncodableValue StartupSuccessValue(",
-                 "\n/**\n * @brief Helper function to log messages")
+        return body[:end.end()] + "\n"
+
+    manager = function("v2ray_manager.cpp", "bool V2rayManager::Start(")
+    codec = "".join(function("flutter_vless_plugin.cpp", signature) for signature in (
+        "flutter::EncodableValue StartupSuccessValue(",
+        "flutter::EncodableValue StartupErrorValue(",
+        "void CompleteStartup(",
+    ))
     plugin = sources["flutter_vless_plugin.cpp"]
     begin = "        operations_.Submit([this, config, proxy_only, assets, routing, shared_result, options, generation, preparation_changes]() {"
     if plugin.count(begin) != 1:
@@ -31,7 +40,11 @@ def extract(sources):
     submission = plugin[first:last]
     if submission.count("CompleteStartup(*shared_result, ready, protecting, outcome);") != 1:
         raise ValueError("Windows startup callback no longer owns its outcome")
-    runtime = part("native_runtime.cpp", "static bool ManagedServicesAllowed(", "\nbool RoutingCapability(")
+    runtime = "".join(function("native_runtime.cpp", signature) for signature in (
+        "static unsigned ManagedServiceBits(",
+        "static bool ManagedServicesAllowed(",
+        "bool CheckPreparedConfig(",
+    ))
     return manager, codec, submission, runtime
 
 
@@ -258,6 +271,14 @@ class ExtractionTests(unittest.TestCase):
 
     def test_actual_sources_generate(self):
         self.assertIn("WINDOWS_PREPARATION_REPORT_CONSUMER_PASS=12", generated(self.sources))
+
+    def test_unrelated_adjacent_functions_are_excluded(self):
+        result = generated(self.sources)
+        self.assertIn("static unsigned ManagedServiceBits(", result)
+        self.assertIn("bool CheckPreparedConfig(", result)
+        for unrelated in ("InspectBundledCore(", "ValidateBundledProfile(",
+                          "CoreCapabilitiesValue(", "ProfileCheckValue("):
+            self.assertNotIn(unrelated, result)
 
     def test_missing_outcome_callback_refused(self):
         self.sources["flutter_vless_plugin.cpp"] = self.sources["flutter_vless_plugin.cpp"].replace(

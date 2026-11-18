@@ -3,9 +3,11 @@
 
 import argparse
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
+from copy import deepcopy
 import hashlib
-from http.client import HTTPConnection, HTTPException
+from http.client import HTTPConnection, HTTPSConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
@@ -74,8 +76,11 @@ def command(core, *arguments):
     return result.stdout.decode('utf-8')
 
 
-def certificate(core):
-    cert = json.loads(command(core, 'tls', 'cert', '-domain', SNI, '-name', SNI, '-expire', '1h'))
+def certificate(core, server_name=SNI, authority=False):
+    flags = ['-domain', server_name, '-name', server_name, '-expire', '1h']
+    if authority:
+        flags.append('-ca')
+    cert = json.loads(command(core, 'tls', 'cert', *flags))
     leaf = ssl.PEM_cert_to_DER_cert('\n'.join(cert['certificate']))
     return cert, hashlib.sha256(leaf).hexdigest()
 
@@ -208,7 +213,7 @@ def core_process(core, directory, name, config):
 
 
 @contextmanager
-def origin():
+def origin(tls_context=None):
     nonce = secrets.token_hex(16).encode('ascii')
     hits = []
 
@@ -230,6 +235,12 @@ def origin():
         def get_request(self):
             connection, address = super().get_request()
             connection.settimeout(1)
+            if tls_context is not None:
+                try:
+                    connection = tls_context.wrap_socket(connection, server_side=True)
+                except OSError:
+                    connection.close()
+                    raise
             return connection, address
 
     with Listener((LOOPBACK, 0), Handler) as listener:
@@ -280,6 +291,101 @@ def measure(core, directory, case, cert, pin, wrong_pin=False):
                 'server_stop_ms': server_result['stop_ms'], 'verified_http': verified}
 
 
+def check_managed_ws_bootstrap(core, directory, cert, pin):
+    """Require app HTTPS over the same managed pin before counting readiness."""
+    logical = 'upstream.fixture.invalid'
+    ws_host = 'websocket.fixture.invalid'
+    app_host = 'https-app.fixture.invalid'
+    loop, scope, leaf, denied = ('flutter-vless-bootstrap-' + tag
+                                 for tag in ('loop', 'input', 'pin', 'denied'))
+    app_cert, _ = certificate(core, app_host, authority=True)
+    app_pem = '\n'.join(app_cert['certificate']) + '\n'
+    cert_path, key_path = directory / 'app.crt', directory / 'app.key'
+    cert_path.write_text(app_pem, encoding='utf-8')
+    key_path.write_text('\n'.join(app_cert['key']) + '\n', encoding='utf-8')
+    origin_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    origin_tls.load_cert_chain(cert_path, key_path)
+    app_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    app_tls.load_verify_locations(cadata=app_pem)
+    case = next(case for case in CASES if case.name == 'vless-websocket-tls')
+
+    with origin(origin_tls) as (origin_port, nonce, hits):
+        used = {origin_port}
+        server_port = unused_port(socket.SOCK_STREAM, used)
+        app_port = unused_port(socket.SOCK_STREAM, used)
+        server, authored = peers(core, case, server_port, app_port, origin_port, cert, pin)
+        server_stream = server['inbounds'][0]['streamSettings']
+        server_stream['tlsSettings']['rejectUnknownSni'] = True
+        server_stream['wsSettings']['host'] = ws_host
+        authored['dns'] = {'queryStrategy': 'UseIPv4', 'hosts': {logical: LOOPBACK}}
+        proxy = authored['outbounds'][0]
+        proxy['settings']['address'] = logical
+        proxy['streamSettings']['wsSettings'] = {'headers': {'Host': ws_host}, 'path': '/fixture'}
+
+        managed = deepcopy(authored)
+        managed['log']['loglevel'] = 'info'
+        managed_stream = managed['outbounds'][0]['streamSettings']
+        managed_stream['sockopt'] = {'domainStrategy': 'AsIs', 'dialerProxy': loop}
+        managed['outbounds'].extend([
+            {'tag': loop, 'protocol': 'loopback', 'settings': {'inboundTag': scope}},
+            {'tag': leaf, 'protocol': 'freedom', 'settings': {
+                'redirect': f'{LOOPBACK}:0',
+                # The synthetic peer uses loopback, which Freedom blocks by default.
+                'finalRules': [
+                    {'action': 'allow', 'ip': [f'{LOOPBACK}/32'],
+                     'port': str(server_port), 'network': 'tcp'},
+                    {'action': 'block', 'delay': 0},
+                ]}, 'streamSettings': {'sockopt': {'domainStrategy': 'AsIs'}}},
+            {'tag': denied, 'protocol': 'blackhole'},
+        ])
+        managed['routing'] = {'domainStrategy': 'AsIs', 'rules': [
+            {'type': 'field', 'inboundTag': [scope], 'domain': [f'full:{logical}'],
+             'port': str(server_port), 'outboundTag': leaf},
+            {'type': 'field', 'inboundTag': [scope], 'outboundTag': denied},
+        ]}
+        assert managed['dns'] == authored['dns']
+        assert managed['outbounds'][0]['settings'] == proxy['settings']
+        for identity in ('tlsSettings', 'wsSettings'):
+            assert managed_stream[identity] == proxy['streamSettings'][identity]
+
+        def app_probe(allow_failure=False):
+            conn = HTTPSConnection(LOOPBACK, app_port, timeout=2, context=app_tls)
+            conn.set_tunnel(app_host, 18080)
+            try:
+                conn.request('GET', '/fixture', headers={'Connection': 'close'})
+                response = conn.getresponse()
+                return response.status == 200 and response.read(len(nonce) + 1) == nonce
+            except (OSError, HTTPException):
+                if not allow_failure:
+                    raise
+                return False
+            finally:
+                conn.close()
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as stall, ExitStack() as accepted:
+            stall.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            stall.bind((LOOPBACK, server_port))
+            stall.listen()
+            stall.settimeout(2)
+            with core_process(core, directory, 'managed-ws-client', managed), ThreadPoolExecutor(1) as worker:
+                pending = worker.submit(app_probe, True)
+                connection, _ = stall.accept()
+                # Let the owned client exit before closing the accepted TCP
+                # socket, so the listening port can be used by the real peer.
+                accepted.enter_context(connection)
+                connection.settimeout(2)
+                with connection.makefile('rb') as tls_wire:
+                    assert tls_wire.read(3).startswith(b'\x16\x03'), 'The fixed pin did not receive a TLS ClientHello'
+                    assert not pending.result(timeout=3) and not hits, 'A stalled upstream was reported as usable'
+
+        with core_process(core, directory, 'managed-ws-server', server):
+            with core_process(core, directory, 'managed-ws-client', managed):
+                assert app_probe() and hits == ['/fixture'], 'The unchanged managed pin did not carry verified HTTPS'
+        log = (directory / 'managed-ws-client.log').read_text(encoding='utf-8', errors='replace')
+        assert f'[{scope} -> {leaf}]' in log, 'App HTTPS did not use the managed fixed pin'
+    print('MANAGED_WS_TLS_BOOTSTRAP_PASS=2', flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--core', required=True, type=Path)
@@ -299,6 +405,8 @@ def main():
         if args.case in (None, 'vless-raw-tls'):
             measure(core, directory, CASES[0], cert, pin, wrong_pin=True)
             print('WRONG_TLS_PIN_REJECTED', flush=True)
+        if args.case in (None, 'vless-websocket-tls'):
+            check_managed_ws_bootstrap(core, directory, cert, pin)
     print(f'PROTOCOL_RUNTIME_MATRIX_PASS={len(selected)}', flush=True)
 
 

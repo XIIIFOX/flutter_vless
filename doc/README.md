@@ -3,6 +3,9 @@
 Guides for flutter_vless 1.1.8. The root README has the package overview and
 quick start. Use the platform guide for your app's native setup.
 
+The [online guide](https://tfox.dev/flutter-vless/docs/) walks through the bundled
+example, VPN and proxy modes, routing, and balancing.
+
 ## Using the plugin
 
 1. [Getting Started](getting-started.md)

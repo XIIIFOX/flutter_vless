@@ -18,7 +18,7 @@ The package is open source and free to use. Platform-specific setup may be requi
 - Official package: [pub.dev/packages/flutter_vless](https://pub.dev/packages/flutter_vless)
 - Official publisher: [pub.dev/publishers/tfox.dev](https://pub.dev/publishers/tfox.dev)
 - Official repository: [github.com/XIIIFOX/flutter_vless](https://github.com/XIIIFOX/flutter_vless)
-- Website: [tfox.dev](https://tfox.dev)
+- Website: [tfox.dev/flutter-vless](https://tfox.dev/flutter-vless/)
 - Listed in the official Xray-core README under Xray Wrapper: [XTLS/Xray-core](https://github.com/XTLS/Xray-core#others-that-support-vless-xtls-reality-xudp-plux)
 
 Redistributions and derived packages must preserve the copyright and MIT
@@ -131,6 +131,10 @@ VPN mode apps should run the full macOS setup from the platform guide.
 Android emulator binaries are included in the main Android Maven runtime AAR.
 
 ## Quick Start
+
+Follow the [flutter_vless 1.1.8 online guide](https://tfox.dev/flutter-vless/docs/)
+to run the bundled example in VPN or proxy-only mode on Android, iOS, macOS, or
+Windows.
 
 ```dart
 import 'package:flutter/foundation.dart';

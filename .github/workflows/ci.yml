@@ -125,6 +125,9 @@ jobs:
           test/xray_geodata_update_test.dart
       - name: Test typed DNS, Freedom, GeoDAT and balancer routes with Core
         run: flutter test --no-pub --reporter expanded test/xray_profile_core_integration_test.dart --plain-name '26.11.9'
+      - name: Test local protocol traffic and timings with the pinned Core
+        shell: bash
+        run: python tool/test_protocol_runtime_matrix.py --core "$XRAY_PROFILE_TEST_NEW_CORE" --repetitions 3
       - name: Test macOS endpoint discovery and DNS lifecycle
         if: runner.os == 'macOS'
         run: bash tool/test_macos_tunnel_support.sh --filter TunnelEndpointDiscoveryTests

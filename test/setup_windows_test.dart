@@ -96,7 +96,10 @@ void main() {
     expect(projectFile('$_stage/geosite.dat').readAsBytesSync(), [1, 2, 3]);
     expect(projectFile('vendor/xray.exe').readAsBytesSync(), _pe());
     final fragment = projectFile(_fragment).readAsStringSync();
-    expect(fragment, contains('DESTINATION xray COMPONENT Runtime'));
+    expect(
+        fragment,
+        contains(
+            r'DESTINATION "${CMAKE_INSTALL_PREFIX}/xray" COMPONENT Runtime'));
     expect(fragment, contains(r'${CMAKE_CURRENT_LIST_DIR}'));
     expect(fragment, contains('tun2socks.exe'));
     expect(fragment, contains('FLUTTER_TARGET_PLATFORM'));

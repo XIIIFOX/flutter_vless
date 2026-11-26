@@ -278,7 +278,10 @@ foreach(_flutter_vless_required IN ITEMS ${required.map((name) => '"$name"').joi
 endforeach()
 foreach(_flutter_vless_file IN ITEMS ${possible.map((name) => '"$name"').join(' ')})
   if(EXISTS "${r'${_flutter_vless_runtime}/${_flutter_vless_file}'}")
-    install(FILES "${r'${_flutter_vless_runtime}/${_flutter_vless_file}'}" DESTINATION xray COMPONENT Runtime)
+    # Flutter's install prefix is a target directory generator expression.
+    # Include it in the destination so CMake resolves it before installation.
+    install(FILES "${r'${_flutter_vless_runtime}/${_flutter_vless_file}'}"
+      DESTINATION "${r'${CMAKE_INSTALL_PREFIX}'}/xray" COMPONENT Runtime)
   endif()
 endforeach()
 unset(_flutter_vless_runtime)

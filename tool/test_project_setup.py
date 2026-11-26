@@ -180,7 +180,7 @@ class ProjectSetupTest(unittest.TestCase):
                         self.assertEqual(snapshot(app), configured)
                     print(f"{mode}: doctor and dry-run were read-only; repeated setup changed no files.", flush=True)
 
-                    run([flutter, "build", "windows", "--release", "--no-pub"],
+                    run([flutter, "--verbose", "build", "windows", "--release", "--no-pub"],
                         app, timeout=660)
                     bundle = app / "build/windows/x64/runner/Release"
                     self.assertTrue((bundle / "vless_setup_probe.exe").is_file())

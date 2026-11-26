@@ -341,10 +341,12 @@ final class _SocketReader {
 }
 
 Future<void> _waitForContinuation(File signal) async {
+  const timeout = Duration(seconds: 35);
   final hold = Stopwatch()..start();
   while (!await signal.exists()) {
-    _check(hold.elapsed < const Duration(seconds: 35),
-        'The host did not verify the active mode within 20 seconds');
+    _check(hold.elapsed < timeout,
+        'The host did not send ${signal.uri.pathSegments.last} within '
+        '${timeout.inSeconds} seconds');
     await Future<void>.delayed(const Duration(milliseconds: 100));
   }
 }

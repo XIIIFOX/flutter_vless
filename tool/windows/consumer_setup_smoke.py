@@ -220,12 +220,18 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
             normal_stop = True
             result = dict(mode=mode, routing=direction, **times, routes=final["routes"],
                           active_https=200, restored_https=200)
+            if mode == "vpn":
+                stages = final["startup_stages_ms"]
+                assert stages and all(type(ms) is int and ms >= 0 for ms in stages.values())
+                result["startup_stages_ms"] = stages
             print("WINDOWS_CONSUMER_LIVE " + json.dumps(result), flush=True)
             if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
                 with Path(summary).open("a", encoding="utf-8") as file:
                     print(f"- {mode} ({direction}): CONNECTED {times['start_to_connected_ms']} ms, "
                           f"first verified HTTPS {times['start_to_first_https_ms']} ms, "
                           f"Stop {times['stop_ms']} ms. Routing and network restoration passed.", file=file)
+                    if mode == "vpn":
+                        print("  - Startup stages: " + ", ".join(f"{stage} {ms} ms" for stage, ms in stages.items()), file=file)
         finally:
             proceeded = process is not None
             if proceeded and process.poll() is None:

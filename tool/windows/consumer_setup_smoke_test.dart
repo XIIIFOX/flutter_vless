@@ -108,6 +108,11 @@ Future<void> _runPlan(
     );
     result['start_to_first_https_ms'] = start.elapsedMilliseconds;
     result['active_https_status'] = active;
+    if (!proxy) {
+      result['startup_stages_ms'] = _vpnStartupStages(
+        await plugin.getProviderDebugSnapshot().timeout(_ioTimeout),
+      );
+    }
 
     result['phase'] = 'routing';
     for (final row in fixtureRoutes.cast<Map<String, dynamic>>()) {
@@ -156,6 +161,40 @@ Future<void> _runPlan(
   result['post_stop_https_status'] = await _publicHttps(uri, address);
   await _writeReceipt(restoredPath, {...result, 'success': true});
   await _waitForContinuation(File(finishPath));
+}
+
+Map<String, int> _vpnStartupStages(String snapshot) {
+  const expected = {
+    'authored_config',
+    'prepare_config',
+    'prepare_runtime',
+    'validate_core',
+    'install_wfp',
+    'prepare_worker',
+    'xray_listener',
+    'wintun_adapter',
+    'ipv4_address',
+    'ipv6_address',
+    'adapter_dns',
+    'routes_and_wfp',
+    'packet_path',
+  };
+  const optional = {'ipv4_configure', 'worker_total'};
+  final timings = <String, int>{};
+  final pattern = RegExp(r'^\[vpn\] startup timing ([a-z0-9_]+) (\d+) ms$');
+  for (final line in const LineSplitter().convert(snapshot)) {
+    final stage = pattern.firstMatch(line);
+    if (stage == null ||
+        (!expected.contains(stage[1]) && !optional.contains(stage[1]))) {
+      continue;
+    }
+    final name = stage[1]!;
+    _check(!timings.containsKey(name), 'Duplicate VPN startup timing: $name');
+    timings[name] = int.parse(stage[2]!);
+  }
+  final missing = expected.difference(timings.keys.toSet());
+  _check(missing.isEmpty, 'Missing VPN startup timings: $missing');
+  return timings;
 }
 
 final class _StatusEvents {

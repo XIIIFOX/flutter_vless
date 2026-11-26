@@ -5,11 +5,40 @@
 #include "xray_config.h"
 #include "owned_address.h"
 #include "windows_underlay.h"
+#include <chrono>
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 
 namespace {
 void Event(const char* message) { flutter_vless::DiagnosticsLog::Instance().Append("vpn", message); }
+
+class StartupTiming {
+ public:
+  void Mark(const char* stage) {
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - previous_).count();
+    previous_ = now;
+    if (published_) Append(stage, elapsed);
+    else pending_.emplace_back(stage, elapsed);
+  }
+
+  void Publish() {
+    published_ = true;
+    for (const auto& [stage, elapsed] : pending_) Append(stage, elapsed);
+    pending_.clear();
+  }
+
+ private:
+  static void Append(const char* stage, std::chrono::milliseconds::rep elapsed) {
+    flutter_vless::DiagnosticsLog::Instance().Append(
+        "vpn", std::string("startup timing ") + stage + " " + std::to_string(elapsed) + " ms");
+  }
+
+  std::chrono::steady_clock::time_point previous_ = std::chrono::steady_clock::now();
+  std::vector<std::pair<const char*, std::chrono::milliseconds::rep>> pending_;
+  bool published_ = false;
+};
+
 std::optional<std::string> Underlay(UINT64* identity = nullptr, ADDRESS_FAMILY family = AF_INET) {
   return flutter_vless::native::SelectUnderlay(family, identity);
 }
@@ -47,6 +76,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing, std::function<void()> admitted,
     flutter_vless::preparation::StartupOutcome* outcome, flutter_vless::preparation::Report changes) {
   using namespace flutter_vless;
+  StartupTiming timing;
   if (outcome) outcome->Fail(preparation::Stage::prepare);
   if (!asset_location::Valid(assets)) return false;
   // Validate before retiring an existing session. No setup failure is reported
@@ -91,6 +121,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     Event("Native VPN routing source selection rejected; active session preserved"); return false;
   }
   const auto owned_api_port = xray_config::OwnedApiPort(config, *prepared).value_or(0);
+  timing.Mark("prepare_config");
   auto runtime = std::make_unique<native::ProtectedRuntime>();
   if (outcome) outcome->Fail(preparation::Stage::persist);
   if (!runtime->Create(*xray, !assets.has_value())) {
@@ -98,6 +129,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     if (!protection_.Active()) protection_.Release();
     return false;
   }
+  timing.Mark("prepare_runtime");
   const auto managed_port = xray_config::Port(xray_config::Parse(*prepared)["inbounds"][0]);
   auto failure = preparation::Stage::prepare;
   auto candidate = managed_port ? PrepareWorkerCandidate(*prepared, *managed_port, *runtime, assets, routing, provenance, user, nullptr, changes, &failure) : nullptr;
@@ -108,7 +140,10 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   }
   const bool record_balancer = options.RecordsBalancerSelections() && !provenance.managed_tag.empty()
       && native::BalancerCapability(*runtime, assets);
+  timing.Mark("validate_core");
   if (admitted) admitted();
+  // Admission resets diagnostics only after the replacement is checked.
+  timing.Publish();
   if (requested_.load()) StopSession(false);
   bootstrap_cache_ = std::move(cache);
   private_runtime_ = std::move(runtime);
@@ -133,6 +168,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     return false;
   }
   Event("Mandatory Windows traffic protection installed");
+  timing.Mark("install_wfp");
   requested_.store(true); ready_.store(false);
   auto startup = std::make_shared<preparation::StartupCompletion>();
   vpn_thread_ = std::thread(&VpnService::RunVpn, this, startup);
@@ -255,6 +291,8 @@ std::unique_ptr<VpnService::WorkerCandidate> VpnService::PrepareWorkerCandidate(
 }
 bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutter_vless::preparation::Stage* failure) {
   using namespace flutter_vless;
+  StartupTiming timing;
+  timing.Publish();
   if (failure) *failure = preparation::Stage::start;
   auto fail = [](const char* stage) { Event(stage); return false; };
   // A previous adapter can outlive its child. Keep cleanup ownership and deny
@@ -286,6 +324,7 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
     }
   }
   if (!requested_.load()) return fail("VPN startup cancelled");
+  timing.Mark("prepare_worker");
   xray_process_ = native::Launch(xray_executable_path_, command, use_balancer_pipe, asset_directory_,
       use_balancer_pipe || use_native_routing, use_balancer_pipe ? balancer_selection::kPipeBufferBytes : 0);
   if (!xray_process_) return fail("Cannot launch the protected Xray process");
@@ -303,6 +342,7 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
     return false;
   }
   Event("Authenticated Xray listener ready");
+  timing.Mark("xray_listener");
   // Credentials live only in a private file, never in the process command line.
   // The bundled tun2socks uses the "tun" driver on Windows too; Wintun is
   // the implementation, not a supported URI scheme.
@@ -325,11 +365,13 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
   if (!adapter_ready || !requested_.load()) return fail("Wintun adapter unavailable or startup cancelled");
+  timing.Mark("wintun_adapter");
   // Wintun can retain its address after a worker crash. netsh may reject a
   // repeated assignment; the IP Helper state is the authoritative readiness
   // check, including DAD, the exact address and its prefix length.
   const bool assigned = native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"address",
       L"name=flutter_vless_tun", L"source=static", L"address=10.0.85.2", L"mask=255.255.255.0", L"gateway=none"});
+  timing.Mark("ipv4_configure");
   bool addressed = false;
   for (int i = 0; i < 150 && requested_.load(); ++i) {
     if (TunnelReady(luid)) { addressed = true; break; }
@@ -337,6 +379,7 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   }
   if (!addressed) return fail("Wintun IPv4 address did not become ready");
   if (!assigned) Event("Reusing the existing ready Wintun IPv4 address");
+  timing.Mark("ipv4_address");
   MIB_UNICASTIPADDRESS_ROW ipv6{}; InitializeUnicastIpAddressEntry(&ipv6);
   ipv6.InterfaceLuid = luid; ipv6.Address.Ipv6.sin6_family = AF_INET6;
   if (InetPtonA(AF_INET6, "fd00:198:18::2", &ipv6.Address.Ipv6.sin6_addr) != 1) return fail("Invalid owned Wintun IPv6 address");
@@ -356,8 +399,10 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   }
   if (!ipv6_ready) return fail("Wintun IPv6 address did not become ready");
   if (ipv6_status == ERROR_OBJECT_ALREADY_EXISTS) Event("Reusing the existing ready Wintun IPv6 address");
+  timing.Mark("ipv6_address");
   if (!native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"dnsservers",
       L"name=flutter_vless_tun", L"source=static", native::Wide(std::string("address=") + xray_config::kVirtualDns), L"validate=no"})) return fail("Wintun address or virtual DNS did not become ready");
+  timing.Mark("adapter_dns");
   for (auto prefix : {std::pair<const char*, UINT8>{"0.0.0.0", UINT8{1}}, {"128.0.0.0", UINT8{1}}, {xray_config::kVirtualDns, UINT8{32}}}) {
     MIB_IPFORWARD_ROW2 row{}; InitializeIpForwardEntry(&row);
     row.InterfaceLuid = luid; row.DestinationPrefix.Prefix.Ipv4.sin_family = AF_INET;
@@ -386,10 +431,12 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   }
   if (!protection_.Install(xray_executable_path_, &luid, ipv6_tcp_scope_ ? &*ipv6_tcp_scope_ : nullptr)) { Event(("Cannot authorize the Wintun interface, code=" + std::to_string(protection_.Error())).c_str()); return false; }
   Event("Wintun capture and virtual DNS ready; checking packet forwarding");
+  timing.Mark("routes_and_wfp");
   worker_candidate_->RemoveFile();
   native::RemovePrivateConfig(tun_config_path_);
   for (int i = 0; i < 10 && requested_.load() && xray_process_->IsRunning() && tun2socks_process_->IsRunning(); ++i) {
     if (worker_candidate_->PacketProbe().Check(PacketPathProbe::address, [this] { return !requested_.load(); })) {
+      timing.Mark("packet_path");
       if (report) *report = worker_candidate_->PreparationReport();
       return true;
     }

@@ -90,12 +90,15 @@ bool V2rayManager::Start(const std::string& config, bool proxy_only, const flutt
   if (proxy_only && routing) return false;
   if (!flutter_vless::asset_location::Valid(assets)) return false;
   auto failure = Stage::core_check;
+  const auto authored_check_started = std::chrono::steady_clock::now();
   if (!ValidateConfig(config, proxy_only, assets, &failure)) {
     if (outcome) outcome->Fail(failure);
     flutter_vless::DiagnosticsLog::Instance().Append(
         "runtime", "Xray configuration check rejected candidate; active session preserved");
     return false;
   }
+  const auto authored_check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - authored_check_started).count();
   if (is_running_.load() && (proxy_only || proxy_only_)) {
     flutter_vless::DiagnosticsLog::Instance().Append(
         "runtime", "Stop the active session before changing proxy-only mode or configuration");
@@ -107,6 +110,8 @@ bool V2rayManager::Start(const std::string& config, bool proxy_only, const flutt
     flutter_vless::DiagnosticsLog::Instance().Reset();
     flutter_vless::DiagnosticsLog::Instance().Append("runtime", proxy_only
         ? "Starting Windows proxy-only session" : "Starting Windows VPN session");
+    if (!proxy_only) flutter_vless::DiagnosticsLog::Instance().Append(
+        "vpn", "startup timing authored_config " + std::to_string(authored_check_ms) + " ms");
     current_config_ = config; proxy_only_ = proxy_only; is_running_.store(true);
   };
   if (proxy_only) return proxy_service_ && proxy_service_->Start(config, assets, outcome, changes, publish);

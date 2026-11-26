@@ -1,6 +1,7 @@
 #include "packet_path_probe.h"
 #include <ws2tcpip.h>
 #include <chrono>
+#include <cstring>
 
 namespace flutter_vless {
 namespace {
@@ -134,27 +135,50 @@ bool PacketPathProbe::Configure(xray_config::Json& config, uint16_t managed_port
       {"settings", {{"redirect", "127.0.0.1:" + std::to_string(port_)}, {"domainStrategy", "ForceIPv4"}}}});
   config["routing"]["rules"].insert(config["routing"]["rules"].begin(), xray_config::Json{
       {"type", "field"}, {"inboundTag", xray_config::Json::array({managed_tag})},
-      {"ip", xray_config::Json::array({std::string(address) + "/32"})},
+      {"ip", xray_config::Json::array({std::string(address) + "/32", std::string(ipv6_address) + "/128"})},
       {"port", std::to_string(port_)}, {"network", "tcp"}, {"outboundTag", probe_tag}});
   if (generated_guards) *generated_guards = {0};
   return true;
 }
-bool PacketPathProbe::Check(const char* destination, const std::function<bool()>& is_cancelled) const {
+bool PacketPathProbe::Check(const char* destination, const std::function<bool()>& is_cancelled,
+    const char* expected_ipv6_source) const {
   // Preserve the old nominal connect/send/receive allowance as one total.
   const ExchangeBudget budget(running_, std::chrono::milliseconds(2250), is_cancelled);
   if (!budget.CanContinue()) return false;
-  SOCKET client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  const bool ipv6 = std::strchr(destination, ':') != nullptr;
+  in6_addr expected{};
+  if (ipv6 && (!expected_ipv6_source || InetPtonA(AF_INET6, expected_ipv6_source, &expected) != 1)) return false;
+  const int family = ipv6 ? AF_INET6 : AF_INET;
+  sockaddr_in target_v4{};
+  sockaddr_in6 target_v6{};
+  target_v4.sin_family = AF_INET;
+  target_v4.sin_port = htons(port_);
+  target_v6.sin6_family = AF_INET6;
+  target_v6.sin6_port = htons(port_);
+  const auto* target = ipv6 ? reinterpret_cast<const sockaddr*>(&target_v6)
+                           : reinterpret_cast<const sockaddr*>(&target_v4);
+  const int target_size = static_cast<int>(ipv6 ? sizeof(target_v6) : sizeof(target_v4));
+  void* ip = ipv6 ? static_cast<void*>(&target_v6.sin6_addr) : static_cast<void*>(&target_v4.sin_addr);
+  if (InetPtonA(family, destination, ip) != 1) return false;
+  SOCKET client = socket(family, SOCK_STREAM, IPPROTO_TCP);
   if (client == INVALID_SOCKET) return false;
-  sockaddr_in target{}; target.sin_family = AF_INET; target.sin_port = htons(port_);
-  bool ok = InetPtonA(AF_INET, destination, &target.sin_addr) == 1;
   u_long nonblocking = 1;
-  ok = ok && ioctlsocket(client, FIONBIO, &nonblocking) == 0;
-  if (ok && connect(client, reinterpret_cast<sockaddr*>(&target), sizeof(target)) != 0) {
+  bool ok = ioctlsocket(client, FIONBIO, &nonblocking) == 0;
+  if (ok && connect(client, target, target_size) != 0) {
     const auto error_code = WSAGetLastError();
     ok = error_code == WSAEWOULDBLOCK || error_code == WSAEINPROGRESS || error_code == WSAEINTR;
     int error = 0, length = sizeof(error);
     ok = ok && WaitReady(client, true, budget)
         && getsockopt(client, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &length) == 0 && error == 0;
+  }
+  if (ok && ipv6) {
+    sockaddr_in6 local{};
+    int size = sizeof(local);
+    // A successful nonce on a socket using the physical IPv6 address cannot
+    // qualify this adapter's capture path. Check the selected source before I/O.
+    ok = getsockname(client, reinterpret_cast<sockaddr*>(&local), &size) == 0
+        && size == static_cast<int>(sizeof(local)) && local.sin6_family == AF_INET6
+        && std::memcmp(&local.sin6_addr, &expected, sizeof(expected)) == 0;
   }
   ok = ok && Send(client, challenge_, budget) && Receive(client, challenge_ + "-ok", budget);
   closesocket(client);

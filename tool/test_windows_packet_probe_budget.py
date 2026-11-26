@@ -111,7 +111,10 @@ PERIODIC
     InertReport* report = nullptr;
     [[maybe_unused]] StartupTiming timing;
     const int ipv4 = 0;
-    const auto TunnelReady = [](int) { return kernel.ipv4_ready; };
+    const int ipv6 = 1;
+    const std::string ipv6_source = session_source_v6_text;
+    const bool optimistic_ipv6 = kernel.optimistic_ipv6;
+    const auto TunnelReady = [](int family) { return family ? kernel.ipv6_ready : kernel.ipv4_ready; };
     const auto fail = [](const char*) { return false; };
 STARTUP
     return false;
@@ -126,6 +129,7 @@ FAKES = r'''
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <cwctype>
 #include <functional>
 #include <iostream>
@@ -136,7 +140,7 @@ FAKES = r'''
 #include <utility>
 #include <vector>
 using SOCKET = int; using DWORD = unsigned long; using u_long = unsigned long; using HANDLE = void*;
-enum { INVALID_SOCKET = -1, SOCKET_ERROR = -1, AF_INET = 2, SOCK_STREAM = 1, IPPROTO_TCP = 6,
+enum { INVALID_SOCKET = -1, SOCKET_ERROR = -1, AF_INET = 2, AF_INET6 = 23, SOCK_STREAM = 1, IPPROTO_TCP = 6,
     SOL_SOCKET = 1, SO_RCVTIMEO = 2, SO_SNDTIMEO = 3, SO_ERROR = 4, FIONBIO = 5,
     WSAEWOULDBLOCK = 10035, WSAEINTR = 10004, WSAEINPROGRESS = 10036 };
 struct InertTimeval { long tv_sec, tv_usec; };
@@ -146,25 +150,39 @@ struct InertFdSet { SOCKET fd = INVALID_SOCKET; };
 #define FD_ZERO(p) ((p)->fd = INVALID_SOCKET)
 #define FD_SET(fd_, p) ((p)->fd = (fd_))
 struct in_addr { struct { uint32_t S_addr = 0; } S_un; };
+struct in6_addr { uint8_t bytes[16]{}; };
+using IN6_ADDR = in6_addr;
 struct sockaddr {};
 struct sockaddr_in { int sin_family = 0; uint16_t sin_port = 0; in_addr sin_addr; };
+struct sockaddr_in6 { int sin6_family = 0; uint16_t sin6_port = 0; in6_addr sin6_addr; };
+constexpr in6_addr probe_target_v6{{0x20,0x01,0x0d,0xb8,0,0x85,0,0,0,0,0,0,0,0,0,0x54}};
+constexpr in6_addr wintun_source_v6{{0xfd,0,0x01,0x98,0,0x18,0,0,0,0,0,0,0,0,0,2}};
+constexpr char session_source_v6_text[] = "fd00:198:18:0:aabb:ccdd:1122:3344";
+constexpr in6_addr session_source_v6{{0xfd,0,0x01,0x98,0,0x18,0,0,0xaa,0xbb,0xcc,0xdd,0x11,0x22,0x33,0x44}};
 using ULONG = unsigned long;
-enum { NO_ERROR = 0, IF_TYPE_PROP_VIRTUAL = 53, NdisMediumIP = 19 };
+enum { NO_ERROR = 0, IF_TYPE_PROP_VIRTUAL = 53, NdisMediumIP = 19,
+    IpDadStateTentative = 1, IpDadStatePreferred = 4, ERROR_OBJECT_ALREADY_EXISTS = 5010 };
 struct MIB_IF_ROW2 {
   int Type = IF_TYPE_PROP_VIRTUAL, MediaType = NdisMediumIP;
   struct { bool HardwareInterface = false; } InterfaceAndOperStatusFlags;
   const wchar_t* Description = L"tun2socks Tunnel";
 };
-struct MIB_UNICASTIPADDRESS_ROW { struct { sockaddr_in Ipv4; } Address; };
+struct MIB_UNICASTIPADDRESS_ROW {
+  struct { int si_family = AF_INET; sockaddr_in Ipv4; sockaddr_in6 Ipv6; } Address;
+  int DadState = IpDadStateTentative;
+};
 struct MIB_UNICASTIPADDRESS_TABLE { ULONG NumEntries = 0; MIB_UNICASTIPADDRESS_ROW Table[2]; };
 using PMIB_UNICASTIPADDRESS_TABLE = MIB_UNICASTIPADDRESS_TABLE*;
 struct Kernel {
   int64_t now = 0, next_ready = 0, step = 0;
   bool cancel = false, eof = false, wrong = false, would_block = false, connect_pending = false;
-  bool ipv4_ready = true;
+  bool ipv4_ready = true, ipv6_ready = true, optimistic_ipv6 = false, reject_optimistic = false;
+  int client_family = 0;
+  bool exact_ipv6_target = false;
+  in6_addr socket_source_v6 = wintun_source_v6;
   MIB_UNICASTIPADDRESS_TABLE local_ipv4;
   bool ipv4_query_failed = false, ipv4_no_table = false, ipv4_table_owned = false;
-  unsigned ipv4_queries = 0, ipv4_frees = 0;
+  unsigned ipv4_queries = 0, ipv4_frees = 0, queried_family = 0, address_creations = 0;
   unsigned io = 0, selects = 0, accepted = 0, closes = 0, joins = 0, socks_ready = 0, tun_side_effects = 0;
   unsigned cancel_after = 0;
   unsigned eof_after = 0;
@@ -181,7 +199,8 @@ int InertWcsnicmp(const wchar_t* left, const wchar_t* right, std::size_t count) 
   return 0;
 }
 int GetUnicastIpAddressTable(int family, PMIB_UNICASTIPADDRESS_TABLE* result) {
-  Require(family == AF_INET && !kernel.ipv4_table_owned, "invalid local IPv4 query");
+  Require((family == AF_INET || family == AF_INET6) && !kernel.ipv4_table_owned, "invalid local IP query");
+  kernel.queried_family = family;
   ++kernel.ipv4_queries;
   if (kernel.ipv4_query_failed) return 5;
   if (!kernel.ipv4_no_table) {
@@ -189,6 +208,10 @@ int GetUnicastIpAddressTable(int family, PMIB_UNICASTIPADDRESS_TABLE* result) {
     kernel.ipv4_table_owned = true;
   }
   return NO_ERROR;
+}
+ULONG CreateUnicastIpAddressEntry(const MIB_UNICASTIPADDRESS_ROW* address) {
+  ++kernel.address_creations;
+  return kernel.reject_optimistic && address->DadState == IpDadStatePreferred ? 87 : NO_ERROR;
 }
 void FreeMibTable(void* table) {
   Require(table == &kernel.local_ipv4 && kernel.ipv4_table_owned, "invalid local IPv4 table free");
@@ -205,15 +228,40 @@ struct InertWorker {
   void join() { Require(active, "join without owner"); ++kernel.joins; if (kernel.join) kernel.join(); active = false; }
 };
 int WSACleanup() { return 0; }
-SOCKET socket(int, int, int) { Require(kernel.handles.insert(9).second, "socket reused live handle"); return 9; }
+SOCKET socket(int family, int, int) { kernel.client_family = family; Require(kernel.handles.insert(9).second, "socket reused live handle"); return 9; }
 int closesocket(SOCKET fd) { Require(kernel.handles.erase(fd) == 1, "double/foreign close"); ++kernel.closes; if (fd == 9 && kernel.on_close) kernel.on_close(); return 0; }
 int setsockopt(SOCKET, int, int, const char*, std::size_t) { return 0; }
-int InetPtonA(int, const char*, in_addr*) { return 1; }
+int InetPtonA(int family, const char* literal, void* address) {
+  if (family == AF_INET) return 1;
+  if (family != AF_INET6) return 0;
+  const std::string_view value(literal);
+  if (value == "2001:db8:85::54") *static_cast<in6_addr*>(address) = probe_target_v6;
+  else if (value == "fd00:198:18::2") *static_cast<in6_addr*>(address) = wintun_source_v6;
+  else if (value == session_source_v6_text) *static_cast<in6_addr*>(address) = session_source_v6;
+  else return 0;
+  return 1;
+}
 #undef htons
 uint16_t htons(uint16_t value) { return value; }
 int ioctlsocket(SOCKET fd, long, u_long* mode) { if (*mode) kernel.nonblocking.insert(fd); else kernel.nonblocking.erase(fd); return 0; }
 int WSAGetLastError() { return kernel.error; }
-int connect(SOCKET, const sockaddr*, int) { if (!kernel.connect_pending) return 0; kernel.error = WSAEWOULDBLOCK; return SOCKET_ERROR; }
+int connect(SOCKET, const sockaddr* address, int length) {
+  if (kernel.client_family == AF_INET6 && length == static_cast<int>(sizeof(sockaddr_in6))) {
+    const auto& target = *reinterpret_cast<const sockaddr_in6*>(address);
+    kernel.exact_ipv6_target = target.sin6_family == AF_INET6 && target.sin6_port == 50001 &&
+        std::memcmp(&target.sin6_addr, &probe_target_v6, sizeof(probe_target_v6)) == 0;
+  }
+  if (!kernel.connect_pending) return 0;
+  kernel.error = WSAEWOULDBLOCK; return SOCKET_ERROR;
+}
+int getsockname(SOCKET fd, sockaddr* address, int* length) {
+  Require(fd == 9 && kernel.client_family == AF_INET6 && *length == static_cast<int>(sizeof(sockaddr_in6)),
+      "IPv6 source checked on the wrong socket");
+  auto& local = *reinterpret_cast<sockaddr_in6*>(address);
+  local.sin6_family = AF_INET6;
+  local.sin6_addr = kernel.socket_source_v6;
+  return 0;
+}
 int getsockopt(SOCKET, int, int, char* result, int*) { *reinterpret_cast<int*>(result) = 0; return 0; }
 int select(int, InertFdSet* read, InertFdSet* write, InertFdSet*, InertTimeval* timeout) {
   ++kernel.selects;
@@ -265,6 +313,28 @@ int main() {
   const std::string nonce(64, 'n');
   auto configure = [&](PacketPathProbe& probe) { probe.running_.store(true); probe.port_ = 50001; probe.challenge_ = nonce; kernel.incoming = nonce + "-ok"; };
   test("fragmented-correct", [&] { PacketPathProbe probe; configure(probe); Require(probe.Check(), "correct response rejected"); Require(kernel.sent == nonce && kernel.offset == nonce.size()+3 && kernel.closes == 1, "framing changed"); });
+  test("ipv6-authenticated-challenge-uses-exact-endpoint-and-source", [&] {
+    PacketPathProbe probe; configure(probe); kernel.connect_pending = true;
+    kernel.socket_source_v6 = session_source_v6;
+    Require(probe.Check(PacketPathProbe::ipv6_address, {}, session_source_v6_text)
+        && kernel.client_family == AF_INET6 && kernel.exact_ipv6_target,
+        "IPv6 challenge missed the configured endpoint");
+    Require(kernel.sent == nonce && kernel.offset == nonce.size()+3 && kernel.closes == 1,
+        "IPv6 challenge response changed");
+  });
+  test("ipv6-unexpected-source-rejects-before-sending-nonce", [&] {
+    PacketPathProbe probe; configure(probe);
+    Require(!probe.Check(PacketPathProbe::ipv6_address, {}, session_source_v6_text)
+        && kernel.exact_ipv6_target && kernel.sent.empty()
+        && kernel.io == 0 && kernel.closes == 1, "IPv6 challenge admitted a non-tunnel source");
+  });
+  test("ipv6-challenge-requires-a-valid-source-address-before-opening-a-socket", [&] {
+    PacketPathProbe probe; configure(probe);
+    Require(!probe.Check(PacketPathProbe::ipv6_address)
+        && !probe.Check(PacketPathProbe::ipv6_address, {}, "10.0.85.2")
+        && kernel.client_family == 0 && kernel.io == 0 && kernel.closes == 0,
+        "IPv6 challenge opened a socket without a valid source address");
+  });
   test("fragmented-total-deadline", [&] { PacketPathProbe probe; configure(probe); kernel.step = 700; Require(!probe.Check(), "fragmentation renewed deadline"); Require(kernel.now < 4000 && kernel.io < nonce.size(), "aggregate budget absent"); });
   test("running-cancel-after-partial", [&] { PacketPathProbe probe; configure(probe); kernel.after_io = [&] { if (kernel.io == 2) probe.running_.store(false); }; Require(!probe.Check() && kernel.io == 2, "probe Stop did not cancel partial I/O"); });
   test("caller-cancel-after-partial", [&] { PacketPathProbe probe; configure(probe); kernel.cancel_after = 2; Require(!flutter_vless::CheckWithCancel(probe) && kernel.io == 2, "worker Stop did not cancel partial I/O"); });
@@ -303,20 +373,31 @@ int main() {
     kernel.on_close = [&] { kernel.ipv4_ready = false; };
     Require(!service.StartupPoll(), "Successful packet probe admitted an invalid IPv4 address");
   });
+  test("actual-startup-requires-ipv6-packet-and-address-for-optimistic-v6", [&] {
+    flutter_vless::PeriodicConsumer service; configure(service.candidate.probe);
+    kernel.optimistic_ipv6 = true;
+    kernel.socket_source_v6 = session_source_v6;
+    kernel.on_close = [&] {
+      if (kernel.client_family == AF_INET) kernel.offset = 0;
+      else kernel.ipv6_ready = false;
+    };
+    Require(!service.StartupPoll() && kernel.exact_ipv6_target && kernel.closes == 2,
+        "Optimistic IPv6 startup bypassed the second nonce or the final address check");
+  });
   MIB_UNICASTIPADDRESS_ROW address{};
   address.Address.Ipv4.sin_addr.S_un.S_addr = 1;
   test("raw-ip-wintun-with-free-local-address-can-use-optimistic-dad", [&] {
     MIB_IF_ROW2 wintun{}; wintun.Description = L"TUN2SOCKS TUNNEL";
     kernel.local_ipv4.NumEntries = 1;
     kernel.local_ipv4.Table[0].Address.Ipv4.sin_addr.S_un.S_addr = 2;
-    Require(CanUseOptimisticIPv4Dad(wintun, address) && kernel.ipv4_queries == 1 && kernel.ipv4_frees == 1,
+    Require(CanUseOptimisticDad(wintun, address) && kernel.ipv4_queries == 1 && kernel.ipv4_frees == 1,
         "private raw-IP tunnel rejected without a local conflict");
   });
   test("windows-numbered-wintun-descriptions-can-use-optimistic-dad", [&] {
     MIB_IF_ROW2 wintun{};
     for (const auto* description : {L"tun2socks Tunnel #2", L"TUN2SOCKS TUNNEL #19"}) {
       wintun.Description = description;
-      Require(CanUseOptimisticIPv4Dad(wintun, address), "numbered Windows tunnel description rejected");
+      Require(CanUseOptimisticDad(wintun, address), "numbered Windows tunnel description rejected");
     }
     Require(kernel.ipv4_queries == 2 && kernel.ipv4_frees == 2, "numbered tunnel bypassed inventory check");
   });
@@ -326,14 +407,14 @@ int main() {
         L"tun2socks Tunnel #0", L"tun2socks Tunnel #02", L"tun2socks Tunnel #\u0662", L"tun2socks Tunnel #2 backup",
         L"tun2socks Tunnel #2 ", L"tun2socks Tunnel#2"}) {
       lookalike.Description = description;
-      Require(!CanUseOptimisticIPv4Dad(lookalike, address), "lookalike description allowed optimistic DAD");
+      Require(!CanUseOptimisticDad(lookalike, address), "lookalike description allowed optimistic DAD");
     }
     Require(kernel.ipv4_queries == 0, "a lookalike triggered an address query");
   });
   test("local-duplicate-address-keeps-standard-dad", [&] {
     kernel.local_ipv4.NumEntries = 2;
     kernel.local_ipv4.Table[1] = address;
-    Require(!CanUseOptimisticIPv4Dad(MIB_IF_ROW2{}, address) && kernel.ipv4_frees == 1,
+    Require(!CanUseOptimisticDad(MIB_IF_ROW2{}, address) && kernel.ipv4_frees == 1,
         "local duplicate allowed optimistic DAD");
   });
   test("unexpected-identity-or-media-keeps-standard-dad", [&] {
@@ -343,18 +424,35 @@ int main() {
     hardware.InterfaceAndOperStatusFlags.HardwareInterface = true;
     other_driver.Description = L"Another Tunnel";
     for (const auto& adapter : {wrong_type, ethernet, hardware, other_driver})
-      Require(!CanUseOptimisticIPv4Dad(adapter, address), "unexpected adapter allowed optimistic DAD");
+      Require(!CanUseOptimisticDad(adapter, address), "unexpected adapter allowed optimistic DAD");
     Require(kernel.ipv4_queries == 0, "unexpected adapter triggered an address query");
   });
   test("unavailable-address-inventory-keeps-standard-dad", [&] {
     kernel.ipv4_query_failed = true;
-    Require(!CanUseOptimisticIPv4Dad(MIB_IF_ROW2{}, address), "failed IPv4 inventory allowed optimistic DAD");
+    Require(!CanUseOptimisticDad(MIB_IF_ROW2{}, address), "failed IPv4 inventory allowed optimistic DAD");
     kernel.ipv4_query_failed = false; kernel.ipv4_no_table = true;
-    Require(!CanUseOptimisticIPv4Dad(MIB_IF_ROW2{}, address) && kernel.ipv4_queries == 2 && kernel.ipv4_frees == 0,
+    Require(!CanUseOptimisticDad(MIB_IF_ROW2{}, address) && kernel.ipv4_queries == 2 && kernel.ipv4_frees == 0,
         "missing IPv4 inventory allowed optimistic DAD");
   });
+  test("ipv6-inventory-rejects-duplicate-and-accepts-distinct-address", [&] {
+    MIB_UNICASTIPADDRESS_ROW target{}; target.Address.si_family = AF_INET6;
+    target.Address.Ipv6.sin6_addr = wintun_source_v6;
+    kernel.local_ipv4.NumEntries = 1;
+    kernel.local_ipv4.Table[0] = target;
+    Require(!CanUseOptimisticDad(MIB_IF_ROW2{}, target) && kernel.queried_family == AF_INET6,
+        "IPv6 duplicate escaped its address-family inventory");
+    kernel.local_ipv4.Table[0].Address.Ipv6.sin6_addr = probe_target_v6;
+    Require(CanUseOptimisticDad(MIB_IF_ROW2{}, target) && kernel.ipv4_frees == 2,
+        "Unrelated IPv6 address blocked optimistic DAD or leaked the inventory");
+  });
+  test("ipv6-optimistic-create-rejection-retries-ordinary-dad", [&] {
+    MIB_UNICASTIPADDRESS_ROW target{}; target.Address.si_family = AF_INET6;
+    kernel.reject_optimistic = true;
+    Require(CreateTunnelAddress(target, true) == NO_ERROR && target.DadState == IpDadStateTentative
+        && kernel.address_creations == 2, "An unsupported optimistic request skipped ordinary DAD");
+  });
   std::cout << "WINDOWS_PACKET_PROBE_BUDGET_PURE_PASS=" << passed << " FAIL=" << failed << '\n';
-  if (passed + failed != 27) return 2;
+  if (passed + failed != 33) return 2;
   return failed ? 1 : 0;
 }
 '''
@@ -363,7 +461,7 @@ int main() {
 class Boundaries(unittest.TestCase):
     def test_actual_framing_and_consumers_are_selected(self):
         result = actual(sources())
-        for token in ("PacketPathProbe::Check(", "PacketPathProbe::Serve()", "bytes == expected", "native::SocksReady(", "CanUseOptimisticIPv4Dad("):
+        for token in ("PacketPathProbe::Check(", "PacketPathProbe::Serve()", "bytes == expected", "native::SocksReady(", "CanUseOptimisticDad("):
             self.assertIn(token, result)
         self.assertNotIn("::Configure(", result)
 
@@ -391,7 +489,7 @@ def main():
         "test_tool_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "native_builder_sha256": hashlib.sha256((ROOT / "tool/windows/build_native_tests.cmd").read_bytes()).hexdigest(),
         "inert_boundaries": ["all Winsock APIs", "monotonic clock", "worker thread", "listener readiness callback", "admission continuation effect counter", "startup diagnostics", "Windows local address inventory"],
-        "actual_bodies": ["Send", "Receive", "Check", "Serve", "destructor", "post-SocksReady admission block", "RunVpn health condition", "StartWorkers packet condition", "CanUseOptimisticIPv4Dad"],
+        "actual_bodies": ["Send", "Receive", "Check", "Serve", "destructor", "post-SocksReady admission block", "RunVpn health condition", "StartWorkers packet condition", "CanUseOptimisticDad"],
         "source_guards": result.testsRun, "real_socket_process_thread_Core": False,
     }, indent=2) + "\n")
     return 0

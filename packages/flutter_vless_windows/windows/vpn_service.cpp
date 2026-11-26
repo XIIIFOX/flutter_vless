@@ -68,6 +68,13 @@ MIB_UNICASTIPADDRESS_ROW TunnelIPv4Address(const NET_LUID& luid) {
   return address;
 }
 
+std::string NewTunnelIPv6Address() {
+  const auto iid = flutter_vless::native::RandomHex(8);
+  if (iid.size() != 16 || iid == "0000000000000000") return {};
+  return "fd00:198:18:0:" + iid.substr(0, 4) + ":" + iid.substr(4, 4) + ":" +
+      iid.substr(8, 4) + ":" + iid.substr(12, 4);
+}
+
 bool IsTun2socksDescription(std::wstring_view description) {
   constexpr std::wstring_view name = L"tun2socks Tunnel";
   if (description.size() < name.size() || _wcsnicmp(description.data(), name.data(), name.size()) != 0) return false;
@@ -82,42 +89,54 @@ bool IsTun2socksAdapter(const MIB_IF_ROW2& adapter) {
       !adapter.InterfaceAndOperStatusFlags.HardwareInterface && IsTun2socksDescription(adapter.Description);
 }
 
-bool CanUseOptimisticIPv4Dad(const MIB_IF_ROW2& adapter, const MIB_UNICASTIPADDRESS_ROW& address) {
-  // Only the worker's private raw-IP Wintun has no shared Ethernet link on
-  // which IPv4 ARP peers could claim this address. Custom adapters keep DAD
-  // synchronous, as does this tunnel if the local address is already in use.
+bool CanUseOptimisticDad(const MIB_IF_ROW2& adapter, const MIB_UNICASTIPADDRESS_ROW& address) {
+  // The newly created raw-IP Wintun is owned by tun2socks. Its SOCKS path
+  // forwards traffic rather than bridging neighbor discovery to another link.
+  const bool ipv6 = address.Address.si_family == AF_INET6;
   if (!IsTun2socksAdapter(adapter)) {
-    Event("Unrecognized tunnel adapter; using synchronous IPv4 DAD");
+    Event(ipv6 ? "Unrecognized tunnel adapter; using synchronous IPv6 DAD"
+               : "Unrecognized tunnel adapter; using synchronous IPv4 DAD");
     return false;
   }
   PMIB_UNICASTIPADDRESS_TABLE addresses = nullptr;
-  if (GetUnicastIpAddressTable(AF_INET, &addresses) != NO_ERROR || !addresses) {
-    Event("Local IPv4 address inventory unavailable; using synchronous IPv4 DAD");
+  if (GetUnicastIpAddressTable(address.Address.si_family, &addresses) != NO_ERROR || !addresses) {
+    Event(ipv6 ? "Local IPv6 address inventory unavailable; using synchronous IPv6 DAD"
+               : "Local IPv4 address inventory unavailable; using synchronous IPv4 DAD");
     return false;
   }
   bool available = true;
   for (ULONG i = 0; i < addresses->NumEntries; ++i) {
     const auto& entry = addresses->Table[i].Address;
-    if (entry.Ipv4.sin_addr.S_un.S_addr == address.Address.Ipv4.sin_addr.S_un.S_addr) {
+    const bool matches = ipv6
+        ? std::memcmp(&entry.Ipv6.sin6_addr, &address.Address.Ipv6.sin6_addr, sizeof(IN6_ADDR)) == 0
+        : entry.Ipv4.sin_addr.S_un.S_addr == address.Address.Ipv4.sin_addr.S_un.S_addr;
+    if (matches) {
       available = false;
       break;
     }
   }
   FreeMibTable(addresses);
-  if (!available) Event("Tunnel IPv4 address already present locally; using synchronous IPv4 DAD");
+  if (!available) Event(ipv6 ? "Tunnel IPv6 address already present locally; using synchronous IPv6 DAD"
+                            : "Tunnel IPv4 address already present locally; using synchronous IPv4 DAD");
   return available;
 }
 
-bool TunnelReady(MIB_UNICASTIPADDRESS_ROW address) {
-  return GetUnicastIpAddressEntry(&address) == NO_ERROR && address.DadState == IpDadStatePreferred
-      && address.OnLinkPrefixLength == 24 && !address.SkipAsSource;
+ULONG CreateTunnelAddress(MIB_UNICASTIPADDRESS_ROW& address, bool optimistic) {
+  const auto previous_state = address.DadState;
+  if (optimistic) address.DadState = IpDadStatePreferred;
+  const auto status = CreateUnicastIpAddressEntry(&address);
+  if (!optimistic || status == NO_ERROR || status == ERROR_OBJECT_ALREADY_EXISTS) return status;
+  address.DadState = previous_state;
+  Event(address.Address.si_family == AF_INET6
+      ? "Optimistic IPv6 assignment was rejected; using synchronous IPv6 DAD"
+      : "Optimistic IPv4 assignment was rejected; using synchronous IPv4 DAD");
+  return CreateUnicastIpAddressEntry(&address);
 }
-bool TunnelIPv6Ready(const NET_LUID& luid) {
-  MIB_UNICASTIPADDRESS_ROW address{}; InitializeUnicastIpAddressEntry(&address);
-  address.InterfaceLuid = luid; address.Address.Ipv6.sin6_family = AF_INET6;
-  if (InetPtonA(AF_INET6, "fd00:198:18::2", &address.Address.Ipv6.sin6_addr) != 1) return false;
+
+bool TunnelReady(MIB_UNICASTIPADDRESS_ROW address) {
+  const auto prefix = address.OnLinkPrefixLength;
   return GetUnicastIpAddressEntry(&address) == NO_ERROR && address.DadState == IpDadStatePreferred
-      && address.OnLinkPrefixLength == 64 && !address.SkipAsSource;
+      && address.OnLinkPrefixLength == prefix && !address.SkipAsSource;
 }
 
 bool SetTunnelDns(const NET_LUID& luid) {
@@ -335,6 +354,10 @@ void VpnService::RunVpn(std::shared_ptr<flutter_vless::preparation::StartupCompl
         Event("Optimistic Wintun IPv4 address lost readiness; retaining traffic protection");
         break;
       }
+      if (ipv6_address_ && !TunnelReady(*ipv6_address_)) {
+        Event("Wintun IPv6 address lost readiness; retaining traffic protection");
+        break;
+      }
       if (!xray_process_->IsRunning() || !tun2socks_process_->IsRunning()
           || !worker_candidate_ || !worker_candidate_->PacketProbe().Check(
               flutter_vless::PacketPathProbe::address, [this] { return !requested_.load(); })) break;
@@ -484,23 +507,6 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   }
   if (!adapter_ready || !requested_.load()) return fail("Wintun adapter unavailable or startup cancelled");
   timing.Mark("wintun_adapter");
-  // Start IPv6 duplicate-address detection before configuring IPv4. Both
-  // addresses must still reach Preferred on this exact adapter before capture.
-  MIB_UNICASTIPADDRESS_ROW ipv6{}; InitializeUnicastIpAddressEntry(&ipv6);
-  ipv6.InterfaceLuid = luid; ipv6.Address.Ipv6.sin6_family = AF_INET6;
-  if (InetPtonA(AF_INET6, "fd00:198:18::2", &ipv6.Address.Ipv6.sin6_addr) != 1) return fail("Invalid owned Wintun IPv6 address");
-  ipv6.OnLinkPrefixLength = 64;
-  ipv6.PrefixOrigin = IpPrefixOriginManual; ipv6.SuffixOrigin = IpSuffixOriginManual;
-  ipv6.ValidLifetime = ipv6.PreferredLifetime = 0xffffffff;
-  ipv6.SkipAsSource = FALSE;
-  const auto ipv6_status = CreateUnicastIpAddressEntry(&ipv6);
-  if (ipv6_status == NO_ERROR) ipv6_address_ = ipv6;
-  else if (ipv6_status != ERROR_OBJECT_ALREADY_EXISTS) {
-    Event(("Cannot assign the owned Wintun IPv6 address, code=" + std::to_string(ipv6_status)).c_str()); return false;
-  }
-  timing.Mark("ipv6_configure");
-  if (!requested_.load() || !tun2socks_process_->IsRunning()) return fail("Wintun IPv4 setup cancelled");
-  auto ipv4 = TunnelIPv4Address(luid);
   // Windows may reuse a recently retired adapter's LUID. A different
   // nonempty device GUID still identifies a distinct adapter instance.
   constexpr GUID empty_guid{};
@@ -510,15 +516,47 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
       ? previous_adapter.Value != luid.Value || changed_guid
       : (previous_status == ERROR_INVALID_PARAMETER || previous_status == ERROR_INVALID_NAME ||
          previous_status == ERROR_NOT_FOUND || previous_status == ERROR_FILE_NOT_FOUND);
-  const auto default_dad = ipv4.DadState;
-  if (new_adapter && CanUseOptimisticIPv4Dad(adapter, ipv4)) ipv4.DadState = IpDadStatePreferred;
-  if (!new_adapter) Event("Tunnel adapter was reused or its identity was unknown; using synchronous IPv4 DAD");
-  auto ipv4_status = CreateUnicastIpAddressEntry(&ipv4);
-  if (ipv4.DadState == IpDadStatePreferred && ipv4_status != NO_ERROR && ipv4_status != ERROR_OBJECT_ALREADY_EXISTS) {
-    Event("Optimistic IPv4 assignment was rejected; using synchronous IPv4 DAD");
-    ipv4.DadState = default_dad;
-    ipv4_status = CreateUnicastIpAddressEntry(&ipv4);
+  // Start IPv6 duplicate-address detection before configuring IPv4. Both
+  // addresses must still reach Preferred on this exact adapter before capture.
+  MIB_UNICASTIPADDRESS_ROW ipv6{}; InitializeUnicastIpAddressEntry(&ipv6);
+  ipv6.InterfaceLuid = luid; ipv6.Address.Ipv6.sin6_family = AF_INET6;
+  ipv6.OnLinkPrefixLength = 64;
+  ipv6.PrefixOrigin = IpPrefixOriginManual; ipv6.SuffixOrigin = IpSuffixOriginManual;
+  ipv6.ValidLifetime = ipv6.PreferredLifetime = 0xffffffff;
+  ipv6.SkipAsSource = FALSE;
+  // RFC 4429 recommends an address with a likely unique interface identifier.
+  // Keep the conventional address and synchronous DAD on an unverified TUN.
+  if (!new_adapter) Event("Tunnel adapter was reused or its identity was unknown; using synchronous IPv6 DAD");
+  auto ipv6_source = new_adapter ? NewTunnelIPv6Address() : std::string();
+  const bool fast_ipv6 = !ipv6_source.empty() &&
+      InetPtonA(AF_INET6, ipv6_source.c_str(), &ipv6.Address.Ipv6.sin6_addr) == 1 && CanUseOptimisticDad(adapter, ipv6);
+  const auto set_conventional_ipv6 = [&] {
+    ipv6_source = "fd00:198:18::2";
+    return InetPtonA(AF_INET6, ipv6_source.c_str(), &ipv6.Address.Ipv6.sin6_addr) == 1;
+  };
+  if (!fast_ipv6 && !set_conventional_ipv6()) return fail("Invalid owned Wintun IPv6 address");
+  const auto default_ipv6_dad = ipv6.DadState;
+  auto ipv6_status = CreateTunnelAddress(ipv6, fast_ipv6);
+  if (fast_ipv6 && ipv6_status == ERROR_OBJECT_ALREADY_EXISTS) {
+    // Another owner claimed the randomly selected address after inventory.
+    // Leave it alone and fall back to the original synchronous address.
+    ipv6.DadState = default_ipv6_dad;
+    if (!set_conventional_ipv6()) return fail("Invalid owned Wintun IPv6 address");
+    ipv6_status = CreateTunnelAddress(ipv6, false);
   }
+  const bool optimistic_ipv6 = ipv6_status == NO_ERROR && ipv6.DadState == IpDadStatePreferred;
+  if (ipv6_status == NO_ERROR) {
+    ipv6_address_ = ipv6;
+    Event(optimistic_ipv6 ? "Wintun IPv6 address configured with optimistic DAD"
+                          : "Wintun IPv6 address configured via IP Helper");
+  } else if (ipv6_status != ERROR_OBJECT_ALREADY_EXISTS) {
+    Event(("Cannot assign the owned Wintun IPv6 address, code=" + std::to_string(ipv6_status)).c_str()); return false;
+  }
+  timing.Mark("ipv6_configure");
+  if (!requested_.load() || !tun2socks_process_->IsRunning()) return fail("Wintun IPv4 setup cancelled");
+  auto ipv4 = TunnelIPv4Address(luid);
+  if (!new_adapter) Event("Tunnel adapter was reused or its identity was unknown; using synchronous IPv4 DAD");
+  const auto ipv4_status = CreateTunnelAddress(ipv4, new_adapter && CanUseOptimisticDad(adapter, ipv4));
   if (ipv4_status == NO_ERROR) {
     ipv4_address_ = ipv4;
     Event(ipv4.DadState == IpDadStatePreferred
@@ -547,7 +585,7 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   timing.Mark("ipv4_address");
   bool ipv6_ready = false;
   for (int i = 0; i < 50 && requested_.load() && tun2socks_process_->IsRunning(); ++i) {
-    if (TunnelIPv6Ready(luid)) { ipv6_ready = true; break; }
+    if (TunnelReady(ipv6)) { ipv6_ready = true; break; }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
   if (!ipv6_ready) return fail("Wintun IPv6 address did not become ready");
@@ -588,8 +626,10 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   worker_candidate_->RemoveFile();
   native::RemovePrivateConfig(tun_config_path_);
   for (int i = 0; i < 10 && requested_.load() && xray_process_->IsRunning() && tun2socks_process_->IsRunning(); ++i) {
-    if (worker_candidate_->PacketProbe().Check(PacketPathProbe::address, [this] { return !requested_.load(); })) {
-      if (!TunnelReady(ipv4)) return fail("Wintun IPv4 address lost readiness during the packet check");
+    if (worker_candidate_->PacketProbe().Check(PacketPathProbe::address, [this] { return !requested_.load(); }) &&
+        (!optimistic_ipv6 || worker_candidate_->PacketProbe().Check(
+            PacketPathProbe::ipv6_address, [this] { return !requested_.load(); }, ipv6_source.c_str()))) {
+      if (!TunnelReady(ipv4) || !TunnelReady(ipv6)) return fail("Wintun address lost readiness during the packet check");
       timing.Mark("packet_path");
       if (report) *report = worker_candidate_->PreparationReport();
       return true;

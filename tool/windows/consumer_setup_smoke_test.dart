@@ -59,6 +59,13 @@ Future<void> _runPlan(
   final activePath = plan['active_receipt'] as String;
   final continuePath = plan['continue'] as String;
   final failClosedPath = plan['fail_closed_receipt'] as String?;
+  final addressLoss = plan['address_loss'] as String?;
+  _check(
+    failClosedPath == null
+        ? addressLoss == null
+        : !proxy && (addressLoss == 'IPv4' || addressLoss == 'IPv6'),
+    'Invalid address-loss control',
+  );
   final restoredPath = plan['restored_receipt'] as String;
   final finishPath = plan['finish'] as String;
   final fixtureRoutes = plan['routes'] as List<dynamic>;
@@ -123,6 +130,16 @@ Future<void> _runPlan(
       };
       result['ipv4_setup'] = diagnosticLines
           .map((line) => ipv4SetupEvents[line])
+          .whereType<String>()
+          .single;
+      const ipv6SetupEvents = {
+        '[vpn] Wintun IPv6 address configured with optimistic DAD':
+            'optimistic_dad',
+        '[vpn] Wintun IPv6 address configured via IP Helper': 'ip_helper',
+        '[vpn] Reusing the existing ready Wintun IPv6 address': 'existing_address',
+      };
+      result['ipv6_setup'] = diagnosticLines
+          .map((line) => ipv6SetupEvents[line])
           .whereType<String>()
           .single;
       const dadFallbackEvents = {
@@ -207,6 +224,7 @@ Future<void> _runPlan(
                 reportedForwardingLoss = true;
                 await _writeReceipt(failClosedPath, {
                   'status': VlessConnectionState.connecting.wireName,
+                  'address_family': addressLoss,
                 });
               }
             },

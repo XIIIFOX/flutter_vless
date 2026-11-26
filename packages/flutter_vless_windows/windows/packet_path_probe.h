@@ -9,6 +9,7 @@ namespace flutter_vless {
 class PacketPathProbe {
  public:
   static constexpr const char* address = "10.0.85.54";
+  static constexpr const char* ipv6_address = "2001:db8:85::54";
   static constexpr const char* tag = "flutter-vless-packet-probe";
   explicit PacketPathProbe(std::set<unsigned> excluded_ports = {})
       : excluded_ports_(std::move(excluded_ports)) {}
@@ -16,9 +17,11 @@ class PacketPathProbe {
   bool Start();
   bool Configure(xray_config::Json& config, uint16_t managed_port,
       std::vector<int64_t>* generated_guards = nullptr) const;
+  // IPv6 requires the expected source address owned by the active tunnel.
   // The synchronous callback is not retained after this exchange.
   bool Check(const char* destination = address,
-      const std::function<bool()>& is_cancelled = {}) const;
+      const std::function<bool()>& is_cancelled = {},
+      const char* expected_ipv6_source = nullptr) const;
  private:
   void Serve();
   SOCKET listener_ = INVALID_SOCKET;

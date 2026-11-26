@@ -36,6 +36,7 @@ PROBE = None
 REAL_DNS = False
 IPV6_PAYLOAD_TARGET = "2001:db8:85::7"
 IPV6_TUN_SOURCE = "fd00:198:18::2"
+IPV6_TUN_PREFIX = ipaddress.IPv6Network("fd00:198:18::/64")
 IPV6_PAYLOAD_PORT = 45678
 FAKEDNS_NAME = "fakedns-payload.invalid"
 FAKEDNS_PORT = 45679
@@ -220,14 +221,34 @@ class FakeDnsPayloadDatagram(socketserver.BaseRequestHandler):
             relay.sendto(packet[:end] + reply, self.client_address)
 
 
-def ipv6_payload_request(state, udp):
+def tunnel_ipv6_rows(*, preferred=False):
+    flags = "-PrefixLength 64 -PrefixOrigin Manual -AddressState Preferred -PolicyStore ActiveStore " if preferred else ""
+    prefix = IPV6_TUN_PREFIX.network_address.packed[:8].hex("-").upper()
+    # Compare the eight prefix bytes independently of Windows' IPv6 text formatting.
+    return ("Get-NetIPAddress -InterfaceAlias 'flutter_vless_tun' -AddressFamily IPv6 "
+            f"{flags}-ErrorAction SilentlyContinue | Where-Object {{ "
+            f"[BitConverter]::ToString(([IPAddress]$_.IPAddress).GetAddressBytes(), 0, 8) -eq '{prefix}' }}")
+
+
+def tunnel_ipv6_address():
+    output = subprocess.check_output(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+        tunnel_ipv6_rows(preferred=True) + " | Select-Object -ExpandProperty IPAddress"], text=True, timeout=15)
+    addresses = [ipaddress.IPv6Address(line.strip()) for line in output.splitlines() if line.strip()]
+    assert len(addresses) == 1 and addresses[0] in IPV6_TUN_PREFIX and addresses[0].scope_id is None, \
+        "Expected one Preferred IPv6 address in the owned tunnel prefix"
+    return str(addresses[0])
+
+
+def ipv6_payload_request(state, udp, source=IPV6_TUN_SOURCE):
     transport = "udp" if udp else "tcp"
     payload = state.arm(transport)
     expected = b"accepted-" + payload
     with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM) as sock:
         sock.settimeout(4)
         sock.connect((IPV6_PAYLOAD_TARGET, IPV6_PAYLOAD_PORT))
-        assert sock.getsockname()[0] == IPV6_TUN_SOURCE, "IPv6 payload did not select the owned tunnel address"
+        actual_source = ipaddress.IPv6Address(sock.getsockname()[0])
+        assert actual_source in IPV6_TUN_PREFIX and actual_source == ipaddress.IPv6Address(source), \
+            "IPv6 payload did not select the owned tunnel address"
         sock.sendall(payload)
         reply = sock.recv(256) if udp else exact(sock, len(expected))
         assert reply == expected, "IPv6 payload marker reply changed"
@@ -1318,7 +1339,7 @@ def direct_only_gate(probe, directory, address, dns, origin, results):
                 assert native(probe, "policy-count") == "0", "Direct-only Stop retained WFP filters"
                 inventory = json.loads(subprocess.check_output(["powershell", "-NoProfile", "-Command",
                     "[pscustomobject]@{Routes=@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1','::/1','8000::/1') }).Count; "
-                    "IPv6Addresses=@(Get-NetIPAddress -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -eq 'flutter_vless_tun' -and $_.IPAddress -eq 'fd00:198:18::2' }).Count} | ConvertTo-Json -Compress"], text=True, timeout=25))
+                    f"IPv6Addresses=@({tunnel_ipv6_rows()}).Count}} | ConvertTo-Json -Compress"], text=True, timeout=25))
                 assert inventory == {"Routes": 0, "IPv6Addresses": 0}, "Direct-only Stop retained tunnel routes/address"
                 results.append(dict(mode=label, check="explicit Stop removes owned WFP, capture routes and IPv6 address", passed=True))
             except BaseException as error:
@@ -1414,7 +1435,7 @@ def fakedns_gate(probe, directory, address, proxy_port, dns_port, payload_state,
                 assert native(probe, "policy-count") == "0", "FakeDNS Stop retained WFP filters"
                 inventory = json.loads(subprocess.check_output(["powershell", "-NoProfile", "-Command",
                     "[pscustomobject]@{Routes=@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1','::/1','8000::/1') }).Count; "
-                    "IPv6Addresses=@(Get-NetIPAddress -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -eq 'flutter_vless_tun' -and $_.IPAddress -eq 'fd00:198:18::2' }).Count} | ConvertTo-Json -Compress"], text=True, timeout=25))
+                    f"IPv6Addresses=@({tunnel_ipv6_rows()}).Count}} | ConvertTo-Json -Compress"], text=True, timeout=25))
                 assert inventory == {"Routes": 0, "IPv6Addresses": 0}, "FakeDNS Stop retained tunnel routes/address"
                 results.append(dict(mode=label, check="FakeDNS restart Stop removes protection and owned routes", passed=True))
             except BaseException as error:
@@ -1512,7 +1533,7 @@ def native_routing_gate(probe, directory, address, dns, origin, results):
                 assert native(probe, "policy-count") == "0", "Native routing Stop retained WFP filters"
                 inventory = json.loads(subprocess.check_output(["powershell", "-NoProfile", "-Command",
                     "[pscustomobject]@{Routes=@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1','::/1','8000::/1') }).Count; "
-                    "IPv6Addresses=@(Get-NetIPAddress -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -eq 'flutter_vless_tun' -and $_.IPAddress -eq 'fd00:198:18::2' }).Count} | ConvertTo-Json -Compress"], text=True, timeout=25))
+                    f"IPv6Addresses=@({tunnel_ipv6_rows()}).Count}} | ConvertTo-Json -Compress"], text=True, timeout=25))
                 assert inventory == {"Routes": 0, "IPv6Addresses": 0}, "Native routing Stop retained routes/address"
                 results.append(dict(mode=label, check="native routing Stop removes WFP routes and owned address", passed=True))
             except BaseException as error:
@@ -1694,7 +1715,7 @@ def profile_balancer_gate(probe, directory, address, dns, results, diagnostics=F
                 assert native(probe, "policy-count") == "0", "Typed-profile Stop retained WFP filters"
                 inventory = json.loads(subprocess.check_output(["powershell", "-NoProfile", "-Command",
                     "[pscustomobject]@{Routes=@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1','::/1','8000::/1') }).Count; "
-                    "IPv6Addresses=@(Get-NetIPAddress -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -eq 'flutter_vless_tun' -and $_.IPAddress -eq 'fd00:198:18::2' }).Count} | ConvertTo-Json -Compress"], text=True, timeout=25))
+                    f"IPv6Addresses=@({tunnel_ipv6_rows()}).Count}} | ConvertTo-Json -Compress"], text=True, timeout=25))
                 assert inventory == {"Routes": 0, "IPv6Addresses": 0}, "Typed-profile Stop retained routes/address"
                 owned_workers = subprocess.check_output(["powershell", "-NoProfile", "-Command", "$ErrorActionPreference='Stop'; "
                     f"@(Get-CimInstance Win32_Process | Where-Object {{ $_.ParentProcessId -eq {process.pid} "
@@ -2412,8 +2433,9 @@ def main():
                             actual = protected_dns(tcp)
                             results.append(dict(mode=label, check="protected TCP DNS" if tcp else "protected UDP DNS", actual=actual, passed=True))
                         if uses_ipv6_payload:
+                            ipv6_source = tunnel_ipv6_address()
                             for udp in (False, True):
-                                actual = ipv6_payload_request(ipv6_payload, udp)
+                                actual = ipv6_payload_request(ipv6_payload, udp, ipv6_source)
                                 results.append(dict(mode=label, check="IPv6 UDP payload via IPv4 proxy" if udp else "IPv6 TCP payload via IPv4 proxy", actual=actual, passed=True))
                             for tcp in (False, True):
                                 results.append(dict(mode=label, check="caller AAAA TCP DNS" if tcp else "caller AAAA UDP DNS",
@@ -2448,9 +2470,10 @@ def main():
                             await_state(state_file, True, timeout=60)
                             assert request("myip.com", True) == "PROXY-FIXTURE"
                             assert system_dns()
+                            ipv6_source = tunnel_ipv6_address()
                             for udp in (False, True):
                                 results.append(dict(mode=label, check="IPv6 payload survives underlay rename",
-                                                    actual=ipv6_payload_request(ipv6_payload, udp), passed=True))
+                                                    actual=ipv6_payload_request(ipv6_payload, udp, ipv6_source), passed=True))
                             results.append(dict(mode=label, check="Unicode underlay rename recovers routing and system DNS", passed=True))
                             for worker in ("xray.exe", "tun2socks.exe"):
                                 kill_worker(process.pid, worker)
@@ -2460,9 +2483,10 @@ def main():
                                 await_state(state_file, True, timeout=60)
                                 assert request("myip.com", True) == "PROXY-FIXTURE"
                                 results.append(dict(mode=label, check=worker + " forwarding recovers", passed=True))
+                                ipv6_source = tunnel_ipv6_address()
                                 for udp in (False, True):
                                     results.append(dict(mode=label, check=worker + " IPv6 payload recovers",
-                                                        actual=ipv6_payload_request(ipv6_payload, udp), passed=True))
+                                                        actual=ipv6_payload_request(ipv6_payload, udp, ipv6_source), passed=True))
                     if args.vpn and ending == "no-reconnect":
                         kill_worker(process.pid, "xray.exe")
                         await_state(state_file, False)
@@ -2491,7 +2515,7 @@ def main():
                         remaining = subprocess.check_output([
                             "powershell", "-NoProfile", "-Command",
                             "[pscustomobject]@{Routes=@(Get-NetRoute -InterfaceAlias flutter_vless_tun -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/1','128.0.0.0/1','::/1','8000::/1') }).Count; "
-                            "IPv6Addresses=@(Get-NetIPAddress -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -eq 'flutter_vless_tun' -and $_.IPAddress -eq 'fd00:198:18::2' }).Count} | ConvertTo-Json -Compress"], text=True, timeout=25)
+                            f"IPv6Addresses=@({tunnel_ipv6_rows()}).Count}} | ConvertTo-Json -Compress"], text=True, timeout=25)
                         inventory = json.loads(remaining)
                         results.append(dict(mode=label, check="capture routes removed by service", passed=inventory["Routes"] == 0))
                         results.append(dict(mode=label, check="owned IPv6 address removed by service", passed=inventory["IPv6Addresses"] == 0))

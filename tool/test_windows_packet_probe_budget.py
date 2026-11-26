@@ -57,8 +57,8 @@ def actual(data):
         raise ValueError("periodic health consumer changed")
     periodic = periodic.replace("break;", "return false;")
     startup = section(service, "    if (worker_candidate_->PacketProbe().Check(", "    std::this_thread::sleep_for(std::chrono::milliseconds(100));\n  }\n  return fail(\"Private packet-path challenge")
-    optimistic_dad = section(service, "bool CanUseOptimisticIPv4Dad(", "bool TunnelReady(")
-    optimistic_dad = optimistic_dad.replace("_wcsicmp", "InertWcsicmp")
+    optimistic_dad = section(service, "bool IsTun2socksDescription(", "bool TunnelReady(")
+    optimistic_dad = optimistic_dad.replace("_wcsnicmp", "InertWcsnicmp")
     cancel = "const std::function<bool()>&" in declaration
     adapter = "return probe.Check(PacketPathProbe::address, [] { return kernel.cancel; });" if cancel else "return probe.Check();"
     return probe + optimistic_dad + r'''
@@ -132,6 +132,7 @@ FAKES = r'''
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 using SOCKET = int; using DWORD = unsigned long; using u_long = unsigned long; using HANDLE = void*;
@@ -172,9 +173,12 @@ struct Kernel {
   std::function<void()> after_io, on_close, join;
 } kernel;
 void Require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
-int InertWcsicmp(const wchar_t* left, const wchar_t* right) {
-  while (*left && std::towlower(*left) == std::towlower(*right)) { ++left; ++right; }
-  return std::towlower(*left) == std::towlower(*right) ? 0 : 1;
+int InertWcsnicmp(const wchar_t* left, const wchar_t* right, std::size_t count) {
+  for (std::size_t i = 0; i < count; ++i) {
+    if (std::towlower(left[i]) != std::towlower(right[i])) return 1;
+    if (!left[i]) break;
+  }
+  return 0;
 }
 int GetUnicastIpAddressTable(int family, PMIB_UNICASTIPADDRESS_TABLE* result) {
   Require(family == AF_INET && !kernel.ipv4_table_owned, "invalid local IPv4 query");
@@ -308,6 +312,24 @@ int main() {
     Require(CanUseOptimisticIPv4Dad(wintun, address) && kernel.ipv4_queries == 1 && kernel.ipv4_frees == 1,
         "private raw-IP tunnel rejected without a local conflict");
   });
+  test("windows-numbered-wintun-descriptions-can-use-optimistic-dad", [&] {
+    MIB_IF_ROW2 wintun{};
+    for (const auto* description : {L"tun2socks Tunnel #2", L"TUN2SOCKS TUNNEL #19"}) {
+      wintun.Description = description;
+      Require(CanUseOptimisticIPv4Dad(wintun, address), "numbered Windows tunnel description rejected");
+    }
+    Require(kernel.ipv4_queries == 2 && kernel.ipv4_frees == 2, "numbered tunnel bypassed inventory check");
+  });
+  test("wintun-description-lookalikes-keep-standard-dad", [&] {
+    MIB_IF_ROW2 lookalike{};
+    for (const auto* description : {L"tun2socks Tunne", L"tun2socks Tunnel backup", L"tun2socks Tunnel #",
+        L"tun2socks Tunnel #0", L"tun2socks Tunnel #02", L"tun2socks Tunnel #\u0662", L"tun2socks Tunnel #2 backup",
+        L"tun2socks Tunnel #2 ", L"tun2socks Tunnel#2"}) {
+      lookalike.Description = description;
+      Require(!CanUseOptimisticIPv4Dad(lookalike, address), "lookalike description allowed optimistic DAD");
+    }
+    Require(kernel.ipv4_queries == 0, "a lookalike triggered an address query");
+  });
   test("local-duplicate-address-keeps-standard-dad", [&] {
     kernel.local_ipv4.NumEntries = 2;
     kernel.local_ipv4.Table[1] = address;
@@ -332,7 +354,7 @@ int main() {
         "missing IPv4 inventory allowed optimistic DAD");
   });
   std::cout << "WINDOWS_PACKET_PROBE_BUDGET_PURE_PASS=" << passed << " FAIL=" << failed << '\n';
-  if (passed + failed != 25) return 2;
+  if (passed + failed != 27) return 2;
   return failed ? 1 : 0;
 }
 '''

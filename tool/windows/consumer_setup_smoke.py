@@ -319,6 +319,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                 assert stages and all(type(ms) is int and ms >= 0 for ms in stages.values())
                 result["startup_stages_ms"] = stages
                 result["ipv4_setup"] = final["ipv4_setup"]
+                result["ipv4_dad_fallback"] = final["ipv4_dad_fallback"]
                 result["dns_setup"] = final["dns_setup"]
                 result["invalid_replacement_rejected"] = True
                 result["network_checks"] = network_checks

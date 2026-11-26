@@ -5,9 +5,11 @@
 #include "xray_config.h"
 #include "owned_address.h"
 #include "windows_underlay.h"
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <cwchar>
+#include <string_view>
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 
@@ -66,15 +68,33 @@ MIB_UNICASTIPADDRESS_ROW TunnelIPv4Address(const NET_LUID& luid) {
   return address;
 }
 
+bool IsTun2socksDescription(std::wstring_view description) {
+  constexpr std::wstring_view name = L"tun2socks Tunnel";
+  if (description.size() < name.size() || _wcsnicmp(description.data(), name.data(), name.size()) != 0) return false;
+  const auto suffix = description.substr(name.size());
+  // Windows can number otherwise identical device descriptions on recreation.
+  return suffix.empty() || (suffix.size() > 2 && suffix.substr(0, 2) == L" #" && suffix[2] >= L'1' &&
+      std::all_of(suffix.begin() + 2, suffix.end(), [](wchar_t c) { return c >= L'0' && c <= L'9'; }));
+}
+
+bool IsTun2socksAdapter(const MIB_IF_ROW2& adapter) {
+  return adapter.Type == IF_TYPE_PROP_VIRTUAL && adapter.MediaType == NdisMediumIP &&
+      !adapter.InterfaceAndOperStatusFlags.HardwareInterface && IsTun2socksDescription(adapter.Description);
+}
+
 bool CanUseOptimisticIPv4Dad(const MIB_IF_ROW2& adapter, const MIB_UNICASTIPADDRESS_ROW& address) {
   // Only the worker's private raw-IP Wintun has no shared Ethernet link on
   // which IPv4 ARP peers could claim this address. Custom adapters keep DAD
   // synchronous, as does this tunnel if the local address is already in use.
-  if (adapter.Type != IF_TYPE_PROP_VIRTUAL || adapter.MediaType != NdisMediumIP ||
-      adapter.InterfaceAndOperStatusFlags.HardwareInterface ||
-      _wcsicmp(adapter.Description, L"tun2socks Tunnel") != 0) return false;
+  if (!IsTun2socksAdapter(adapter)) {
+    Event("Unrecognized tunnel adapter; using synchronous IPv4 DAD");
+    return false;
+  }
   PMIB_UNICASTIPADDRESS_TABLE addresses = nullptr;
-  if (GetUnicastIpAddressTable(AF_INET, &addresses) != NO_ERROR || !addresses) return false;
+  if (GetUnicastIpAddressTable(AF_INET, &addresses) != NO_ERROR || !addresses) {
+    Event("Local IPv4 address inventory unavailable; using synchronous IPv4 DAD");
+    return false;
+  }
   bool available = true;
   for (ULONG i = 0; i < addresses->NumEntries; ++i) {
     const auto& entry = addresses->Table[i].Address;
@@ -84,6 +104,7 @@ bool CanUseOptimisticIPv4Dad(const MIB_IF_ROW2& adapter, const MIB_UNICASTIPADDR
     }
   }
   FreeMibTable(addresses);
+  if (!available) Event("Tunnel IPv4 address already present locally; using synchronous IPv4 DAD");
   return available;
 }
 
@@ -442,6 +463,9 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   if (!requested_.load()) return fail("VPN startup cancelled");
   NET_LUID previous_adapter{};
   const auto previous_status = ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &previous_adapter);
+  MIB_IF_ROW2 previous_row{};
+  previous_row.InterfaceLuid = previous_adapter;
+  const bool previous_identified = previous_status == NO_ERROR && GetIfEntry2(&previous_row) == NO_ERROR;
   tun2socks_process_ = native::Launch(tun2socks_executable_path_, {L"-config", tun_config_path_.wstring()});
   if (!tun2socks_process_) return fail("Cannot launch tun2socks");
   NET_LUID luid{};
@@ -477,13 +501,21 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   timing.Mark("ipv6_configure");
   if (!requested_.load() || !tun2socks_process_->IsRunning()) return fail("Wintun IPv4 setup cancelled");
   auto ipv4 = TunnelIPv4Address(luid);
-  const bool new_adapter = previous_status == NO_ERROR ? previous_adapter.Value != luid.Value
+  // Windows may reuse a recently retired adapter's LUID. A different
+  // nonempty device GUID still identifies a distinct adapter instance.
+  constexpr GUID empty_guid{};
+  const bool changed_guid = previous_identified && !IsEqualGUID(previous_row.InterfaceGuid, empty_guid) &&
+      !IsEqualGUID(adapter.InterfaceGuid, empty_guid) && !IsEqualGUID(previous_row.InterfaceGuid, adapter.InterfaceGuid);
+  const bool new_adapter = previous_status == NO_ERROR
+      ? previous_adapter.Value != luid.Value || changed_guid
       : (previous_status == ERROR_INVALID_PARAMETER || previous_status == ERROR_INVALID_NAME ||
          previous_status == ERROR_NOT_FOUND || previous_status == ERROR_FILE_NOT_FOUND);
   const auto default_dad = ipv4.DadState;
   if (new_adapter && CanUseOptimisticIPv4Dad(adapter, ipv4)) ipv4.DadState = IpDadStatePreferred;
+  if (!new_adapter) Event("Tunnel adapter was reused or its identity was unknown; using synchronous IPv4 DAD");
   auto ipv4_status = CreateUnicastIpAddressEntry(&ipv4);
   if (ipv4.DadState == IpDadStatePreferred && ipv4_status != NO_ERROR && ipv4_status != ERROR_OBJECT_ALREADY_EXISTS) {
+    Event("Optimistic IPv4 assignment was rejected; using synchronous IPv4 DAD");
     ipv4.DadState = default_dad;
     ipv4_status = CreateUnicastIpAddressEntry(&ipv4);
   }

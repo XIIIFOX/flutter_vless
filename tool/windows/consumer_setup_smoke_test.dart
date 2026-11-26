@@ -125,6 +125,22 @@ Future<void> _runPlan(
           .map((line) => ipv4SetupEvents[line])
           .whereType<String>()
           .single;
+      const dadFallbackEvents = {
+        '[vpn] Unrecognized tunnel adapter; using synchronous IPv4 DAD':
+            'unexpected_adapter',
+        '[vpn] Local IPv4 address inventory unavailable; using synchronous IPv4 DAD':
+            'inventory_unavailable',
+        '[vpn] Tunnel IPv4 address already present locally; using synchronous IPv4 DAD':
+            'local_address_exists',
+        '[vpn] Tunnel adapter was reused or its identity was unknown; using synchronous IPv4 DAD':
+            'adapter_not_new',
+        '[vpn] Optimistic IPv4 assignment was rejected; using synchronous IPv4 DAD':
+            'optimistic_assignment_rejected',
+      };
+      result['ipv4_dad_fallback'] = diagnosticLines
+          .map((line) => dadFallbackEvents[line])
+          .whereType<String>()
+          .toList();
       const dnsSetupEvents = {
         '[vpn] Wintun IPv4 DNS configured via IP Helper': 'ip_helper',
         '[vpn] Wintun IPv4 DNS configured via netsh': 'netsh',

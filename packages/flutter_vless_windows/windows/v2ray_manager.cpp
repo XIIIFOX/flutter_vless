@@ -90,15 +90,12 @@ bool V2rayManager::Start(const std::string& config, bool proxy_only, const flutt
   if (proxy_only && routing) return false;
   if (!flutter_vless::asset_location::Valid(assets)) return false;
   auto failure = Stage::core_check;
-  const auto authored_check_started = std::chrono::steady_clock::now();
-  if (!ValidateConfig(config, proxy_only, assets, &failure)) {
+  if (proxy_only && !ValidateConfig(config, assets, &failure)) {
     if (outcome) outcome->Fail(failure);
     flutter_vless::DiagnosticsLog::Instance().Append(
         "runtime", "Xray configuration check rejected candidate; active session preserved");
     return false;
   }
-  const auto authored_check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::steady_clock::now() - authored_check_started).count();
   if (is_running_.load() && (proxy_only || proxy_only_)) {
     flutter_vless::DiagnosticsLog::Instance().Append(
         "runtime", "Stop the active session before changing proxy-only mode or configuration");
@@ -110,8 +107,6 @@ bool V2rayManager::Start(const std::string& config, bool proxy_only, const flutt
     flutter_vless::DiagnosticsLog::Instance().Reset();
     flutter_vless::DiagnosticsLog::Instance().Append("runtime", proxy_only
         ? "Starting Windows proxy-only session" : "Starting Windows VPN session");
-    if (!proxy_only) flutter_vless::DiagnosticsLog::Instance().Append(
-        "vpn", "startup timing authored_config " + std::to_string(authored_check_ms) + " ms");
     current_config_ = config; proxy_only_ = proxy_only; is_running_.store(true);
   };
   if (proxy_only) return proxy_service_ && proxy_service_->Start(config, assets, outcome, changes, publish);
@@ -218,12 +213,11 @@ void V2rayManager::GetTrafficStats(int64_t& upload, int64_t& download) {
   upload = sample.upload.value_or(0); download = sample.download.value_or(0);
 }
 
-bool V2rayManager::ValidateConfig(const std::string& config, bool proxy_only, const flutter_vless::asset_location::Root& assets,
+bool V2rayManager::ValidateConfig(const std::string& config, const flutter_vless::asset_location::Root& assets,
     flutter_vless::preparation::Stage* failure) {
   const auto executable = flutter_vless::native::FindBundledFile(L"xray.exe");
-  const auto storage = proxy_only ? flutter_vless::native::ConfigCheckStorage::currentUser
-                                 : flutter_vless::native::ConfigCheckStorage::administrators;
-  return executable && flutter_vless::native::CheckConfig(config, *executable, storage, assets, failure);
+  return executable && flutter_vless::native::CheckConfig(config, *executable,
+      flutter_vless::native::ConfigCheckStorage::currentUser, assets, failure);
 }
 
 // Kept for reference but unused in VPN stub

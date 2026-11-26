@@ -59,7 +59,7 @@ class V2rayManager {
 
   // Helper methods
   void RunV2ray();
-  bool ValidateConfig(const std::string& config, bool proxy_only, const flutter_vless::asset_location::Root& assets,
+  bool ValidateConfig(const std::string& config, const flutter_vless::asset_location::Root& assets,
       flutter_vless::preparation::Stage* failure = nullptr);
   std::string ModifyConfigForWindows(const std::string& config, bool proxy_only);
   

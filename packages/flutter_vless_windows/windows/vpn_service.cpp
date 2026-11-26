@@ -106,6 +106,26 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   if (native_routing::NativeRoutingSpec::ValidateSource(config, routing) != native_routing::NativeRoutingError::none) {
     Event("Native VPN routing selection rejected; active session preserved"); return false;
   }
+  auto authored = xray_config::Parse(config);
+  if (!xray_config::Normalize(authored)) return false;
+  if (outcome) outcome->Fail(preparation::Stage::persist);
+  auto runtime = std::make_unique<native::ProtectedRuntime>();
+  if (!runtime->Create(*xray, !assets.has_value())) {
+    Event("Cannot create private administrator-owned VPN runtime"); return false;
+  }
+  timing.Mark("prepare_runtime");
+  // Both Core checks use this one administrator-owned snapshot. Reject an
+  // invalid authored profile before endpoint bootstrap or session replacement.
+  fs::path authored_path;
+  auto authored_failure = preparation::Stage::prepare;
+  const bool authored_valid = native::CheckPreparedConfig(authored.dump(), *runtime, authored_path, assets, &authored_failure);
+  native::RemovePrivateConfig(authored_path);
+  if (!authored_valid || !authored_path.empty()) {
+    if (outcome) outcome->Fail(authored_valid ? preparation::Stage::persist : authored_failure);
+    Event("Xray configuration check rejected authored VPN document; active session preserved"); return false;
+  }
+  timing.Mark("authored_config");
+  if (outcome) outcome->Fail(preparation::Stage::prepare);
   auto underlay = Underlay();
   if (!underlay) underlay = Underlay(nullptr, AF_INET6); // preparation only; checked candidate chooses its required family
   auto user = native::RandomHex(16), password = native::RandomHex(32);
@@ -137,14 +157,6 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   }
   const auto owned_api_port = xray_config::OwnedApiPort(config, *prepared).value_or(0);
   timing.Mark("prepare_config");
-  auto runtime = std::make_unique<native::ProtectedRuntime>();
-  if (outcome) outcome->Fail(preparation::Stage::persist);
-  if (!runtime->Create(*xray, !assets.has_value())) {
-    Event("Cannot create private administrator-owned VPN runtime");
-    if (!protection_.Active()) protection_.Release();
-    return false;
-  }
-  timing.Mark("prepare_runtime");
   const auto managed_port = xray_config::Port(xray_config::Parse(*prepared)["inbounds"][0]);
   auto failure = preparation::Stage::prepare;
   auto candidate = managed_port ? PrepareWorkerCandidate(*prepared, *managed_port, *runtime, assets, routing, provenance, user, nullptr, changes, &failure) : nullptr;

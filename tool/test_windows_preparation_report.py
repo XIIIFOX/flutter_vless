@@ -45,7 +45,13 @@ def extract(sources):
         "static bool ManagedServicesAllowed(",
         "bool CheckPreparedConfig(",
     ))
-    return manager, codec, submission, runtime
+    vpn = function("vpn_service.cpp", "bool VpnService::Start(")
+    before_bootstrap, separator, after_bootstrap = vpn.partition("  auto underlay = Underlay();")
+    authored = "  auto authored = xray_config::Parse(config);"
+    if not separator or before_bootstrap.count(authored) != 1 or vpn.count("std::make_unique<native::ProtectedRuntime>()") != 1 \
+            or after_bootstrap.count("PrepareWorkerCandidate(*prepared, *managed_port, *runtime,") != 1:
+        raise ValueError("Windows VPN authored/effective runtime ownership changed")
+    return manager, codec, submission, runtime, before_bootstrap[before_bootstrap.index(authored):]
 
 
 HEADER = r'''
@@ -77,8 +83,9 @@ using DWORD = unsigned long;
 using HANDLE = void*;
 constexpr DWORD WAIT_OBJECT_0 = 0;
 #endif
-struct NativeState { bool write = true, launch = true, wait = true, capability_command = false; DWORD exit = 0;
-  int capability_calls = 0; std::string written, capabilities; fs::path launched; } native_state;
+struct NativeState { bool write = true, launch = true, wait = true, remove = true, capability_command = false; DWORD exit = 0;
+  int capability_calls = 0, runtime_creations = 0, launches = 0;
+  std::string written, capabilities; fs::path launched; } native_state;
 namespace flutter_vless::native {
 bool Command(const fs::path&, const std::vector<std::wstring>& args, std::string& output, unsigned timeout, const Root&) {
   if (args != std::vector<std::wstring>{L"native-services", L"capabilities"} || timeout != 3000)
@@ -93,14 +100,14 @@ bool WritePrivateConfig(const std::string& config, fs::path& path) {
   if (!native_state.write) return false;
   native_state.written = config; path = "private-checked-file"; return true;
 }
-void RemovePrivateConfig(fs::path& path) { path.clear(); }
+void RemovePrivateConfig(fs::path& path) { if (native_state.remove) path.clear(); }
 struct ProtectedRuntime {
-  bool Create(const fs::path&, bool) const { return true; }
+  bool Create(const fs::path&, bool) const { ++native_state.runtime_creations; return true; }
   bool WriteConfig(const std::string& config, fs::path& path) const { return WritePrivateConfig(config, path); }
   fs::path Executable() const { return "private-owned-image"; }
 };
 std::unique_ptr<ProcessHandle> Launch(const fs::path&, const std::vector<std::wstring>& arguments, bool, const Root&) {
-  native_state.launched = arguments.back();
+  native_state.launched = arguments.back(); ++native_state.launches;
   return native_state.launch ? std::make_unique<ProcessHandle>() : nullptr;
 }
 }
@@ -136,7 +143,7 @@ class V2rayManager { public:
   std::unique_ptr<FakeService> vpn_service_ = std::make_unique<FakeService>();
   bool Start(const std::string&, bool, const flutter_vless::NativeOptions& = {}, Root = {},
       std::optional<Intent> = {}, Outcome* = nullptr, Report = {});
-  bool ValidateConfig(const std::string&, bool, const Root&, Stage* failure) { if (failure) *failure = Stage::core_check; return valid; }
+  bool ValidateConfig(const std::string&, const Root&, Stage* failure) { if (failure) *failure = Stage::core_check; return valid; }
   bool IsRunning() const { return is_running_.load(); }
   bool IsProtecting() const { return vpn_service_->protecting; }
 };
@@ -217,8 +224,11 @@ int main() try {
   Require(proxy->success["preparationReport"]["scope"] == "host"
       && proxy->success["preparationReport"]["coreCheck"] == "passed", "proxy claimed final-file identity");
   manager.valid = false;
-  Outcome refused; Require(!manager.Start("raw-private-invalid", false, {}, {}, {}, &refused)
-      && !refused.report && refused.Details()["stage"] == "core-check", "raw check refusal fabricated report");
+  Outcome refused; Require(!manager.Start("raw-private-invalid", true, {}, {}, {}, &refused)
+      && !refused.report && refused.Details()["stage"] == "core-check", "raw proxy check refusal fabricated report");
+  manager.is_running_ = false;
+  Require(manager.Start("raw-vpn-delegated", false), "manager performed a redundant VPN authored check");
+  manager.vpn_service_->accept = false; manager.vpn_service_->failure = Stage::core_check;
   for (const auto* secret : {"secret", "canary", "invalid", "token", "path"})
     Require((first->success.dump() + second->success.dump() + rejected->details.dump() + persist->details.dump()).find(secret) == std::string::npos,
         "channel report disclosed caller content");
@@ -250,27 +260,52 @@ int main() try {
   native_state.capabilities = R"({"stage":"capabilities","code":0,"managed_service_lifetimes":7})";
   Require(CheckPreparedConfig(cloud, runtime, checked, {}, &failure)
       && native_state.written == cloud, "actual managed preflight gate refused the matching runtime");
-  std::cout << "WINDOWS_PREPARATION_REPORT_CONSUMER_PASS=12\n";
+  const std::string authored = R"({"outbounds":[{"protocol":"freedom"}]})";
+  native_state = {};
+  Require(CheckVpnAuthoredThenEffective(authored, exact, &refused)
+      && native_state.runtime_creations == 1 && native_state.launches == 2,
+      "authored and effective checks did not share one protected runtime");
+  native_state = {}; native_state.exit = 1;
+  Require(!CheckVpnAuthoredThenEffective(authored, exact, &refused) && native_state.launches == 1
+      && refused.Details()["stage"] == "core-check", "authored Core failure reached effective preflight");
+  native_state = {}; native_state.remove = false;
+  Require(!CheckVpnAuthoredThenEffective(authored, exact, &refused) && native_state.launches == 1
+      && refused.Details()["stage"] == "persist", "retained authored file reached effective preflight");
+  std::cout << "WINDOWS_PREPARATION_REPORT_CONSUMER_PASS=16\n";
 } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 '''
 
 
 def generated(sources):
-    manager, codec, submission, runtime = extract(sources)
+    manager, codec, submission, runtime, authored = extract(sources)
     return HEADER + "\nnamespace flutter_vless::native {\n" + runtime + "\n}\n" + manager + codec + r'''
 void FlutterVlessPlugin::Submit(const std::string& config, bool proxy_only, Report preparation_changes,
     std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> shared_result) {
   Root assets; std::optional<Intent> routing; flutter_vless::NativeOptions options;
   const auto generation = options_generation_.load();
-''' + submission + "\n}\n" + TESTS
+''' + submission + "\n}\n" + r'''
+bool CheckVpnAuthoredThenEffective(const std::string& config, const std::string& effective, Outcome* outcome) {
+  using namespace flutter_vless;
+  struct StartupTiming { void Mark(const char*) const {} } timing;
+  const auto xray = std::optional<fs::path>{"bundled-xray"};
+  const Root assets;
+  const auto Event = [](const char*) {};
+''' + authored + r'''
+  fs::path effective_path;
+  return native::CheckPreparedConfig(effective, *runtime, effective_path, assets, nullptr);
+}
+''' + TESTS
+
+
+SOURCE_NAMES = ("v2ray_manager.cpp", "flutter_vless_plugin.cpp", "native_runtime.cpp", "vpn_service.cpp")
 
 
 class ExtractionTests(unittest.TestCase):
     def setUp(self):
-        self.sources = {name: (WINDOWS / name).read_text() for name in ("v2ray_manager.cpp", "flutter_vless_plugin.cpp", "native_runtime.cpp")}
+        self.sources = {name: (WINDOWS / name).read_text() for name in SOURCE_NAMES}
 
     def test_actual_sources_generate(self):
-        self.assertIn("WINDOWS_PREPARATION_REPORT_CONSUMER_PASS=12", generated(self.sources))
+        self.assertIn("WINDOWS_PREPARATION_REPORT_CONSUMER_PASS=16", generated(self.sources))
 
     def test_unrelated_adjacent_functions_are_excluded(self):
         result = generated(self.sources)
@@ -291,13 +326,21 @@ class ExtractionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             generated(self.sources)
 
+    def test_effective_check_requires_the_authored_runtime(self):
+        self.sources["vpn_service.cpp"] = self.sources["vpn_service.cpp"].replace(
+            "PrepareWorkerCandidate(*prepared, *managed_port, *runtime,",
+            "PrepareWorkerCandidate(*prepared, *managed_port, *other_runtime,",
+        )
+        with self.assertRaises(ValueError):
+            generated(self.sources)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--generate", type=Path)
     args = parser.parse_args()
     if args.generate:
-        sources = {name: (WINDOWS / name).read_text() for name in ("v2ray_manager.cpp", "flutter_vless_plugin.cpp", "native_runtime.cpp")}
+        sources = {name: (WINDOWS / name).read_text() for name in SOURCE_NAMES}
         args.generate.parent.mkdir(parents=True, exist_ok=True)
         args.generate.write_text(generated(sources))
         hashes = {str((WINDOWS / name).relative_to(ROOT)): hashlib.sha256((WINDOWS / name).read_bytes()).hexdigest()

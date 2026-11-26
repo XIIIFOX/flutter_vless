@@ -248,6 +248,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                 == final["post_stop_https_status"] == 200
             if mode == "vpn":
                 assert final["administrator"] is True
+                assert final["invalid_replacement_rejected"] is True
             times = {key: final[key] for key in
                      ("start_to_connected_ms", "start_to_first_https_ms", "stop_ms")}
             assert all(type(ms) is int and ms >= 0 for ms in times.values())
@@ -272,6 +273,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                 assert stages and all(type(ms) is int and ms >= 0 for ms in stages.values())
                 result["startup_stages_ms"] = stages
                 result["ipv4_setup"] = final["ipv4_setup"]
+                result["invalid_replacement_rejected"] = True
                 result["network_checks"] = network_checks
             print("WINDOWS_CONSUMER_LIVE " + json.dumps(result), flush=True)
             if summary := os.environ.get("GITHUB_STEP_SUMMARY"):

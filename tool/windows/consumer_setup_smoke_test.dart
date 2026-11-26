@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_vless/flutter_vless.dart';
 
@@ -109,7 +110,8 @@ Future<void> _runPlan(
     result['start_to_first_https_ms'] = start.elapsedMilliseconds;
     result['active_https_status'] = active;
     if (!proxy) {
-      final snapshot = await plugin.getProviderDebugSnapshot().timeout(_ioTimeout);
+      final snapshot =
+          await plugin.getProviderDebugSnapshot().timeout(_ioTimeout);
       result['startup_stages_ms'] = _vpnStartupStages(snapshot);
       const ipv4SetupEvents = {
         '[vpn] Wintun IPv4 address configured via IP Helper': 'ip_helper',
@@ -120,6 +122,27 @@ Future<void> _runPlan(
           .map((line) => ipv4SetupEvents[line])
           .whereType<String>()
           .single;
+      result['phase'] = 'invalid_replacement';
+      final invalid = jsonDecode(jsonEncode(plan['config'])) as Map;
+      (invalid['outbounds'] as List).first['protocol'] =
+          'private-preflight-canary';
+      var rejected = false;
+      try {
+        await plugin
+            .startVless(
+              remark: 'Invalid Windows VPN smoke replacement',
+              config: jsonEncode(invalid),
+            )
+            .timeout(const Duration(seconds: 20));
+      } on PlatformException catch (error) {
+        rejected = error.code == 'VPN_START_FAILED' &&
+            VlessConfigurationFailure.fromDetails(error.details)?.stage ==
+                'core-check';
+      }
+      _check(rejected, 'Core did not reject the invalid VPN replacement');
+      _check(events.current == VlessConnectionState.connected,
+          'An invalid replacement interrupted the active VPN');
+      result['invalid_replacement_rejected'] = true;
     }
 
     result['phase'] = 'routing';

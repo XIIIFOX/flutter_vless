@@ -2,6 +2,11 @@ name: Windows project setup
 
 on:
   workflow_dispatch:
+    inputs:
+      live_runtime:
+        description: Exercise elevated proxy and VPN after the clean project builds
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,5 +27,17 @@ jobs:
           flutter-version: '3.50.0'
           channel: stable
           cache: true
+      - name: Require an elevated token and build the network observer
+        if: inputs.live_runtime
+        shell: pwsh
+        run: |
+          $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+          if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'Windows runtime verification requires an elevated token'
+          }
+          & cmd.exe /d /c 'tool\windows\build_runtime_probe.cmd build\windows-project-setup'
+          if ($LASTEXITCODE) { throw 'Could not build the native network observer' }
       - name: Verify setup, doctor, and MSVC builds on fresh proxy and VPN apps
+        env:
+          FLUTTER_VLESS_WINDOWS_LIVE_PROBE: ${{ inputs.live_runtime && 'build/windows-project-setup/runtime_probe.exe' || '' }}
         run: python tool/test_project_setup.py -v ProjectSetupTest.test_windows_published_runtime_and_build

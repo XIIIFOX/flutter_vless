@@ -140,6 +140,7 @@ class ProjectSetupTest(unittest.TestCase):
         flutter = shutil.which("flutter")
         dart = shutil.which("dart")
         self.assertTrue(flutter and dart, "Flutter and Dart must be on PATH")
+        live_probe = os.environ.get("FLUTTER_VLESS_WINDOWS_LIVE_PROBE")
         with tempfile.TemporaryDirectory(prefix="fv-setup-", dir=os.environ.get("RUNNER_TEMP")) as tmp:
             for mode in ("proxy", "vpn"):
                 with self.subTest(mode=mode):
@@ -180,6 +181,9 @@ class ProjectSetupTest(unittest.TestCase):
                         self.assertEqual(snapshot(app), configured)
                     print(f"{mode}: doctor and dry-run were read-only; repeated setup changed no files.", flush=True)
 
+                    if live_probe:
+                        shutil.copyfile(REPO / "tool/windows/consumer_setup_smoke_test.dart",
+                                        app / "lib/main.dart")
                     run([flutter, "--verbose", "build", "windows", "--release", "--no-pub"],
                         app, timeout=660)
                     bundle = app / "build/windows/x64/runner/Release"
@@ -191,6 +195,10 @@ class ProjectSetupTest(unittest.TestCase):
                     version = run([installed / "xray.exe", "version"], bundle).splitlines()[0]
                     self.assertRegex(version, r"^Xray \d+\.\d+\.\d+\b")
                     print(f"{mode}: MSVC build and {len(expected)} bundled runtime files verified. {version}", flush=True)
+                    if live_probe:
+                        from windows.consumer_setup_smoke import exercise_consumer
+                        exercise_consumer(bundle, mode, Path(tmp) / f"{mode}-evidence",
+                                          (REPO / live_probe).resolve())
 
 
 if __name__ == "__main__":

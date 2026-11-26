@@ -58,6 +58,7 @@ Future<void> _runPlan(
   );
   final activePath = plan['active_receipt'] as String;
   final continuePath = plan['continue'] as String;
+  final failClosedPath = plan['fail_closed_receipt'] as String?;
   final restoredPath = plan['restored_receipt'] as String;
   final finishPath = plan['finish'] as String;
   final fixtureRoutes = plan['routes'] as List<dynamic>;
@@ -116,6 +117,7 @@ Future<void> _runPlan(
       final diagnosticLines = const LineSplitter().convert(snapshot);
       const ipv4SetupEvents = {
         '[vpn] Wintun IPv4 address configured via IP Helper': 'ip_helper',
+        '[vpn] Wintun IPv4 address configured with optimistic DAD': 'optimistic_dad',
         '[vpn] Reusing an existing Wintun IPv4 address': 'existing_address',
         '[vpn] Wintun IPv4 address configuration falling back to netsh': 'netsh',
       };
@@ -177,14 +179,30 @@ Future<void> _runPlan(
     );
     result['phase'] = 'active_hold';
     await _writeReceipt(activePath, {...result, 'success': true});
+    var reportedForwardingLoss = false;
     await _waitForContinuation(
       File(continuePath),
-      timeout: Duration(seconds: proxy ? 35 : 60),
+      timeout: Duration(seconds: proxy ? 35 : (failClosedPath == null ? 60 : 75)),
+      whileWaiting: failClosedPath == null
+          ? null
+          : () async {
+              if (!reportedForwardingLoss &&
+                  events.current == VlessConnectionState.connecting) {
+                reportedForwardingLoss = true;
+                await _writeReceipt(failClosedPath, {
+                  'status': VlessConnectionState.connecting.wireName,
+                });
+              }
+            },
     );
-    _check(
-      events.current == VlessConnectionState.connected,
-      'The runtime disconnected while the host verified routing state',
-    );
+    if (failClosedPath == null) {
+      _check(events.current == VlessConnectionState.connected,
+          'The runtime disconnected while the host verified routing state');
+    } else {
+      _check(reportedForwardingLoss &&
+          events.current == VlessConnectionState.connecting,
+          'The VPN did not retain its protected state after address loss');
+    }
   } catch (error) {
     result['live_error'] = error.toString();
     rethrow;
@@ -425,12 +443,14 @@ final class _SocketReader {
 Future<void> _waitForContinuation(
   File signal, {
   Duration timeout = const Duration(seconds: 35),
+  Future<void> Function()? whileWaiting,
 }) async {
   final hold = Stopwatch()..start();
   while (!await signal.exists()) {
     _check(hold.elapsed < timeout,
         'The host did not send ${signal.uri.pathSegments.last} within '
         '${timeout.inSeconds} seconds');
+    await whileWaiting?.call();
     await Future<void>.delayed(const Duration(milliseconds: 100));
   }
 }

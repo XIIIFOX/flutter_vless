@@ -57,9 +57,11 @@ def actual(data):
         raise ValueError("periodic health consumer changed")
     periodic = periodic.replace("break;", "return false;")
     startup = section(service, "    if (worker_candidate_->PacketProbe().Check(", "    std::this_thread::sleep_for(std::chrono::milliseconds(100));\n  }\n  return fail(\"Private packet-path challenge")
+    optimistic_dad = section(service, "bool CanUseOptimisticIPv4Dad(", "bool TunnelReady(")
+    optimistic_dad = optimistic_dad.replace("_wcsicmp", "InertWcsicmp")
     cancel = "const std::function<bool()>&" in declaration
     adapter = "return probe.Check(PacketPathProbe::address, [] { return kernel.cancel; });" if cancel else "return probe.Check();"
-    return probe + r'''
+    return probe + optimistic_dad + r'''
 namespace flutter_vless {
 bool CheckWithCancel(PacketPathProbe& probe) { ADAPTER }
 namespace native {
@@ -108,6 +110,9 @@ PERIODIC
   bool StartupPoll() {
     InertReport* report = nullptr;
     [[maybe_unused]] StartupTiming timing;
+    const int ipv4 = 0;
+    const auto TunnelReady = [](int) { return kernel.ipv4_ready; };
+    const auto fail = [](const char*) { return false; };
 STARTUP
     return false;
   }
@@ -121,6 +126,7 @@ FAKES = r'''
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cwctype>
 #include <functional>
 #include <iostream>
 #include <set>
@@ -138,12 +144,26 @@ struct InertFdSet { SOCKET fd = INVALID_SOCKET; };
 #undef FD_SET
 #define FD_ZERO(p) ((p)->fd = INVALID_SOCKET)
 #define FD_SET(fd_, p) ((p)->fd = (fd_))
-struct in_addr {};
+struct in_addr { struct { uint32_t S_addr = 0; } S_un; };
 struct sockaddr {};
 struct sockaddr_in { int sin_family = 0; uint16_t sin_port = 0; in_addr sin_addr; };
+using ULONG = unsigned long;
+enum { NO_ERROR = 0, IF_TYPE_PROP_VIRTUAL = 53, NdisMediumIP = 19 };
+struct MIB_IF_ROW2 {
+  int Type = IF_TYPE_PROP_VIRTUAL, MediaType = NdisMediumIP;
+  struct { bool HardwareInterface = false; } InterfaceAndOperStatusFlags;
+  const wchar_t* Description = L"tun2socks Tunnel";
+};
+struct MIB_UNICASTIPADDRESS_ROW { struct { sockaddr_in Ipv4; } Address; };
+struct MIB_UNICASTIPADDRESS_TABLE { ULONG NumEntries = 0; MIB_UNICASTIPADDRESS_ROW Table[2]; };
+using PMIB_UNICASTIPADDRESS_TABLE = MIB_UNICASTIPADDRESS_TABLE*;
 struct Kernel {
   int64_t now = 0, next_ready = 0, step = 0;
   bool cancel = false, eof = false, wrong = false, would_block = false, connect_pending = false;
+  bool ipv4_ready = true;
+  MIB_UNICASTIPADDRESS_TABLE local_ipv4;
+  bool ipv4_query_failed = false, ipv4_no_table = false, ipv4_table_owned = false;
+  unsigned ipv4_queries = 0, ipv4_frees = 0;
   unsigned io = 0, selects = 0, accepted = 0, closes = 0, joins = 0, socks_ready = 0, tun_side_effects = 0;
   unsigned cancel_after = 0;
   unsigned eof_after = 0;
@@ -152,6 +172,25 @@ struct Kernel {
   std::function<void()> after_io, on_close, join;
 } kernel;
 void Require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+int InertWcsicmp(const wchar_t* left, const wchar_t* right) {
+  while (*left && std::towlower(*left) == std::towlower(*right)) { ++left; ++right; }
+  return std::towlower(*left) == std::towlower(*right) ? 0 : 1;
+}
+int GetUnicastIpAddressTable(int family, PMIB_UNICASTIPADDRESS_TABLE* result) {
+  Require(family == AF_INET && !kernel.ipv4_table_owned, "invalid local IPv4 query");
+  ++kernel.ipv4_queries;
+  if (kernel.ipv4_query_failed) return 5;
+  if (!kernel.ipv4_no_table) {
+    *result = &kernel.local_ipv4;
+    kernel.ipv4_table_owned = true;
+  }
+  return NO_ERROR;
+}
+void FreeMibTable(void* table) {
+  Require(table == &kernel.local_ipv4 && kernel.ipv4_table_owned, "invalid local IPv4 table free");
+  kernel.ipv4_table_owned = false;
+  ++kernel.ipv4_frees;
+}
 struct FakeClock {
   using duration = std::chrono::milliseconds; using time_point = std::chrono::time_point<FakeClock>;
   static time_point now() { return time_point(duration(kernel.now)); }
@@ -216,7 +255,7 @@ int main() {
   using flutter_vless::PacketPathProbe;
   unsigned passed = 0, failed = 0;
   auto test = [&](const char* name, const std::function<void()>& body) {
-    try { Reset(); body(); Require(kernel.handles.empty(), "fake handles leaked"); ++passed; std::cout << "PASS " << name << '\n'; }
+    try { Reset(); body(); Require(kernel.handles.empty() && !kernel.ipv4_table_owned, "fake handles leaked"); ++passed; std::cout << "PASS " << name << '\n'; }
     catch (const std::exception& e) { ++failed; std::cout << "FAIL " << name << ": " << e.what() << '\n'; kernel.handles.clear(); }
   };
   const std::string nonce(64, 'n');
@@ -255,8 +294,45 @@ int main() {
     Require(!service.ContinueAfterListener() && kernel.tun_side_effects == 0, "late listener success admitted tun worker"); });
   test("actual-periodic-Stop-callback", [&] { flutter_vless::PeriodicConsumer service; configure(service.candidate.probe); kernel.after_io = [&] { if (kernel.io == 2) service.requested_.store(false); }; Require(!service.Poll() && kernel.io == 2, "actual periodic health lost Stop callback"); });
   test("actual-startup-Stop-callback", [&] { flutter_vless::PeriodicConsumer service; configure(service.candidate.probe); kernel.after_io = [&] { if (kernel.io == 2) service.requested_.store(false); }; Require(!service.StartupPoll() && kernel.io == 2, "actual startup health lost Stop callback"); });
+  test("actual-startup-rejects-ipv4-loss-after-packet-check", [&] {
+    flutter_vless::PeriodicConsumer service; configure(service.candidate.probe);
+    kernel.on_close = [&] { kernel.ipv4_ready = false; };
+    Require(!service.StartupPoll(), "Successful packet probe admitted an invalid IPv4 address");
+  });
+  MIB_UNICASTIPADDRESS_ROW address{};
+  address.Address.Ipv4.sin_addr.S_un.S_addr = 1;
+  test("raw-ip-wintun-with-free-local-address-can-use-optimistic-dad", [&] {
+    MIB_IF_ROW2 wintun{}; wintun.Description = L"TUN2SOCKS TUNNEL";
+    kernel.local_ipv4.NumEntries = 1;
+    kernel.local_ipv4.Table[0].Address.Ipv4.sin_addr.S_un.S_addr = 2;
+    Require(CanUseOptimisticIPv4Dad(wintun, address) && kernel.ipv4_queries == 1 && kernel.ipv4_frees == 1,
+        "private raw-IP tunnel rejected without a local conflict");
+  });
+  test("local-duplicate-address-keeps-standard-dad", [&] {
+    kernel.local_ipv4.NumEntries = 2;
+    kernel.local_ipv4.Table[1] = address;
+    Require(!CanUseOptimisticIPv4Dad(MIB_IF_ROW2{}, address) && kernel.ipv4_frees == 1,
+        "local duplicate allowed optimistic DAD");
+  });
+  test("unexpected-identity-or-media-keeps-standard-dad", [&] {
+    MIB_IF_ROW2 wrong_type{}, ethernet{}, hardware{}, other_driver{};
+    wrong_type.Type = 1;
+    ethernet.MediaType = 0;
+    hardware.InterfaceAndOperStatusFlags.HardwareInterface = true;
+    other_driver.Description = L"Another Tunnel";
+    for (const auto& adapter : {wrong_type, ethernet, hardware, other_driver})
+      Require(!CanUseOptimisticIPv4Dad(adapter, address), "unexpected adapter allowed optimistic DAD");
+    Require(kernel.ipv4_queries == 0, "unexpected adapter triggered an address query");
+  });
+  test("unavailable-address-inventory-keeps-standard-dad", [&] {
+    kernel.ipv4_query_failed = true;
+    Require(!CanUseOptimisticIPv4Dad(MIB_IF_ROW2{}, address), "failed IPv4 inventory allowed optimistic DAD");
+    kernel.ipv4_query_failed = false; kernel.ipv4_no_table = true;
+    Require(!CanUseOptimisticIPv4Dad(MIB_IF_ROW2{}, address) && kernel.ipv4_queries == 2 && kernel.ipv4_frees == 0,
+        "missing IPv4 inventory allowed optimistic DAD");
+  });
   std::cout << "WINDOWS_PACKET_PROBE_BUDGET_PURE_PASS=" << passed << " FAIL=" << failed << '\n';
-  if (passed + failed != 20) return 2;
+  if (passed + failed != 25) return 2;
   return failed ? 1 : 0;
 }
 '''
@@ -265,7 +341,7 @@ int main() {
 class Boundaries(unittest.TestCase):
     def test_actual_framing_and_consumers_are_selected(self):
         result = actual(sources())
-        for token in ("PacketPathProbe::Check(", "PacketPathProbe::Serve()", "bytes == expected", "native::SocksReady("):
+        for token in ("PacketPathProbe::Check(", "PacketPathProbe::Serve()", "bytes == expected", "native::SocksReady(", "CanUseOptimisticIPv4Dad("):
             self.assertIn(token, result)
         self.assertNotIn("::Configure(", result)
 
@@ -292,8 +368,8 @@ def main():
         "production_sha256": {n: hashlib.sha256(v.encode()).hexdigest() for n, v in data.items()},
         "test_tool_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "native_builder_sha256": hashlib.sha256((ROOT / "tool/windows/build_native_tests.cmd").read_bytes()).hexdigest(),
-        "inert_boundaries": ["all Winsock APIs", "monotonic clock", "worker thread", "listener readiness callback", "admission continuation effect counter", "startup diagnostics"],
-        "actual_bodies": ["Send", "Receive", "Check", "Serve", "destructor", "post-SocksReady admission block", "RunVpn health condition", "StartWorkers packet condition"],
+        "inert_boundaries": ["all Winsock APIs", "monotonic clock", "worker thread", "listener readiness callback", "admission continuation effect counter", "startup diagnostics", "Windows local address inventory"],
+        "actual_bodies": ["Send", "Receive", "Check", "Serve", "destructor", "post-SocksReady admission block", "RunVpn health condition", "StartWorkers packet condition", "CanUseOptimisticIPv4Dad"],
         "source_guards": result.testsRun, "real_socket_process_thread_Core": False,
     }, indent=2) + "\n")
     return 0

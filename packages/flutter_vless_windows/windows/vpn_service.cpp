@@ -7,6 +7,7 @@
 #include "windows_underlay.h"
 #include <chrono>
 #include <cstring>
+#include <cwchar>
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 
@@ -64,6 +65,28 @@ MIB_UNICASTIPADDRESS_ROW TunnelIPv4Address(const NET_LUID& luid) {
   address.SkipAsSource = FALSE;
   return address;
 }
+
+bool CanUseOptimisticIPv4Dad(const MIB_IF_ROW2& adapter, const MIB_UNICASTIPADDRESS_ROW& address) {
+  // Only the worker's private raw-IP Wintun has no shared Ethernet link on
+  // which IPv4 ARP peers could claim this address. Custom adapters keep DAD
+  // synchronous, as does this tunnel if the local address is already in use.
+  if (adapter.Type != IF_TYPE_PROP_VIRTUAL || adapter.MediaType != NdisMediumIP ||
+      adapter.InterfaceAndOperStatusFlags.HardwareInterface ||
+      _wcsicmp(adapter.Description, L"tun2socks Tunnel") != 0) return false;
+  PMIB_UNICASTIPADDRESS_TABLE addresses = nullptr;
+  if (GetUnicastIpAddressTable(AF_INET, &addresses) != NO_ERROR || !addresses) return false;
+  bool available = true;
+  for (ULONG i = 0; i < addresses->NumEntries; ++i) {
+    const auto& entry = addresses->Table[i].Address;
+    if (entry.Ipv4.sin_addr.S_un.S_addr == address.Address.Ipv4.sin_addr.S_un.S_addr) {
+      available = false;
+      break;
+    }
+  }
+  FreeMibTable(addresses);
+  return available;
+}
+
 bool TunnelReady(MIB_UNICASTIPADDRESS_ROW address) {
   return GetUnicastIpAddressEntry(&address) == NO_ERROR && address.DadState == IpDadStatePreferred
       && address.OnLinkPrefixLength == 24 && !address.SkipAsSource;
@@ -287,6 +310,10 @@ void VpnService::RunVpn(std::shared_ptr<flutter_vless::preparation::StartupCompl
         Event("Outbound interface changed; rebuilding the protected VPN path");
         break;
       }
+      if (ipv4_address_ && ipv4_address_->DadState == IpDadStatePreferred && !TunnelReady(*ipv4_address_)) {
+        Event("Optimistic Wintun IPv4 address lost readiness; retaining traffic protection");
+        break;
+      }
       if (!xray_process_->IsRunning() || !tun2socks_process_->IsRunning()
           || !worker_candidate_ || !worker_candidate_->PacketProbe().Check(
               flutter_vless::PacketPathProbe::address, [this] { return !requested_.load(); })) break;
@@ -413,14 +440,18 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
       + "@127.0.0.1:" + std::to_string(socks_port_) + "\nloglevel: silent\nmtu: 1500\n";
   if (!private_runtime_->WriteConfig(tun, tun_config_path_)) return fail("Cannot write the private tun2socks configuration");
   if (!requested_.load()) return fail("VPN startup cancelled");
+  NET_LUID previous_adapter{};
+  const auto previous_status = ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &previous_adapter);
   tun2socks_process_ = native::Launch(tun2socks_executable_path_, {L"-config", tun_config_path_.wstring()});
   if (!tun2socks_process_) return fail("Cannot launch tun2socks");
   NET_LUID luid{};
+  MIB_IF_ROW2 adapter{};
   bool adapter_ready = false;
   for (int i = 0; i < 100 && requested_.load(); ++i) {
     if (!tun2socks_process_->IsRunning()) return fail("tun2socks exited before creating its adapter");
     if (ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &luid) == NO_ERROR) {
-      MIB_IF_ROW2 adapter{}; adapter.InterfaceLuid = luid;
+      adapter = {};
+      adapter.InterfaceLuid = luid;
       if (GetIfEntry2(&adapter) == NO_ERROR && adapter.OperStatus == IfOperStatusUp) {
         adapter_ready = true; break;
       }
@@ -445,11 +476,22 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   }
   timing.Mark("ipv6_configure");
   if (!requested_.load() || !tun2socks_process_->IsRunning()) return fail("Wintun IPv4 setup cancelled");
-  const auto ipv4 = TunnelIPv4Address(luid);
-  const auto ipv4_status = CreateUnicastIpAddressEntry(&ipv4);
+  auto ipv4 = TunnelIPv4Address(luid);
+  const bool new_adapter = previous_status == NO_ERROR ? previous_adapter.Value != luid.Value
+      : (previous_status == ERROR_INVALID_PARAMETER || previous_status == ERROR_INVALID_NAME ||
+         previous_status == ERROR_NOT_FOUND || previous_status == ERROR_FILE_NOT_FOUND);
+  const auto default_dad = ipv4.DadState;
+  if (new_adapter && CanUseOptimisticIPv4Dad(adapter, ipv4)) ipv4.DadState = IpDadStatePreferred;
+  auto ipv4_status = CreateUnicastIpAddressEntry(&ipv4);
+  if (ipv4.DadState == IpDadStatePreferred && ipv4_status != NO_ERROR && ipv4_status != ERROR_OBJECT_ALREADY_EXISTS) {
+    ipv4.DadState = default_dad;
+    ipv4_status = CreateUnicastIpAddressEntry(&ipv4);
+  }
   if (ipv4_status == NO_ERROR) {
     ipv4_address_ = ipv4;
-    Event("Wintun IPv4 address configured via IP Helper");
+    Event(ipv4.DadState == IpDadStatePreferred
+        ? "Wintun IPv4 address configured with optimistic DAD"
+        : "Wintun IPv4 address configured via IP Helper");
   } else if (ipv4_status == ERROR_OBJECT_ALREADY_EXISTS) {
     Event("Reusing an existing Wintun IPv4 address");
   } else {
@@ -479,6 +521,7 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   if (!ipv6_ready) return fail("Wintun IPv6 address did not become ready");
   if (ipv6_status == ERROR_OBJECT_ALREADY_EXISTS) Event("Reusing the existing ready Wintun IPv6 address");
   timing.Mark("ipv6_address");
+  if (!TunnelReady(ipv4)) return fail("Wintun IPv4 address lost readiness before installing routes");
   if (!SetTunnelDns(luid)) return fail("Wintun virtual DNS did not become ready");
   timing.Mark("adapter_dns");
   for (auto prefix : {std::pair<const char*, UINT8>{"0.0.0.0", UINT8{1}}, {"128.0.0.0", UINT8{1}}, {xray_config::kVirtualDns, UINT8{32}}}) {
@@ -514,6 +557,7 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   native::RemovePrivateConfig(tun_config_path_);
   for (int i = 0; i < 10 && requested_.load() && xray_process_->IsRunning() && tun2socks_process_->IsRunning(); ++i) {
     if (worker_candidate_->PacketProbe().Check(PacketPathProbe::address, [this] { return !requested_.load(); })) {
+      if (!TunnelReady(ipv4)) return fail("Wintun IPv4 address lost readiness during the packet check");
       timing.Mark("packet_path");
       if (report) *report = worker_candidate_->PreparationReport();
       return true;

@@ -1,6 +1,6 @@
 """Run the freshly built Flutter consumer on a disposable Windows runner."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import ctypes
 from ctypes import wintypes
 import json
@@ -88,9 +88,21 @@ def remove_test_routes():
 
 
 @contextmanager
-def route_fixtures(address):
-    with fixtures.DirectOrigin((address, 0), fixtures.Direct) as direct, \
-            fixtures.Server((address, 0), fixtures.Socks) as proxy:
+def route_fixtures(address, vpn):
+    with ExitStack() as stack:
+        direct = stack.enter_context(fixtures.DirectOrigin((address, 0), fixtures.Direct))
+        ipv6_payload = None
+        if vpn:
+            proxy, relay = fixtures.socks_datagram_pair(address, fixtures.IPv6PayloadDatagram)
+            stack.enter_context(proxy)
+            stack.enter_context(relay)
+            ipv6_payload = fixtures.IPv6PayloadState()
+            proxy.ipv6_payload = relay.ipv6_payload = ipv6_payload
+            relay.socket.settimeout(1)
+            servers = (direct, proxy, relay)
+        else:
+            proxy = stack.enter_context(fixtures.Server((address, 0), fixtures.Socks))
+            servers = (direct, proxy)
         fixtures.PORTS["direct"] = direct.server_address[1]
         fixtures.PORTS["proxy"] = proxy.server_address[1]
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -99,17 +111,23 @@ def route_fixtures(address):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as extra:
                 extra.bind(("127.0.0.1", 0))
                 fixtures.PORTS["extra"] = extra.getsockname()[1]
-        servers = (direct, proxy)
-        threads = [threading.Thread(target=server.serve_forever, daemon=True) for server in servers]
-        for thread in threads:
-            thread.start()
+        started = []
         try:
-            yield
-        finally:
             for server in servers:
-                server.shutdown()
-            for thread in threads:
-                thread.join(timeout=3)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                started.append((server, thread))
+            yield ipv6_payload
+        finally:
+            try:
+                if ipv6_payload is not None:
+                    ipv6_payload.close()
+            finally:
+                for server, thread in started:
+                    server.shutdown()
+                    thread.join(timeout=3)
+        if ipv6_payload is not None:
+            ipv6_payload.require_clean()
 
 
 def read_receipt(path):
@@ -170,10 +188,11 @@ def query_restored_dns(servers):
         socket.inet_pton(socket.AF_INET, address)
 
 
-def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, reverse):
+def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, reverse, ipv6_payload):
     receipt = directory / "final.json"
     active = directory / "live.json"
     proceed = directory / "continue"
+    fail_closed = directory / "fail-closed.json" if mode == "vpn" and reverse else None
     restored = directory / "restored.json"
     finish = directory / "finish"
     guard_stop = directory / "guard-stop"
@@ -185,11 +204,14 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
              expected_body="DIRECT-FIXTURE" if (host == "myip.com") == reverse else "PROXY-FIXTURE")
         for host in HOSTS
     ]
-    task = dict(mode=mode, config=fixtures.config(reverse, public_ip, underlay),
+    task = dict(mode=mode, config=fixtures.config(reverse, public_ip, underlay,
+                                                  ipv6_payload=ipv6_payload is not None),
                 socks_port=fixtures.PORTS["inbound"], routes=routes,
                 https=dict(host=HTTPS_HOST, address=public_ip, path="/"),
                 receipt=str(receipt), active_receipt=str(active), restored_receipt=str(restored),
                 finish=str(finish), **{"continue": str(proceed)})
+    if fail_closed is not None:
+        task["fail_closed_receipt"] = str(fail_closed)
     plan_file.write_text(json.dumps(task), encoding="utf-8")
     process = guard = None
     normal_stop = False
@@ -210,6 +232,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
             count = int(fixtures.native(probe, "policy-count"))
             proxy_settings = system_proxy()
             if mode == "vpn":
+                assert ipv6_payload is not None, "IPv6 payload fixture is unavailable"
                 assert count >= 10 and CAPTURE_ROUTES == capture_routes(), "Expected Wintun routes and WFP protection"
                 assert proxy_settings == proxy, "VPN changed WinINet proxy settings"
                 assert powershell("(Get-NetIPInterface -InterfaceAlias 'flutter_vless_tun' "
@@ -227,6 +250,10 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                 for route in routes:
                     assert fixtures.request(route["host"], vpn=True) == route["expected_body"]
                 network_checks = dict(
+                    ipv6_tcp=fixtures.ipv6_payload_request(ipv6_payload, udp=False),
+                    ipv6_udp=fixtures.ipv6_payload_request(ipv6_payload, udp=True),
+                    ipv6_aaaa_udp=fixtures.ipv6_payload_dns(tcp=False),
+                    ipv6_aaaa_tcp=fixtures.ipv6_payload_dns(tcp=True),
                     protected_dns_udp=fixtures.protected_dns(tcp=False),
                     protected_dns_tcp=fixtures.protected_dns(tcp=True),
                     system_dns=fixtures.system_dns(),
@@ -234,6 +261,22 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                     physical_tcp=fixtures.physical_denied(public_ip, underlay, 443),
                     physical_dns_udp=fixtures.physical_denied("1.1.1.1", underlay, 53, True, probe),
                 )
+                if fail_closed is not None:
+                    # This runner owns one exact manually provisioned Wintun
+                    # /24. Leave the physical network and WFP policy alone.
+                    powershell("$address = @(Get-NetIPAddress -InterfaceAlias 'flutter_vless_tun' "
+                               "-AddressFamily IPv4 -IPAddress '10.0.85.2' -PrefixLength 24 "
+                               "-PrefixOrigin Manual -AddressState Preferred -PolicyStore ActiveStore "
+                               "-ErrorAction Stop); if ($address.Count -ne 1) { throw 'Expected one owned IPv4 address' }; "
+                               "Remove-NetIPAddress -InputObject $address -Confirm:$false -ErrorAction Stop")
+                    protected = wait_receipt(fail_closed, receipt, process, "protected status after address loss", 12)
+                    assert protected["status"] == "CONNECTING"
+                    assert int(fixtures.native(probe, "policy-count")) >= 10, "WFP protection disappeared after address loss"
+                    network_checks.update(
+                        address_loss_status=protected["status"],
+                        address_loss_physical_tcp=fixtures.physical_denied(public_ip, underlay, 443),
+                        address_loss_physical_dns_udp=fixtures.physical_denied("1.1.1.1", underlay, 53, True, probe),
+                    )
             else:
                 assert not count and not capture_routes(), "Proxy mode installed VPN routes or protection"
                 assert proxy_settings[0] & 2 and proxy_settings[1] == f"socks=localhost:{task['socks_port']}", \
@@ -288,6 +331,9 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                     if mode == "vpn":
                         print("  - Startup stages: " + ", ".join(f"{stage} {ms} ms" for stage, ms in stages.items()), file=file)
                         print("  - Protected DNS, physical-interface leak controls, and restored DNS passed.", file=file)
+                        print("  - IPv6 TCP/UDP through Wintun and protected AAAA replies passed.", file=file)
+                        if fail_closed is not None:
+                            print("  - Address loss retained WFP protection until explicit Stop.", file=file)
         finally:
             proceeded = process is not None
             if proceeded and process.poll() is None:
@@ -331,8 +377,8 @@ def exercise_consumer(bundle, mode, directory, probe):
     if dns_servers:
         query_restored_dns(dns_servers)
     baseline = (gateway, proxy, dns_servers)
-    with route_fixtures(underlay):
+    with route_fixtures(underlay, vpn=mode == "vpn") as ipv6_payload:
         for reverse in (False, True):
             case_directory = directory / ("reverse" if reverse else "original")
             case_directory.mkdir(parents=True)
-            test_case(bundle, mode, case_directory, probe, public_ip, underlay, baseline, reverse)
+            test_case(bundle, mode, case_directory, probe, public_ip, underlay, baseline, reverse, ipv6_payload)

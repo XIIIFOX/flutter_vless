@@ -72,24 +72,26 @@ Future<void> _runPlan(
   _check(baseline.source != _tunnelAddress, 'Baseline already uses Wintun');
 
   final events = _StatusEvents();
+  result['states'] = events.transitions;
   final plugin = FlutterVless(
     onStatusChanged: events.record,
     options: const VlessOptions(reconnect: ReconnectOptions(enabled: false)),
   );
-  result['phase'] = 'initialize';
+  result['phase'] = 'initializeVless';
   await plugin.initializeVless().timeout(const Duration(seconds: 10));
-  await events.initial.future.timeout(const Duration(seconds: 10));
   if (!proxy) {
+    result['phase'] = 'requestPermission';
     final elevated = await plugin.requestPermission().timeout(_ioTimeout);
     result['administrator'] = elevated;
     _check(elevated, 'The VPN app process is not elevated');
   }
+  result['phase'] = 'getCoreVersion';
   result['core_version'] = await plugin.getCoreVersion().timeout(_ioTimeout);
 
   final observedRoutes = <Map<String, Object?>>[];
   result['routes'] = observedRoutes;
   try {
-    result['phase'] = 'start';
+    result['phase'] = 'startVless';
     final start = Stopwatch()..start();
     events.connectWatch = start;
     await plugin
@@ -100,6 +102,7 @@ Future<void> _runPlan(
         )
         .timeout(const Duration(seconds: 60));
     result['start_accepted_ms'] = start.elapsedMilliseconds;
+    result['phase'] = 'wait_connected_event';
     result['start_to_connected_ms'] =
         await events.connected.future.timeout(const Duration(seconds: 10));
 
@@ -180,7 +183,7 @@ Future<void> _runPlan(
 }
 
 final class _StatusEvents {
-  final initial = Completer<void>();
+  final transitions = <String>[];
   final connected = Completer<int>();
   final disconnected = Completer<int>();
   Stopwatch? connectWatch;
@@ -188,18 +191,21 @@ final class _StatusEvents {
   VlessConnectionState? current;
 
   void record(VlessStatus status) {
-    current = status.connectionState;
+    final next = status.connectionState;
+    if (current != next && transitions.length < 16) {
+      transitions.add(next.wireName);
+    }
+    current = next;
     final starting = connectWatch;
     final stopping = stopWatch;
     if (current == VlessConnectionState.connected &&
         starting != null &&
         !connected.isCompleted) {
       connected.complete(starting.elapsedMilliseconds);
-    } else if (current == VlessConnectionState.disconnected) {
-      if (!initial.isCompleted) initial.complete();
-      if (stopping != null && !disconnected.isCompleted) {
-        disconnected.complete(stopping.elapsedMilliseconds);
-      }
+    } else if (current == VlessConnectionState.disconnected &&
+        stopping != null &&
+        !disconnected.isCompleted) {
+      disconnected.complete(stopping.elapsedMilliseconds);
     }
   }
 }

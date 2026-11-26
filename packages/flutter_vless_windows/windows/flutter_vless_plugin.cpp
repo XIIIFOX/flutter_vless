@@ -180,7 +180,7 @@ class FlutterVlessPlugin : public flutter::Plugin {
   std::optional<std::chrono::steady_clock::time_point> last_traffic_sample_time_;
   
   // Platform-thread callback dispatcher for status, method results and controls
-  HWND main_window_handle_ = nullptr;  ///< Main window handle for PostMessage
+  HWND view_window_ = nullptr;
   const DWORD platform_thread_id_ = GetCurrentThreadId();
   int window_proc_delegate_id_ = 0;      ///< ID of registered window proc delegate
   UINT ui_callback_message_id_ = 0;      ///< Registered window message ID for UI callbacks
@@ -203,7 +203,20 @@ class FlutterVlessPlugin : public flutter::Plugin {
   std::atomic<std::uint64_t> quick_profile_generation_{0};
   std::atomic<int> last_tray_state_{-1};
   bool tray_pending_ = false;
-  void OpenApp() { if (main_window_handle_) { ShowWindow(main_window_handle_, SW_RESTORE); SetForegroundWindow(main_window_handle_); } }
+  HWND HostWindow() const {
+    // The stock Flutter runner registers plugins before parenting the view.
+    // Resolve its root when delivering work, after the host window is attached.
+    return view_window_ ? GetAncestor(view_window_, GA_ROOT) : nullptr;
+  }
+  bool CanDispatchToPlatform() const {
+    return HostWindow() && ui_callback_message_id_ && window_proc_delegate_id_;
+  }
+  void OpenApp() {
+    if (const HWND window = HostWindow()) {
+      ShowWindow(window, SW_RESTORE);
+      SetForegroundWindow(window);
+    }
+  }
   void RefreshTray() { const auto& manager = V2rayManager::GetInstance(); if (tray_) tray_->Refresh((manager.IsRunning() && !manager.IsProxyOnly()) || manager.IsProtecting(), tray_pending_); }
   void ToggleFromTray(bool expected_active) {
     if (tray_pending_ || !native_options_.quick_enabled) return;
@@ -248,8 +261,9 @@ class FlutterVlessPlugin : public flutter::Plugin {
       std::lock_guard<std::mutex> lock(ui_callbacks_mutex_);
       ui_callbacks_.push_back(std::move(callback));
     }
-    if (main_window_handle_ && ui_callback_message_id_ != 0) {
-      if (!PostMessage(main_window_handle_, ui_callback_message_id_, 0, 0)) {
+    const HWND window = HostWindow();
+    if (window && ui_callback_message_id_ != 0) {
+      if (!PostMessage(window, ui_callback_message_id_, 0, 0)) {
         LogMessage("Error: PostMessage failed with error: " + std::to_string(GetLastError()));
       }
     } else {
@@ -353,19 +367,11 @@ FlutterVlessPlugin::FlutterVlessPlugin(flutter::PluginRegistrarWindows *registra
   // Deliver queued callbacks through the top-level window's platform thread.
   // Setup UI thread invocation mechanism using window proc delegate
   if (registrar_) {
-    auto view = registrar_->GetView();
-    if (view) {
-      // The registrar's delegate receives messages for the top-level window,
-      // while Flutter's view can be a child HWND.
-      const HWND view_window = view->GetNativeWindow();
-      main_window_handle_ = view_window ? GetAncestor(view_window, GA_ROOT) : nullptr;
-      if (main_window_handle_) {
-        LogMessage("Main window handle obtained: " + std::to_string(reinterpret_cast<uintptr_t>(main_window_handle_)));
-      } else {
-        LogMessage("Warning: GetNativeWindow returned null");
-      }
-    } else {
-      LogMessage("Warning: GetView returned null");
+    if (auto* view = registrar_->GetView()) {
+      view_window_ = view->GetNativeWindow();
+    }
+    if (!view_window_) {
+      LogMessage("Warning: Flutter view window is unavailable");
     }
     
     // Register window message ID once
@@ -448,7 +454,7 @@ void FlutterVlessPlugin::HandleMethodCall(
         {flutter::EncodableValue("balancerSelections"), flutter::EncodableValue(balancer)}}));
     };
     // A headless runner has no window on which to deliver worker replies.
-    if (!main_window_handle_ || !ui_callback_message_id_ || !window_proc_delegate_id_) {
+    if (!CanDispatchToPlatform()) {
       report(false);
       return;
     }
@@ -457,7 +463,7 @@ void FlutterVlessPlugin::HandleMethodCall(
       RunOnUIThread([report, balancer] { report(balancer); });
     });
   } else if (method_call.method_name() == "getCoreCapabilities") {
-    if (!main_window_handle_ || !ui_callback_message_id_ || !window_proc_delegate_id_) {
+    if (!CanDispatchToPlatform()) {
       result->Success(CoreCapabilitiesValue({}));
       return;
     }
@@ -488,7 +494,7 @@ void FlutterVlessPlugin::HandleMethodCall(
       result->Success(ProfileCheckValue({Status::invalid}));
       return;
     }
-    if (!main_window_handle_ || !ui_callback_message_id_ || !window_proc_delegate_id_) {
+    if (!CanDispatchToPlatform()) {
       result->Success(ProfileCheckValue({Status::unavailable}));
       return;
     }
@@ -514,7 +520,7 @@ void FlutterVlessPlugin::HandleMethodCall(
         const auto found = arguments->find(flutter::EncodableValue("options"));
         auto parsed = flutter_vless::NativeOptions::Parse(found == arguments->end() ? flutter_vless::NativeOptions::Json::object() : OptionJson(found->second));
         parsed.ValidateWindows();
-        if (!tray_) tray_ = std::make_unique<flutter_vless::SystemTray>(main_window_handle_,
+        if (!tray_) tray_ = std::make_unique<flutter_vless::SystemTray>(HostWindow(),
             [this](bool expected_active) { ToggleFromTray(expected_active); }, [this] { OpenApp(); },
             [this] { return quick_profile_generation_.load(); });
         if (!tray_->Configure(parsed)) { result->Error("QUICK_ACCESS_UNAVAILABLE", "Cannot create the system tray icon; check the .ico path and desktop session"); return; }

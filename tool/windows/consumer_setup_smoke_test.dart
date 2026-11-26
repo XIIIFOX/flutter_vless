@@ -109,9 +109,17 @@ Future<void> _runPlan(
     result['start_to_first_https_ms'] = start.elapsedMilliseconds;
     result['active_https_status'] = active;
     if (!proxy) {
-      result['startup_stages_ms'] = _vpnStartupStages(
-        await plugin.getProviderDebugSnapshot().timeout(_ioTimeout),
-      );
+      final snapshot = await plugin.getProviderDebugSnapshot().timeout(_ioTimeout);
+      result['startup_stages_ms'] = _vpnStartupStages(snapshot);
+      const ipv4SetupEvents = {
+        '[vpn] Wintun IPv4 address configured via IP Helper': 'ip_helper',
+        '[vpn] Reusing an existing Wintun IPv4 address': 'existing_address',
+        '[vpn] Wintun IPv4 address configuration falling back to netsh': 'netsh',
+      };
+      result['ipv4_setup'] = const LineSplitter().convert(snapshot)
+          .map((line) => ipv4SetupEvents[line])
+          .whereType<String>()
+          .single;
     }
 
     result['phase'] = 'routing';

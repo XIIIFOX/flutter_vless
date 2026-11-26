@@ -138,8 +138,9 @@ def disconnected(probe, gateway, proxy):
     assert not capture_routes(), "Plugin capture routes remain after Stop"
     assert not powershell(
         "$addresses = @(Get-NetIPAddress -InterfaceAlias 'flutter_vless_tun' "
-        "-IPAddress 'fd00:198:18::2' -ErrorAction SilentlyContinue); $addresses.IPAddress"
-    ), "Plugin IPv6 tunnel address remains after Stop"
+        "-ErrorAction SilentlyContinue); $addresses.IPAddress | "
+        "Where-Object { $_ -in @('10.0.85.2','fd00:198:18::2') }"
+    ), "Plugin tunnel addresses remain after Stop"
     assert fixtures.native(probe, "gateway") == gateway, "Default IPv4 gateway was not restored"
     # Query the same WinINet values Windows clients use, not the user registry
     # cache or process proxy environment.
@@ -211,6 +212,12 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
             if mode == "vpn":
                 assert count >= 10 and CAPTURE_ROUTES == capture_routes(), "Expected Wintun routes and WFP protection"
                 assert proxy_settings == proxy, "VPN changed WinINet proxy settings"
+                assert powershell("(Get-NetIPInterface -InterfaceAlias 'flutter_vless_tun' "
+                                  "-AddressFamily IPv4 -ErrorAction Stop).Dhcp") == "Disabled", \
+                    "Wintun IPv4 unexpectedly uses DHCP"
+                assert not powershell("$routes = @(Get-NetRoute -InterfaceAlias 'flutter_vless_tun' "
+                                      "-DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue); "
+                                      "$routes.DestinationPrefix"), "Wintun installed a default gateway"
                 # Dart's Socket.address can report the dialed address. Windows
                 # socket probes confirm the local address via getsockname.
                 assert fixtures.external_http(public_ip, vpn=True, verify_body=True) == "HTTP 200"
@@ -264,6 +271,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                 stages = final["startup_stages_ms"]
                 assert stages and all(type(ms) is int and ms >= 0 for ms in stages.values())
                 result["startup_stages_ms"] = stages
+                result["ipv4_setup"] = final["ipv4_setup"]
                 result["network_checks"] = network_checks
             print("WINDOWS_CONSUMER_LIVE " + json.dumps(result), flush=True)
             if summary := os.environ.get("GITHUB_STEP_SUMMARY"):

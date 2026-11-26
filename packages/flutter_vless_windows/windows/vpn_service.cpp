@@ -53,12 +53,19 @@ std::string Bootstrap(const std::string& name) {
   }
   WSACleanup(); return result;
 }
-bool TunnelReady(const NET_LUID& luid) {
+MIB_UNICASTIPADDRESS_ROW TunnelIPv4Address(const NET_LUID& luid) {
   MIB_UNICASTIPADDRESS_ROW address{}; InitializeUnicastIpAddressEntry(&address);
   address.InterfaceLuid = luid; address.Address.Ipv4.sin_family = AF_INET;
   InetPtonA(AF_INET, "10.0.85.2", &address.Address.Ipv4.sin_addr);
+  address.OnLinkPrefixLength = 24;
+  address.PrefixOrigin = IpPrefixOriginManual; address.SuffixOrigin = IpSuffixOriginManual;
+  address.ValidLifetime = address.PreferredLifetime = 0xffffffff;
+  address.SkipAsSource = FALSE;
+  return address;
+}
+bool TunnelReady(MIB_UNICASTIPADDRESS_ROW address) {
   return GetUnicastIpAddressEntry(&address) == NO_ERROR && address.DadState == IpDadStatePreferred
-      && address.OnLinkPrefixLength == 24;
+      && address.OnLinkPrefixLength == 24 && !address.SkipAsSource;
 }
 bool TunnelIPv6Ready(const NET_LUID& luid) {
   MIB_UNICASTIPADDRESS_ROW address{}; InitializeUnicastIpAddressEntry(&address);
@@ -66,6 +73,15 @@ bool TunnelIPv6Ready(const NET_LUID& luid) {
   if (InetPtonA(AF_INET6, "fd00:198:18::2", &address.Address.Ipv6.sin6_addr) != 1) return false;
   return GetUnicastIpAddressEntry(&address) == NO_ERROR && address.DadState == IpDadStatePreferred
       && address.OnLinkPrefixLength == 64 && !address.SkipAsSource;
+}
+
+bool RetireTunnelAddress(std::optional<MIB_UNICASTIPADDRESS_ROW>& owned, const char* family) {
+  return flutter_vless::native::RetireOwnedAddress(owned, [family](const MIB_UNICASTIPADDRESS_ROW& address) {
+    const auto status = DeleteUnicastIpAddressEntry(&address);
+    if (status == NO_ERROR || status == ERROR_NOT_FOUND) return true;
+    Event((std::string("Owned Wintun ") + family + " address cleanup failed, code=" + std::to_string(status)).c_str());
+    return false;
+  });
 }
 }
 VpnService::VpnService() = default;
@@ -296,7 +312,8 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   auto fail = [](const char* stage) { Event(stage); return false; };
   // A previous adapter can outlive its child. Keep cleanup ownership and deny
   // a replacement until its exact address is retired or verified absent.
-  if (!RetireIPv6Address()) return fail("Previous owned Wintun IPv6 address cleanup remains pending");
+  const bool ipv4_retired = RetireIPv4Address();
+  if (!RetireIPv6Address() || !ipv4_retired) return fail("Previous owned Wintun address cleanup remains pending");
   if (!private_runtime_) return fail("Private VPN runtime is unavailable");
   worker_candidate_ = pending_candidate_ ? std::move(pending_candidate_)
       : PrepareWorkerCandidate(current_config_, socks_port_, *private_runtime_, asset_directory_, routing_intent_, routing_provenance_, username_, ipv6_tcp_scope_ ? &*ipv6_tcp_scope_ : nullptr);
@@ -380,19 +397,32 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
     Event(("Cannot assign the owned Wintun IPv6 address, code=" + std::to_string(ipv6_status)).c_str()); return false;
   }
   timing.Mark("ipv6_configure");
-  // Wintun can retain its address after a worker crash. netsh may reject a
-  // repeated assignment; the IP Helper state is the authoritative readiness
-  // check, including DAD, the exact address and its prefix length.
-  const bool assigned = native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"address",
-      L"name=flutter_vless_tun", L"source=static", L"address=10.0.85.2", L"mask=255.255.255.0", L"gateway=none"});
+  if (!requested_.load() || !tun2socks_process_->IsRunning()) return fail("Wintun IPv4 setup cancelled");
+  const auto ipv4 = TunnelIPv4Address(luid);
+  const auto ipv4_status = CreateUnicastIpAddressEntry(&ipv4);
+  if (ipv4_status == NO_ERROR) {
+    ipv4_address_ = ipv4;
+    Event("Wintun IPv4 address configured via IP Helper");
+  } else if (ipv4_status == ERROR_OBJECT_ALREADY_EXISTS) {
+    Event("Reusing an existing Wintun IPv4 address");
+  } else {
+    // Keep the legacy path for a stack that rejects the temporary IP Helper
+    // address. Ensure the alias still identifies the adapter we checked.
+    NET_LUID current{};
+    if (ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &current) != NO_ERROR || current.Value != luid.Value) {
+      return fail("Wintun adapter changed during IPv4 setup");
+    }
+    Event("Wintun IPv4 address configuration falling back to netsh");
+    native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"address",
+        L"name=flutter_vless_tun", L"source=static", L"address=10.0.85.2", L"mask=255.255.255.0", L"gateway=none"});
+  }
   timing.Mark("ipv4_configure");
   bool addressed = false;
   for (int i = 0; i < 150 && requested_.load() && tun2socks_process_->IsRunning(); ++i) {
-    if (TunnelReady(luid)) { addressed = true; break; }
+    if (TunnelReady(ipv4)) { addressed = true; break; }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
   if (!addressed) return fail("Wintun IPv4 address did not become ready");
-  if (!assigned) Event("Reusing the existing ready Wintun IPv4 address");
   timing.Mark("ipv4_address");
   bool ipv6_ready = false;
   for (int i = 0; i < 50 && requested_.load() && tun2socks_process_->IsRunning(); ++i) {
@@ -453,20 +483,20 @@ void VpnService::StopWorkers() {
   // The separate WFP barrier remains installed, including during route removal.
   for (const auto& route : capture_routes_) DeleteIpForwardEntry2(&route);
   capture_routes_.clear();
+  const bool ipv4_retired = RetireIPv4Address();
   const bool ipv6_retired = RetireIPv6Address();
   tun2socks_process_.reset(); xray_process_.reset();
+  if (!ipv4_retired) RetireIPv4Address();
   if (!ipv6_retired) RetireIPv6Address(); // adapter teardown can complete a pending deletion
   worker_candidate_.reset();
   pending_candidate_.reset();
   flutter_vless::native::RemovePrivateConfig(tun_config_path_);
 }
 bool VpnService::RetireIPv6Address() {
-  return flutter_vless::native::RetireOwnedAddress(ipv6_address_, [](const MIB_UNICASTIPADDRESS_ROW& address) {
-    const auto status = DeleteUnicastIpAddressEntry(&address);
-    if (status == NO_ERROR || status == ERROR_NOT_FOUND) return true;
-    Event(("Owned Wintun IPv6 address cleanup failed, code=" + std::to_string(status)).c_str());
-    return false;
-  });
+  return RetireTunnelAddress(ipv6_address_, "IPv6");
+}
+bool VpnService::RetireIPv4Address() {
+  return RetireTunnelAddress(ipv4_address_, "IPv4");
 }
 void VpnService::UpdateTrafficStats() {
   flutter_vless::traffic::Sample sample;

@@ -105,6 +105,7 @@ class VpnService {
       const flutter_vless::Ipv6TcpScope* retained_scope = nullptr,
       flutter_vless::preparation::Report changes = {}, flutter_vless::preparation::Stage* failure = nullptr);
   void StopWorkers();
+  bool RetireIPv4Address();
   bool RetireIPv6Address();
   void StopSession(bool release_protection);
   void UpdateTrafficStats();
@@ -140,6 +141,7 @@ class VpnService {
   std::optional<flutter_vless::native_routing::NativeRoutingIntent> routing_intent_;
   flutter_vless::xray_config::VpnRoutingProvenance routing_provenance_;
   std::vector<MIB_IPFORWARD_ROW2> capture_routes_;
+  std::optional<MIB_UNICASTIPADDRESS_ROW> ipv4_address_;
   std::optional<MIB_UNICASTIPADDRESS_ROW> ipv6_address_;
   std::mutex stats_mutex_;
   flutter_vless::traffic::Sample traffic_sample_;

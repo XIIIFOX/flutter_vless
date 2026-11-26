@@ -218,6 +218,9 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                 assert not powershell("$routes = @(Get-NetRoute -InterfaceAlias 'flutter_vless_tun' "
                                       "-DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue); "
                                       "$routes.DestinationPrefix"), "Wintun installed a default gateway"
+                assert powershell("(Get-DnsClientServerAddress -InterfaceAlias 'flutter_vless_tun' "
+                                  "-AddressFamily IPv4 -ErrorAction Stop).ServerAddresses") == "10.0.85.53", \
+                    "Wintun IPv4 DNS differs from the protected resolver"
                 # Dart's Socket.address can report the dialed address. Windows
                 # socket probes confirm the local address via getsockname.
                 assert fixtures.external_http(public_ip, vpn=True, verify_body=True) == "HTTP 200"
@@ -273,6 +276,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                 assert stages and all(type(ms) is int and ms >= 0 for ms in stages.values())
                 result["startup_stages_ms"] = stages
                 result["ipv4_setup"] = final["ipv4_setup"]
+                result["dns_setup"] = final["dns_setup"]
                 result["invalid_replacement_rejected"] = True
                 result["network_checks"] = network_checks
             print("WINDOWS_CONSUMER_LIVE " + json.dumps(result), flush=True)

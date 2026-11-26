@@ -113,13 +113,22 @@ Future<void> _runPlan(
       final snapshot =
           await plugin.getProviderDebugSnapshot().timeout(_ioTimeout);
       result['startup_stages_ms'] = _vpnStartupStages(snapshot);
+      final diagnosticLines = const LineSplitter().convert(snapshot);
       const ipv4SetupEvents = {
         '[vpn] Wintun IPv4 address configured via IP Helper': 'ip_helper',
         '[vpn] Reusing an existing Wintun IPv4 address': 'existing_address',
         '[vpn] Wintun IPv4 address configuration falling back to netsh': 'netsh',
       };
-      result['ipv4_setup'] = const LineSplitter().convert(snapshot)
+      result['ipv4_setup'] = diagnosticLines
           .map((line) => ipv4SetupEvents[line])
+          .whereType<String>()
+          .single;
+      const dnsSetupEvents = {
+        '[vpn] Wintun IPv4 DNS configured via IP Helper': 'ip_helper',
+        '[vpn] Wintun IPv4 DNS configured via netsh': 'netsh',
+      };
+      result['dns_setup'] = diagnosticLines
+          .map((line) => dnsSetupEvents[line])
           .whereType<String>()
           .single;
       result['phase'] = 'invalid_replacement';

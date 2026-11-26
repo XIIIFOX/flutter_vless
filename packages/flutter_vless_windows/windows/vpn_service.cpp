@@ -6,6 +6,7 @@
 #include "owned_address.h"
 #include "windows_underlay.h"
 #include <chrono>
+#include <cstring>
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 
@@ -73,6 +74,40 @@ bool TunnelIPv6Ready(const NET_LUID& luid) {
   if (InetPtonA(AF_INET6, "fd00:198:18::2", &address.Address.Ipv6.sin6_addr) != 1) return false;
   return GetUnicastIpAddressEntry(&address) == NO_ERROR && address.DadState == IpDadStatePreferred
       && address.OnLinkPrefixLength == 64 && !address.SkipAsSource;
+}
+
+bool SetTunnelDns(const NET_LUID& luid) {
+  auto server = flutter_vless::native::Wide(flutter_vless::xray_config::kVirtualDns);
+#ifdef DNS_INTERFACE_SETTINGS_VERSION1
+  // The function is exported on Windows 10 2004 and later. Loading it at
+  // runtime keeps the existing netsh path available on older Windows builds.
+  using Setter = decltype(&SetInterfaceDnsSettings);
+  static const auto set = [] {
+    const auto module = GetModuleHandleW(L"iphlpapi.dll");
+    const auto symbol = module ? GetProcAddress(module, "SetInterfaceDnsSettings") : nullptr;
+    Setter setter = nullptr;
+    static_assert(sizeof(setter) == sizeof(symbol));
+    std::memcpy(&setter, &symbol, sizeof(setter));
+    return setter;
+  }();
+  GUID adapter{};
+  if (set && ConvertInterfaceLuidToGuid(&luid, &adapter) == NO_ERROR) {
+    DNS_INTERFACE_SETTINGS settings{};
+    settings.Version = DNS_INTERFACE_SETTINGS_VERSION1;
+    settings.Flags = DNS_SETTING_NAMESERVER;
+    settings.NameServer = server.data();
+    if (set(adapter, &settings) == NO_ERROR) {
+      Event("Wintun IPv4 DNS configured via IP Helper");
+      return true;
+    }
+  }
+#endif
+  NET_LUID current{};
+  if (ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &current) != NO_ERROR || current.Value != luid.Value) return false;
+  if (!flutter_vless::native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"dnsservers",
+      L"name=flutter_vless_tun", L"source=static", L"address=" + server, L"validate=no"})) return false;
+  Event("Wintun IPv4 DNS configured via netsh");
+  return true;
 }
 
 bool RetireTunnelAddress(std::optional<MIB_UNICASTIPADDRESS_ROW>& owned, const char* family) {
@@ -444,8 +479,7 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   if (!ipv6_ready) return fail("Wintun IPv6 address did not become ready");
   if (ipv6_status == ERROR_OBJECT_ALREADY_EXISTS) Event("Reusing the existing ready Wintun IPv6 address");
   timing.Mark("ipv6_address");
-  if (!native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"dnsservers",
-      L"name=flutter_vless_tun", L"source=static", native::Wide(std::string("address=") + xray_config::kVirtualDns), L"validate=no"})) return fail("Wintun address or virtual DNS did not become ready");
+  if (!SetTunnelDns(luid)) return fail("Wintun virtual DNS did not become ready");
   timing.Mark("adapter_dns");
   for (auto prefix : {std::pair<const char*, UINT8>{"0.0.0.0", UINT8{1}}, {"128.0.0.0", UINT8{1}}, {xray_config::kVirtualDns, UINT8{32}}}) {
     MIB_IPFORWARD_ROW2 row{}; InitializeIpForwardEntry(&row);

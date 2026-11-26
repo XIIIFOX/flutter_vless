@@ -148,6 +148,65 @@ void main() {
     expect(find.text('VPN Diagnostics'), findsOneWidget);
   });
 
+  testWidgets('first connected status adds the pub.dev button and logs once', (
+    tester,
+  ) async {
+    const launcher = MethodChannel('plugins.flutter.io/url_launcher');
+    const label = 'Like on pub.dev';
+    const pubDevUrl = 'https://pub.dev/packages/flutter_vless';
+    final launchCalls = <MethodCall>[];
+    messenger.setMockMethodCallHandler(launcher, (call) async {
+      launchCalls.add(call);
+      return true;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(launcher, null));
+
+    final pubDevLogs = <String>[];
+    final originalDebugPrint = debugPrint;
+    debugPrint = (message, {wrapWidth}) {
+      if (message != null && message.contains(pubDevUrl)) {
+        pubDevLogs.add(message);
+      }
+    };
+
+    try {
+      await tester.pumpWidget(const MyApp());
+      await tester.pumpAndSettle();
+      expect(find.text(label), findsNothing);
+      expect(pubDevLogs, isEmpty);
+
+      await emit(tester, {'state': 'CONNECTING'});
+      expect(find.text(label), findsNothing);
+      expect(pubDevLogs, isEmpty);
+
+      await emit(tester, {'state': 'CONNECTED'});
+      expect(find.text(label), findsOneWidget);
+      final banner = pubDevLogs.single;
+      final mask = banner.split('\n\n').first;
+      expect(find.text(mask), findsNothing);
+      expect(mask, contains('⢯⡉⠓⠦⣄'));
+      expect(const LineSplitter().convert(banner).last, pubDevUrl);
+      expect(
+        mask.runes.every(
+          (code) => code == 10 || (code >= 0x2800 && code <= 0x28FF),
+        ),
+        isTrue,
+      );
+      await tap(tester, label);
+      expect(launchCalls.single.method, 'launch');
+      expect(launchCalls.single.arguments['url'], pubDevUrl);
+
+      await emit(tester, {'state': 'DISCONNECTED'});
+      expect(find.text(label), findsOneWidget);
+      await emit(tester, {'state': 'CONNECTED'});
+      expect(find.text(label), findsOneWidget);
+      expect(launchCalls, hasLength(1));
+      expect(pubDevLogs, [banner]);
+    } finally {
+      debugPrint = originalDebugPrint;
+    }
+  });
+
   testWidgets('balancer shows the imported subscription size and sends all nodes', (
     tester,
   ) async {

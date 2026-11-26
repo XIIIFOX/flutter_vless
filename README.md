@@ -31,8 +31,6 @@ Have a question for 13FOX Studio, need help integrating `flutter_vless`, or want
 to discuss a custom Flutter app? Reach us on [Telegram](https://t.me/fast_mano)
 or at [13fox.comp@gmail.com](mailto:13fox.comp@gmail.com).
 
-If `flutter_vless` is useful to you, please give it a like on [pub.dev](https://pub.dev/packages/flutter_vless).
-
 ## At A Glance
 
 | Platform | VPN tunnel | Proxy only | Key setup requirements |
@@ -171,6 +169,11 @@ For proxy-only mode, set `proxyOnly: true` in `startVless()` and skip the VPN pe
 
 `startVless()` and `getServerDelay()` validate that the provided config is a
 well-formed Xray JSON object before the native layer sees it.
+
+Got your first connection working with `flutter_vless`? Give it a
+[like on pub.dev](https://pub.dev/packages/flutter_vless) or a
+[star on GitHub](https://github.com/XIIIFOX/flutter_vless) to help other Flutter
+developers discover the package.
 
 ## Supported Inputs
 

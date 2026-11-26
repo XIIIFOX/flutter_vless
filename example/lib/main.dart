@@ -1,12 +1,40 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_vless/flutter_vless.dart';
 import 'package:flutter_vless_example/routing.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'options.dart';
 import 'options_storage.dart';
 import 'profile_import.dart';
 import 'preparation_report.dart';
 import 'vpn_routing.dart';
+
+const _pubDevUrl = 'https://pub.dev/packages/flutter_vless';
+const _pubDevMask = '''⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⣀⡈⢯⡉⠓⠦⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠻⣉⠹⠷⠀⠀⠀⠙⢷⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⣠⠞⠀⠀⠀⠀⠀⠀⠀⢿⡇⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⡇⠀⠀⠀⠀⠀⠀⠀⠀⢈⡇⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⡇⠀⠹⠝⠀⠀⠀⠀⠀⣼⠃⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⣠⠞⠀⣀⣠⣤⣤⠄⠀⠀⢠⡏⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠚⠢⠼⠿⠟⢛⣾⠃⠀⠀⠀⢸⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⢀⡴⣻⠃⠀⠀⠀⠀⢸⡉⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⣰⢻⡷⠁⠀⠀⠀⠀⠀⢸⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⢰⢽⡟⠁⠀⠀⠀⠀⠀⠀⠀⣇⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⢾⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⣸⡆⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⢸⣿⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⡀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠘⢧⣳⡀⠀⠀⠀⠀⠀⠀⠀⠀⠘⣷⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠈⣷⣱⡀⠀⠀⠀⠀⣸⠀⠀⠀⠈⢻⣦⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⢸⣷⡙⣆⠀⠀⣾⠃⠀⠀⠀⠀⠈⢽⡆⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠸⡇⢷⡏⠃⢠⠇⠀⠀⣀⠄⠀⠀⠀⣿⡖⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⢀⡇⢨⠇⠀⡼⢀⠔⠊⠀⠀⠀⠀⠀⠘⣯⣄⢀⠀
+⠀⠀⠀⠀⠀⠀⠀⢰⡇⣼⡀⣰⣷⠁⠀⠀⠀⠀⠀⠀⠀⠀⣇⢻⣧⡄
+⠀⠀⠀⠀⣀⣮⣿⣿⣿⣯⡭⢉⠟⠛⠳⢤⣄⣀⣀⣀⣀⡴⢠⠨⢻⣿
+⠀⠀⢀⣾⣿⣿⣿⣿⢏⠓⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⢨⣿
+⠀⣰⣿⣿⣿⣿⣿⣿⡱⠌⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⢭⣾⠏
+⣰⡿⠟⠋⠛⢿⣿⣿⣊⠡⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⣼⡿⠋⠀
+⠋⠁⠀⠀⠀⠀⠈⠑⠿⢶⣄⣀⣀⣀⣀⣀⣄⣤⡶⠿⠟⠋⠁⠀⠀⠀''';
 
 Future<void> main() => runExample();
 
@@ -78,6 +106,7 @@ class _HomePageState extends State<HomePage> {
   int preparationRequest = 0;
   int _importRequest = 0;
   int? _importedBalancerNodes;
+  bool _hasConnected = false;
   int? pendingConnectionRequest;
   late String reportEditorText;
   late FlutterVless flutterVless = FlutterVless(
@@ -121,7 +150,34 @@ class _HomePageState extends State<HomePage> {
         status.connectionState != VlessConnectionState.connected) {
       _balancerSession.value++;
     }
+    if (!_hasConnected &&
+        status.connectionState == VlessConnectionState.connected) {
+      _hasConnected = true;
+      if (kDebugMode) {
+        debugPrint(
+          '$_pubDevMask\n\n'
+          'Enjoying flutter_vless? Give it a like on pub.dev.\n'
+          '$_pubDevUrl',
+        );
+      }
+    }
     vlessStatus.value = status;
+  }
+
+  Future<void> _openPubDev() async {
+    bool opened;
+    try {
+      opened = await launchUrl(
+        Uri.parse(_pubDevUrl),
+        mode: LaunchMode.externalApplication,
+      );
+    } on PlatformException {
+      opened = false;
+    }
+    if (opened || !mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Could not open pub.dev.')));
   }
 
   void _configurationEdited() {
@@ -720,6 +776,14 @@ class _HomePageState extends State<HomePage> {
                 const SizedBox(height: 8),
                 Text('Core: ${coreVersion ?? '-'}',
                     style: const TextStyle(fontSize: 12)),
+                if (_hasConnected) ...[
+                  const SizedBox(height: 4),
+                  TextButton.icon(
+                    onPressed: _openPubDev,
+                    icon: const Icon(Icons.thumb_up_outlined),
+                    label: const Text('Like on pub.dev'),
+                  ),
+                ],
               ],
             );
           },

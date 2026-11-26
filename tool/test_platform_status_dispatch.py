@@ -3,7 +3,7 @@
 
 Apple probes compile the actual emitStatus methods with an in-process sink.
 The Windows probe compiles the actual dispatcher/sender and pumps real HWND
-messages, including a child Flutter view and its top-level window.
+messages after attaching the Flutter view to its host window.
 """
 import argparse
 from pathlib import Path
@@ -87,10 +87,10 @@ do {{
 def windows(output):
     path = ROOT / "packages/flutter_vless_windows/windows/flutter_vless_plugin.cpp"
     source = path.read_text()
+    host_window = method(source, "  HWND HostWindow() const")
+    can_dispatch = method(source, "  bool CanDispatchToPlatform() const")
     enqueue = method(source, "  void RunOnUIThread(")
     send = method(source, "void FlutterVlessPlugin::SendStatusToUI(")
-    root_assignment = next(line.strip() for line in source.splitlines()
-                           if line.strip().startswith("main_window_handle_ = view_window"))
     code = r'''#include <windows.h>
 #include <cassert>
 #include <chrono>
@@ -119,7 +119,8 @@ struct Sink {
 class FlutterVlessPlugin {
  public:
   const DWORD platform_thread_id_ = GetCurrentThreadId();
-  HWND main_window_handle_ = nullptr;
+  HWND view_window_ = nullptr;
+  int window_proc_delegate_id_ = 1;
   UINT ui_callback_message_id_ = WM_APP + 37;
   std::mutex ui_callbacks_mutex_, sink_mutex_;
   std::vector<std::function<void()>> ui_callbacks_;
@@ -130,7 +131,7 @@ class FlutterVlessPlugin {
     { std::lock_guard<std::mutex> lock(ui_callbacks_mutex_); tasks.swap(ui_callbacks_); }
     for (auto& task : tasks) task();
   }
-'''+enqueue+r'''
+'''+host_window+'\n'+can_dispatch+'\n'+enqueue+r'''
 };
 '''+send+r'''
 FlutterVlessPlugin* active = nullptr;
@@ -150,17 +151,24 @@ int main() {
   HWND root = CreateWindowW(root_class.lpszClassName, L"fixture", WS_OVERLAPPED,
                            0, 0, 100, 100, nullptr, nullptr, root_class.hInstance, nullptr);
   assert(root);
-  HWND view_window = CreateWindowW(L"STATIC", L"view", WS_CHILD, 0, 0, 50, 50,
-                                  root, nullptr, root_class.hInstance, nullptr);
-  assert(view_window && view_window != root);
-  HWND& main_window_handle_ = plugin.main_window_handle_;
-  '''+root_assignment+r'''
-  assert(main_window_handle_ == root);
+  // The stock runner registers its plugins while the Flutter view is still
+  // a child of HWND_MESSAGE, then calls SetChildContent to attach the view.
+  plugin.view_window_ = CreateWindowW(L"STATIC", L"view", WS_CHILD, 0, 0, 50, 50,
+                                    HWND_MESSAGE, nullptr, root_class.hInstance, nullptr);
+  assert(plugin.view_window_ && plugin.HostWindow() != root);
+  SetParent(plugin.view_window_, root);
+  assert(GetParent(plugin.view_window_) == root);
+  assert(plugin.HostWindow() == root && plugin.CanDispatchToPlatform());
   flutter::EncodableList status{std::string("1"), std::string("2"), std::string("3"),
       std::string("4"), std::string("5"), std::string("CONNECTING")};
   plugin.SendStatusToUI(status);
   assert(plugin.status_sink_->payloads.size() == 1);
+  int completions = 0;
   std::thread worker([&] {
+    plugin.RunOnUIThread([&] {
+      assert(GetCurrentThreadId() == plugin.platform_thread_id_);
+      ++completions;
+    });
     auto copied = status;
     copied[0] = std::string("9"); copied[5] = std::string("CONNECTED");
     plugin.SendStatusToUI(copied);
@@ -168,7 +176,7 @@ int main() {
     plugin.SendStatusToUI(status);
   });
   worker.join();
-  assert(plugin.status_sink_->payloads.size() == 1);
+  assert(completions == 0 && plugin.status_sink_->payloads.size() == 1);
   const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
   while (plugin.status_sink_->payloads.size() < 3 && std::chrono::steady_clock::now() < until) {
     MSG message;
@@ -178,7 +186,7 @@ int main() {
     Sleep(1);
   }
   const auto& payloads = plugin.status_sink_->payloads;
-  assert(payloads.size() == 3);
+  assert(completions == 1 && payloads.size() == 3);
   assert(std::get<std::string>(payloads[1][0]) == "9");
   assert(std::get<std::string>(payloads[1][5]) == "CONNECTED");
   assert(payloads[2] == status);
@@ -186,7 +194,7 @@ int main() {
   std::thread cancelled([&] { plugin.SendStatusToUI(status); });
   cancelled.join(); plugin.Drain();
   DestroyWindow(root);
-  std::cout << "Windows platform status: child/root routing, thread, copied payload, order, cancellation passed\n";
+  std::cout << "Windows platform status: Flutter view reparent, thread, copied payload, order, cancellation passed\n";
 }
 '''
     result = output / "status_dispatch_test.cpp"

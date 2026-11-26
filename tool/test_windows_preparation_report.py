@@ -108,7 +108,7 @@ std::unique_ptr<ProcessHandle> Launch(const fs::path&, const std::vector<std::ws
 namespace flutter_vless {
 struct DiagnosticsLog {
   static DiagnosticsLog& Instance() { static DiagnosticsLog log; return log; }
-  void Append(const char*, const char*) {} void Reset() {}
+  void Append(const std::string&, const std::string&) {} void Reset() {}
 };
 }
 struct FakeService {

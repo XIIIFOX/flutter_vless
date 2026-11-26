@@ -53,8 +53,7 @@ std::string Bootstrap(const std::string& name) {
   }
   WSACleanup(); return result;
 }
-bool TunnelReady(NET_LUID& luid) {
-  if (ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &luid) != NO_ERROR) return false;
+bool TunnelReady(const NET_LUID& luid) {
   MIB_UNICASTIPADDRESS_ROW address{}; InitializeUnicastIpAddressEntry(&address);
   address.InterfaceLuid = luid; address.Address.Ipv4.sin_family = AF_INET;
   InetPtonA(AF_INET, "10.0.85.2", &address.Address.Ipv4.sin_addr);
@@ -366,20 +365,8 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   }
   if (!adapter_ready || !requested_.load()) return fail("Wintun adapter unavailable or startup cancelled");
   timing.Mark("wintun_adapter");
-  // Wintun can retain its address after a worker crash. netsh may reject a
-  // repeated assignment; the IP Helper state is the authoritative readiness
-  // check, including DAD, the exact address and its prefix length.
-  const bool assigned = native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"address",
-      L"name=flutter_vless_tun", L"source=static", L"address=10.0.85.2", L"mask=255.255.255.0", L"gateway=none"});
-  timing.Mark("ipv4_configure");
-  bool addressed = false;
-  for (int i = 0; i < 150 && requested_.load(); ++i) {
-    if (TunnelReady(luid)) { addressed = true; break; }
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  }
-  if (!addressed) return fail("Wintun IPv4 address did not become ready");
-  if (!assigned) Event("Reusing the existing ready Wintun IPv4 address");
-  timing.Mark("ipv4_address");
+  // Start IPv6 duplicate-address detection before configuring IPv4. Both
+  // addresses must still reach Preferred on this exact adapter before capture.
   MIB_UNICASTIPADDRESS_ROW ipv6{}; InitializeUnicastIpAddressEntry(&ipv6);
   ipv6.InterfaceLuid = luid; ipv6.Address.Ipv6.sin6_family = AF_INET6;
   if (InetPtonA(AF_INET6, "fd00:198:18::2", &ipv6.Address.Ipv6.sin6_addr) != 1) return fail("Invalid owned Wintun IPv6 address");
@@ -392,6 +379,21 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   else if (ipv6_status != ERROR_OBJECT_ALREADY_EXISTS) {
     Event(("Cannot assign the owned Wintun IPv6 address, code=" + std::to_string(ipv6_status)).c_str()); return false;
   }
+  timing.Mark("ipv6_configure");
+  // Wintun can retain its address after a worker crash. netsh may reject a
+  // repeated assignment; the IP Helper state is the authoritative readiness
+  // check, including DAD, the exact address and its prefix length.
+  const bool assigned = native::SystemCommand(L"netsh.exe", {L"interface", L"ipv4", L"set", L"address",
+      L"name=flutter_vless_tun", L"source=static", L"address=10.0.85.2", L"mask=255.255.255.0", L"gateway=none"});
+  timing.Mark("ipv4_configure");
+  bool addressed = false;
+  for (int i = 0; i < 150 && requested_.load() && tun2socks_process_->IsRunning(); ++i) {
+    if (TunnelReady(luid)) { addressed = true; break; }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  if (!addressed) return fail("Wintun IPv4 address did not become ready");
+  if (!assigned) Event("Reusing the existing ready Wintun IPv4 address");
+  timing.Mark("ipv4_address");
   bool ipv6_ready = false;
   for (int i = 0; i < 50 && requested_.load() && tun2socks_process_->IsRunning(); ++i) {
     if (TunnelIPv6Ready(luid)) { ipv6_ready = true; break; }

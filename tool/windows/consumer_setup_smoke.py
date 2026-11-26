@@ -146,6 +146,29 @@ def disconnected(probe, gateway, proxy):
     assert system_proxy() == proxy, "WinINet proxy settings were not restored"
 
 
+def physical_dns_servers(underlay):
+    index = fixtures.source_interface(underlay)
+    servers = powershell(
+        f"(Get-DnsClientServerAddress -InterfaceIndex {index} -AddressFamily IPv4 "
+        "-ErrorAction Stop).ServerAddresses"
+    ).splitlines()
+    assert servers, "The Windows underlay has no DNS resolver"
+    for server in servers:
+        socket.inet_pton(socket.AF_INET, server)
+    return tuple(servers)
+
+
+def query_restored_dns(servers):
+    addresses = ",".join(f"'{server}'" for server in servers)
+    answer = powershell(
+        f"(Resolve-DnsName -Name 'api.github.com.' -Type A -Server @({addresses}) "
+        "-DnsOnly -NoHostsFile -QuickTimeout -ErrorAction Stop).IPAddress"
+    )
+    assert answer, "Restored physical DNS returned no IPv4 answer"
+    for address in answer.splitlines():
+        socket.inet_pton(socket.AF_INET, address)
+
+
 def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, reverse):
     receipt = directory / "final.json"
     active = directory / "live.json"
@@ -154,6 +177,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
     finish = directory / "finish"
     guard_stop = directory / "guard-stop"
     plan_file = directory / "plan.json"
+    gateway, proxy, dns_servers = baseline
     direction = "reverse" if reverse else "original"
     routes = [
         dict(host=host, address=fixtures.PROFILE_TUN_TARGET, port=fixtures.PORTS["direct"],
@@ -168,6 +192,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
     plan_file.write_text(json.dumps(task), encoding="utf-8")
     process = guard = None
     normal_stop = False
+    network_checks = None
     with (directory / "app.log").open("wb") as app_log:
         try:
             process = subprocess.Popen(
@@ -185,13 +210,20 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
             proxy_settings = system_proxy()
             if mode == "vpn":
                 assert count >= 10 and CAPTURE_ROUTES == capture_routes(), "Expected Wintun routes and WFP protection"
-                assert proxy_settings == baseline[1], "VPN changed WinINet proxy settings"
+                assert proxy_settings == proxy, "VPN changed WinINet proxy settings"
                 # Dart's Socket.address can report the dialed address. Windows
                 # socket probes confirm the local address via getsockname.
                 assert fixtures.external_http(public_ip, vpn=True, verify_body=True) == "HTTP 200"
                 for route in routes:
                     assert fixtures.request(route["host"], vpn=True) == route["expected_body"]
-                fixtures.protected_dns(tcp=False)
+                network_checks = dict(
+                    protected_dns_udp=fixtures.protected_dns(tcp=False),
+                    protected_dns_tcp=fixtures.protected_dns(tcp=True),
+                    system_dns=fixtures.system_dns(),
+                    real_dns=fixtures.relayed_dns(),
+                    physical_tcp=fixtures.physical_denied(public_ip, underlay, 443),
+                    physical_dns_udp=fixtures.physical_denied("1.1.1.1", underlay, 53, True, probe),
+                )
             else:
                 assert not count and not capture_routes(), "Proxy mode installed VPN routes or protection"
                 assert proxy_settings[0] & 2 and proxy_settings[1] == f"socks=localhost:{task['socks_port']}", \
@@ -213,8 +245,16 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                      ("start_to_connected_ms", "start_to_first_https_ms", "stop_ms")}
             assert all(type(ms) is int and ms >= 0 for ms in times.values())
             assert times["start_to_first_https_ms"] >= times["start_to_connected_ms"]
-            disconnected(probe, *baseline)
+            disconnected(probe, gateway, proxy)
             assert fixtures.external_http(public_ip, verify_body=True) == "HTTP 200"
+            if network_checks is not None:
+                assert physical_dns_servers(underlay) == dns_servers, "Physical DNS servers changed after Stop"
+                query_restored_dns(dns_servers)
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.settimeout(4)
+                    fixtures.pin_interface(sock, underlay)
+                    sock.connect((public_ip, 443))
+                network_checks.update(restored_dns=True, restored_physical_tcp=True)
             finish.touch()
             assert process.wait(timeout=10) == 0, "Consumer exited with an error after Stop"
             normal_stop = True
@@ -224,6 +264,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                 stages = final["startup_stages_ms"]
                 assert stages and all(type(ms) is int and ms >= 0 for ms in stages.values())
                 result["startup_stages_ms"] = stages
+                result["network_checks"] = network_checks
             print("WINDOWS_CONSUMER_LIVE " + json.dumps(result), flush=True)
             if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
                 with Path(summary).open("a", encoding="utf-8") as file:
@@ -232,6 +273,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                           f"Stop {times['stop_ms']} ms. Routing and network restoration passed.", file=file)
                     if mode == "vpn":
                         print("  - Startup stages: " + ", ".join(f"{stage} {ms} ms" for stage, ms in stages.items()), file=file)
+                        print("  - Protected DNS, physical-interface leak controls, and restored DNS passed.", file=file)
         finally:
             proceeded = process is not None
             if proceeded and process.poll() is None:
@@ -248,8 +290,8 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                 fixtures.native(probe, "release-protection")
                 if capture_routes():
                     remove_test_routes()
-                if system_proxy() != baseline[1]:
-                    system_proxy(baseline[1])
+                if system_proxy() != proxy:
+                    system_proxy(proxy)
             if guard is not None:
                 guard_stop.touch()
                 assert guard.wait(timeout=10) == 0, "Runner network watchdog failed"
@@ -263,13 +305,18 @@ def exercise_consumer(bundle, mode, directory, probe):
     # Reply synthetically only for the isolated DNS fixture. The runner needs
     # normal DNS while its own network traffic is captured by the VPN.
     fixtures.REAL_DNS = True
+    fixtures.PROBE = probe
     public_ip = socket.gethostbyname(HTTPS_HOST)
     assert fixtures.external_http(public_ip, verify_body=True) == "HTTP 200"
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as routing:
         routing.connect((public_ip, 443))
         underlay = routing.getsockname()[0]
-    baseline = (fixtures.native(probe, "gateway"), system_proxy())
-    disconnected(probe, *baseline)
+    gateway, proxy = fixtures.native(probe, "gateway"), system_proxy()
+    disconnected(probe, gateway, proxy)
+    dns_servers = physical_dns_servers(underlay) if mode == "vpn" else None
+    if dns_servers:
+        query_restored_dns(dns_servers)
+    baseline = (gateway, proxy, dns_servers)
     with route_fixtures(underlay):
         for reverse in (False, True):
             case_directory = directory / ("reverse" if reverse else "original")

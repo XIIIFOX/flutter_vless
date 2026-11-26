@@ -84,6 +84,10 @@ using Root = flutter_vless::asset_location::Root;
 using Intent = flutter_vless::native_routing::NativeRoutingIntent;
 using Provenance = flutter_vless::xray_config::VpnRoutingProvenance;
 using Json = flutter_vless::xray_config::Json;
+struct StartupTiming {
+  void Mark(const char*) const {}
+  void Publish() const {}
+};
 struct FakeBoundary {
   bool accept = true;
   unsigned checks = 0, removed = 0;
@@ -160,6 +164,7 @@ bool VpnService::Fresh(const std::string& base, const Provenance& provenance) {
   preparation::StartupOutcome failed;
   auto* outcome = &failed;
   const std::function<void()> admitted = [this] { ++admissions; };
+  [[maybe_unused]] StartupTiming timing;
 '''
 FRESH_SUFFIX = r'''
   (void)record_balancer;

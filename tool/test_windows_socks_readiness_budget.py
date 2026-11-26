@@ -167,6 +167,8 @@ class VpnConsumer {
   void Event(const char*) {}
   bool Run() { auto fail=[](const char*){return false;};
     using namespace flutter_vless;
+    struct StartupTiming { void Mark(const char*) const {} };
+    [[maybe_unused]] StartupTiming timing;
 VPN
     ++kernel.tun_effects;return true;
   }

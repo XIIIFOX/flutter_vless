@@ -137,7 +137,10 @@ Future<void> _runPlan(
     );
     result['phase'] = 'active_hold';
     await _writeReceipt(activePath, {...result, 'success': true});
-    await _waitForContinuation(File(continuePath));
+    await _waitForContinuation(
+      File(continuePath),
+      timeout: Duration(seconds: proxy ? 35 : 60),
+    );
     _check(
       events.current == VlessConnectionState.connected,
       'The runtime disconnected while the host verified routing state',
@@ -179,7 +182,7 @@ Map<String, int> _vpnStartupStages(String snapshot) {
     'routes_and_wfp',
     'packet_path',
   };
-  const optional = {'ipv4_configure', 'worker_total'};
+  const optional = {'ipv4_configure', 'ipv6_configure'};
   final timings = <String, int>{};
   final pattern = RegExp(r'^\[vpn\] startup timing ([a-z0-9_]+) (\d+) ms$');
   for (final line in const LineSplitter().convert(snapshot)) {
@@ -379,8 +382,10 @@ final class _SocketReader {
   Future<void> cancel() => _iterator.cancel();
 }
 
-Future<void> _waitForContinuation(File signal) async {
-  const timeout = Duration(seconds: 35);
+Future<void> _waitForContinuation(
+  File signal, {
+  Duration timeout = const Duration(seconds: 35),
+}) async {
   final hold = Stopwatch()..start();
   while (!await signal.exists()) {
     _check(hold.elapsed < timeout,

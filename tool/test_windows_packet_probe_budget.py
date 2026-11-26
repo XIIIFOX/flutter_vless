@@ -73,6 +73,7 @@ class SocksReadinessBudget {
 bool SocksReady(uint16_t, const std::string&, const std::string&, const SocksReadinessBudget*) {
   ++kernel.socks_ready; kernel.cancel = true; if (kernel.join) kernel.join(); return true;
 } }
+struct StartupTiming { void Mark(const char*) const {} };
 class AdmissionConsumer {
  public:
   std::atomic<bool> requested_{true};
@@ -81,6 +82,7 @@ class AdmissionConsumer {
   uint16_t socks_port_ = 10808; std::string username_, password_;
   bool ContinueAfterListener() {
     auto fail = [](const char*) { return false; }; (void)fail;
+    [[maybe_unused]] StartupTiming timing;
 ADMISSION
     ++kernel.tun_side_effects; return true;
   }
@@ -105,6 +107,7 @@ PERIODIC
   }
   bool StartupPoll() {
     InertReport* report = nullptr;
+    [[maybe_unused]] StartupTiming timing;
 STARTUP
     return false;
   }
@@ -289,7 +292,7 @@ def main():
         "production_sha256": {n: hashlib.sha256(v.encode()).hexdigest() for n, v in data.items()},
         "test_tool_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "native_builder_sha256": hashlib.sha256((ROOT / "tool/windows/build_native_tests.cmd").read_bytes()).hexdigest(),
-        "inert_boundaries": ["all Winsock APIs", "monotonic clock", "worker thread", "listener readiness callback", "admission continuation effect counter"],
+        "inert_boundaries": ["all Winsock APIs", "monotonic clock", "worker thread", "listener readiness callback", "admission continuation effect counter", "startup diagnostics"],
         "actual_bodies": ["Send", "Receive", "Check", "Serve", "destructor", "post-SocksReady admission block", "RunVpn health condition", "StartWorkers packet condition"],
         "source_guards": result.testsRun, "real_socket_process_thread_Core": False,
     }, indent=2) + "\n")

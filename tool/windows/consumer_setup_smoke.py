@@ -16,7 +16,7 @@ from . import runtime_smoke as fixtures
 
 HOSTS = ("2ip.ru", "myip.com")
 HTTPS_HOST = "api.ipify.org"
-CAPTURE_ROUTES = {"0.0.0.0/1", "128.0.0.0/1", "::/1", "8000::/1"}
+CAPTURE_ROUTES = {"0.0.0.0/1", "128.0.0.0/1", "10.0.85.53/32", "::/1", "8000::/1"}
 
 
 def system_proxy(settings=None):
@@ -73,15 +73,18 @@ def powershell(command):
 
 
 def capture_routes():
-    return set(powershell(
+    return CAPTURE_ROUTES.intersection(powershell(
         "$routes = @(Get-NetRoute -InterfaceAlias 'flutter_vless_tun' "
         "-ErrorAction SilentlyContinue); $routes.DestinationPrefix"
     ).splitlines())
 
 
 def remove_test_routes():
+    prefixes = ",".join(f"'{route}'" for route in sorted(CAPTURE_ROUTES))
     powershell("Get-NetRoute -InterfaceAlias 'flutter_vless_tun' "
-               "-ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction Stop")
+               "-ErrorAction SilentlyContinue | "
+               f"Where-Object {{ $_.DestinationPrefix -in @({prefixes}) }} | "
+               "Remove-NetRoute -Confirm:$false -ErrorAction Stop")
 
 
 @contextmanager
@@ -117,22 +120,26 @@ def read_receipt(path):
     return json.loads(data)
 
 
-def wait_active(active, final, process):
-    deadline = time.monotonic() + 90
+def wait_receipt(path, final, process, phase, timeout):
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        receipt = read_receipt(active)
+        receipt = read_receipt(path)
         if receipt is not None:
             return receipt
         failure = read_receipt(final)
         if failure is not None or process.poll() is not None:
-            raise AssertionError(f"Consumer exited before route checks: {failure}")
+            raise AssertionError(f"Consumer exited before {phase}: {failure}")
         time.sleep(0.1)
-    raise AssertionError("Consumer did not report live HTTPS and routing within 90 seconds")
+    raise AssertionError(f"Consumer did not report {phase} within {timeout} seconds")
 
 
 def disconnected(probe, gateway, proxy):
     assert int(fixtures.native(probe, "policy-count")) == 0, "Plugin WFP filters remain after Stop"
     assert not capture_routes(), "Plugin capture routes remain after Stop"
+    assert not powershell(
+        "$addresses = @(Get-NetIPAddress -InterfaceAlias 'flutter_vless_tun' "
+        "-IPAddress 'fd00:198:18::2' -ErrorAction SilentlyContinue); $addresses.IPAddress"
+    ), "Plugin IPv6 tunnel address remains after Stop"
     assert fixtures.native(probe, "gateway") == gateway, "Default IPv4 gateway was not restored"
     # Query the same WinINet values Windows clients use, not the user registry
     # cache or process proxy environment.
@@ -143,6 +150,8 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
     receipt = directory / "final.json"
     active = directory / "live.json"
     proceed = directory / "continue"
+    restored = directory / "restored.json"
+    finish = directory / "finish"
     guard_stop = directory / "guard-stop"
     plan_file = directory / "plan.json"
     direction = "reverse" if reverse else "original"
@@ -154,7 +163,8 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
     task = dict(mode=mode, config=fixtures.config(reverse, public_ip, underlay),
                 socks_port=fixtures.PORTS["inbound"], routes=routes,
                 https=dict(host=HTTPS_HOST, address=public_ip, path="/"),
-                receipt=str(receipt), active_receipt=str(active), **{"continue": str(proceed)})
+                receipt=str(receipt), active_receipt=str(active), restored_receipt=str(restored),
+                finish=str(finish), **{"continue": str(proceed)})
     plan_file.write_text(json.dumps(task), encoding="utf-8")
     process = guard = None
     normal_stop = False
@@ -169,32 +179,34 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                 [str(probe), "guard", str(process.pid), "150", str(guard_stop)],
                 cwd=probe.parent, stdout=app_log, stderr=app_log,
             )
-            during = wait_active(active, receipt, process)
+            during = wait_receipt(active, receipt, process, "live HTTPS and routing", 90)
             assert during["mode"] == mode
             count = int(fixtures.native(probe, "policy-count"))
             proxy_settings = system_proxy()
             if mode == "vpn":
-                assert count >= 10 and CAPTURE_ROUTES <= capture_routes(), "Expected Wintun routes and WFP protection"
+                assert count >= 10 and CAPTURE_ROUTES == capture_routes(), "Expected Wintun routes and WFP protection"
                 assert proxy_settings == baseline[1], "VPN changed WinINet proxy settings"
+                # Dart's Socket.address can report the dialed address. Windows
+                # socket probes confirm the local address via getsockname.
+                assert fixtures.external_http(public_ip, vpn=True, verify_body=True) == "HTTP 200"
+                for route in routes:
+                    assert fixtures.request(route["host"], vpn=True) == route["expected_body"]
                 fixtures.protected_dns(tcp=False)
             else:
                 assert not count and not capture_routes(), "Proxy mode installed VPN routes or protection"
                 assert proxy_settings[0] & 2 and proxy_settings[1] == f"socks=localhost:{task['socks_port']}", \
                     "Proxy mode did not install the owned WinINet SOCKS endpoint"
             proceed.touch()
-            code = process.wait(timeout=35)
-            final = read_receipt(receipt)
-            assert code == 0 and final and final["success"] is True and final["mode"] == mode, \
+            final = wait_receipt(restored, receipt, process, "Stop and restored HTTPS", 35)
+            assert final["success"] is True and final["mode"] == mode, \
                 f"Consumer failed its connection or Stop checks: {final}"
             assert final["routes"] == [
                 dict(host=route["host"], expected=route["expected_body"],
-                     actual=route["expected_body"], source_is_tun=mode == "vpn")
+                     actual=route["expected_body"])
                 for route in routes
             ], "Consumer did not prove both exact routes"
             assert final["baseline_https_status"] == final["active_https_status"] \
                 == final["post_stop_https_status"] == 200
-            assert final["post_stop_source_matches_baseline"] is True
-            assert final["active_https_source_is_tun"] == (mode == "vpn")
             if mode == "vpn":
                 assert final["administrator"] is True
             times = {key: final[key] for key in
@@ -203,6 +215,8 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
             assert times["start_to_first_https_ms"] >= times["start_to_connected_ms"]
             disconnected(probe, *baseline)
             assert fixtures.external_http(public_ip, verify_body=True) == "HTTP 200"
+            finish.touch()
+            assert process.wait(timeout=10) == 0, "Consumer exited with an error after Stop"
             normal_stop = True
             result = dict(mode=mode, routing=direction, **times, routes=final["routes"],
                           active_https=200, restored_https=200)
@@ -216,6 +230,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
             proceeded = process is not None
             if proceeded and process.poll() is None:
                 proceed.touch()
+                finish.touch()
                 try:
                     process.wait(timeout=20)
                 except subprocess.TimeoutExpired:

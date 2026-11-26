@@ -7,7 +7,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_vless/flutter_vless.dart';
 
 const _ioTimeout = Duration(seconds: 6);
-const _tunnelAddress = '10.0.85.2';
 const _maximumResponseBytes = 4096;
 
 /// The Windows Actions driver copies this entry point into a fresh Flutter app.
@@ -56,20 +55,15 @@ Future<void> _runPlan(
     port: _port(public['port'] ?? 443),
     path: public['path'] as String,
   );
-  final activePath = plan['active_receipt'] as String?;
-  final continuePath = plan['continue'] as String?;
-  _check(
-    (activePath == null) == (continuePath == null),
-    'Active and continuation receipts must be supplied together',
-  );
+  final activePath = plan['active_receipt'] as String;
+  final continuePath = plan['continue'] as String;
+  final restoredPath = plan['restored_receipt'] as String;
+  final finishPath = plan['finish'] as String;
   final fixtureRoutes = plan['routes'] as List<dynamic>;
   _check(fixtureRoutes.length >= 2, 'At least two route controls are required');
 
   result['phase'] = 'baseline';
-  final baseline = await _publicHttps(uri, address);
-  result['baseline_https_status'] = baseline.status;
-  result['baseline_source_is_tun'] = baseline.source == _tunnelAddress;
-  _check(baseline.source != _tunnelAddress, 'Baseline already uses Wintun');
+  result['baseline_https_status'] = await _publicHttps(uri, address);
 
   final events = _StatusEvents();
   result['states'] = events.transitions;
@@ -113,13 +107,7 @@ Future<void> _runPlan(
       socksPort: proxy ? socksPort : null,
     );
     result['start_to_first_https_ms'] = start.elapsedMilliseconds;
-    result['active_https_status'] = active.status;
-    result['active_https_source_is_tun'] = active.source == _tunnelAddress;
-    if (proxy) {
-      _check(active.source == '127.0.0.1', 'HTTPS bypassed the local proxy');
-    } else {
-      _check(active.source == _tunnelAddress, 'HTTPS bypassed Wintun');
-    }
+    result['active_https_status'] = active;
 
     result['phase'] = 'routing';
     for (final row in fixtureRoutes.cast<Map<String, dynamic>>()) {
@@ -134,29 +122,21 @@ Future<void> _runPlan(
       observedRoutes.add({
         'host': fixtureHost,
         'expected': expected,
-        'actual': route.body,
-        'source_is_tun': route.source == _tunnelAddress,
+        'actual': route,
       });
-      _check(
-          route.body == expected, 'Unexpected route marker for $fixtureHost');
-      _check(
-        route.source == (proxy ? '127.0.0.1' : _tunnelAddress),
-        'Routing probe did not traverse the requested local path',
-      );
+      _check(route == expected, 'Unexpected route marker for $fixtureHost');
     }
     _check(
       events.current == VlessConnectionState.connected,
       'The runtime disconnected during traffic checks',
     );
-    if (activePath != null) {
-      result['phase'] = 'active_hold';
-      await _writeReceipt(activePath, {...result, 'success': true});
-      await _waitForContinuation(File(continuePath!));
-      _check(
-        events.current == VlessConnectionState.connected,
-        'The runtime disconnected while the host verified routing state',
-      );
-    }
+    result['phase'] = 'active_hold';
+    await _writeReceipt(activePath, {...result, 'success': true});
+    await _waitForContinuation(File(continuePath));
+    _check(
+      events.current == VlessConnectionState.connected,
+      'The runtime disconnected while the host verified routing state',
+    );
   } catch (error) {
     result['live_error'] = error.toString();
     rethrow;
@@ -173,13 +153,9 @@ Future<void> _runPlan(
 
   result['phase'] = 'restored';
   _check(result['disconnected'] == true, 'Stop did not leave DISCONNECTED');
-  final restored = await _publicHttps(uri, address);
-  result['post_stop_https_status'] = restored.status;
-  result['post_stop_source_matches_baseline'] =
-      restored.source == baseline.source;
-  result['post_stop_exit_matches_baseline'] = restored.exit == baseline.exit;
-  _check(restored.source == baseline.source,
-      'The physical route was not restored');
+  result['post_stop_https_status'] = await _publicHttps(uri, address);
+  await _writeReceipt(restoredPath, {...result, 'success': true});
+  await _waitForContinuation(File(finishPath));
 }
 
 final class _StatusEvents {
@@ -210,13 +186,12 @@ final class _StatusEvents {
   }
 }
 
-Future<({int status, String source, String exit})> _publicHttps(
+Future<int> _publicHttps(
   Uri uri,
   InternetAddress remote, {
   int? socksPort,
 }) async {
   Socket? pendingSocket;
-  String? source;
   Future<Socket> open() async {
     final socket = await Socket.connect(
       socksPort == null ? remote : InternetAddress.loopbackIPv4,
@@ -224,7 +199,6 @@ Future<({int status, String source, String exit})> _publicHttps(
       timeout: _ioTimeout,
     );
     pendingSocket = socket;
-    source = socket.address.address;
     try {
       if (socksPort != null) {
         final reader = _SocketReader(socket);
@@ -265,17 +239,18 @@ Future<({int status, String source, String exit})> _publicHttps(
       body.add(chunk);
       _check(body.length <= 64, 'Public HTTPS returned an oversized IP body');
     }
-    final exit =
-        InternetAddress.tryParse(ascii.decode(body.takeBytes()).trim());
-    _check(exit != null, 'Public HTTPS did not return an IP address');
-    return (status: response.statusCode, source: source!, exit: exit!.address);
+    _check(
+      InternetAddress.tryParse(ascii.decode(body.takeBytes()).trim()) != null,
+      'Public HTTPS did not return an IP address',
+    );
+    return response.statusCode;
   } finally {
     client.close(force: true);
     pendingSocket?.destroy();
   }
 }
 
-Future<({String source, String body})> _routeHttp(
+Future<String> _routeHttp(
   String host,
   InternetAddress remote,
   int port, {
@@ -286,7 +261,6 @@ Future<({String source, String body})> _routeHttp(
     socksPort ?? port,
     timeout: _ioTimeout,
   );
-  final source = socket.address.address;
   final reader = _SocketReader(socket);
   try {
     if (socksPort != null) await _socksConnect(socket, reader, host, port);
@@ -297,7 +271,7 @@ Future<({String source, String body})> _routeHttp(
     final separator = response.indexOf('\r\n\r\n');
     _check(separator >= 0 && RegExp(r'^HTTP/1\.[01] 200\b').hasMatch(response),
         'The controlled route did not return HTTP 200');
-    return (source: source, body: response.substring(separator + 4).trim());
+    return response.substring(separator + 4).trim();
   } finally {
     socket.destroy();
     await reader.cancel();
@@ -369,7 +343,7 @@ final class _SocketReader {
 Future<void> _waitForContinuation(File signal) async {
   final hold = Stopwatch()..start();
   while (!await signal.exists()) {
-    _check(hold.elapsed < const Duration(seconds: 20),
+    _check(hold.elapsed < const Duration(seconds: 35),
         'The host did not verify the active mode within 20 seconds');
     await Future<void>.delayed(const Duration(milliseconds: 100));
   }

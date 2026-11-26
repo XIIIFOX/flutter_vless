@@ -14,6 +14,8 @@ cp "$ROOT_DIR"/ios/flutter_vless/Sources/flutter_vless_privacy/*.swift \
   "$WORK_DIR/Sources/flutter_vless_privacy/"
 cp "$ROOT_DIR"/ios/flutter_vless/Sources/flutter_vless_tunnel_support/*.swift \
   "$WORK_DIR/Sources/flutter_vless_tunnel_support/"
+# This fixture exercises policy code on macOS without the iOS native SDKs.
+rm "$WORK_DIR/Sources/flutter_vless_tunnel_support/FlutterVlessPacketTunnelProvider.swift"
 cp "$ROOT_DIR"/ios/flutter_vless/Tests/flutter_vless_tunnel_supportTests/*.swift \
   "$WORK_DIR/Tests/flutter_vless_tunnel_supportTests/"
 

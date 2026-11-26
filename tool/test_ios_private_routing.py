@@ -47,9 +47,11 @@ with tempfile.TemporaryDirectory(prefix="flutter-vless-private-routing-") as dir
     sdk = execute(["xcrun", "--sdk", "iphonesimulator", "--show-sdk-path"]).stdout.decode().strip()
     common = ["-O", "-target", os.uname().machine + "-apple-ios15.0-simulator", "-sdk", sdk]
     for module, object_name in [("flutter_vless_privacy", "privacy"), ("flutter_vless_tunnel_support", "support")]:
+        sources = sorted(path for path in (ROOT / "ios/flutter_vless/Sources" / module).glob("*.swift")
+                         if path.name != "FlutterVlessPacketTunnelProvider.swift")
         execute(["xcrun", "swiftc", *common, "-parse-as-library", "-I", str(modules), "-module-name", module,
                  "-emit-module", "-emit-object", "-whole-module-optimization", "-emit-module-path", str(modules / (module + ".swiftmodule")),
-                 *map(str, (ROOT / "ios/flutter_vless/Sources" / module).glob("*.swift")), "-o", str(modules / (object_name + ".o"))])
+                 *map(str, sources), "-o", str(modules / (object_name + ".o"))])
     execute(["xcrun", "swiftc", *common, "-I", str(modules), "-F", str(ROOT / "ios/XRay.xcframework/ios-arm64_x86_64-simulator"),
              "-framework", "XRay", "-framework", "UIKit", "-lresolv", str(work / "main.swift"),
              str(ROOT / "ios/flutter_vless/Sources/flutter_vless/BoundedNativeLogStore.swift"), str(modules / "privacy.o"),

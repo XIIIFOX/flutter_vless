@@ -82,7 +82,11 @@ case "$SIMULATOR_ARCH" in arm64|x86_64) ;; *) echo "Unsupported simulator archit
 COMMON=(-O -target "$SIMULATOR_ARCH-apple-ios15.0-simulator" -sdk "$SDK")
 echo 'PROBE_PHASE=ios-compile-begin'
 xcrun swiftc "${COMMON[@]}" -parse-as-library -module-name flutter_vless_privacy -emit-module -emit-object -whole-module-optimization -emit-module-path "$OUT/modules/flutter_vless_privacy.swiftmodule" "$ROOT"/ios/flutter_vless/Sources/flutter_vless_privacy/*.swift -o "$OUT/modules/privacy.o"
-xcrun swiftc "${COMMON[@]}" -parse-as-library -I "$OUT/modules" -module-name flutter_vless_tunnel_support -emit-module -emit-object -whole-module-optimization -emit-module-path "$OUT/modules/flutter_vless_tunnel_support.swiftmodule" "$ROOT"/ios/flutter_vless/Sources/flutter_vless_tunnel_support/*.swift -o "$OUT/modules/support.o"
+SUPPORT=()
+for file in "$ROOT"/ios/flutter_vless/Sources/flutter_vless_tunnel_support/*.swift; do
+    [[ "$(basename "$file")" == FlutterVlessPacketTunnelProvider.swift ]] || SUPPORT+=("$file")
+done
+xcrun swiftc "${COMMON[@]}" -parse-as-library -I "$OUT/modules" -module-name flutter_vless_tunnel_support -emit-module -emit-object -whole-module-optimization -emit-module-path "$OUT/modules/flutter_vless_tunnel_support.swiftmodule" "${SUPPORT[@]}" -o "$OUT/modules/support.o"
 COMPAT="$ROOT/ios/flutter_vless/Sources/flutter_vless_core_compat"
 xcrun clang -fobjc-arc -target "$SIMULATOR_ARCH-apple-ios15.0-simulator" -isysroot "$SDK" \
     -c "$COMPAT/FlutterVlessCoreCompat.m" -o "$OUT/modules/compat.o"

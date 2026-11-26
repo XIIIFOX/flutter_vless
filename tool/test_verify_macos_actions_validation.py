@@ -94,7 +94,7 @@ class WorkerProof(unittest.TestCase):
             self.benchmark['log_sha256'][mode+'-run.log'] = subject.digest(log)
             self.benchmark['metrics'][mode] = subject.endpoint_timing.parse_metrics(log.read_text(), mode)
         self.benchmark['comparison'] = subject.endpoint_timing.compare(self.benchmark['metrics']['baseline'], self.benchmark['metrics']['candidate'])
-        ios = 'example/ios/XrayTunnel/PacketTunnelProvider.swift'
+        ios = subject.endpoint_timing.IOS_PROVIDER
         self.write(ios, 'actual iOS provider policy fixture\n')
         self.benchmark['provider_policy_source_sha256'] = {name: subject.digest(self.root/name) for name in [ios, subject.PROVIDER]}
         for platform in ('ios', 'macos'):
@@ -191,7 +191,7 @@ class WorkerProof(unittest.TestCase):
             self.endpoint/'candidate/Sources/flutter_vless_macos_tunnel_support/TunnelEndpointResolver.swift',
             self.endpoint/'baseline/Tests/flutter_vless_macos_tunnel_supportTests'/Path(subject.endpoint_timing.TEST).name,
             self.root/subject.endpoint_timing.TEST,
-            self.root/'example/ios/XrayTunnel/PacketTunnelProvider.swift']
+            self.root/subject.endpoint_timing.IOS_PROVIDER]
         for path in paths:
             with self.subTest(path=str(path)):
                 original = path.read_bytes(); path.write_bytes(b'changed measured input')

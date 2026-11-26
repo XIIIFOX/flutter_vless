@@ -103,6 +103,13 @@ class RuntimeVersionPinsTest(unittest.TestCase):
         self.assertEqual(len(official_sha), 1)
         self.assertEqual(re.findall(r'archive SHA-256: `([0-9a-f]{64})`', guide), official_sha)
 
+    def test_windows_setup_matches_managed_published_archive(self):
+        installer = self.read_literals('tool/windows/install_published_runtime.py')
+        setup = self.read('lib/src/setup/windows.dart')
+        self.assertIn(f"/releases/download/{installer['TAG']}/{installer['ARCHIVE']}", setup)
+        for field in ('ZIP_SHA256', 'CORE_SHA256'):
+            self.assertIn(installer[field], setup)
+
     def test_apple_producer_release_matches_shared_core(self):
         self.assertEqual(self.apple_core, self.core)
         manifest = self.apple_manifest_fields()

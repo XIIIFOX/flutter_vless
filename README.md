@@ -117,16 +117,15 @@ dependencies:
 
 Then run `flutter pub get`.
 
-For a macOS app, prepare the generated Flutter SwiftPM metadata before the first
-build. Proxy-only apps can run only the metadata step:
+From your Flutter app, prepare the platform and connection mode you need:
 
 ```bash
-dart run flutter_vless:setup_macos_vpn --prepare-only
+dart run flutter_vless:setup --platform macos --proxy
+dart run flutter_vless:doctor --platform macos --proxy
 ```
 
-VPN mode apps should run the full macOS setup from the platform guide.
-
-Android emulator binaries are included in the main Android Maven runtime AAR.
+For VPN mode or setup on Android, iOS, and Windows, see the
+[project setup guide](doc/project-setup.md).
 
 ## Quick Start
 

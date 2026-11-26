@@ -5,6 +5,11 @@ tun2socks and Wintun. VPN mode requires administrator privileges.
 
 ## Runtime files
 
+For a standard Flutter app,
+[`setup --platform windows`](../project-setup.md#windows) verifies the pinned
+runtime and configures CMake packaging. Choose `--vpn` to include the tunnel
+helpers. The layout below also supports manual packaging.
+
 Ship these files next to the application executable, or in its `xray` directory:
 
 ```text

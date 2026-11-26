@@ -8,7 +8,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 PLATFORMS = {
-    "ios": ("example/ios/XrayTunnel/PacketTunnelProvider.swift", "ios/flutter_vless/Sources", "flutter_vless"),
+    "ios": ("ios/flutter_vless/Sources/flutter_vless_tunnel_support/FlutterVlessPacketTunnelProvider.swift", "ios/flutter_vless/Sources", "flutter_vless"),
     "macos": ("packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/flutter_vless_macos_tunnel_support/FlutterVlessPacketTunnelProvider.swift", "packages/flutter_vless_macos/macos/flutter_vless_macos/Sources", "flutter_vless_macos"),
 }
 
@@ -34,14 +34,20 @@ def main():
         unchanged_source = (ROOT / provider).read_text()
         if args.provider_ref:
             assert len(args.provider_ref) == 40 and all(c in "0123456789abcdef" for c in args.provider_ref)
-            text = subprocess.check_output(["git", "show", args.provider_ref + ":" + provider], cwd=ROOT, text=True)
+            name = provider
+            if platform == "ios" and not subprocess.check_output(
+                ["git", "ls-tree", args.provider_ref, "--", provider], cwd=ROOT, text=True
+            ):
+                name = "example/ios/XrayTunnel/PacketTunnelProvider.swift"
+            text = subprocess.check_output(["git", "show", args.provider_ref + ":" + name], cwd=ROOT, text=True)
         else:
             text = unchanged_source
         fixture_path = ROOT / "tool/fixtures/apple_cold_start_policy.swift"
         fixture_source = fixture_path.read_bytes()
         plan_path = support / "TunnelEndpointPlanAdmission.swift"
         plan_source = plan_path.read_bytes()
-        marker = "    " + ("open override" if platform == "macos" else "override") + " func startTunnel("
+        modifier = "open override" if "    open override func startTunnel(" in text else "override"
+        marker = "    " + modifier + " func startTunnel("
         start = text.index(marker)
         end = text.index("\n    }\n", start) + len("\n    }\n")
         entry = text[start:end].replace("open override func", "func", 1).replace("override func", "func", 1)
@@ -67,7 +73,7 @@ def main():
         extras += "\n" + actual_block("    private func cancelPendingSleep")
         if "    private final class InitialDiscoveryCorrectionPermit" in text:
             extras += "\n" + actual_block("    private final class InitialDiscoveryCorrectionPermit").replace("private final class", "final class")
-        stop_marker = "    " + ("open override" if platform == "macos" else "override") + " func stopTunnel("
+        stop_marker = "    " + modifier + " func stopTunnel("
         stop = actual_block(stop_marker).replace("open override func", "func", 1).replace("override func", "func", 1)
         helper_path = support / "TunnelOnDemandPolicy.swift"
         helper_source = helper_path.read_bytes()

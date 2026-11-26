@@ -18,6 +18,10 @@ can run on Android devices and emulators with the main Android dependency.
 
 ## What You Need
 
+Run `dart run flutter_vless:setup --platform android --vpn` to prepare a
+standard Flutter app. Use `--proxy` for proxy-only mode. See
+[Project setup](../project-setup.md#android) for the verification command.
+
 - Flutter package dependency
 - Android project configured for the plugin
 - `minSdkVersion` of at least 23

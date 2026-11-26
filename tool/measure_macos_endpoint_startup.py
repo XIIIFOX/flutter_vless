@@ -18,6 +18,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = '9d18a5fa8c894f35ab02a4819751b7640842182e'
 PACKAGE = 'packages/flutter_vless_macos/macos/flutter_vless_macos'
+IOS_PROVIDER = 'ios/flutter_vless/Sources/flutter_vless_tunnel_support/FlutterVlessPacketTunnelProvider.swift'
 TEST = PACKAGE + '/Tests/flutter_vless_macos_tunnel_supportTests/TunnelEndpointStartupTimingTests.swift'
 PREFIX = 'FLVLESS_ENDPOINT_STARTUP_TIMING '
 CASES = {'terminal_unavailable_fallback': 3, 'no_record_late_aaaa': 1,
@@ -178,7 +179,7 @@ def main():
         try:
             result['provider_policy_metrics'] = {}
             result['provider_policy_source_sha256'] = {}
-            for platform, name in [('ios', 'example/ios/XrayTunnel/PacketTunnelProvider.swift'),
+            for platform, name in [('ios', IOS_PROVIDER),
                                    ('macos', PACKAGE + '/Sources/flutter_vless_macos_tunnel_support/FlutterVlessPacketTunnelProvider.swift')]:
                 result['provider_policy_source_sha256'][name] = digest((ROOT / name).read_bytes())
                 for mode, directory in [('candidate', 'apple-cold-start-current'), ('baseline', 'apple-cold-start-negative')]:

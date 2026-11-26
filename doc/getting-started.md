@@ -46,15 +46,16 @@ dependencies:
   flutter_vless: ^1.1.8
 ```
 
-For macOS, run the metadata preparation step before the first build:
+Prepare the platform and connection mode your app uses:
 
 ```bash
-dart run flutter_vless:setup_macos_vpn --prepare-only
+dart run flutter_vless:setup --platform macos --proxy
+dart run flutter_vless:doctor --platform macos --proxy
 ```
 
-Use the full macOS setup command instead when you need Packet Tunnel VPN mode.
-
-Android emulator support is included through the main Android runtime AAR.
+Use `--vpn` for VPN support and `--platform android`, `--platform windows`,
+or `--platform ios` for other targets. See [Project setup](project-setup.md)
+for signing, Windows runtime packaging, and previewing changes.
 
 ## 2. Complete Platform Setup
 

@@ -86,7 +86,7 @@ def verify_endpoint_startup_timing(root, sha):
             metrics[mode] = endpoint_timing.parse_metrics(text, mode)
         if result.get('metrics') != metrics or result.get('comparison') != endpoint_timing.compare(metrics['baseline'], metrics['candidate']):
             raise ValueError('Timing rows or improvement comparison differ')
-        policies = ['example/ios/XrayTunnel/PacketTunnelProvider.swift', PROVIDER]
+        policies = [endpoint_timing.IOS_PROVIDER, PROVIDER]
         if result.get('provider_policy_source_sha256') != {name: digest(root/name) for name in policies}:
             raise ValueError('Current provider policy source differs')
         provider_metrics, provider_logs = {}, []

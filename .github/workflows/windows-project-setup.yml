@@ -1,0 +1,26 @@
+name: Windows project setup
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-consumer:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.50.0'
+          channel: stable
+          cache: true
+      - name: Verify setup, doctor, and MSVC builds on fresh proxy and VPN apps
+        run: python tool/test_project_setup.py -v ProjectSetupTest.test_windows_published_runtime_and_build

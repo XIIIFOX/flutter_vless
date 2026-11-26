@@ -9,7 +9,7 @@ python3 - "$ROOT" "$OUT" <<'PY'
 from pathlib import Path
 import sys
 root, out = map(Path, sys.argv[1:])
-source = (root/'example/ios/XrayTunnel/PacketTunnelProvider.swift').read_text()
+source = (root/'ios/flutter_vless/Sources/flutter_vless_tunnel_support/FlutterVlessPacketTunnelProvider.swift').read_text()
 fixture = (root/'tool/fixtures/ios_acceptance_provider_test.swift').read_text()
 
 def guarded(marker):

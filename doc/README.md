@@ -21,6 +21,7 @@ example, VPN and proxy modes, routing, and balancing.
 
 ## Native integration
 
+- [Project setup and doctor](project-setup.md)
 - [Security and runtime boundaries](security.md)
 - [Architecture](architecture.md)
 - [macOS Packet Tunnel architecture](macos_packet_tunnel_architecture.md)

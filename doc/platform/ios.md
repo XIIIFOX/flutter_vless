@@ -96,9 +96,9 @@ the complete pair, and atomically replace the live files before the next
 reading it. Passing a new directory on a later start switches the next runtime
 session; omitting `geoAssetsDirectory` restores Xray's default/bundled lookup.
 
-The Packet Tunnel provider must forward `geoAssetsDirectory` from its
-`providerConfiguration` and call `XRaySetAssetLocation` before `XRayStart`.
-Use the current provider implementation from:
+The packaged Packet Tunnel provider forwards `geoAssetsDirectory` from its
+`providerConfiguration` and calls `XRaySetAssetLocation` before `XRayStart`.
+The example uses the packaged provider through this wrapper:
 
 ```text
 example/ios/XrayTunnel/PacketTunnelProvider.swift
@@ -142,6 +142,10 @@ overrides, and rationale, see [Build XRay.xcframework](../../ios/XRAY_BUILD.md).
 
 ## Suggested Setup Flow
 
+For a standard Flutter Runner project, use
+[`setup --platform ios --vpn`](../project-setup.md#macos-and-ios) to configure
+the target and entitlements. For manual integration:
+
 1. Run the bundled example on a real iPhone.
 2. Add the package to your own app.
 3. Create a Packet Tunnel extension named `XrayTunnel`.
@@ -166,8 +170,9 @@ directory.
 
 ## PacketTunnelProvider.swift
 
-Your tunnel target needs a `PacketTunnelProvider.swift`. The example has a
-working provider here:
+Your tunnel target needs a `PacketTunnelProvider.swift` that subclasses
+`FlutterVlessPacketTunnelProvider` from the SwiftPM product
+`flutter-vless-tunnel-support`. The example wrapper is here:
 
 ```text
 example/ios/XrayTunnel/PacketTunnelProvider.swift

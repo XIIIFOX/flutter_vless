@@ -12,7 +12,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 PROVIDERS = {
-    'ios': ('example/ios/XrayTunnel/PacketTunnelProvider.swift', 'iphoneos',
+    'ios': ('ios/flutter_vless/Sources/flutter_vless_tunnel_support/FlutterVlessPacketTunnelProvider.swift', 'iphoneos',
             'arm64-apple-ios15.0'),
     'macos': ('packages/flutter_vless_macos/macos/flutter_vless_macos/Sources/'
               'flutter_vless_macos_tunnel_support/FlutterVlessPacketTunnelProvider.swift',

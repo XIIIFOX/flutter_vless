@@ -31,7 +31,7 @@ def run(command, output, seconds=45):
 
 
 def generate(root):
-    source = (root/'example/ios/XrayTunnel/PacketTunnelProvider.swift').read_text()
+    source = (root/'ios/flutter_vless/Sources/flutter_vless_tunnel_support/FlutterVlessPacketTunnelProvider.swift').read_text()
     marker = '    #if FLUTTER_VLESS_ACCEPTANCE_SESSION_DEADLINE\n'
     if source.count(marker) != 1: raise AssertionError('actual acceptance deadline hook missing')
     begin = source.index(marker); depth = 0; end = begin

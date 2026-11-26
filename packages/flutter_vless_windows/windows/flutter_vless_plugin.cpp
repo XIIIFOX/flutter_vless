@@ -533,7 +533,7 @@ void FlutterVlessPlugin::HandleMethodCall(
           operations_.Submit([] { V2rayManager::GetInstance().DisableBalancerSelections(); });
         }
         if (!parsed.quick_enabled) operations_.Submit([this] { quick_profile_.reset(); });
-        RefreshTray(); result->Success(flutter::EncodableValue(nullptr));
+        RefreshTray(); result->Success();
       } catch (const std::exception&) { result->Error("INVALID_OPTIONS", "Unsupported or invalid Windows options"); }
     } else {
       result->Error("INVALID_ARGUMENTS", "Invalid arguments for initializeVless");
@@ -680,7 +680,7 @@ void FlutterVlessPlugin::HandleMethodCall(
       // Return result on UI thread
       RunOnUIThread([this, shared_result]() {
         RefreshTray();
-        shared_result->Success(flutter::EncodableValue(nullptr));
+        shared_result->Success();
       });
     });
 

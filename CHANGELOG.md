@@ -1,16 +1,26 @@
 ## 1.1.8
 
+### General
+
 * Update the pinned Android, iOS, macOS and Windows runtimes to **Xray-core 26.11.9**.
-* Add immutable `XrayProfile` construction and copy editing. Import full JSON or JSONC while retaining extension fields, nulls and ordering.
+* Build and edit immutable `XrayProfile` copies. Import JSON or JSONC while preserving unknown fields, explicit nulls and array order.
 * Add typed node and group references, domain routing, and the `random`, `roundRobin`, `leastPing` and `leastLoad` balancing strategies.
-* Edit Core fields by exact JSON path with `CorePath`. Specify a minimum Xray version when a profile depends on a newer Core feature.
-* Run the balancer Example with multiple share links. The examples also cover composing a profile and editing a copy with Core-specific fields.
-* Fetch HTTPS subscriptions with `FlutterVless.fetchSubscription()` and build the Example balancer from share-link subscriptions.
-* Discover installed Core capabilities and validate profiles without connecting on Android, iOS, macOS and Windows.
+* Edit Core fields by exact JSON path with `CorePath` and declare a minimum Xray version with `requireCoreAtLeast()`.
+* Fetch profiles from an HTTPS URL with `FlutterVless.fetchSubscription()`. The Example builds a balancer from a subscription or multiple share links.
+* Inspect the installed Core with `getCoreCapabilities()`. Check a typed profile or raw JSON with `validateProfile()` or `validateProfileJson()` without connecting on Android, iOS, macOS and Windows.
 * Compose split DNS and combine IPv4/IPv6 CIDR, port and TCP/UDP conditions in typed routing rules.
 * Refresh a subscription while retaining a uniquely matched selection and local edits. Review removed profiles and conflicting changes.
 * Configure Freedom final rules and GeoDAT schedules in Dart. Update the XDRIVE templates for the TCP Mux behavior in Core 26.11.9.
-* Inspect the balancer's outbound choices in VPN Diagnostics on Android, iOS, macOS and Windows with a compatible Core. This opt-in history uses numeric aliases and lasts for the active VPN session.
+* Inspect recent outbound choices in VPN Diagnostics when `VlessCapabilities.balancerSelections` reports support. The opt-in history uses session-local numeric aliases.
+
+### iOS and macOS
+
+* Speed up DNS preparation for profiles with many nodes by resolving more endpoints concurrently.
+* Fix premature `getConnectedServerDelay()` timeouts during an active tunnel. The provider gets time to finish its bounded probe and return the result.
+
+### Android
+
+* Keep standalone profile validation independent of abandoned VPN session file cleanup.
 
 ## 1.1.7
 

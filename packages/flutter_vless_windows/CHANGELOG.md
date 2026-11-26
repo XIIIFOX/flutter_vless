@@ -1,6 +1,8 @@
 ## 1.1.8
 
 * Integrate with the managed Xray-core `26.11.9-r1` companion.
+* Inspect Core capabilities and validate a profile without starting or replacing the VPN.
+* Expose opt-in, session-local balancer selection diagnostics with a compatible Core.
 
 ## 1.1.7+1
 

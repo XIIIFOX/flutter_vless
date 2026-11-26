@@ -1,6 +1,9 @@
 ## 1.1.8
 
 * Pin the universal Xray-core `26.11.9-r1` framework.
+* Inspect Core capabilities and validate a profile without starting or replacing the VPN.
+* Speed up DNS preparation for profiles with many nodes and give connected delay probes their full bounded reply window.
+* Expose opt-in, session-local balancer selection diagnostics with a compatible Core.
 
 ## 1.1.7+1
 

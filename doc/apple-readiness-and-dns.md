@@ -50,5 +50,6 @@ resolver. Other DNS schemes, OS-resolver modes and IPv6-only/NAT64 environments
 require testing on the deployment network; the supported local-DNS forms do
 not establish those paths.
 
-Upstream behavior is pinned to [Xray-core 26.10.31 TCP DNS](https://github.com/XTLS/Xray-core/blob/v26.10.31/app/dns/nameserver_tcp.go)
-and [DoH DNS](https://github.com/XTLS/Xray-core/blob/v26.10.31/app/dns/nameserver_doh.go).
+See the pinned Xray-core 26.11.9 implementations of
+[TCP DNS](https://github.com/XTLS/Xray-core/blob/676eaf66f8f05d4d558ee7a74b4736623d3feeb9/app/dns/nameserver_tcp.go)
+and [DoH DNS](https://github.com/XTLS/Xray-core/blob/676eaf66f8f05d4d558ee7a74b4736623d3feeb9/app/dns/nameserver_doh.go).

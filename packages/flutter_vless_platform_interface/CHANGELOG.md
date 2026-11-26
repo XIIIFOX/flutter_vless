@@ -1,5 +1,6 @@
 ## 1.1.8
 
+* Add `getCoreCapabilities()` and standalone `validateProfile()` with typed `VlessCoreCapabilities` and `VlessProfileValidation` results. Older backends report conservative capabilities and return `unsupported` for validation.
 * Add opt-in VPN balancer selection diagnostics with capability discovery and typed, session-local results.
 
 ## 1.1.7

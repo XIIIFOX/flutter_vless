@@ -1,6 +1,6 @@
 # Xray Windows 26.11.9-r1
 
-Native Windows AMD64 pre-release for `flutter_vless` 1.1.7. It uses
+The managed Windows AMD64 runtime used by `flutter_vless` 1.1.8 is based on
 [Xray-core 26.11.9](https://github.com/XTLS/Xray-core/releases/tag/v26.11.9),
 commit `676eaf66f8f05d4d558ee7a74b4736623d3feeb9`, built with Go 1.27.3.
 

@@ -201,8 +201,8 @@ Use `parse()` for a single share link or a raw config, and `parseMany()` when yo
 Use `XrayProfile.build()` to compose proxy nodes, balancers and ordered
 routing rules. Use `XrayProfile.fromJson()` to import a full JSON or JSONC
 profile, and `edit()` to create an independent copy. `CorePath` and the draft's
-`setRaw()` and `removeRaw()` methods can edit fields supported by Xray that the
-typed builder has yet to model. Pass `profile.toCoreJson()` to `startVless()`.
+`setRaw()` and `removeRaw()` methods edit Xray fields by exact JSON path.
+Pass `profile.toCoreJson()` to `startVless()`.
 See the [profile contract](https://github.com/XIIIFOX/flutter_vless/blob/main/doc/xray-profile-api-design.md)
 and [profile examples](https://github.com/XIIIFOX/flutter_vless/blob/main/example/xray_profile/README.md).
 
@@ -212,8 +212,8 @@ for how native startup prepares the resulting profile.
 ## Example App
 
 The bundled app demonstrates clipboard import, routing edits, proxy-only mode,
-VPN mode and status tracking. Its balancer entry point groups multiple share
-links and uses the same connection controls.
+VPN mode and status tracking. Its balancer entry point accepts multiple share
+links or an HTTPS subscription and uses the same connection controls.
 
 - [Run the Example app](https://github.com/XIIIFOX/flutter_vless/blob/main/example/README.md)
 - [Run the balancer Example](https://github.com/XIIIFOX/flutter_vless/blob/main/example/xray_profile/README.md#run-the-balancer-in-example)

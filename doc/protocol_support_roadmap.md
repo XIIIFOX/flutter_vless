@@ -1,8 +1,8 @@
 # Protocol and transport support
 
-The native previews in this repository target Xray-core **26.11.9**. Generated configurations must
-match the actual loaded runtime and remote server. See [compatibility](compatibility.md)
-for platform protection, DNS and real-network limits.
+`flutter_vless` 1.1.8 uses Xray-core **26.11.9**. Generated configurations must
+match the loaded runtime and remote server. See [compatibility](compatibility.md)
+for platform protection, DNS and network limits.
 
 ## Client profiles
 

@@ -1,4 +1,4 @@
-# GeoDAT gzip with Core 26.10.31
+# GeoDAT gzip downloads
 
 Merge the `geodata` section from [geodat-gzip.json](geodat-gzip.json) into your
 complete profile, retaining its routing and outbound tags. The URLs are
@@ -38,10 +38,8 @@ The focused acceptance fixture exercises real loopback HTTPS/HTTP2:
 * Stop during a continuing gzip stream, preserving the original file and
   draining the request, HTTP/2 pool, scheduler and staging.
 
-These synthetic byte fixtures qualify decoding, limits and file ownership;
-they do not replace testing your actual regional datasets. The decoded-limit
-case does not allocate or write a 256 MiB asset. The fixture is opt-in under
-the `flutter_vless_core31_followups` build tag and runs only in Actions; no
-native Core is executed on the owner's Mac.
+Use your actual regional datasets to verify compatibility. The decoded-limit
+fixture checks the boundary without allocating or writing a 256 MiB asset.
+The fixture runs in Actions with the `flutter_vless_core31_followups` build tag.
 
-Source: [pinned Core downloader](https://github.com/XTLS/Xray-core/blob/a4a3dff5b20c2faae567b742c172c7b95e75c083/app/geodata/download.go).
+[Xray-core 26.11.9 GeoDAT downloader](https://github.com/XTLS/Xray-core/blob/676eaf66f8f05d4d558ee7a74b4736623d3feeb9/app/geodata/download.go).

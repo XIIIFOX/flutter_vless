@@ -1,4 +1,6 @@
-Native macOS runtime preview for flutter_vless based on Xray-core 26.11.9.
+# Xray macOS 26.11.9-r1
+
+The macOS runtime used by `flutter_vless` 1.1.8 is based on Xray-core 26.11.9.
 The static XCFramework contains arm64 and x86_64 slices.
 
 The manifest records the Core commit, source inputs, exported capabilities and

@@ -4,7 +4,7 @@ This directory contains the Windows-specific files for the flutter_vless example
 
 ## Xray Setup
 
-Use the [managed Core 26.11.9-r1 pre-release](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-windows-v26.11.9-r1)
+Use the [managed Core 26.11.9-r1 archive](https://github.com/XIIIFOX/flutter_vless/releases/tag/xray-windows-v26.11.9-r1)
 for native routing and XDRIVE/GeoDAT services. The archive SHA-256 is
 `81df36b77068fa7cf49f07311879a02d23e5d6bde9606c7d6cd024a5a01b6264`.
 Its AMD64 `xray.exe` SHA-256 is

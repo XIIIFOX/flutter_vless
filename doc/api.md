@@ -286,6 +286,31 @@ final version = await flutterVless.getCoreVersion();
 The exact value can differ by platform package, release version, or externally
 supplied Windows `xray.exe`.
 
+## `getCoreCapabilities()`
+
+Returns a `VlessCoreCapabilities` snapshot for the installed Xray runtime.
+It includes the Core version when available and flags for profile validation,
+native VPN routing, managed GeoDAT updates, XDRIVE and balancer selections.
+Call it before initialization if needed. Unknown capabilities default to
+`false`. Use `getCapabilities()` for OS and system-control options.
+
+## `validateProfile()` and `validateProfileJson()`
+
+Check an `XrayProfile` or a JSON or JSONC string without requesting VPN
+permission, connecting to a server or changing the active session. Both methods
+accept optional `geoAssetsDirectory` and `certificateAssetsDirectory` paths
+for file lookup in the app process.
+
+```dart
+final result = await flutterVless.validateProfile(profile);
+```
+
+`VlessProfileValidation.status` is `valid`, `invalid`, `unsupported` or
+`unavailable`. An invalid result can include a rejection stage and a
+zero-based inbound or outbound index when the backend identifies the entry.
+Native VPN startup still applies its own adapter preparation and permission
+checks. See [profile validation examples](examples.md#7-check-a-profile-before-connecting).
+
 ## `getProviderDebugSnapshot()`
 
 Returns bounded, human-readable diagnostics for the active or most recent VPN
@@ -312,6 +337,15 @@ collection is disabled. `DiagnosticsOptions` bounds collection and disabling it
 clears retained buffers. Treat the text as support data, not a stable parser
 format; current collectors omit raw configs, credentials and arbitrary native
 error text. Let users review support attachments before sharing them.
+
+## `getBalancerSelections()`
+
+Returns recent `BalancerSelection` entries in sequence order for the active VPN.
+Check `VlessCapabilities.balancerSelections` and enable
+`DiagnosticsOptions.recordBalancerSelections` before connecting. The runtime
+keeps a bounded history of numeric aliases in memory for the session. The list
+is empty when collection is disabled, unsupported or has recorded no choices.
+See [VPN balancer diagnostics](runtime-diagnostics.md#vpn-balancer-diagnostics).
 
 ## `parse()`
 
@@ -367,13 +401,21 @@ Call this on user request. The response limit is 2 MiB and the timeout is
 12 seconds, including redirects. Keep URLs and profile contents out of logs.
 Use `parseMany()` for payloads your application has already downloaded.
 
+## `refreshSubscription()`
+
+Fetches the same HTTPS feed used for an existing `XraySubscription` and
+returns an `XraySubscriptionRefresh`. A uniquely matched selection and local
+profile edits are carried forward. Review removed nodes and conflicting edits
+before persisting the resulting snapshot. A failed refresh leaves the previous
+snapshot usable. See the [subscription refresh example](examples.md#9-refresh-a-subscription-and-keep-local-edits).
+
 ## `XrayProfile`
 
 Use `XrayProfile.build` to assemble nodes, balancers and ordered routes.
 Use `XrayProfile.fromJson` to retain the full authored JSON or JSONC, then
-`edit` to produce an independent profile. `CorePath` addresses fields that
-the typed builder has yet to model. `requireCoreAtLeast` adds an explicit
-version check for fields that the profile depends on.
+`edit` to produce an independent profile. Use `CorePath` to address fields by
+their exact JSON path. `requireCoreAtLeast` adds an explicit minimum Core
+version for fields that the profile depends on.
 
 Pass `profile.toCoreJson()` as the existing `startVless(config: ...)`
 argument. Native preparation still applies the selected VPN and DNS

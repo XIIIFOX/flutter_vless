@@ -109,10 +109,15 @@ initialized the Go runtime, Xray's Go-side `os.LookupEnv()` does not observe
 that change. `XRaySetAssetLocation` performs the update inside Go and validates
 the requested asset location first; Core checks the files referenced by the profile.
 
-## Rebuilding the Xray Framework
+## Using the prebuilt Xray framework
 
-Most application integrators use the prebuilt `XRay.xcframework` and do not
-need this step. It is for maintainers rebuilding the iOS runtime.
+SwiftPM uses the pinned prebuilt `XRay.xcframework`. For a CocoaPods plugin build,
+place the checksum-verified framework in `ios/XRay.xcframework` inside the
+installed `flutter_vless` package before building. Flutter integrates the pod
+as a local `:path` dependency, for which CocoaPods skips `prepare_command`.
+See the [iOS SDK archive and checksum](../release/xray-ios-v26.11.9-r1.md).
+
+## Rebuilding the Xray Framework
 
 The package pins `xray-ios-v26.11.9-r1`, including listener cleanup
 after invalid server `h2Params`. The bundled framework and download checksum

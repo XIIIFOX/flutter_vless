@@ -1,6 +1,8 @@
 ## 1.1.8
 
 * Pin the Xray-core `26.11.9-protect1` Maven runtime.
+* Inspect Core capabilities and validate a profile without starting or replacing the VPN. Keep validation files independent of abandoned session cleanup.
+* Expose opt-in, session-local balancer selection diagnostics with a compatible Core.
 
 ## 1.1.7+1
 

@@ -1,12 +1,12 @@
 # Xray Android 26.11.9-protect1
 
-Android native runtime preview for flutter_vless, built from
+The Android runtime used by `flutter_vless` 1.1.8 is built from
 [Xray-core v26.11.9](https://github.com/XTLS/Xray-core/releases/tag/v26.11.9)
 at commit `676eaf66f8f05d4d558ee7a74b4736623d3feeb9`.
 
 The signed AAR uses Maven coordinate
 `dev.tfox.fluttervless:xray-android:26.11.9-protect1`.
-The [candidate build](https://github.com/XIIIFOX/flutter_vless/actions/runs/43068600201)
+The [runtime build](https://github.com/XIIIFOX/flutter_vless/actions/runs/43068600201)
 at `a56429a73d0229ffd5ac5223bfabdcd6a7c19724` built fresh
 `arm64-v8a`, `armeabi-v7a`, `x86` and `x86_64` Core binaries and verified
 16 KiB ELF load alignment. The AAR retains the pinned HEV and GeoDAT inputs.

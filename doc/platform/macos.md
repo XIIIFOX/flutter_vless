@@ -30,6 +30,12 @@ location bridges and closes listeners after invalid server `h2Params`.
 Repository builds use the bundled XCFramework; the hosted fallback uses the
 same published, checksum-pinned archive.
 
+For a CocoaPods plugin build, place the checksum-verified framework in
+`macos/XRay.xcframework` inside the installed `flutter_vless_macos` package
+before building. Flutter integrates the pod as a local `:path` dependency,
+for which CocoaPods skips `prepare_command`. See the
+[macOS SDK archive and checksum](../release/xray-macos-v26.11.9-r1.md).
+
 ## Quick Run The Example
 
 Use the example app first if you want to verify that Xcode signing, the Packet

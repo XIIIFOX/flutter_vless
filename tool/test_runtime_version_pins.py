@@ -8,31 +8,38 @@ import unittest
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
+IMPLEMENTATIONS = ('android', 'macos', 'windows')
 
 
 class RuntimeVersionPinsTest(unittest.TestCase):
     def setUp(self):
         # Read literals only: importing a producer must never become a build.
-        nodes = ast.parse(self.read('tool/build_android_runtime_preview.py')).body
-        literals = {node.targets[0].id: node.value.value for node in nodes
-                    if isinstance(node, ast.Assign) and len(node.targets) == 1
-                    and isinstance(node.targets[0], ast.Name)
-                    and isinstance(node.value, ast.Constant)}
+        literals = self.read_literals('tool/build_android_runtime_preview.py')
         self.assertRegex(literals['CORE_TAG'], r'^v[0-9]+\.[0-9]+\.[0-9]+$')
         self.core = literals['CORE_TAG'][1:]
         self.runtime = literals['RELEASE_VERSION']
+        published = self.read_literals('tool/install_published_apple_runtime.py')
+        self.apple_core = published['CORE_VERSION']
+        self.apple_revision = published['REVISION']
+        self.assertRegex(self.apple_revision, r'^r[1-9][0-9]*$')
+
+    @classmethod
+    def read_literals(cls, name):
+        nodes = ast.parse(cls.read(name)).body
+        return {node.targets[0].id: node.value.value for node in nodes
+                if isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Constant)}
+
+    def apple_manifest_fields(self):
         apple = ast.parse(self.read('tool/package_apple_runtime_release.py'))
         manifests = [node.value for node in ast.walk(apple)
                      if isinstance(node, ast.Assign) and any(
                          isinstance(target, ast.Name) and target.id == 'manifest'
                          for target in node.targets) and isinstance(node.value, ast.Dict)]
         self.assertEqual(len(manifests), 1)
-        apple_literals = {key.value: value.value
-                          for key, value in zip(manifests[0].keys, manifests[0].values)
-                          if isinstance(key, ast.Constant) and isinstance(value, ast.Constant)}
-        self.apple_core = apple_literals['release_version']
-        self.apple_revision = apple_literals['runtime_revision']
-        self.assertRegex(self.apple_revision, r'^r[1-9][0-9]*$')
+        return {key.value: value for key, value in zip(manifests[0].keys, manifests[0].values)
+                if isinstance(key, ast.Constant)}
 
     @staticmethod
     def read(name):
@@ -98,6 +105,18 @@ class RuntimeVersionPinsTest(unittest.TestCase):
 
     def test_apple_producer_release_matches_shared_core(self):
         self.assertEqual(self.apple_core, self.core)
+        manifest = self.apple_manifest_fields()
+        self.assertEqual(ast.literal_eval(manifest['release_version']), self.apple_core)
+
+    def test_apple_producer_default_revision_matches_published_runtime(self):
+        revision = self.apple_manifest_fields()['runtime_revision']
+        self.assertIsInstance(revision, ast.IfExp)
+        self.assertIsInstance(revision.test, ast.Name)
+        self.assertEqual(revision.test.id, 'diagnostics')
+        self.assertEqual(ast.literal_eval(revision.orelse), self.apple_revision)
+        diagnostics_revision = ast.literal_eval(revision.body)
+        self.assertRegex(diagnostics_revision, r'^r[1-9][0-9]*$')
+        self.assertGreater(int(diagnostics_revision[1:]), int(self.apple_revision[1:]))
 
     def assert_apple_pins(self, platform, package, podspec):
         """Check declared default consumers; public archive bytes are a separate gate."""
@@ -180,40 +199,44 @@ class RuntimeVersionPinsTest(unittest.TestCase):
             with self.subTest(source=stale), self.assertRaises(AssertionError):
                 self.assert_preview_commit(stale, current)
 
-    def test_selected_pub_versions_keep_plugin_and_native_build_numbers_separate(self):
-        expected = {
-            'pubspec.yaml': '1.1.7',
-            'packages/flutter_vless_platform_interface/pubspec.yaml': '1.1.7',
-            'packages/flutter_vless_android/pubspec.yaml': '1.1.7+1',
-            'packages/flutter_vless_macos/pubspec.yaml': '1.1.7+1',
-            'packages/flutter_vless_windows/pubspec.yaml': '1.1.7+1',
-            'example/pubspec.yaml': '1.1.7+117',
-        }
-        for path, version in expected.items():
-            with self.subTest(package=path):
-                self.assertEqual(re.findall(r'^version:\s*([^\s]+)\s*$', self.read(path), re.M), [version])
-                if path.startswith('packages/'):
-                    changelog = path.replace('pubspec.yaml', 'CHANGELOG.md')
-                    self.assertEqual(self.read(changelog).splitlines()[0], '## ' + version)
-                    if version == '1.1.7+1':
-                        # Keep the actual published predecessor beneath its new build.
-                        headings = re.findall(r'^## ([^\n]+)$', self.read(changelog), re.M)
-                        self.assertEqual(headings[:3], ['1.1.7+1', '1.1.7', '1.1.6'])
+    def pub_version(self, directory):
+        versions = re.findall(r'^version:[ \t]*([^\s]+)[ \t]*$', self.read(directory + '/pubspec.yaml'), re.M)
+        self.assertEqual(len(versions), 1, directory)
+        version = versions[0]
+        self.assertRegex(version, r'^\d+\.\d+\.\d+(?:\+[1-9]\d*)?$', directory)
+        return version
 
-    def test_root_requires_new_implementation_builds_without_bumping_interface(self):
+    def test_selected_pub_versions_keep_plugin_and_native_build_numbers_separate(self):
+        current = self.pub_version('.')
+        release = current.partition('+')[0]
+        self.assertRegex(self.pub_version('example'), '^' + re.escape(release) + r'\+[1-9]\d*$')
+        history = ['1.1.7+1', '1.1.7', '1.1.6']
+        for directory in ['.', *('packages/flutter_vless_' + component
+                                 for component in (*IMPLEMENTATIONS, 'platform_interface'))]:
+            with self.subTest(package=directory):
+                version = self.pub_version(directory)
+                self.assertEqual(version.partition('+')[0], release)
+                changelog = self.read(directory + '/CHANGELOG.md')
+                self.assertEqual(changelog.splitlines()[0], '## ' + version)
+                if directory.split('_')[-1] in IMPLEMENTATIONS:
+                    headings = re.findall(r'^## ([^\n]+)$', changelog, re.M)
+                    self.assertEqual([heading for heading in headings if heading in history], history)
+
+    def test_plugin_and_implementations_require_current_platform_interface(self):
         source = self.read('pubspec.yaml')
-        for implementation in ['android', 'macos', 'windows']:
+        interface = '^' + self.pub_version('packages/flutter_vless_platform_interface')
+        for implementation in IMPLEMENTATIONS:
             with self.subTest(package=implementation):
-                # ^1.1.7 would still allow the already-published older wrapper.
+                directory = 'packages/flutter_vless_' + implementation
                 self.assertEqual(re.findall(
                     rf'^  flutter_vless_{implementation}:\s*([^\s]+)\s*$', source, re.M),
-                    ['^1.1.7+1'])
-                backend = self.read(f'packages/flutter_vless_{implementation}/pubspec.yaml')
+                    ['^' + self.pub_version(directory)])
+                backend = self.read(directory + '/pubspec.yaml')
                 self.assertEqual(re.findall(
                     r'^  flutter_vless_platform_interface:\s*([^\s]+)\s*$', backend, re.M),
-                    ['^1.1.7'])
+                    [interface])
         self.assertEqual(re.findall(
-            r'^  flutter_vless_platform_interface:\s*([^\s]+)\s*$', source, re.M), ['^1.1.7'])
+            r'^  flutter_vless_platform_interface:\s*([^\s]+)\s*$', source, re.M), [interface])
 
 
 if __name__ == '__main__':

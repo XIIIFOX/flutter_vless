@@ -102,7 +102,6 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   if (!native::IsAdministrator() || !xray || !tun || !wintun || wintun->parent_path() != tun->parent_path()) {
     Event("VPN requires administrator rights and bundled native executables"); return false;
   }
-  if (!protection_.Inspect()) { Event(("Windows traffic protection is unavailable, code=" + std::to_string(protection_.Error())).c_str()); return false; }
   if (native_routing::NativeRoutingSpec::ValidateSource(config, routing) != native_routing::NativeRoutingError::none) {
     Event("Native VPN routing selection rejected; active session preserved"); return false;
   }
@@ -126,6 +125,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   }
   timing.Mark("authored_config");
   if (outcome) outcome->Fail(preparation::Stage::prepare);
+  if (!protection_.Inspect()) { Event(("Windows traffic protection is unavailable, code=" + std::to_string(protection_.Error())).c_str()); return false; }
   auto underlay = Underlay();
   if (!underlay) underlay = Underlay(nullptr, AF_INET6); // preparation only; checked candidate chooses its required family
   auto user = native::RandomHex(16), password = native::RandomHex(32);

@@ -48,10 +48,16 @@ def extract(sources):
     vpn = function("vpn_service.cpp", "bool VpnService::Start(")
     before_bootstrap, separator, after_bootstrap = vpn.partition("  auto underlay = Underlay();")
     authored = "  auto authored = xray_config::Parse(config);"
+    authored_end = '  timing.Mark("authored_config");\n'
     if not separator or before_bootstrap.count(authored) != 1 or vpn.count("std::make_unique<native::ProtectedRuntime>()") != 1 \
+            or before_bootstrap.count(authored_end) != 1 \
             or after_bootstrap.count("PrepareWorkerCandidate(*prepared, *managed_port, *runtime,") != 1:
         raise ValueError("Windows VPN authored/effective runtime ownership changed")
-    return manager, codec, submission, runtime, before_bootstrap[before_bootstrap.index(authored):]
+    protection = "!protection_.Inspect()"
+    if before_bootstrap.count(protection) != 1 or before_bootstrap.index(protection) < before_bootstrap.index(authored_end):
+        raise ValueError("Windows VPN traffic protection ownership acquired before authored validation")
+    authored_body = before_bootstrap[before_bootstrap.index(authored):before_bootstrap.index(authored_end) + len(authored_end)]
+    return manager, codec, submission, runtime, authored_body
 
 
 HEADER = r'''
@@ -332,6 +338,14 @@ class ExtractionTests(unittest.TestCase):
             "PrepareWorkerCandidate(*prepared, *managed_port, *other_runtime,",
         )
         with self.assertRaises(ValueError):
+            generated(self.sources)
+
+    def test_invalid_authored_profile_cannot_acquire_traffic_protection(self):
+        source = self.sources["vpn_service.cpp"]
+        self.sources["vpn_service.cpp"] = source.replace("!protection_.Inspect()", "false", 1).replace(
+            "if (!xray_config::Normalize(authored))", "if (!protection_.Inspect() || !xray_config::Normalize(authored))", 1,
+        )
+        with self.assertRaisesRegex(ValueError, "traffic protection ownership"):
             generated(self.sources)
 
 

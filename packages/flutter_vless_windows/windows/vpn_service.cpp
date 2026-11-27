@@ -7,6 +7,7 @@
 #include "windows_underlay.h"
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstring>
 #include <cwchar>
 #include <string_view>
@@ -42,6 +43,37 @@ class StartupTiming {
   std::vector<std::pair<const char*, std::chrono::milliseconds::rep>> pending_;
   bool published_ = false;
 };
+
+enum class ListenerState { missing, owned, unavailable };
+
+ListenerState OwnedListenerState(DWORD pid, uint16_t port, std::vector<DWORD>& buffer) {
+  if (!pid) return ListenerState::unavailable;
+  constexpr DWORD max_bytes = 1024 * 1024;
+  constexpr auto header_size = offsetof(MIB_TCPTABLE_OWNER_PID, table);
+  const auto query = [&buffer](DWORD& bytes) {
+    return GetExtendedTcpTable(buffer.data(), &bytes, FALSE, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0);
+  };
+  auto bytes = static_cast<DWORD>(buffer.size() * sizeof(DWORD));
+  auto status = query(bytes);
+  if (status == ERROR_INSUFFICIENT_BUFFER && bytes <= max_bytes) {
+    buffer.resize((bytes + sizeof(DWORD) - 1) / sizeof(DWORD));
+    bytes = static_cast<DWORD>(buffer.size() * sizeof(DWORD));
+    status = query(bytes);
+  }
+  if (status != NO_ERROR || bytes < header_size || bytes > buffer.size() * sizeof(DWORD)) {
+    return ListenerState::unavailable;
+  }
+  const auto* table = reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(buffer.data());
+  if (table->dwNumEntries > (bytes - header_size) / sizeof(MIB_TCPROW_OWNER_PID)) return ListenerState::unavailable;
+  const auto loopback = htonl(INADDR_LOOPBACK);
+  const auto net_port = htons(port);
+  for (DWORD i = 0; i < table->dwNumEntries; ++i) {
+    const auto& row = table->table[i];
+    if (row.dwState == MIB_TCP_STATE_LISTEN && row.dwOwningPid == pid && row.dwLocalAddr == loopback &&
+        (row.dwLocalPort & 0xffff) == net_port) return ListenerState::owned;
+  }
+  return ListenerState::missing;
+}
 
 std::optional<std::string> Underlay(UINT64* identity = nullptr, ADDRESS_FAMILY family = AF_INET) {
   return flutter_vless::native::SelectUnderlay(family, identity);
@@ -463,11 +495,21 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
       use_balancer_pipe || use_native_routing, use_balancer_pipe ? balancer_selection::kPipeBufferBytes : 0);
   if (!xray_process_) return fail("Cannot launch the protected Xray process");
   if (use_balancer_pipe) balancer_pipe_ = BalancerPipe::starting;
+  timing.Mark("xray_spawn");
   const native::SocksReadinessBudget readiness_budget(std::chrono::milliseconds(6000), [this] { return !requested_.load(); });
+  const auto xray_pid = GetProcessId(reinterpret_cast<HANDLE>(xray_process_->hProcess));
+  std::vector<DWORD> listeners(1024);
   bool listening = false;
-  for (int i = 0; i < 60 && readiness_budget.CanContinue() && requested_.load() && xray_process_->IsRunning(); ++i) {
-    if (native::SocksReady(socks_port_, username_, password_, &readiness_budget)) { listening = true; break; }
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  while (readiness_budget.CanContinue() && requested_.load() && xray_process_->IsRunning()) {
+    // An early connect can idle inside Winsock before Xray has bound the
+    // loopback port. Discover the listener first, then require SOCKS auth.
+    if (OwnedListenerState(xray_pid, socks_port_, listeners) != ListenerState::missing &&
+        readiness_budget.CanContinue() &&
+        native::SocksReady(socks_port_, username_, password_, &readiness_budget)) {
+      listening = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(std::min(20L, readiness_budget.PollMilliseconds())));
   }
   if (!requested_.load() || !readiness_budget.CanContinue()) return fail("VPN startup cancelled");
   if (!listening) {
@@ -491,10 +533,12 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   const bool previous_identified = previous_status == NO_ERROR && GetIfEntry2(&previous_row) == NO_ERROR;
   tun2socks_process_ = native::Launch(tun2socks_executable_path_, {L"-config", tun_config_path_.wstring()});
   if (!tun2socks_process_) return fail("Cannot launch tun2socks");
+  timing.Mark("tun_spawn");
   NET_LUID luid{};
   MIB_IF_ROW2 adapter{};
   bool adapter_ready = false;
-  for (int i = 0; i < 100 && requested_.load(); ++i) {
+  const auto adapter_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (requested_.load() && std::chrono::steady_clock::now() < adapter_deadline) {
     if (!tun2socks_process_->IsRunning()) return fail("tun2socks exited before creating its adapter");
     if (ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &luid) == NO_ERROR) {
       adapter = {};
@@ -503,7 +547,7 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
         adapter_ready = true; break;
       }
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
   if (!adapter_ready || !requested_.load()) return fail("Wintun adapter unavailable or startup cancelled");
   timing.Mark("wintun_adapter");

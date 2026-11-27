@@ -69,6 +69,7 @@ class SocksReadinessBudget {
  public:
   SocksReadinessBudget(std::chrono::milliseconds, std::function<bool()> cancelled) : cancelled_(std::move(cancelled)) {}
   bool CanContinue() const { return !cancelled_(); }
+  long PollMilliseconds() const { return 20; }
  private:
   std::function<bool()> cancelled_;
 };
@@ -198,6 +199,9 @@ int InertWcsnicmp(const wchar_t* left, const wchar_t* right, std::size_t count) 
   }
   return 0;
 }
+enum class ListenerState { missing, owned, unavailable };
+ListenerState OwnedListenerState(DWORD, uint16_t, std::vector<DWORD>&) { return ListenerState::owned; }
+DWORD GetProcessId(HANDLE) { return 23; }
 int GetUnicastIpAddressTable(int family, PMIB_UNICASTIPADDRESS_TABLE* result) {
   Require((family == AF_INET || family == AF_INET6) && !kernel.ipv4_table_owned, "invalid local IP query");
   kernel.queried_family = family;

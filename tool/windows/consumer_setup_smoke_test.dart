@@ -274,7 +274,7 @@ Map<String, int> _vpnStartupStages(String snapshot) {
     'routes_and_wfp',
     'packet_path',
   };
-  const optional = {'ipv4_configure', 'ipv6_configure'};
+  const optional = {'ipv4_configure', 'ipv6_configure', 'xray_spawn', 'tun_spawn'};
   final timings = <String, int>{};
   final pattern = RegExp(r'^\[vpn\] startup timing ([a-z0-9_]+) (\d+) ms$');
   for (final line in const LineSplitter().convert(snapshot)) {

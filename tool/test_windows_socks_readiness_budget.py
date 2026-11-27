@@ -29,9 +29,10 @@ def actual(data):
     body=section(data["native_runtime.cpp"],"bool SocksReady(","\n}  // namespace flutter_vless::native")
     proxy=section(data["proxy_service.cpp"],"  const flutter_vless::native::SocksReadinessBudget readiness_budget(","  start_time_ = std::chrono::steady_clock::now();")
     vpn=section(data["vpn_service.cpp"],"  const native::SocksReadinessBudget readiness_budget(","  // Credentials live only in a private file")
-    text=ADAPTER.replace("ACTUAL",declaration+body).replace("PROXY",proxy).replace("VPN",vpn)
+    listener=section(data["vpn_service.cpp"],"enum class ListenerState {","std::optional<std::string> Underlay(")
+    text=ADAPTER.replace("LISTENER_LOOKUP",listener).replace("ACTUAL",declaration+body).replace("PROXY",proxy).replace("VPN",vpn)
     text=text.replace("std::chrono::steady_clock","FakeClock").replace("std::this_thread::sleep_for","InertSleep")
-    for old,new in (("htons(","InertHtons("),("fd_set","InertFdSet"),("timeval","InertTimeval"),
+    for old,new in (("htonl(","InertHtonl("),("htons(","InertHtons("),("fd_set","InertFdSet"),("timeval","InertTimeval"),
                     ("FD_ZERO(","InertFD_ZERO("),("FD_SET(","InertFD_SET("),("select(","InertSelect(")):
         text=text.replace(old,new)
     return text
@@ -41,6 +42,8 @@ FAKES = r'''
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstring>
 #include <cstdint>
 #include <functional>
 #include <iostream>
@@ -51,10 +54,21 @@ FAKES = r'''
 #include <vector>
 #include <utility>
 using u_long = unsigned long;
-using SOCKET = int; using DWORD = unsigned long; using HANDLE = void*;
+using SOCKET = int; using DWORD = uint32_t; using HANDLE = void*;
 enum { INVALID_SOCKET=-1, SOCKET_ERROR=-1, AF_INET=2, SOCK_STREAM=1, IPPROTO_TCP=6,
        SOL_SOCKET=1, SO_RCVTIMEO=2, SO_SNDTIMEO=3, SO_ERROR=4, FIONBIO=5,
-       WSAEINTR=10004, WSAECONNRESET=10054, WSAEWOULDBLOCK=10035, WSAEINPROGRESS=10036 };
+       WSAEINTR=10004, WSAECONNRESET=10054, WSAEWOULDBLOCK=10035, WSAEINPROGRESS=10036,
+       NO_ERROR=0, ERROR_INSUFFICIENT_BUFFER=122, ERROR_NOT_SUPPORTED=50, FALSE=0,
+       TCP_TABLE_OWNER_PID_LISTENER=3, MIB_TCP_STATE_LISTEN=2 };
+constexpr DWORD INADDR_LOOPBACK=0x7f000001;
+constexpr DWORD listener_address=0x0100007f;
+constexpr DWORD listener_pid=53;
+constexpr uint16_t listener_port=0x382a;
+struct MIB_TCPROW_OWNER_PID {
+  DWORD dwState=MIB_TCP_STATE_LISTEN, dwLocalAddr=listener_address, dwLocalPort=listener_port;
+  DWORD dwRemoteAddr=0, dwRemotePort=0, dwOwningPid=listener_pid;
+};
+struct MIB_TCPTABLE_OWNER_PID { DWORD dwNumEntries; MIB_TCPROW_OWNER_PID table[1]; };
 struct InertTimeval { long tv_sec=0, tv_usec=0; };
 struct InertFdSet { SOCKET value=INVALID_SOCKET; };
 void InertFD_ZERO(InertFdSet* value) { value->value=INVALID_SOCKET; }
@@ -76,6 +90,9 @@ struct Kernel {
   size_t chunk=2, offset=0; bool cancel=false, fail_socket=false, cancel_on_receive=false;
   std::string reply, written; std::set<int> live;
   int proxy_effects=0, tun_effects=0, api_effects=0, ready_effects=0;
+  int listener_visible_at=0, listener_table_calls=0, max_caller_sleep=0;
+  bool table_unavailable=false, cancel_in_table=false, oversized_table=false, malformed_table=false;
+  MIB_TCPROW_OWNER_PID listener;
   std::function<void()> after_ready, during_proxy, during_api;
 } kernel;
 struct FakeClock {
@@ -103,7 +120,10 @@ int WSACleanup() { ++kernel.cleanup;kernel.now+=kernel.cleanup_delay;if(kernel.c
 SOCKET socket(int,int,int) { if(kernel.fail_socket) return INVALID_SOCKET; ++kernel.opens;kernel.live.insert(42);return 42; }
 int closesocket(SOCKET fd) { if(!kernel.live.erase(fd)) throw std::runtime_error("double_close");++kernel.closes;kernel.now+=kernel.close_delay;if(kernel.cancel_on_close)kernel.cancel=true;return 0; }
 int setsockopt(SOCKET,int,int,const char*,int) { return 0; }
-uint16_t InertHtons(uint16_t value) { return value; }
+uint16_t InertHtons(uint16_t value) { return static_cast<uint16_t>((value >> 8) | (value << 8)); }
+DWORD InertHtonl(DWORD value) {
+  return (value >> 24) | ((value >> 8) & 0x0000ff00) | ((value << 8) & 0x00ff0000) | (value << 24);
+}
 int InetPtonA(int,const char*,uint32_t* address) { *address=0x7f000001;return 1; }
 int connect(SOCKET,sockaddr*,int) { ++kernel.connects;RequireNonblocking();kernel.now+=kernel.connect_delay;return kernel.connect_result; }
 int send(SOCKET,const char* data,int size,int) { ++kernel.sends;RequireNonblocking();if(!kernel.delay_readiness)kernel.now+=kernel.send_delay;kernel.ready_remaining=-1;
@@ -121,7 +141,27 @@ int recv(SOCKET,char* data,int size,int) { ++kernel.receives;RequireNonblocking(
 }
 int WSAGetLastError() { return kernel.error; }
 void GetExitCodeProcess(HANDLE,DWORD* code) { *code=1; }
-void InertSleep(std::chrono::milliseconds duration) { kernel.now+=duration.count(); }
+DWORD GetProcessId(HANDLE) { return listener_pid; }
+DWORD GetExtendedTcpTable(void* output,DWORD* size,int ordered,DWORD family,int kind,DWORD reserved) {
+  if (ordered || family != AF_INET || kind != TCP_TABLE_OWNER_PID_LISTENER || reserved)
+    throw std::runtime_error("unexpected_listener_table_query");
+  ++kernel.listener_table_calls;
+  if (kernel.table_unavailable) return ERROR_NOT_SUPPORTED;
+  if (kernel.oversized_table) { *size=2*1024*1024; return ERROR_INSUFFICIENT_BUFFER; }
+  constexpr DWORD needed=sizeof(MIB_TCPTABLE_OWNER_PID);
+  if (!output || *size < needed) { *size=needed; return ERROR_INSUFFICIENT_BUFFER; }
+  if (kernel.cancel_in_table) kernel.cancel=true;
+  MIB_TCPTABLE_OWNER_PID value{};
+  value.dwNumEntries=kernel.malformed_table ? 2u : (kernel.now>=kernel.listener_visible_at ? 1u : 0u);
+  value.table[0]=kernel.listener;
+  std::memcpy(output,&value,sizeof(value));
+  *size=needed;
+  return NO_ERROR;
+}
+void InertSleep(std::chrono::milliseconds duration) {
+  kernel.now+=duration.count();
+  kernel.max_caller_sleep=std::max(kernel.max_caller_sleep,static_cast<int>(duration.count()));
+}
 void Require(bool value,const char* reason) { if(!value) throw std::runtime_error(reason); }
 void Reset(bool auth=false) { kernel=Kernel{};kernel.reply=auth?std::string("\5\2\1\0",4):std::string("\5\0",2); }
 
@@ -129,6 +169,7 @@ void Reset(bool auth=false) { kernel=Kernel{};kernel.reply=auth?std::string("\5\
 
 ADAPTER = r'''
 
+LISTENER_LOOKUP
 namespace readiness_under_test {
 ACTUAL
 bool WithBudget(uint16_t port,const std::string& user,const std::string& password,
@@ -140,6 +181,7 @@ bool WithBudget(uint16_t port,const std::string& user,const std::string& passwor
 namespace flutter_vless { namespace native {
 using SocksReadinessBudget=readiness_under_test::SocksReadinessBudget;
 bool SocksReady(uint16_t,const std::string&,const std::string&,const SocksReadinessBudget* budget) {
+  if (!budget->CanContinue()) return false;
   ++kernel.ready_calls;
   for(int elapsed=0;elapsed<kernel.ready_delay;elapsed+=50){if(!budget->CanContinue())return false;kernel.now+=50;}
   if(kernel.after_ready) kernel.after_ready();
@@ -235,7 +277,46 @@ int main() {
   test("WSA-cleanup-cancellation-rejects-success",[&]{kernel.cancel_on_cleanup=true;Require(!call(),"success_after_WSA_cleanup_cancel");Require(kernel.closes==1&&kernel.cleanup==1,"WSA_cancel_cleanup_not_once");});
   test("VPN-deadline-after-listener-cannot-admit-tun",[&]{VpnConsumer service;kernel.after_ready=[&]{kernel.now=6000;};Require(!service.Run(),"expired_listener_admitted_tun");Require(kernel.tun_effects==0,"tun_after_parent_deadline");});
   test("Proxy-deadline-after-listener-cannot-install-proxy",[&]{ProxyConsumer service;kernel.after_ready=[&]{kernel.now=5000;};service.Run();Require(kernel.proxy_effects==0&&kernel.api_effects==0&&kernel.ready_effects==0,"proxy_after_parent_deadline");});
-  std::cout<<"WINDOWS_SOCKS_READINESS_BUDGET_PURE_PASS="<<(total-failed)<<" FAIL="<<failed<<"\n";if(total!=52)return 2;return failed?1:0;
+  test("listener-ownership-verifies-pid-address-port-and-state",[&]{
+    std::vector<DWORD> buffer(1);
+    Require(OwnedListenerState(listener_pid,10808,buffer)==ListenerState::owned&&kernel.listener_table_calls==2,
+        "matching_listener_or_table_resize_failed");
+    Require(OwnedListenerState(listener_pid+1,10808,buffer)==ListenerState::missing,"foreign_listener_accepted");
+    Require(OwnedListenerState(listener_pid,10809,buffer)==ListenerState::missing,"wrong_port_accepted");
+    kernel.listener.dwLocalAddr=0;
+    Require(OwnedListenerState(listener_pid,10808,buffer)==ListenerState::missing,"wildcard_listener_accepted");
+    kernel.listener.dwLocalAddr=listener_address;kernel.listener.dwState=5;
+    Require(OwnedListenerState(listener_pid,10808,buffer)==ListenerState::missing,"non_listener_row_accepted");
+  });
+  test("listener-table-failure-is-distinct-from-absence",[&]{
+    std::vector<DWORD> buffer(1);
+    Require(OwnedListenerState(0,10808,buffer)==ListenerState::unavailable&&kernel.listener_table_calls==0,
+        "unknown_pid_accepted");
+    kernel.oversized_table=true;
+    Require(OwnedListenerState(listener_pid,10808,buffer)==ListenerState::unavailable&&buffer.size()==1,
+        "oversized_table_was_allocated");
+    kernel.oversized_table=false;kernel.malformed_table=true;
+    Require(OwnedListenerState(listener_pid,10808,buffer)==ListenerState::unavailable,"truncated_table_was_read");
+  });
+  test("VPN-waits-for-owner-before-authenticating-within-full-budget",[&]{
+    VpnConsumer service;kernel.listener_visible_at=2400;
+    Require(service.Run()&&kernel.ready_calls==1&&kernel.tun_effects==1,"slow_worker_rejected_or_probed_early");
+    Require(kernel.now>=2400&&kernel.now<=2420&&kernel.max_caller_sleep==20,"listener_polling_was_slow_or_skipped");
+  });
+  test("VPN-foreign-listener-never-receives-auth",[&]{
+    VpnConsumer service;kernel.listener.dwOwningPid=listener_pid+1;
+    Require(!service.Run()&&kernel.now==6000&&!kernel.ready_calls&&!kernel.tun_effects,"foreign_listener_received_auth");
+  });
+  test("VPN-unavailable-inventory-still-requires-SOCKS-auth",[&]{
+    VpnConsumer service;kernel.table_unavailable=true;kernel.ready_result=false;
+    Require(!service.Run()&&kernel.ready_calls>0&&!kernel.tun_effects,"inventory_failure_bypassed_auth");
+  });
+  test("VPN-stop-during-listener-inventory-cannot-admit-tun",[&]{
+    VpnConsumer service;kernel.cancel_in_table=true;
+    kernel.after_ready=[&]{if(kernel.cancel)service.requested_.store(false);};
+    Require(!service.Run()&&!kernel.tun_effects,"aborted_listener_admitted_tun");
+  });
+  std::cout<<"WINDOWS_SOCKS_READINESS_BUDGET_PURE_PASS="<<(total-failed)<<" FAIL="<<failed<<"\n";if(total!=58)return 2;return failed?1:0;
 }
 
 '''
@@ -244,6 +325,7 @@ class Boundaries(unittest.TestCase):
     def test_missing_or_duplicate_real_body_refuses(self):
         for name,token in (("native_runtime.h","class SocksReadinessBudget {"),("native_runtime.cpp","bool SocksReady("),
                            ("proxy_service.cpp","  start_time_ = std::chrono::steady_clock::now();"),
+                           ("vpn_service.cpp","enum class ListenerState {"),
                            ("vpn_service.cpp","  // Credentials live only in a private file")):
             for replacement in ("",token+token):
                 data=sources();data[name]=data[name].replace(token,replacement)
@@ -267,7 +349,7 @@ def main():
         "production_sha256":{n:hashlib.sha256(v.encode()).hexdigest() for n,v in data.items()},
         "test_tool_sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "native_builder_sha256":hashlib.sha256((ROOT/"tool/windows/build_native_tests.cmd").read_bytes()).hexdigest(),
-        "actual_bodies":["SocksReadinessBudget","SocksReady","VPN startup listener admission","Proxy startup listener/API admission"],
+        "actual_bodies":["SocksReadinessBudget","SocksReady","OwnedListenerState","VPN startup listener admission","Proxy startup listener/API admission"],
         "real_socket_process_thread_Core":False,"source_guards":result.testsRun,
     },indent=2)+"\n")
     return 0

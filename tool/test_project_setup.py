@@ -230,6 +230,10 @@ class ProjectSetupTest(unittest.TestCase):
                         first_timing = read_setup_timing(first, pre_staged)
                         if pre_staged:
                             self.assertIn("Wintun driver staged.", first)
+                            self.assertIn("stage_write_probe", first_timing["wintun_phases"],
+                                          "Expected setup to prepare the Dart Wintun probe")
+                            self.assertNotIn("stage_compile_probe", first_timing["wintun_phases"],
+                                             "Wintun setup unexpectedly compiled a native helper")
                         packages = smoke.wintun_driver_inventory()
                         self.assertEqual(len(packages), int(pre_staged), "Unexpected Wintun package count after setup")
                         self.assertEqual(smoke.wintun_setup_network(probe), setup_network)

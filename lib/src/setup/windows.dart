@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -122,7 +123,8 @@ void planWindows(
       if (missing.isEmpty) continue;
       plan.defer('Download and verify ${pinned.label}', () async {
         final archive = await download(Uri.parse(pinned.url), pinned.maxBytes);
-        final files = pinned.verify(archive, missing, architecture);
+        return _verifyRuntime(pinned, archive, missing, architecture);
+      }, (files) {
         for (final entry in files.entries) {
           final destination = File(request.resolve('$stage/${entry.key}'));
           if (_isRegularFile(destination) &&
@@ -142,6 +144,14 @@ void planWindows(
     'Use flutter build windows on a Windows $architecture host with Visual Studio C++ tools.${vpn ? ' VPN mode requires an elevated app process.' : ''}',
   );
 }
+
+Future<Map<String, Uint8List>> _verifyRuntime(
+  _RuntimeSource source,
+  Uint8List archive,
+  List<String> missing,
+  String architecture,
+) =>
+    Isolate.run(() => source.verify(archive, missing, architecture));
 
 /// Inspect Driver Store without editing the project or creating an adapter.
 Future<WindowsWintunStaging> inspectWindowsWintun(

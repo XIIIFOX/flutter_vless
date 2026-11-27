@@ -47,7 +47,7 @@ class SetupPlan {
   final SetupRequest request;
   final notes = <String>[];
   final _edits = <String, ({Uint8List? before, Uint8List after})>{};
-  final _preparations = <String, Future<void> Function()>{};
+  final _preparations = <String, Future<void Function()> Function()>{};
 
   List<String> get changedPaths => _edits.keys.toList(growable: false);
   List<String> get pendingActions => _preparations.keys.toList(growable: false);
@@ -69,9 +69,17 @@ class SetupPlan {
     _edits[path] = (before: before, after: after);
   }
 
-  /// Prepare verified inputs only on apply. Preparations may add file writes.
-  void defer(String description, Future<void> Function() prepare) {
-    _preparations[description] = prepare;
+  /// Prepare independent inputs concurrently on apply, then plan their edits
+  /// in registration order after all preparations succeed.
+  void defer<T>(
+    String description,
+    Future<T> Function() prepare,
+    void Function(T) planEdits,
+  ) {
+    _preparations[description] = () async {
+      final input = await prepare();
+      return () => planEdits(input);
+    };
   }
 
   /// [inspect] may run concurrently with preparation. Both must finish
@@ -82,8 +90,11 @@ class SetupPlan {
   }) async {
     Future<void> prepareInputs() async {
       final clock = recordTiming == null ? null : (Stopwatch()..start());
-      for (final prepare in _preparations.values.toList()) {
-        await prepare();
+      final verified = await Future.wait(
+        _preparations.values.map((prepare) => prepare()),
+      );
+      for (final planEdits in verified) {
+        planEdits();
       }
       if (clock != null) {
         recordTiming!('runtime_prepare', clock.elapsedMilliseconds);

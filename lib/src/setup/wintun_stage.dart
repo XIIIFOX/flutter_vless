@@ -42,6 +42,18 @@ Future<WindowsWintunResult> runWindowsWintunCommand(
   if (systemRoot == null || !p.isAbsolute(systemRoot) || script == null) {
     throw const SetupException('Windows Wintun setup helper is unavailable.');
   }
+  String? probeSource;
+  final dart = Platform.resolvedExecutable;
+  if (action == 'stage') {
+    final probe = await Isolate.resolvePackageUri(
+      Uri.parse('package:flutter_vless/src/setup/wintun_probe.dart'),
+    );
+    if (probe == null || p.basename(dart).toLowerCase() != 'dart.exe') {
+      throw const SetupException(
+          'Wintun staging requires the Windows Dart CLI.');
+    }
+    probeSource = base64Encode(await File.fromUri(probe).readAsBytes());
+  }
   final source = await File.fromUri(script).readAsString();
   final encoded = ByteData(source.length * 2);
   for (var i = 0; i < source.length; i++) {
@@ -63,6 +75,9 @@ Future<WindowsWintunResult> runWindowsWintunCommand(
         'FLUTTER_VLESS_WINTUN_STAGE_ACTION': action,
         'FLUTTER_VLESS_WINTUN_STAGE_DLL': dll.path,
         'FLUTTER_VLESS_WINTUN_STAGE_TIMING': recordTiming == null ? '0' : '1',
+        if (probeSource != null) 'FLUTTER_VLESS_WINTUN_STAGE_DART': dart,
+        if (probeSource != null)
+          'FLUTTER_VLESS_WINTUN_STAGE_PROBE': probeSource,
       },
     );
   } on ProcessException {

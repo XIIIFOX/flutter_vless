@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -29,6 +30,7 @@ void main() {
     SetupMode mode, {
     String? source,
     String? arch,
+    WindowsRuntimeDownload? download,
   }) {
     final request = SetupRequest(
       root: root,
@@ -41,10 +43,11 @@ void main() {
     planWindows(
       request,
       plan,
-      download: (uri, limit) async {
-        calls++;
-        return Uint8List.fromList([42]);
-      },
+      download: download ??
+          (uri, limit) async {
+            calls++;
+            return Uint8List.fromList([42]);
+          },
     );
     return plan;
   }
@@ -97,11 +100,12 @@ void main() {
     expect(repeated.present, isTrue);
     expect(await repeated.stage(), isFalse);
     expect(actions, ['inspect', 'stage', 'inspect']);
-  }, skip: Platform.isWindows &&
-      (Platform.environment['PROCESSOR_ARCHITEW6432'] ??
-                  Platform.environment['PROCESSOR_ARCHITECTURE'])
-              ?.toLowerCase() ==
-          'arm64');
+  },
+      skip: Platform.isWindows &&
+          (Platform.environment['PROCESSOR_ARCHITEW6432'] ??
+                      Platform.environment['PROCESSOR_ARCHITECTURE'])
+                  ?.toLowerCase() ==
+              'arm64');
 
   test('Wintun staging rejects other architectures and custom runtimes', () {
     Future<WindowsWintunResult> unexpectedCommand(String action, File dll) {
@@ -126,9 +130,15 @@ void main() {
     }
   });
 
-  test('a digest mismatch leaves the application unchanged', () async {
-    final plan = inspect(SetupMode.vpn);
-    await expectLater(
+  test('independent VPN downloads overlap and digest failure leaves no edits',
+      () async {
+    final pending = <Uri, Completer<Uint8List>>{};
+    final plan = inspect(SetupMode.vpn, download: (uri, limit) {
+      final bytes = Completer<Uint8List>();
+      pending[uri] = bytes;
+      return bytes.future;
+    });
+    final failure = expectLater(
       plan.apply(),
       throwsA(isA<SetupException>().having(
         (exception) => exception.message,
@@ -136,11 +146,22 @@ void main() {
         contains('SHA-256'),
       )),
     );
-    expect(calls, 1);
+    expect(pending.keys.map((uri) => uri.pathSegments.last), [
+      'Xray-windows-managed-64.zip',
+      'tun2socks-windows-amd64.zip',
+      'wintun-0.14.1.zip',
+      'LICENSE',
+    ]);
+    for (final bytes in pending.values.toList().reversed) {
+      bytes.complete(Uint8List.fromList([42]));
+    }
+    await failure;
     expect(projectFile('windows/CMakeLists.txt').readAsStringSync(), _cmake);
     expect(projectFile('windows/.gitignore').readAsStringSync(),
         'flutter/ephemeral/\n');
     expect(projectFile(_fragment).existsSync(), isFalse);
+    expect(
+        Directory.fromUri(root.uri.resolve('$_stage/')).existsSync(), isFalse);
   });
 
   test('a supplied VPN runtime is staged and repeatable without downloads',

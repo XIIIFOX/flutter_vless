@@ -128,51 +128,12 @@ try {
         Copy-VerifiedWintun $env:FLUTTER_VLESS_WINTUN_STAGE_DLL $dll
         Record-Timing 'private_copy' $start
         $start = $clock.ElapsedMilliseconds
-        $helper = Join-Path $privateDirectory 'stage-wintun.exe'
+        $probe = Join-Path $privateDirectory 'wintun_probe.dart'
         # Wintun can queue orphan cleanup from CloseAdapter. The child keeps the
         # DLL loaded until process exit, then this parent removes the staging files.
-        $source = @'
-using System;
-using System.Runtime.InteropServices;
-
-public static class FlutterVlessWintunSetup {
-    [DllImport("kernel32.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
-    private static extern IntPtr LoadLibraryExW(string path, IntPtr file, uint flags);
-    [DllImport("kernel32.dll", ExactSpelling = true)]
-    private static extern IntPtr GetProcAddress(IntPtr module, string exportName);
-
-    [UnmanagedFunctionPointer(CallingConvention.Winapi, CharSet = CharSet.Unicode)]
-    private delegate IntPtr CreateAdapter(string name, string type, IntPtr guid);
-    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-    private delegate void CloseAdapter(IntPtr adapter);
-
-    public static int Main(string[] args) {
-        const uint LoadLibrarySearchSystem32 = 0x800;
-        try {
-            IntPtr module = LoadLibraryExW(args[0], IntPtr.Zero, LoadLibrarySearchSystem32);
-            if (module == IntPtr.Zero) return 1;
-            IntPtr createAddress = GetProcAddress(module, "WintunCreateAdapter");
-            IntPtr closeAddress = GetProcAddress(module, "WintunCloseAdapter");
-            if (createAddress == IntPtr.Zero || closeAddress == IntPtr.Zero) return 1;
-            var create = (CreateAdapter) Marshal.GetDelegateForFunctionPointer(createAddress, typeof(CreateAdapter));
-            var close = (CloseAdapter) Marshal.GetDelegateForFunctionPointer(closeAddress, typeof(CloseAdapter));
-            IntPtr adapter = create(args[1], args[1], IntPtr.Zero);
-            if (adapter == IntPtr.Zero) return 1;
-            close(adapter);
-            return 0;
-        } catch {
-            return 1;
-        }
-    }
-}
-'@
         $failure = 'failed_probe'
-        $sourceFile = Join-Path $privateDirectory 'stage-wintun.cs'
-        [IO.File]::WriteAllText($sourceFile, $source)
-        $compiler = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
-        & $compiler '/nologo' '/target:exe' '/platform:x64' "/out:$helper" $sourceFile *> $null
-        if ($LASTEXITCODE -ne 0) { throw 'Wintun probe compilation failed' }
-        Record-Timing 'compile_probe' $start
+        [IO.File]::WriteAllBytes($probe, [Convert]::FromBase64String($env:FLUTTER_VLESS_WINTUN_STAGE_PROBE))
+        Record-Timing 'write_probe' $start
 
         # Loading Wintun can itself clean up legacy devices. Recheck before loading it.
         $failure = 'failed_inventory'
@@ -180,7 +141,7 @@ public static class FlutterVlessWintunSetup {
         if ($status -eq 'absent') {
             $failure = 'failed_probe'
             $start = $clock.ElapsedMilliseconds
-            & $helper $dll $name
+            & $env:FLUTTER_VLESS_WINTUN_STAGE_DART $probe $dll $name
             if ($LASTEXITCODE -ne 0) { throw 'Wintun adapter creation failed' }
             Record-Timing 'native_probe' $start
             $failure = 'failed_verify'

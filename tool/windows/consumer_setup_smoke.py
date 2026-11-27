@@ -4,12 +4,14 @@ from contextlib import contextmanager, ExitStack
 import ctypes
 from ctypes import wintypes
 from datetime import datetime, timedelta
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import threading
 import time
@@ -156,6 +158,74 @@ def powershell(command, *, timeout=15):
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
         check=True, capture_output=True, encoding="utf-8", timeout=timeout,
     ).stdout.strip()
+
+
+def private_runtime_directories():
+    root = Path(os.environ["SystemRoot"]) / "Temp"
+    try:
+        return {entry for entry in root.iterdir()
+                if re.fullmatch(r"flutter-vless-protected-[0-9a-fA-F]{64}", entry.name)}
+    except OSError:
+        raise AssertionError("Cannot enumerate private runtime candidates") from None
+
+
+def verify_private_runtime(bundle, before):
+    added = private_runtime_directories() - before
+    assert len(added) == 1, "Expected one new private VPN runtime"
+    runtime = added.pop()
+    files = [runtime / name for name in ("xray.exe", "geoip.dat", "geosite.dat")]
+    try:
+        assert stat.S_ISDIR(runtime.lstat().st_mode), "Expected a private runtime directory"
+        for path in [runtime, *files]:
+            assert not path.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT, \
+                "Private runtime contains a reparse point"
+        for file in files:
+            assert stat.S_ISREG(file.lstat().st_mode), "Expected a private runtime file"
+            source = bundle / "xray" / file.name
+            assert not source.samefile(file), "Private runtime file shares the bundle file identity"
+            with file.open("rb") as copied, source.open("rb") as bundled:
+                assert hashlib.file_digest(copied, "sha256").digest() == \
+                    hashlib.file_digest(bundled, "sha256").digest(), "Private runtime bytes differ from the bundle"
+    except OSError:
+        raise AssertionError("Cannot read the private runtime snapshot") from None
+
+    paths = ", ".join("'" + str(path).replace("'", "''") + "'" for path in [runtime, *files])
+    try:
+        acl_status = powershell(f"""
+            $ErrorActionPreference = 'Stop'
+            $sid = [Security.Principal.SecurityIdentifier]
+            foreach ($path in @({paths})) {{
+                $acl = Get-Acl -LiteralPath $path
+                if (!$acl.AreAccessRulesProtected -or $acl.GetOwner($sid).Value -ne 'S-1-5-32-544') {{
+                    exit 1
+                }}
+                $rules = @($acl.GetAccessRules($true, $true, $sid))
+                if ($rules.Count -ne 2 -or
+                    (($rules | ForEach-Object {{ $_.IdentityReference.Value }} | Sort-Object) -join ',') -ne 'S-1-5-18,S-1-5-32-544') {{
+                    exit 1
+                }}
+                foreach ($rule in $rules) {{
+                    if ($rule.AccessControlType -ne 'Allow' -or $rule.FileSystemRights -ne 'FullControl' -or $rule.IsInherited) {{
+                        exit 1
+                    }}
+                }}
+            }}
+            'valid'
+        """)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        raise AssertionError("Private runtime owner or ACL verification failed") from None
+    assert acl_status == "valid", "Private runtime owner or ACL was not verified"
+    return runtime
+
+
+def verify_private_runtime_removed(runtime):
+    try:
+        runtime.lstat()
+    except FileNotFoundError:
+        return
+    except OSError:
+        raise AssertionError("Cannot confirm private runtime cleanup after Stop") from None
+    raise AssertionError("Private runtime directory remained after Stop")
 
 
 def wintun_authenticode_status(dll):
@@ -367,12 +437,14 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
     normal_stop = False
     network_checks = None
     ipv6_control = None
+    confirm_private_runtime = mode == "vpn" and wintun_benchmark == "pre-staged" and not reverse
     if ipv6_underlay is not None:
         ipv6_control = dict(baseline_udp=fixtures.adapter_datagram(
             ipv6_underlay, IPV6_CONTROL_SUBNET, ipv6=True, denied=False))
     with (directory / "app.log").open("wb") as app_log:
         try:
             installation_baseline = setupapi_baseline() if measure_wintun_install else None
+            runtime_before = private_runtime_directories() if confirm_private_runtime else None
             process = subprocess.Popen(
                 [str(bundle / "vless_setup_probe.exe")], cwd=bundle,
                 env=dict(os.environ, FLUTTER_VLESS_CONSUMER_PLAN=str(plan_file)),
@@ -384,6 +456,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
             )
             during = wait_receipt(active, receipt, process, "live HTTPS and routing", 90)
             assert during["mode"] == mode
+            owned_runtime = verify_private_runtime(bundle, runtime_before) if runtime_before is not None else None
             count = int(fixtures.native(probe, "policy-count"))
             proxy_settings = system_proxy()
             if mode == "vpn":
@@ -447,6 +520,8 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                     "Proxy mode did not install the owned WinINet SOCKS endpoint"
             proceed.touch()
             final = wait_receipt(restored, receipt, process, "Stop and restored HTTPS", 35)
+            if owned_runtime is not None:
+                verify_private_runtime_removed(owned_runtime)
             assert final["success"] is True and final["mode"] == mode, \
                 f"Consumer failed its connection or Stop checks: {final}"
             assert final["routes"] == [
@@ -482,6 +557,9 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
             normal_stop = True
             result = dict(mode=mode, routing=direction, **times, routes=final["routes"],
                           active_https=200, restored_https=200)
+            if owned_runtime is not None:
+                result["private_runtime"] = dict(bundle_bytes_match=True, distinct_file_identity=True,
+                                                 restricted_acl=True, removed_after_stop=True)
             if mode == "vpn":
                 stages = final["startup_stages_ms"]
                 assert "ipv6_address" in stages and all(type(ms) is int and ms >= 0 for ms in stages.values())
@@ -522,6 +600,8 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                             runtime = ", ".join(f"{stage} {stages[stage]} ms" for stage in PRIVATE_RUNTIME_STAGES)
                             print(f"  - Startup stages: {startup}.", file=file)
                             print(f"  - Private runtime phases ({stages['prepare_runtime']} ms total): {runtime}.", file=file)
+                        if owned_runtime is not None:
+                            print("  - Private runtime bytes, administrator-only ACLs and cleanup passed.", file=file)
                         if measure_wintun_install:
                             sections = ", ".join(f"{row['stage']} {row['elapsed_ms']} ms" for row in setupapi["sections"])
                             print(f"  - Wintun SetupAPI: {setupapi['status']} ({sections or 'no completed sections'}).", file=file)

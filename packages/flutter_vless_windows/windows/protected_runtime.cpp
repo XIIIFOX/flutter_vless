@@ -1,12 +1,24 @@
 #include "protected_runtime.h"
 #include <sddl.h>
 #include <array>
+#include <future>
 
 namespace flutter_vless::native {
 namespace {
 using Clock = std::chrono::steady_clock;
 std::chrono::milliseconds Milliseconds(Clock::duration duration) {
   return std::chrono::duration_cast<std::chrono::milliseconds>(duration);
+}
+
+bool UsesProcessToken() {
+  // A copy thread would otherwise use the process identity in place of an
+  // impersonating caller's token. Keep those calls on the calling thread.
+  HANDLE token = nullptr;
+  if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token)) {
+    return GetLastError() == ERROR_NO_TOKEN;
+  }
+  CloseHandle(token);
+  return false;
 }
 
 class AdministratorDescriptor {
@@ -32,7 +44,7 @@ HANDLE NewFile(const fs::path& path) {
 bool CopyImage(const fs::path& source, const fs::path& destination, RuntimeFileTiming* timing) {
   const auto started = Clock::now();
   HANDLE input = CreateFileW(source.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-      OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
   if (input == INVALID_HANDLE_VALUE) return false;
   BY_HANDLE_FILE_INFORMATION info{};
   if (!GetFileInformationByHandle(input, &info) || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
@@ -41,7 +53,7 @@ bool CopyImage(const fs::path& source, const fs::path& destination, RuntimeFileT
   HANDLE output = NewFile(destination);
   if (output == INVALID_HANDLE_VALUE) { CloseHandle(input); return false; }
   const auto opened = Clock::now();
-  std::array<char, 64 * 1024> bytes{};
+  std::array<char, 256 * 1024> bytes;
   DWORD count = 0, written = 0;
   bool ok = true;
   while (ok) {
@@ -82,15 +94,29 @@ bool ProtectedRuntime::Create(const fs::path& bundled_xray, bool copy_geo_assets
       FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
   if (directory_handle_ == INVALID_HANDLE_VALUE) return false;
   if (timing) timing->directory = Milliseconds(Clock::now() - started);
-  if (!CopyImage(bundled_xray, Executable(), timing ? &timing->xray : nullptr)) return false;
-  if (!copy_geo_assets) return true;
+  const auto copy_xray = [&] {
+    return CopyImage(bundled_xray, Executable(), timing ? &timing->xray : nullptr);
+  };
+  if (!copy_geo_assets) return copy_xray();
   const auto copy_asset = [&](const wchar_t* asset, RuntimeFileTiming* asset_timing) {
     const auto source = bundled_xray.parent_path() / asset;
     std::error_code error;
     return !fs::exists(source, error) || CopyImage(source, directory_ / asset, asset_timing);
   };
-  return copy_asset(L"geoip.dat", timing ? &timing->geoip : nullptr) &&
-      copy_asset(L"geosite.dat", timing ? &timing->geosite : nullptr);
+  if (!UsesProcessToken()) {
+    return copy_xray() && copy_asset(L"geoip.dat", timing ? &timing->geoip : nullptr) &&
+        copy_asset(L"geosite.dat", timing ? &timing->geosite : nullptr);
+  }
+
+  // Each file still has its own protected destination and flush. Wait for
+  // both GeoDAT copies even if another copy fails, before validation or cleanup.
+  const auto policy = std::launch::async | std::launch::deferred;
+  auto geoip = std::async(policy, copy_asset, L"geoip.dat", timing ? &timing->geoip : nullptr);
+  auto geosite = std::async(policy, copy_asset, L"geosite.dat", timing ? &timing->geosite : nullptr);
+  const bool xray_ready = copy_xray();
+  const bool geoip_ready = geoip.get();
+  const bool geosite_ready = geosite.get();
+  return xray_ready && geoip_ready && geosite_ready;
 }
 bool ProtectedRuntime::WriteConfig(const std::string& data, fs::path& path) {
   if (directory_.empty() || data.size() > 16 * 1024 * 1024) return false;

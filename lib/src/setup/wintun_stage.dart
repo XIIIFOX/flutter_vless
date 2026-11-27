@@ -29,8 +29,9 @@ class WindowsWintunStaging {
 
 Future<WindowsWintunResult> runWindowsWintunCommand(
   String action,
-  File dll,
-) async {
+  File dll, {
+  void Function(Map<String, int>)? recordTiming,
+}) async {
   if (!Platform.isWindows) {
     throw const SetupException('--stage-wintun must run on Windows.');
   }
@@ -61,13 +62,20 @@ Future<WindowsWintunResult> runWindowsWintunCommand(
       environment: {
         'FLUTTER_VLESS_WINTUN_STAGE_ACTION': action,
         'FLUTTER_VLESS_WINTUN_STAGE_DLL': dll.path,
+        'FLUTTER_VLESS_WINTUN_STAGE_TIMING': recordTiming == null ? '0' : '1',
       },
     );
   } on ProcessException {
     throw const SetupException(
         'Could not run the Windows Wintun setup helper.');
   }
-  final status = (result.stdout as String).trim();
+  final lines = const LineSplitter().convert((result.stdout as String).trim());
+  final status = lines.isEmpty ? '' : lines.first;
+  if (recordTiming != null && result.exitCode == 0 && lines.length == 2) {
+    final phases = jsonDecode(lines[1]) as Map<String, dynamic>;
+    recordTiming(
+        {for (final entry in phases.entries) entry.key: entry.value as int});
+  }
   if (result.exitCode == 0) {
     if (status == 'present') return WindowsWintunResult.present;
     if (action == 'inspect' && status == 'absent') {

@@ -8,6 +8,7 @@ import 'android.dart';
 import 'apple.dart';
 import 'common.dart';
 import 'windows.dart';
+import 'wintun_stage.dart';
 
 Future<void> runSetupCli(List<String> arguments, {bool doctor = false}) async {
   final command = doctor ? 'doctor' : 'setup';
@@ -75,8 +76,15 @@ Usage: dart run flutter_vless:$command --platform macos|android|windows|ios [--p
       architecture: flags['arch'],
       runtimeDirectory: flags['runtime-dir'],
     );
-    _checkProject(request, isApple: isApple);
     final dryRun = flags.containsKey('dry-run');
+    final clock = !doctor &&
+            !dryRun &&
+            Platform.environment['FLUTTER_VLESS_SETUP_TIMING'] == '1'
+        ? (Stopwatch()..start())
+        : null;
+    final timings = <String, int>{'runtime_prepare': 0, 'project_apply': 0};
+    final wintunPhases = <String, int>{};
+    _checkProject(request, isApple: isApple);
     final plan = SetupPlan(request);
     final interactive = !doctor &&
         !dryRun &&
@@ -92,7 +100,24 @@ Usage: dart run flutter_vless:$command --platform macos|android|windows|ios [--p
         planWindows(request, plan);
     }
     final title = '${platform.name} ${mode.name}';
-    final wintun = stageWintun ? await inspectWindowsWintun(request) : null;
+    if (clock != null) timings['project_plan'] = clock.elapsedMilliseconds;
+    final wintun = stageWintun
+        ? await inspectWindowsWintun(request, run: (action, dll) async {
+            final start = clock?.elapsedMilliseconds;
+            final result = await runWindowsWintunCommand(action, dll,
+                recordTiming: clock == null
+                    ? null
+                    : (phases) {
+                        for (final entry in phases.entries) {
+                          wintunPhases['${action}_${entry.key}'] = entry.value;
+                        }
+                      });
+            if (clock != null) {
+              timings['wintun_$action'] = clock.elapsedMilliseconds - start!;
+            }
+            return result;
+          })
+        : null;
     final needsWintun = wintun != null && !wintun.present;
     final ready = plan.changedPaths.isEmpty &&
         plan.pendingActions.isEmpty &&
@@ -113,7 +138,12 @@ Usage: dart run flutter_vless:$command --platform macos|android|windows|ios [--p
       for (final action in plan.pendingActions) {
         stdout.writeln('  $action');
       }
-      await plan.apply();
+      await plan.apply(
+          recordTiming: clock == null
+              ? null
+              : (stage, elapsed) {
+                  timings[stage] = elapsed;
+                });
       stdout.writeln('$title: project configured.');
       for (final path in plan.changedPaths) {
         stdout.writeln('  Updated $path');
@@ -129,6 +159,13 @@ Usage: dart run flutter_vless:$command --platform macos|android|windows|ios [--p
     }
     for (final note in plan.notes) {
       stdout.writeln(note);
+    }
+    if (clock != null) {
+      stdout.writeln('WINDOWS_SETUP_TIMING ${jsonEncode({
+            ...timings,
+            'total': clock.elapsedMilliseconds,
+            if (stageWintun) 'wintun_phases': wintunPhases,
+          })}');
     }
   } on SetupException catch (error) {
     stderr.writeln('flutter_vless $command: ${error.message}');

@@ -2,6 +2,21 @@ $ErrorActionPreference = 'Stop'
 $WarningPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
 
+$clock = [Diagnostics.Stopwatch]::StartNew()
+$recordTiming = $env:FLUTTER_VLESS_WINTUN_STAGE_TIMING -eq '1'
+$timings = [ordered]@{}
+function Record-Timing($name, $start) {
+    if ($recordTiming) { $timings[$name] = $clock.ElapsedMilliseconds - $start }
+}
+
+function Write-Result($status) {
+    [Console]::WriteLine($status)
+    if ($recordTiming) {
+        $timings['script'] = $clock.ElapsedMilliseconds
+        [Console]::WriteLine(($timings | ConvertTo-Json -Compress))
+    }
+}
+
 function Get-WintunPackages {
     Dism\Get-WindowsDriver -Online | Where-Object {
         [IO.Path]::GetFileName($_.OriginalFileName) -ieq 'wintun.inf'
@@ -15,13 +30,16 @@ function Test-PinnedPackage($packages) {
     })
 }
 
-function Get-WintunState {
+function Get-WintunState($phase) {
+    $start = $clock.ElapsedMilliseconds
     $devices = @(PnpDevice\Get-PnpDevice -Class Net -PresentOnly)
-    if (($devices | Where-Object FriendlyName -match '^FlutterVlessSetup-[0-9a-f]{32} Tunnel$') -or
-        (NetAdapter\Get-NetAdapter -IncludeHidden | Where-Object Name -match '^FlutterVlessSetup-[0-9a-f]{32}$')) {
-        return 'blocked'
-    }
+    $hasSetupAdapter = ($devices | Where-Object FriendlyName -match '^FlutterVlessSetup-[0-9a-f]{32} Tunnel$') -or
+        (NetAdapter\Get-NetAdapter -IncludeHidden | Where-Object Name -match '^FlutterVlessSetup-[0-9a-f]{32}$')
+    Record-Timing "${phase}_devices" $start
+    if ($hasSetupAdapter) { return 'blocked' }
+    $start = $clock.ElapsedMilliseconds
     $packages = @(Get-WintunPackages)
+    Record-Timing "${phase}_driver_store" $start
     if (Test-PinnedPackage $packages) { return 'present' }
     if ($packages.Count -ne 0) { return 'blocked' }
 
@@ -66,6 +84,7 @@ function Copy-VerifiedWintun($source, $destination) {
 
 $failure = 'failed_inventory'
 try {
+    $start = $clock.ElapsedMilliseconds
     $action = $env:FLUTTER_VLESS_WINTUN_STAGE_ACTION
     if ($action -cnotin @('inspect', 'stage')) { throw 'Unknown operation' }
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -78,14 +97,16 @@ try {
     foreach ($module in 'Dism', 'PnpDevice', 'NetAdapter') {
         Import-Module (Join-Path $moduleDirectory "$module\$module.psd1")
     }
+    Record-Timing 'initialization' $start
 
-    $status = Get-WintunState
+    $status = Get-WintunState 'initial'
     if ($action -eq 'inspect' -or $status -ne 'absent') {
-        [Console]::WriteLine($status)
+        Write-Result $status
         if ($status -eq 'blocked') { exit 1 }
         exit 0
     }
 
+    $start = $clock.ElapsedMilliseconds
     $failure = 'failed_scratch'
     $acl = [Security.AccessControl.DirectorySecurity]::new()
     $acl.SetAccessRuleProtection($true, $false)
@@ -105,6 +126,8 @@ try {
         $dll = Join-Path $privateDirectory 'wintun.dll'
         $failure = 'failed_verify'
         Copy-VerifiedWintun $env:FLUTTER_VLESS_WINTUN_STAGE_DLL $dll
+        Record-Timing 'private_copy' $start
+        $start = $clock.ElapsedMilliseconds
         $helper = Join-Path $privateDirectory 'stage-wintun.exe'
         # Wintun can queue orphan cleanup from CloseAdapter. The child keeps the
         # DLL loaded until process exit, then this parent removes the staging files.
@@ -149,31 +172,42 @@ public static class FlutterVlessWintunSetup {
         $compiler = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
         & $compiler '/nologo' '/target:exe' '/platform:x64' "/out:$helper" $sourceFile *> $null
         if ($LASTEXITCODE -ne 0) { throw 'Wintun probe compilation failed' }
+        Record-Timing 'compile_probe' $start
 
         # Loading Wintun can itself clean up legacy devices. Recheck before loading it.
         $failure = 'failed_inventory'
-        $status = Get-WintunState
+        $status = Get-WintunState 'preflight'
         if ($status -eq 'absent') {
             $failure = 'failed_probe'
+            $start = $clock.ElapsedMilliseconds
             & $helper $dll $name
             if ($LASTEXITCODE -ne 0) { throw 'Wintun adapter creation failed' }
+            Record-Timing 'native_probe' $start
             $failure = 'failed_verify'
             $deadline = [Diagnostics.Stopwatch]::StartNew()
+            $start = $clock.ElapsedMilliseconds
             do {
                 $adapter = (NetAdapter\Get-NetAdapter -IncludeHidden | Where-Object Name -eq $name) -or
                     (PnpDevice\Get-PnpDevice -Class Net -PresentOnly | Where-Object FriendlyName -eq "$name Tunnel")
                 if (!$adapter) { break }
                 Start-Sleep -Milliseconds 100
             } while ($deadline.Elapsed.TotalSeconds -lt 5)
+            Record-Timing 'verify_devices' $start
+            $start = $clock.ElapsedMilliseconds
             if ($adapter -or !(Test-PinnedPackage @(Get-WintunPackages))) {
                 throw 'Wintun setup verification failed'
             }
+            Record-Timing 'verify_driver_store' $start
             $status = 'staged'
         }
         $failure = 'failed_scratch'
     }
-    finally { [IO.Directory]::Delete($privateDirectory, $true) }
-    [Console]::WriteLine($status)
+    finally {
+        $start = $clock.ElapsedMilliseconds
+        [IO.Directory]::Delete($privateDirectory, $true)
+        Record-Timing 'cleanup' $start
+    }
+    Write-Result $status
     if ($status -eq 'blocked') { exit 1 }
 }
 catch {

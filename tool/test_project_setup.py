@@ -14,6 +14,7 @@ import unittest
 
 REPO = Path(__file__).resolve().parent.parent
 PLATFORMS = ("macos", "android", "windows", "ios")
+SETUP_TIMING_MARKER = "WINDOWS_SETUP_TIMING "
 
 
 def run(args, cwd, expected=0, env=None, timeout=120):
@@ -27,6 +28,34 @@ def run(args, cwd, expected=0, env=None, timeout=120):
     if result.returncode != expected:
         raise AssertionError(f"{args} exited {result.returncode}:\n{result.stdout}{result.stderr}")
     return result.stdout
+
+
+def read_setup_timing(output, pre_staged):
+    timing_lines = [line[len(SETUP_TIMING_MARKER):] for line in output.splitlines()
+                    if line.startswith(SETUP_TIMING_MARKER)]
+    assert len(timing_lines) == 1, "Expected one Windows setup timing receipt"
+    timing = json.loads(timing_lines[0])
+    expected = {"project_plan", "runtime_prepare", "project_apply", "total"}
+    if pre_staged:
+        expected.update(("wintun_stage", "wintun_phases"))
+    assert isinstance(timing, dict) and set(timing) == expected, "Unexpected Windows setup timing fields"
+    phases = timing.pop("wintun_phases", None)
+    assert all(type(value) is int and 0 <= value <= timing["total"] for value in timing.values()), \
+        "Invalid Windows setup duration"
+    if pre_staged:
+        assert isinstance(phases, dict) and phases, "Missing Wintun helper timings"
+        assert all(type(value) is int and 0 <= value <= timing["wintun_stage"] for value in phases.values()), \
+            "Invalid Wintun helper duration"
+        timing["wintun_phases"] = phases
+    return timing
+
+
+def timing_summary(file, label, wall_ms, timing):
+    print(f"- VPN setup ({label}): {wall_ms} ms including runtime provisioning.", file=file)
+    phases = ", ".join(f"{name} {ms} ms" for name, ms in timing.items() if type(ms) is int)
+    print(f"  - Setup CLI timings: {phases}.", file=file)
+    if helper := timing.get("wintun_phases"):
+        print(f"  - Wintun helper: {', '.join(f'{name} {ms} ms' for name, ms in helper.items())}.", file=file)
 
 
 def snapshot(app):
@@ -165,6 +194,8 @@ class ProjectSetupTest(unittest.TestCase):
                     if pre_staged:
                         setup.append("--stage-wintun")
                         doctor.append("--stage-wintun")
+                    timing_env = (dict(os.environ, FLUTTER_VLESS_SETUP_TIMING="1")
+                                  if compare_wintun else None)
                     if compare_wintun:
                         self.assertEqual(smoke.wintun_driver_inventory(), [],
                                          "The Windows runner is not cold: Wintun was already staged")
@@ -186,10 +217,11 @@ class ProjectSetupTest(unittest.TestCase):
                         setup_log = smoke.setupapi_baseline()
 
                     started = time.monotonic_ns()
-                    first = run(setup, app, timeout=240)
+                    first = run(setup, app, timeout=240, env=timing_env)
                     setup_ms = (time.monotonic_ns() - started) // 1_000_000
                     self.assertIn("project configured.", first)
                     if compare_wintun:
+                        first_timing = read_setup_timing(first, pre_staged)
                         if pre_staged:
                             self.assertIn("Wintun driver staged.", first)
                         packages = smoke.wintun_driver_inventory()
@@ -199,15 +231,6 @@ class ProjectSetupTest(unittest.TestCase):
                         self.assertIn(setupapi["status"], ("observed", "no_wintun_sections"), setupapi)
                         self.assertEqual(any(row["stage"] == "driver_stage" for row in setupapi["sections"]),
                                          pre_staged, setupapi)
-                        evidence = dict(wintun_benchmark=benchmark, setup_ms=setup_ms, setupapi_wintun=setupapi,
-                                        installed_before_first_connect=pre_staged)
-                        print("WINDOWS_WINTUN_SETUP " + json.dumps(evidence), flush=True)
-                        if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
-                            phases = ", ".join(f"{row['stage']} {row['elapsed_ms']} ms" for row in setupapi["sections"])
-                            with Path(summary).open("a", encoding="utf-8") as file:
-                                print(f"- VPN setup ({benchmark}): {setup_ms} ms including runtime provisioning.", file=file)
-                                if phases:
-                                    print(f"  - SetupAPI during setup: {phases}.", file=file)
                         repeat_log = smoke.setupapi_baseline()
                     stage = app / "windows/.flutter_vless/runtime/x64"
                     expected = {"xray.exe", "geoip.dat", "geosite.dat", "LICENSE.xray-core"}
@@ -224,7 +247,13 @@ class ProjectSetupTest(unittest.TestCase):
                     }
                     self.assertTrue(changed and all(path.startswith("windows/") for path in changed))
                     for command in (doctor, setup, doctor):
-                        output = run(command, app)
+                        started = time.monotonic_ns()
+                        output = run(command, app, env=timing_env if command is setup else None)
+                        if compare_wintun and command is setup:
+                            repeat_setup_ms = (time.monotonic_ns() - started) // 1_000_000
+                            repeat_timing = read_setup_timing(output, pre_staged)
+                            self.assertEqual(repeat_timing["runtime_prepare"], 0)
+                            self.assertEqual(repeat_timing["project_apply"], 0)
                         self.assertIn("project configuration is up to date.", output)
                         self.assertNotIn("Download and verify", output)
                         self.assertEqual(snapshot(app), configured)
@@ -236,6 +265,24 @@ class ProjectSetupTest(unittest.TestCase):
                         repeat_setupapi = smoke.setupapi_wintun_delta(repeat_log)
                         self.assertEqual(repeat_setupapi, dict(status="no_wintun_sections", sections=[]),
                                          "Repeat setup ran Wintun installation again or lost its audit evidence")
+                        evidence = dict(wintun_benchmark=benchmark, setup_ms=setup_ms, setup_timing_ms=first_timing,
+                                        setupapi_wintun=setupapi, installed_before_first_connect=pre_staged,
+                                        repeat_setup_ms=repeat_setup_ms, repeat_setup_timing_ms=repeat_timing)
+                        if pre_staged:
+                            signature = smoke.wintun_authenticode_status(stage / "wintun.dll")
+                            self.assertEqual(signature, "Valid", "Pinned Wintun DLL Authenticode trust failed")
+                            evidence["wintun_authenticode"] = signature
+                        print("WINDOWS_WINTUN_SETUP " + json.dumps(evidence), flush=True)
+                        if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+                            with Path(summary).open("a", encoding="utf-8") as file:
+                                timing_summary(file, benchmark, setup_ms, first_timing)
+                                phases = ", ".join(f"{row['stage']} {row['elapsed_ms']} ms"
+                                                   for row in setupapi["sections"])
+                                if phases:
+                                    print(f"  - SetupAPI during setup: {phases}.", file=file)
+                                if pre_staged:
+                                    print(f"  - Pinned Wintun DLL Authenticode: {signature}.", file=file)
+                                timing_summary(file, f"{benchmark}, repeat", repeat_setup_ms, repeat_timing)
                     print(f"{mode}: doctor and dry-run were read-only; repeated setup changed no files.", flush=True)
 
                     if live_probe:

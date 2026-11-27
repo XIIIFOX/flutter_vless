@@ -74,9 +74,14 @@ class SetupPlan {
     _preparations[description] = prepare;
   }
 
-  Future<void> apply() async {
+  Future<void> apply({void Function(String, int)? recordTiming}) async {
+    final clock = recordTiming == null ? null : (Stopwatch()..start());
     for (final prepare in _preparations.values.toList()) {
       await prepare();
+    }
+    if (clock != null) {
+      recordTiming!('runtime_prepare', clock.elapsedMilliseconds);
+      clock.reset();
     }
     final staged = <({File file, File next, File? backup})>[];
     final committed = <({File file, File next, File? backup})>[];
@@ -126,6 +131,9 @@ class SetupPlan {
           dir.deleteSync();
         }
       }
+    }
+    if (clock != null) {
+      recordTiming!('project_apply', clock.elapsedMilliseconds);
     }
   }
 

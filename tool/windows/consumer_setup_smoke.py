@@ -146,11 +146,19 @@ def system_proxy(settings=None):
                 free(option.value.text)
 
 
-def powershell(command, *, timeout=15):
+def powershell(command, *, timeout=15, env=None):
     return subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
-        check=True, capture_output=True, encoding="utf-8", timeout=timeout,
+        check=True, capture_output=True, encoding="utf-8", timeout=timeout, env=env,
     ).stdout.strip()
+
+
+def wintun_authenticode_status(dll):
+    return powershell(
+        "(Get-AuthenticodeSignature -LiteralPath $env:FLUTTER_VLESS_WINTUN_TEST_DLL "
+        "-ErrorAction Stop).Status.ToString()",
+        env=dict(os.environ, FLUTTER_VLESS_WINTUN_TEST_DLL=str(dll)), timeout=45,
+    )
 
 
 def wintun_driver_inventory():

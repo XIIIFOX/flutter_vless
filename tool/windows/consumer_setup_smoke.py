@@ -169,7 +169,7 @@ def private_runtime_directories():
         raise AssertionError("Cannot enumerate private runtime candidates") from None
 
 
-def verify_private_runtime(bundle, before):
+def verify_private_runtime(bundle, before, probe):
     added = private_runtime_directories() - before
     assert len(added) == 1, "Expected one new private VPN runtime"
     runtime = added.pop()
@@ -189,31 +189,10 @@ def verify_private_runtime(bundle, before):
     except OSError:
         raise AssertionError("Cannot read the private runtime snapshot") from None
 
-    paths = ", ".join("'" + str(path).replace("'", "''") + "'" for path in [runtime, *files])
     try:
-        acl_status = powershell(f"""
-            $ErrorActionPreference = 'Stop'
-            $sid = [Security.Principal.SecurityIdentifier]
-            foreach ($path in @({paths})) {{
-                $acl = Get-Acl -LiteralPath $path
-                if (!$acl.AreAccessRulesProtected -or $acl.GetOwner($sid).Value -ne 'S-1-5-32-544') {{
-                    exit 1
-                }}
-                $rules = @($acl.GetAccessRules($true, $true, $sid))
-                if ($rules.Count -ne 2 -or
-                    (($rules | ForEach-Object {{ $_.IdentityReference.Value }} | Sort-Object) -join ',') -ne 'S-1-5-18,S-1-5-32-544') {{
-                    exit 1
-                }}
-                foreach ($rule in $rules) {{
-                    if ($rule.AccessControlType -ne 'Allow' -or $rule.FileSystemRights -ne 'FullControl' -or $rule.IsInherited) {{
-                        exit 1
-                    }}
-                }}
-            }}
-            'valid'
-        """)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        raise AssertionError("Private runtime owner or ACL verification failed") from None
+        acl_status = fixtures.native(probe, "private-runtime-acl", runtime)
+    except (OSError, subprocess.TimeoutExpired):
+        raise AssertionError("Cannot run the private runtime ACL observer") from None
     assert acl_status == "valid", "Private runtime owner or ACL was not verified"
     return runtime
 
@@ -456,7 +435,17 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
             )
             during = wait_receipt(active, receipt, process, "live HTTPS and routing", 90)
             assert during["mode"] == mode
-            owned_runtime = verify_private_runtime(bundle, runtime_before) if runtime_before is not None else None
+            owned_runtime = None
+            if runtime_before is not None:
+                measured = {
+                    "start_to_connected_ms": during["start_to_connected_ms"],
+                    "start_to_first_https_ms": during["start_to_first_https_ms"],
+                    **{name: during["startup_stages_ms"][name]
+                       for name in ("prepare_runtime", *PRIVATE_RUNTIME_STAGES)},
+                }
+                assert all(type(ms) is int and ms >= 0 for ms in measured.values())
+                print("WINDOWS_PRIVATE_RUNTIME_TIMING " + json.dumps(measured), flush=True)
+                owned_runtime = verify_private_runtime(bundle, runtime_before, probe)
             count = int(fixtures.native(probe, "policy-count"))
             proxy_settings = system_proxy()
             if mode == "vpn":

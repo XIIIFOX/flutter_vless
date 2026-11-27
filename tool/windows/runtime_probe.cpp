@@ -16,6 +16,7 @@
 #include "v2ray_manager.h"
 #include "diagnostics_log.h"
 #include <windows.h>
+#include <aclapi.h>
 #include <shellapi.h>
 #include <fwpmu.h>
 #include "traffic_protection.h"
@@ -25,6 +26,38 @@
 #include "ipv6_tcp_challenge_peer.h"
 #include <algorithm>
 #include <cstring>
+
+namespace {
+const char* PrivateRuntimeAclError(const std::filesystem::path& path) {
+  PSID owner = nullptr;
+  PACL dacl = nullptr;
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  const auto status = GetNamedSecurityInfoW(const_cast<wchar_t*>(path.c_str()),
+      SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+      &owner, nullptr, &dacl, nullptr, &descriptor);
+  const std::unique_ptr<void, decltype(&LocalFree)> owned_descriptor(descriptor, LocalFree);
+  if (status != ERROR_SUCCESS || !owner || !dacl || !descriptor) return "read";
+  if (!IsWellKnownSid(owner, WinBuiltinAdministratorsSid)) return "owner";
+  SECURITY_DESCRIPTOR_CONTROL control{};
+  DWORD revision = 0;
+  if (!GetSecurityDescriptorControl(descriptor, &control, &revision) ||
+      !(control & SE_DACL_PROTECTED) || dacl->AceCount != 2) return "protection";
+  bool administrators = false, system = false;
+  for (DWORD i = 0; i < dacl->AceCount; ++i) {
+    void* raw = nullptr;
+    if (!GetAce(dacl, i, &raw)) return "entry";
+    auto* ace = static_cast<ACCESS_ALLOWED_ACE*>(raw);
+    if (ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE ||
+        ace->Header.AceFlags != 0 || ace->Mask != FILE_ALL_ACCESS) return "access";
+    auto* sid = static_cast<PSID>(&ace->SidStart);
+    if (IsWellKnownSid(sid, WinBuiltinAdministratorsSid)) administrators = true;
+    else if (IsWellKnownSid(sid, WinLocalSystemSid)) system = true;
+    else return "identity";
+  }
+  return administrators && system ? nullptr : "missing_identity";
+}
+}  // namespace
+
 int main(int argc,char** argv) {
   int wide_count = 0;
   auto wide = CommandLineToArgvW(GetCommandLineW(), &wide_count);
@@ -34,6 +67,18 @@ int main(int argc,char** argv) {
   if(argc<2)return 2;
   std::string action=argv[1];
   const bool isolated = [] { wchar_t value[16]{}; return GetEnvironmentVariableW(L"GITHUB_ACTIONS", value, 16) && std::wstring(value) == L"true"; }();
+  if (action == "private-runtime-acl") {
+    if (!isolated || arguments.size() != 3 || !flutter_vless::native::IsAdministrator()) return 20;
+    const std::filesystem::path directory(arguments[2]);
+    for (const auto& path : {directory, directory / L"xray.exe", directory / L"geoip.dat", directory / L"geosite.dat"}) {
+      if (const auto* error = PrivateRuntimeAclError(path)) {
+        std::cout << "invalid_" << error << std::endl;
+        return 0;
+      }
+    }
+    std::cout << "valid" << std::endl;
+    return 0;
+  }
   if (action == "release-protection") {
     if (!isolated) return 20;
     flutter_vless::TrafficProtection protection;

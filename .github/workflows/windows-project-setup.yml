@@ -11,6 +11,10 @@ on:
         description: Compare first and repeat VPN starts on separate elevated Windows runners
         type: boolean
         default: false
+      staged_runtime_only:
+        description: Measure first and repeat VPN starts with the staged Wintun driver
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        stage_wintun: ${{ fromJSON(inputs.compare_wintun_staging && '[false, true]' || '[false]') }}
+        stage_wintun: ${{ fromJSON(inputs.staged_runtime_only && '[true]' || inputs.compare_wintun_staging && '[false, true]' || '[false]') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,7 +41,7 @@ jobs:
           channel: stable
           cache: true
       - name: Require an elevated token and build the network observer
-        if: inputs.live_runtime || inputs.compare_wintun_staging
+        if: inputs.live_runtime || inputs.compare_wintun_staging || inputs.staged_runtime_only
         shell: pwsh
         run: |
           $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -50,6 +54,6 @@ jobs:
           if ($LASTEXITCODE) { throw 'Could not build the native network observer' }
       - name: Verify setup, doctor, and MSVC builds on fresh proxy and VPN apps
         env:
-          FLUTTER_VLESS_WINDOWS_LIVE_PROBE: ${{ (inputs.live_runtime || inputs.compare_wintun_staging) && 'build/windows-project-setup/runtime_probe.exe' || '' }}
-          FLUTTER_VLESS_WINDOWS_WINTUN_BENCHMARK: ${{ inputs.compare_wintun_staging && (matrix.stage_wintun && 'pre-staged' || 'control') || '' }}
+          FLUTTER_VLESS_WINDOWS_LIVE_PROBE: ${{ (inputs.live_runtime || inputs.compare_wintun_staging || inputs.staged_runtime_only) && 'build/windows-project-setup/runtime_probe.exe' || '' }}
+          FLUTTER_VLESS_WINDOWS_WINTUN_BENCHMARK: ${{ (inputs.compare_wintun_staging || inputs.staged_runtime_only) && (matrix.stage_wintun && 'pre-staged' || 'control') || '' }}
         run: python tool/test_project_setup.py -v ProjectSetupTest.test_windows_published_runtime_and_build

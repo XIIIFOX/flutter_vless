@@ -21,6 +21,11 @@ HOSTS = ("2ip.ru", "myip.com")
 HTTPS_HOST = "api.ipify.org"
 CAPTURE_ROUTES = {"0.0.0.0/1", "128.0.0.0/1", "10.0.85.53/32", "::/1", "8000::/1"}
 IPV6_CONTROL_SUBNET = 3
+PRIVATE_RUNTIME_STAGES = (
+    "runtime_preflight", "runtime_snapshot", "runtime_directory",
+    *(f"runtime_{file}_{phase}" for file in ("xray", "geoip", "geosite")
+      for phase in ("open", "copy", "flush", "close")),
+)
 SETUPAPI_READ_LIMIT = 256 * 1024
 SETUPAPI_TIMESTAMP = r"\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d{3}"
 SETUPAPI_HEADER = re.compile(r">>>\s+\[([^\r\n]+)\]")
@@ -480,6 +485,10 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
             if mode == "vpn":
                 stages = final["startup_stages_ms"]
                 assert "ipv6_address" in stages and all(type(ms) is int and ms >= 0 for ms in stages.values())
+                missing = set(PRIVATE_RUNTIME_STAGES).difference(stages)
+                assert not missing, f"Missing clean-app private runtime timings: {sorted(missing)}"
+                # The aggregate includes all files, whose operations may overlap.
+                assert all(stages[stage] <= stages["prepare_runtime"] for stage in PRIVATE_RUNTIME_STAGES)
                 result["startup_stages_ms"] = stages
                 result["ipv4_setup"] = final["ipv4_setup"]
                 result["ipv4_dad_fallback"] = final["ipv4_dad_fallback"]
@@ -508,7 +517,11 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                               f"Stop {times['stop_ms']} ms. Routing and network restoration passed.", file=file)
                     if mode == "vpn":
                         if address_loss != "IPv6":
-                            print("  - Startup stages: " + ", ".join(f"{stage} {ms} ms" for stage, ms in stages.items()), file=file)
+                            startup = ", ".join(f"{stage} {ms} ms" for stage, ms in stages.items()
+                                                if stage not in PRIVATE_RUNTIME_STAGES)
+                            runtime = ", ".join(f"{stage} {stages[stage]} ms" for stage in PRIVATE_RUNTIME_STAGES)
+                            print(f"  - Startup stages: {startup}.", file=file)
+                            print(f"  - Private runtime phases ({stages['prepare_runtime']} ms total): {runtime}.", file=file)
                         if measure_wintun_install:
                             sections = ", ".join(f"{row['stage']} {row['elapsed_ms']} ms" for row in setupapi["sections"])
                             print(f"  - Wintun SetupAPI: {setupapi['status']} ({sections or 'no completed sections'}).", file=file)

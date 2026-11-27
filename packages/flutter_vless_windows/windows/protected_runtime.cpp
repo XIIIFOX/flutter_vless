@@ -4,6 +4,11 @@
 
 namespace flutter_vless::native {
 namespace {
+using Clock = std::chrono::steady_clock;
+std::chrono::milliseconds Milliseconds(Clock::duration duration) {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(duration);
+}
+
 class AdministratorDescriptor {
  public:
   AdministratorDescriptor() {
@@ -24,7 +29,8 @@ HANDLE NewFile(const fs::path& path) {
   return CreateFileW(path.c_str(), GENERIC_WRITE, 0, &security, CREATE_NEW,
       FILE_ATTRIBUTE_NOT_CONTENT_INDEXED | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
 }
-bool CopyImage(const fs::path& source, const fs::path& destination) {
+bool CopyImage(const fs::path& source, const fs::path& destination, RuntimeFileTiming* timing) {
+  const auto started = Clock::now();
   HANDLE input = CreateFileW(source.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
       OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
   if (input == INVALID_HANDLE_VALUE) return false;
@@ -34,6 +40,7 @@ bool CopyImage(const fs::path& source, const fs::path& destination) {
   }
   HANDLE output = NewFile(destination);
   if (output == INVALID_HANDLE_VALUE) { CloseHandle(input); return false; }
+  const auto opened = Clock::now();
   std::array<char, 64 * 1024> bytes{};
   DWORD count = 0, written = 0;
   bool ok = true;
@@ -42,8 +49,14 @@ bool CopyImage(const fs::path& source, const fs::path& destination) {
     if (!count) break;
     ok = WriteFile(output, bytes.data(), count, &written, nullptr) && written == count;
   }
+  const auto copied = Clock::now();
   ok = ok && FlushFileBuffers(output);
+  const auto flushed = Clock::now();
   CloseHandle(output); CloseHandle(input);
+  if (timing) {
+    *timing = {Milliseconds(opened - started), Milliseconds(copied - opened),
+        Milliseconds(flushed - copied), Milliseconds(Clock::now() - flushed), ok};
+  }
   return ok;
 }
 }
@@ -51,7 +64,9 @@ ProtectedRuntime::~ProtectedRuntime() {
   if (directory_handle_ != INVALID_HANDLE_VALUE) CloseHandle(directory_handle_);
   if (!directory_.empty()) { std::error_code error; fs::remove_all(directory_, error); }
 }
-bool ProtectedRuntime::Create(const fs::path& bundled_xray, bool copy_geo_assets) {
+bool ProtectedRuntime::Create(const fs::path& bundled_xray, bool copy_geo_assets,
+    RuntimeSnapshotTiming* timing) {
+  const auto started = Clock::now();
   if (!directory_.empty() || !IsAdministrator()) return false;
   wchar_t windows[32768]{};
   if (!GetWindowsDirectoryW(windows, 32768)) return false;
@@ -66,13 +81,16 @@ bool ProtectedRuntime::Create(const fs::path& bundled_xray, bool copy_geo_assets
       FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
       FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
   if (directory_handle_ == INVALID_HANDLE_VALUE) return false;
-  if (!CopyImage(bundled_xray, Executable())) return false;
-  if (copy_geo_assets) for (const auto* asset : {L"geoip.dat", L"geosite.dat"}) {
-    auto source = bundled_xray.parent_path() / asset;
+  if (timing) timing->directory = Milliseconds(Clock::now() - started);
+  if (!CopyImage(bundled_xray, Executable(), timing ? &timing->xray : nullptr)) return false;
+  if (!copy_geo_assets) return true;
+  const auto copy_asset = [&](const wchar_t* asset, RuntimeFileTiming* asset_timing) {
+    const auto source = bundled_xray.parent_path() / asset;
     std::error_code error;
-    if (fs::exists(source, error) && !CopyImage(source, directory_ / asset)) return false;
-  }
-  return true;
+    return !fs::exists(source, error) || CopyImage(source, directory_ / asset, asset_timing);
+  };
+  return copy_asset(L"geoip.dat", timing ? &timing->geoip : nullptr) &&
+      copy_asset(L"geosite.dat", timing ? &timing->geosite : nullptr);
 }
 bool ProtectedRuntime::WriteConfig(const std::string& data, fs::path& path) {
   if (directory_.empty() || data.size() > 16 * 1024 * 1024) return false;

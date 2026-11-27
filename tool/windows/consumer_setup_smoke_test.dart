@@ -263,6 +263,13 @@ Map<String, int> _vpnStartupStages(String snapshot) {
     'authored_config',
     'prepare_config',
     'prepare_runtime',
+    'runtime_preflight',
+    'runtime_snapshot',
+    'runtime_directory',
+    'runtime_xray_open',
+    'runtime_xray_copy',
+    'runtime_xray_flush',
+    'runtime_xray_close',
     'validate_core',
     'install_wfp',
     'prepare_worker',
@@ -277,7 +284,20 @@ Map<String, int> _vpnStartupStages(String snapshot) {
     'routes_and_wfp',
     'packet_path',
   };
-  const optional = {'ipv4_configure', 'ipv6_configure', 'xray_spawn', 'tun_spawn'};
+  const optional = {
+    'ipv4_configure',
+    'ipv6_configure',
+    'xray_spawn',
+    'tun_spawn',
+    'runtime_geoip_open',
+    'runtime_geoip_copy',
+    'runtime_geoip_flush',
+    'runtime_geoip_close',
+    'runtime_geosite_open',
+    'runtime_geosite_copy',
+    'runtime_geosite_flush',
+    'runtime_geosite_close',
+  };
   final timings = <String, int>{};
   final pattern = RegExp(r'^\[vpn\] startup timing ([a-z0-9_]+) (\d+) ms$');
   for (final line in const LineSplitter().convert(snapshot)) {

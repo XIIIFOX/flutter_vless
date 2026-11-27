@@ -28,9 +28,30 @@ class StartupTiming {
   }
 
   void Record(const char* stage, Clock::time_point start, Clock::time_point end) {
-    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    if (published_) Append(stage, elapsed);
-    else pending_.emplace_back(stage, elapsed);
+    Record(stage, std::chrono::duration_cast<std::chrono::milliseconds>(end - start));
+  }
+
+  void Record(const char* stage, std::chrono::milliseconds elapsed) {
+    if (published_) Append(stage, elapsed.count());
+    else pending_.emplace_back(stage, elapsed.count());
+  }
+
+  void RecordSnapshot(const flutter_vless::native::RuntimeSnapshotTiming& snapshot) {
+    Record("runtime_directory", snapshot.directory);
+    const auto record_file = [this](const auto& file, const char* opened, const char* copied,
+        const char* flushed, const char* closed) {
+      if (!file.copied) return;
+      Record(opened, file.open);
+      Record(copied, file.copy);
+      Record(flushed, file.flush);
+      Record(closed, file.close);
+    };
+    record_file(snapshot.xray, "runtime_xray_open", "runtime_xray_copy",
+        "runtime_xray_flush", "runtime_xray_close");
+    record_file(snapshot.geoip, "runtime_geoip_open", "runtime_geoip_copy",
+        "runtime_geoip_flush", "runtime_geoip_close");
+    record_file(snapshot.geosite, "runtime_geosite_open", "runtime_geosite_copy",
+        "runtime_geosite_flush", "runtime_geosite_close");
   }
 
   void Publish() {
@@ -228,6 +249,7 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
     flutter_vless::preparation::StartupOutcome* outcome, flutter_vless::preparation::Report changes) {
   using namespace flutter_vless;
   StartupTiming timing;
+  const auto prepare_started = StartupTiming::Clock::now();
   if (outcome) outcome->Fail(preparation::Stage::prepare);
   if (!asset_location::Valid(assets)) return false;
   // Validate before retiring an existing session. No setup failure is reported
@@ -244,11 +266,17 @@ bool VpnService::Start(const std::string& config, const flutter_vless::NativeOpt
   auto authored = xray_config::Parse(config);
   if (!xray_config::Normalize(authored)) return false;
   if (outcome) outcome->Fail(preparation::Stage::persist);
+  const auto runtime_started = StartupTiming::Clock::now();
+  native::RuntimeSnapshotTiming runtime_timing;
   auto runtime = std::make_unique<native::ProtectedRuntime>();
-  if (!runtime->Create(*xray, !assets.has_value())) {
+  if (!runtime->Create(*xray, !assets.has_value(), &runtime_timing)) {
     Event("Cannot create private administrator-owned VPN runtime"); return false;
   }
+  const auto runtime_finished = StartupTiming::Clock::now();
   timing.Mark("prepare_runtime");
+  timing.Record("runtime_preflight", prepare_started, runtime_started);
+  timing.Record("runtime_snapshot", runtime_started, runtime_finished);
+  timing.RecordSnapshot(runtime_timing);
   // Both Core checks use this one administrator-owned snapshot. Reject an
   // invalid authored profile before endpoint bootstrap or session replacement.
   fs::path authored_path;

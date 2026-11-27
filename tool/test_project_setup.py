@@ -30,22 +30,28 @@ def run(args, cwd, expected=0, env=None, timeout=120):
     return result.stdout
 
 
-def read_setup_timing(output, pre_staged):
+def read_setup_timing(output, pre_staged, *, repeat=False):
     timing_lines = [line[len(SETUP_TIMING_MARKER):] for line in output.splitlines()
                     if line.startswith(SETUP_TIMING_MARKER)]
     assert len(timing_lines) == 1, "Expected one Windows setup timing receipt"
     timing = json.loads(timing_lines[0])
-    expected = {"project_plan", "runtime_prepare", "project_apply", "total"}
+    required = {"project_plan", "runtime_prepare", "project_apply", "total"}
+    known = set(required)
     if pre_staged:
-        expected.update(("wintun_stage", "wintun_phases"))
-    assert isinstance(timing, dict) and set(timing) == expected, "Unexpected Windows setup timing fields"
+        required.add("wintun_phases")
+        if not repeat:
+            required.add("wintun_stage")
+        known.update(("wintun_inspect", "wintun_stage", "wintun_phases"))
+    assert isinstance(timing, dict) and required <= set(timing) <= known, "Unexpected Windows setup timing fields"
     phases = timing.pop("wintun_phases", None)
-    assert all(type(value) is int and 0 <= value <= timing["total"] for value in timing.values()), \
-        "Invalid Windows setup duration"
+    assert all(type(value) is int and value >= 0 for value in timing.values()), "Invalid Windows setup duration"
+    assert all(value <= timing["total"] for value in timing.values()), "Windows setup phase exceeds total duration"
     if pre_staged:
         assert isinstance(phases, dict) and phases, "Missing Wintun helper timings"
-        assert all(type(value) is int and 0 <= value <= timing["wintun_stage"] for value in phases.values()), \
-            "Invalid Wintun helper duration"
+        for name, value in phases.items():
+            phase = f"wintun_{name.partition('_')[0]}"
+            assert phase in ("wintun_inspect", "wintun_stage") and phase in timing, "Unknown Wintun helper phase"
+            assert type(value) is int and 0 <= value <= timing[phase], "Invalid Wintun helper duration"
         timing["wintun_phases"] = phases
     return timing
 
@@ -251,7 +257,7 @@ class ProjectSetupTest(unittest.TestCase):
                         output = run(command, app, env=timing_env if command is setup else None)
                         if compare_wintun and command is setup:
                             repeat_setup_ms = (time.monotonic_ns() - started) // 1_000_000
-                            repeat_timing = read_setup_timing(output, pre_staged)
+                            repeat_timing = read_setup_timing(output, pre_staged, repeat=True)
                             self.assertEqual(repeat_timing["runtime_prepare"], 0)
                             self.assertEqual(repeat_timing["project_apply"], 0)
                         self.assertIn("project configuration is up to date.", output)

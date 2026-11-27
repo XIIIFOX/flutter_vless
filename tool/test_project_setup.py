@@ -276,9 +276,10 @@ class ProjectSetupTest(unittest.TestCase):
                                         repeat_setup_ms=repeat_setup_ms, repeat_setup_timing_ms=repeat_timing)
                         if pre_staged:
                             signature = smoke.wintun_authenticode_status(stage / "wintun.dll")
-                            self.assertEqual(signature, "Valid", "Pinned Wintun DLL Authenticode trust failed")
                             evidence["wintun_authenticode"] = signature
                         print("WINDOWS_WINTUN_SETUP " + json.dumps(evidence), flush=True)
+                        if pre_staged:
+                            self.assertEqual(signature, "Valid", "Pinned Wintun DLL Authenticode trust failed")
                         if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
                             with Path(summary).open("a", encoding="utf-8") as file:
                                 timing_summary(file, benchmark, setup_ms, first_timing)

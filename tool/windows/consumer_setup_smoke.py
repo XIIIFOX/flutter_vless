@@ -146,19 +146,22 @@ def system_proxy(settings=None):
                 free(option.value.text)
 
 
-def powershell(command, *, timeout=15, env=None):
+def powershell(command, *, timeout=15):
     return subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
-        check=True, capture_output=True, encoding="utf-8", timeout=timeout, env=env,
+        check=True, capture_output=True, encoding="utf-8", timeout=timeout,
     ).stdout.strip()
 
 
 def wintun_authenticode_status(dll):
-    return powershell(
-        "(Get-AuthenticodeSignature -LiteralPath $env:FLUTTER_VLESS_WINTUN_TEST_DLL "
-        "-ErrorAction Stop).Status.ToString()",
-        env=dict(os.environ, FLUTTER_VLESS_WINTUN_TEST_DLL=str(dll)), timeout=45,
+    sdk_bins = Path(os.environ["ProgramFiles(x86)"]) / "Windows Kits" / "10" / "bin"
+    candidates = sorted(sdk_bins.glob("10.*/x64/signtool.exe"), reverse=True)
+    assert candidates, "Windows SDK SignTool is required to verify Wintun Authenticode"
+    result = subprocess.run(
+        [str(candidates[0]), "verify", "/pa", str(dll)],
+        capture_output=True, timeout=45,
     )
+    return "Valid" if result.returncode == 0 else f"SignTool exit {result.returncode}"
 
 
 def wintun_driver_inventory():

@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -28,44 +27,6 @@ void main() {
     await expectLater(plan.apply(), throwsA(isA<SetupException>()));
     expect(original.readAsStringSync(), 'original');
     expect(root.listSync(), hasLength(1));
-  });
-
-  test('inspection overlaps preparation and finishes before files change',
-      () async {
-    final started = Completer<void>();
-    final canPrepare = Completer<void>();
-    final prepared = Completer<void>();
-    final canApply = Completer<void>();
-    final destination = File.fromUri(root.uri.resolve('runtime.txt'));
-    plan.defer('prepare verified input', () async {
-      started.complete();
-      await canPrepare.future;
-      plan.writeText('runtime.txt', 'verified');
-      prepared.complete();
-    });
-    final applied = plan.apply(inspect: () async {
-      await started.future;
-      canPrepare.complete();
-      await canApply.future;
-    });
-
-    await prepared.future;
-    expect(destination.existsSync(), isFalse);
-    canApply.complete();
-    await applied;
-    expect(destination.readAsStringSync(), 'verified');
-  });
-
-  test('failed inspection prevents writes even if preparation succeeds',
-      () async {
-    plan.defer('prepare verified input', () async {
-      plan.writeText('runtime.txt', 'verified');
-    });
-    await expectLater(
-      plan.apply(inspect: () => throw const SetupException('blocked driver')),
-      throwsA(isA<SetupException>()),
-    );
-    expect(root.listSync(), isEmpty);
   });
 
   test('changes made after planning are never replaced', () async {

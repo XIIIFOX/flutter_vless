@@ -99,8 +99,8 @@ try {
     }
     Record-Timing 'initialization' $start
 
-    if ($action -eq 'inspect') {
-        $status = Get-WintunState 'initial'
+    $status = Get-WintunState 'initial'
+    if ($action -eq 'inspect' -or $status -ne 'absent') {
         Write-Result $status
         if ($status -eq 'blocked') { exit 1 }
         exit 0

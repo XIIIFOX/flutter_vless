@@ -101,27 +101,31 @@ Usage: dart run flutter_vless:$command --platform macos|android|windows|ios [--p
     }
     final title = '${platform.name} ${mode.name}';
     if (clock != null) timings['project_plan'] = clock.elapsedMilliseconds;
-    final wintun = stageWintun
-        ? await inspectWindowsWintun(request, run: (action, dll) async {
-            final start = clock?.elapsedMilliseconds;
-            final result = await runWindowsWintunCommand(action, dll,
-                recordTiming: clock == null
-                    ? null
-                    : (phases) {
-                        for (final entry in phases.entries) {
-                          wintunPhases['${action}_${entry.key}'] = entry.value;
-                        }
-                      });
-            if (clock != null) {
-              timings['wintun_$action'] = clock.elapsedMilliseconds - start!;
-            }
-            return result;
-          })
-        : null;
-    final needsWintun = wintun != null && !wintun.present;
-    final ready = plan.changedPaths.isEmpty &&
-        plan.pendingActions.isEmpty &&
-        !needsWintun;
+    WindowsWintunStaging? wintun;
+    Future<void> inspectWintun() async {
+      wintun = await inspectWindowsWintun(request, run: (action, dll) async {
+        final start = clock?.elapsedMilliseconds;
+        final result = await runWindowsWintunCommand(action, dll,
+            recordTiming: clock == null
+                ? null
+                : (phases) {
+                    for (final entry in phases.entries) {
+                      wintunPhases['${action}_${entry.key}'] = entry.value;
+                    }
+                  });
+        if (clock != null) {
+          timings['wintun_$action'] = clock.elapsedMilliseconds - start!;
+        }
+        return result;
+      });
+    }
+
+    final projectReady =
+        plan.changedPaths.isEmpty && plan.pendingActions.isEmpty;
+    final inspectDuringPreparation =
+        stageWintun && !doctor && !dryRun && !projectReady;
+    if (stageWintun && !inspectDuringPreparation) await inspectWintun();
+    final ready = projectReady && (wintun?.present ?? true);
     if (ready) {
       stdout.writeln('$title: project configuration is up to date.');
     } else if (doctor || dryRun) {
@@ -132,13 +136,16 @@ Usage: dart run flutter_vless:$command --platform macos|android|windows|ios [--p
       for (final action in plan.pendingActions) {
         stdout.writeln('  $action');
       }
-      if (needsWintun) stdout.writeln('  Stage the pinned Wintun driver.');
+      if (wintun?.present == false) {
+        stdout.writeln('  Stage the pinned Wintun driver.');
+      }
       if (doctor) exitCode = 1;
     } else {
       for (final action in plan.pendingActions) {
         stdout.writeln('  $action');
       }
       await plan.apply(
+          inspect: inspectDuringPreparation ? inspectWintun : null,
           recordTiming: clock == null
               ? null
               : (stage, elapsed) {
@@ -148,8 +155,9 @@ Usage: dart run flutter_vless:$command --platform macos|android|windows|ios [--p
       for (final path in plan.changedPaths) {
         stdout.writeln('  Updated $path');
       }
-      if (needsWintun) {
-        final staged = await wintun.stage();
+      final pendingWintun = wintun;
+      if (pendingWintun != null && !pendingWintun.present) {
+        final staged = await pendingWintun.stage();
         stdout.writeln(
             staged ? 'Wintun driver staged.' : 'Wintun driver already staged.');
       }

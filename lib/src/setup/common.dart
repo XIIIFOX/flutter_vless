@@ -74,15 +74,28 @@ class SetupPlan {
     _preparations[description] = prepare;
   }
 
-  Future<void> apply({void Function(String, int)? recordTiming}) async {
+  /// [inspect] may run concurrently with preparation. Both must finish
+  /// successfully before any project file is written.
+  Future<void> apply({
+    Future<void> Function()? inspect,
+    void Function(String, int)? recordTiming,
+  }) async {
+    Future<void> prepareInputs() async {
+      final clock = recordTiming == null ? null : (Stopwatch()..start());
+      for (final prepare in _preparations.values.toList()) {
+        await prepare();
+      }
+      if (clock != null) {
+        recordTiming!('runtime_prepare', clock.elapsedMilliseconds);
+      }
+    }
+
+    if (inspect == null) {
+      await prepareInputs();
+    } else {
+      await Future.wait([prepareInputs(), Future<void>.sync(inspect)]);
+    }
     final clock = recordTiming == null ? null : (Stopwatch()..start());
-    for (final prepare in _preparations.values.toList()) {
-      await prepare();
-    }
-    if (clock != null) {
-      recordTiming!('runtime_prepare', clock.elapsedMilliseconds);
-      clock.reset();
-    }
     final staged = <({File file, File next, File? backup})>[];
     final committed = <({File file, File next, File? backup})>[];
     final scratch = <Directory>[];

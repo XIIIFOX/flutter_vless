@@ -19,10 +19,16 @@ void Event(const char* message) { flutter_vless::DiagnosticsLog::Instance().Appe
 
 class StartupTiming {
  public:
+  using Clock = std::chrono::steady_clock;
+
   void Mark(const char* stage) {
-    const auto now = std::chrono::steady_clock::now();
-    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - previous_).count();
+    const auto now = Clock::now();
+    Record(stage, previous_, now);
     previous_ = now;
+  }
+
+  void Record(const char* stage, Clock::time_point start, Clock::time_point end) {
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     if (published_) Append(stage, elapsed);
     else pending_.emplace_back(stage, elapsed);
   }
@@ -39,7 +45,7 @@ class StartupTiming {
         "vpn", std::string("startup timing ") + stage + " " + std::to_string(elapsed) + " ms");
   }
 
-  std::chrono::steady_clock::time_point previous_ = std::chrono::steady_clock::now();
+  Clock::time_point previous_ = Clock::now();
   std::vector<std::pair<const char*, std::chrono::milliseconds::rep>> pending_;
   bool published_ = false;
 };
@@ -465,6 +471,9 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   const bool ipv4_retired = RetireIPv4Address();
   if (!RetireIPv6Address() || !ipv4_retired) return fail("Previous owned Wintun address cleanup remains pending");
   if (!private_runtime_) return fail("Private VPN runtime is unavailable");
+  // Only Start's admitted candidate follows a committed WFP transaction
+  // with no tunnel permit. Recovery can still have the prior LUID's permit.
+  const bool fresh_candidate = static_cast<bool>(pending_candidate_);
   worker_candidate_ = pending_candidate_ ? std::move(pending_candidate_)
       : PrepareWorkerCandidate(current_config_, socks_port_, *private_runtime_, asset_directory_, routing_intent_, routing_provenance_, username_, ipv6_tcp_scope_ ? &*ipv6_tcp_scope_ : nullptr);
   if (!worker_candidate_) return fail("Final VPN recovery configuration check failed");
@@ -489,6 +498,52 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
       command.push_back(worker_candidate_->MetadataPath().wstring());
     }
   }
+  using Clock = StartupTiming::Clock;
+  NET_LUID previous_adapter{};
+  DWORD previous_status = ERROR_NOT_FOUND;
+  MIB_IF_ROW2 previous_row{};
+  bool previous_identified = false;
+  Clock::time_point tun_started{};
+  const auto launch_tun = [&] {
+    if (!requested_.load()) return fail("VPN startup cancelled");
+    const auto config_started = Clock::now();
+    // Credentials live only in a private file, never in the process command line.
+    // The bundled tun2socks uses the "tun" driver on Windows too.
+    std::string tun = "device: tun://flutter_vless_tun\nproxy: socks5://" + username_ + ":" + password_
+        + "@127.0.0.1:" + std::to_string(socks_port_) + "\nloglevel: silent\nmtu: 1500\n";
+    if (!private_runtime_->WriteConfig(tun, tun_config_path_)) return fail("Cannot write the private tun2socks configuration");
+    previous_status = ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &previous_adapter);
+    previous_row.InterfaceLuid = previous_adapter;
+    previous_identified = previous_status == NO_ERROR && GetIfEntry2(&previous_row) == NO_ERROR;
+    if (!requested_.load()) return fail("VPN startup cancelled");
+    const auto spawn_started = Clock::now();
+    tun2socks_process_ = native::Launch(tun2socks_executable_path_, {L"-config", tun_config_path_.wstring()});
+    if (!tun2socks_process_) return fail("Cannot launch tun2socks");
+    tun_started = Clock::now();
+    timing.Record("tun_config", config_started, spawn_started);
+    timing.Record("tun_spawn", spawn_started, tun_started);
+    return true;
+  };
+  NET_LUID luid{};
+  MIB_IF_ROW2 adapter{};
+  std::optional<Clock::time_point> alias_seen, link_up;
+  NET_LUID observed_luid{};
+  const auto observe_adapter = [&] {
+    if (ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &luid) != NO_ERROR) return false;
+    if (!alias_seen || observed_luid.Value != luid.Value) {
+      observed_luid = luid;
+      alias_seen = Clock::now();
+      link_up.reset();
+    }
+    adapter = {};
+    adapter.InterfaceLuid = luid;
+    if (GetIfEntry2(&adapter) != NO_ERROR || adapter.OperStatus != IfOperStatusUp) {
+      link_up.reset();
+      return false;
+    }
+    if (!link_up) link_up = Clock::now();
+    return true;
+  };
   if (!requested_.load()) return fail("VPN startup cancelled");
   timing.Mark("prepare_worker");
   xray_process_ = native::Launch(xray_executable_path_, command, use_balancer_pipe, asset_directory_,
@@ -497,10 +552,21 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   if (use_balancer_pipe) balancer_pipe_ = BalancerPipe::starting;
   timing.Mark("xray_spawn");
   const native::SocksReadinessBudget readiness_budget(std::chrono::milliseconds(6000), [this] { return !requested_.load(); });
+  // Overlap adapter creation with Xray authentication on an admitted Start.
+  // Under the no-tunnel WFP policy this worker only creates the private
+  // device and rings. Address, DNS, routes and WFP admission stay below auth.
+  if (fresh_candidate) {
+    if (!protection_.Active()) return fail("Traffic protection is unavailable before Wintun launch");
+    if (!launch_tun()) return false;
+  }
   const auto xray_pid = GetProcessId(reinterpret_cast<HANDLE>(xray_process_->hProcess));
   std::vector<DWORD> listeners(1024);
   bool listening = false;
   while (readiness_budget.CanContinue() && requested_.load() && xray_process_->IsRunning()) {
+    if (fresh_candidate) {
+      if (!tun2socks_process_->IsRunning()) return fail("tun2socks exited before creating its adapter");
+      observe_adapter();
+    }
     // An early connect can idle inside Winsock before Xray has bound the
     // loopback port. Discover the listener first, then require SOCKS auth.
     if (OwnedListenerState(xray_pid, socks_port_, listeners) != ListenerState::missing &&
@@ -519,37 +585,18 @@ bool VpnService::StartWorkers(flutter_vless::preparation::Report* report, flutte
   }
   Event("Authenticated Xray listener ready");
   timing.Mark("xray_listener");
-  // Credentials live only in a private file, never in the process command line.
-  // The bundled tun2socks uses the "tun" driver on Windows too; Wintun is
-  // the implementation, not a supported URI scheme.
-  std::string tun = "device: tun://flutter_vless_tun\nproxy: socks5://" + username_ + ":" + password_
-      + "@127.0.0.1:" + std::to_string(socks_port_) + "\nloglevel: silent\nmtu: 1500\n";
-  if (!private_runtime_->WriteConfig(tun, tun_config_path_)) return fail("Cannot write the private tun2socks configuration");
-  if (!requested_.load()) return fail("VPN startup cancelled");
-  NET_LUID previous_adapter{};
-  const auto previous_status = ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &previous_adapter);
-  MIB_IF_ROW2 previous_row{};
-  previous_row.InterfaceLuid = previous_adapter;
-  const bool previous_identified = previous_status == NO_ERROR && GetIfEntry2(&previous_row) == NO_ERROR;
-  tun2socks_process_ = native::Launch(tun2socks_executable_path_, {L"-config", tun_config_path_.wstring()});
-  if (!tun2socks_process_) return fail("Cannot launch tun2socks");
-  timing.Mark("tun_spawn");
-  NET_LUID luid{};
-  MIB_IF_ROW2 adapter{};
+  // Automatic recovery keeps adapter creation after authentication.
+  if (!fresh_candidate && !launch_tun()) return false;
   bool adapter_ready = false;
-  const auto adapter_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-  while (requested_.load() && std::chrono::steady_clock::now() < adapter_deadline) {
+  const auto adapter_deadline = tun_started + std::chrono::seconds(10);
+  while (requested_.load() && Clock::now() < adapter_deadline) {
     if (!tun2socks_process_->IsRunning()) return fail("tun2socks exited before creating its adapter");
-    if (ConvertInterfaceAliasToLuid(L"flutter_vless_tun", &luid) == NO_ERROR) {
-      adapter = {};
-      adapter.InterfaceLuid = luid;
-      if (GetIfEntry2(&adapter) == NO_ERROR && adapter.OperStatus == IfOperStatusUp) {
-        adapter_ready = true; break;
-      }
-    }
+    if (observe_adapter()) { adapter_ready = true; break; }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
   if (!adapter_ready || !requested_.load()) return fail("Wintun adapter unavailable or startup cancelled");
+  timing.Record("wintun_alias", tun_started, *alias_seen);
+  timing.Record("wintun_link_up", *alias_seen, *link_up);
   timing.Mark("wintun_adapter");
   // Windows may reuse a recently retired adapter's LUID. A different
   // nonempty device GUID still identifies a distinct adapter instance.

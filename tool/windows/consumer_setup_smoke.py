@@ -3,9 +3,11 @@
 from contextlib import contextmanager, ExitStack
 import ctypes
 from ctypes import wintypes
+from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import subprocess
@@ -19,6 +21,83 @@ HOSTS = ("2ip.ru", "myip.com")
 HTTPS_HOST = "api.ipify.org"
 CAPTURE_ROUTES = {"0.0.0.0/1", "128.0.0.0/1", "10.0.85.53/32", "::/1", "8000::/1"}
 IPV6_CONTROL_SUBNET = 3
+SETUPAPI_READ_LIMIT = 256 * 1024
+SETUPAPI_TIMESTAMP = r"\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d{3}"
+SETUPAPI_HEADER = re.compile(r">>>\s+\[([^\r\n]+)\]")
+SETUPAPI_START = re.compile(
+    rf">>>\s+(?:Section start ({SETUPAPI_TIMESTAMP})|({SETUPAPI_TIMESTAMP}):? Section start)"
+)
+SETUPAPI_END = re.compile(
+    rf"<<<\s+(?:Section end ({SETUPAPI_TIMESTAMP})|\[({SETUPAPI_TIMESTAMP}):? Section end\])"
+)
+SETUPAPI_EXIT = re.compile(r"<<<\s+\[Exit(?: status(?:: .*|\(0x[0-9a-f]+\)))?\]", re.IGNORECASE)
+
+
+def wintun_setupapi_sections(log_delta):
+    """Keep completed Wintun staging and installation durations only."""
+    sections = []
+    stage = start = end = None
+    for line in log_delta.splitlines():
+        line = line.rstrip()
+        if header := SETUPAPI_HEADER.fullmatch(line):
+            stage = start = end = None
+            title, _, target = header[1].partition(" - ")
+            title = title.lower().partition(" (")[0]
+            target = target.lower().strip('"')
+            inf_name = re.split(r"[\\/]", target)[-1]
+            if title in ("setupcopyoeminf", "driver package import", "setup import driver package") \
+                    and inf_name == "wintun.inf":
+                stage = "driver_stage"
+            elif title == "device install" and target.startswith(("swd\\wintun\\", "root\\wintun\\")):
+                stage = "device_install"
+        elif stage is not None:
+            if stamp := SETUPAPI_START.fullmatch(line):
+                start = stamp[1] or stamp[2]
+            elif stamp := SETUPAPI_END.fullmatch(line):
+                end = stamp[1] or stamp[2]
+            elif SETUPAPI_EXIT.fullmatch(line):
+                if start and end:
+                    try:
+                        elapsed = datetime.fromisoformat(end.replace("/", "-")) - \
+                                  datetime.fromisoformat(start.replace("/", "-"))
+                    except ValueError:
+                        pass
+                    else:
+                        if elapsed.days >= 0:
+                            sections.append(dict(stage=stage, elapsed_ms=elapsed // timedelta(milliseconds=1)))
+                stage = start = end = None
+    return sections
+
+
+def setupapi_baseline():
+    if system_root := os.environ.get("SystemRoot"):
+        path = Path(system_root) / "inf" / "setupapi.dev.log"
+        try:
+            return path, path.stat()
+        except OSError:
+            pass
+    return None
+
+
+def setupapi_wintun_delta(baseline):
+    if baseline is None:
+        return dict(status="unavailable", sections=[])
+    path, before = baseline
+    try:
+        with path.open("rb") as log:
+            after = os.fstat(log.fileno())
+            offset = before.st_size
+            if not os.path.samestat(before, after) or after.st_size < offset:
+                return dict(status="log_replaced", sections=[])
+            encoding = {b"\xff\xfe": "utf-16-le", b"\xfe\xff": "utf-16-be"}.get(log.read(2), "utf-8")
+            log.seek(offset)
+            delta = log.read(min(after.st_size - offset, SETUPAPI_READ_LIMIT))
+    except OSError:
+        return dict(status="unavailable", sections=[])
+    sections = wintun_setupapi_sections(delta.decode(encoding, errors="replace").removeprefix("\ufeff"))
+    truncated = after.st_size - offset > len(delta)
+    status = "truncated" if truncated else "observed" if sections else "no_wintun_sections"
+    return dict(status=status, sections=sections)
 
 
 def system_proxy(settings=None):
@@ -226,6 +305,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
     plan_file = directory / "plan.json"
     gateway, proxy, dns_servers = baseline
     direction = "reverse" if reverse else "original"
+    measure_wintun_install = mode == "vpn" and address_loss != "IPv6"
     routes = [
         dict(host=host, address=fixtures.PROFILE_TUN_TARGET, port=fixtures.PORTS["direct"],
              expected_body="DIRECT-FIXTURE" if (host == "myip.com") == reverse else "PROXY-FIXTURE")
@@ -250,6 +330,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
             ipv6_underlay, IPV6_CONTROL_SUBNET, ipv6=True, denied=False))
     with (directory / "app.log").open("wb") as app_log:
         try:
+            installation_baseline = setupapi_baseline() if measure_wintun_install else None
             process = subprocess.Popen(
                 [str(bundle / "vless_setup_probe.exe")], cwd=bundle,
                 env=dict(os.environ, FLUTTER_VLESS_CONSUMER_PLAN=str(plan_file)),
@@ -369,6 +450,9 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                 result["dns_setup"] = final["dns_setup"]
                 result["invalid_replacement_rejected"] = True
                 result["network_checks"] = network_checks
+            if measure_wintun_install:
+                setupapi = setupapi_wintun_delta(installation_baseline)
+                result["setupapi_wintun"] = setupapi
             event = "WINDOWS_CONSUMER_IPV6_LOSS" if address_loss == "IPv6" else "WINDOWS_CONSUMER_LIVE"
             print(event + " " + json.dumps(result), flush=True)
             if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
@@ -382,6 +466,9 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                     if mode == "vpn":
                         if address_loss != "IPv6":
                             print("  - Startup stages: " + ", ".join(f"{stage} {ms} ms" for stage, ms in stages.items()), file=file)
+                        if measure_wintun_install:
+                            sections = ", ".join(f"{row['stage']} {row['elapsed_ms']} ms" for row in setupapi["sections"])
+                            print(f"  - Wintun SetupAPI: {setupapi['status']} ({sections or 'no completed sections'}).", file=file)
                         print("  - Protected DNS, physical-interface leak controls, and restored DNS passed.", file=file)
                         print("  - IPv6 TCP/UDP through Wintun and protected AAAA replies passed.", file=file)
                         if fail_closed is not None:

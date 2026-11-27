@@ -28,9 +28,11 @@ def actual(data):
     declaration=section(data["native_runtime.h"],"class SocksReadinessBudget {","// A point-in-time TCP loopback bind check;")
     body=section(data["native_runtime.cpp"],"bool SocksReady(","\n}  // namespace flutter_vless::native")
     proxy=section(data["proxy_service.cpp"],"  const flutter_vless::native::SocksReadinessBudget readiness_budget(","  start_time_ = std::chrono::steady_clock::now();")
-    vpn=section(data["vpn_service.cpp"],"  const native::SocksReadinessBudget readiness_budget(","  // Credentials live only in a private file")
-    listener=section(data["vpn_service.cpp"],"enum class ListenerState {","std::optional<std::string> Underlay(")
-    text=ADAPTER.replace("LISTENER_LOOKUP",listener).replace("ACTUAL",declaration+body).replace("PROXY",proxy).replace("VPN",vpn)
+    service=data["vpn_service.cpp"]
+    fresh=section(service,"  const bool fresh_candidate = ","  worker_candidate_ = pending_candidate_ ?")
+    vpn=section(service,"  const native::SocksReadinessBudget readiness_budget(","  bool adapter_ready = false;")
+    listener=section(service,"enum class ListenerState {","std::optional<std::string> Underlay(")
+    text=ADAPTER.replace("LISTENER_LOOKUP",listener).replace("ACTUAL",declaration+body).replace("PROXY",proxy).replace("VPN_FRESH",fresh).replace("VPN_ADMISSION",vpn)
     text=text.replace("std::chrono::steady_clock","FakeClock").replace("std::this_thread::sleep_for","InertSleep")
     for old,new in (("htonl(","InertHtonl("),("htons(","InertHtons("),("fd_set","InertFdSet"),("timeval","InertTimeval"),
                     ("FD_ZERO(","InertFD_ZERO("),("FD_SET(","InertFD_SET("),("select(","InertSelect(")):
@@ -47,6 +49,7 @@ FAKES = r'''
 #include <cstdint>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -90,6 +93,7 @@ struct Kernel {
   size_t chunk=2, offset=0; bool cancel=false, fail_socket=false, cancel_on_receive=false;
   std::string reply, written; std::set<int> live;
   int proxy_effects=0, tun_effects=0, api_effects=0, ready_effects=0;
+  int tun_launches=0, auth_calls_at_tun_launch=-1, adapter_observations=0;
   int listener_visible_at=0, listener_table_calls=0, max_caller_sleep=0;
   bool table_unavailable=false, cancel_in_table=false, oversized_table=false, malformed_table=false;
   MIB_TCPROW_OWNER_PID listener;
@@ -204,14 +208,27 @@ PROXY
 class VpnConsumer {
  public:
   std::atomic<bool> requested_{true};
-  struct Process { bool IsRunning()const{return true;} HANDLE hProcess=nullptr; } process;
+  struct Process { bool IsRunning() const { return running; } bool running=true; HANDLE hProcess=nullptr; } process, tun;
+  struct Protection { bool Active() const { return active; } bool active=true; } protection_;
   Process* xray_process_=&process;uint16_t socks_port_=10808;std::string username_="u",password_="p";
+  Process* tun2socks_process_=nullptr;
+  std::unique_ptr<int> pending_candidate_;
+  bool tun_launch_result=true;
   void Event(const char*) {}
   bool Run() { auto fail=[](const char*){return false;};
     using namespace flutter_vless;
     struct StartupTiming { void Mark(const char*) const {} };
     [[maybe_unused]] StartupTiming timing;
-VPN
+    auto launch_tun=[&] {
+      if (!requested_.load()) return false;
+      ++kernel.tun_launches;
+      kernel.auth_calls_at_tun_launch=kernel.ready_calls;
+      if (tun_launch_result) tun2socks_process_=&tun;
+      return tun_launch_result;
+    };
+    auto observe_adapter=[] { ++kernel.adapter_observations; };
+VPN_FRESH
+VPN_ADMISSION
     ++kernel.tun_effects;return true;
   }
 };
@@ -316,7 +333,42 @@ int main() {
     kernel.after_ready=[&]{if(kernel.cancel)service.requested_.store(false);};
     Require(!service.Run()&&!kernel.tun_effects,"aborted_listener_admitted_tun");
   });
-  std::cout<<"WINDOWS_SOCKS_READINESS_BUDGET_PURE_PASS="<<(total-failed)<<" FAIL="<<failed<<"\n";if(total!=58)return 2;return failed?1:0;
+  test("VPN-fresh-protected-attempt-overlaps-tun-creation-with-auth",[&]{
+    VpnConsumer service;service.pending_candidate_=std::make_unique<int>(0);
+    kernel.after_ready=[&]{Require(kernel.tun_launches==1&&kernel.tun_effects==0,"protected_adapter_missing_or_network_configured_before_auth");};
+    Require(service.Run()&&kernel.auth_calls_at_tun_launch==0&&kernel.adapter_observations>0&&kernel.tun_effects==1,"protected_overlap_or_admission_missing");
+  });
+  test("VPN-fresh-attempt-without-active-WFP-denies-early-launch",[&]{
+    VpnConsumer service;service.pending_candidate_=std::make_unique<int>(0);service.protection_.active=false;
+    Require(!service.Run()&&!kernel.ready_calls&&!kernel.tun_launches&&!kernel.adapter_observations&&!kernel.tun_effects,"unprotected_attempt_admitted");
+  });
+  test("VPN-recovery-waits-for-successful-auth-before-launching-tun",[&]{
+    VpnConsumer service;
+    kernel.after_ready=[&]{Require(!kernel.tun_launches&&!kernel.adapter_observations&&!kernel.tun_effects,"recovery_overlapped_before_auth");};
+    Require(service.Run()&&kernel.tun_launches==1&&kernel.auth_calls_at_tun_launch==1&&kernel.tun_effects==1,"post_auth_recovery_missing");
+  });
+  test("VPN-fresh-auth-rejection-never-admits-adapter-network-setup",[&]{
+    VpnConsumer service;service.pending_candidate_=std::make_unique<int>(0);kernel.ready_result=false;
+    Require(!service.Run()&&kernel.tun_launches==1&&kernel.ready_calls>0&&!kernel.tun_effects,"failed_auth_admitted_adapter_network");
+  });
+  test("VPN-fresh-stop-during-successful-auth-never-admits-adapter-network-setup",[&]{
+    VpnConsumer service;service.pending_candidate_=std::make_unique<int>(0);
+    kernel.after_ready=[&]{service.requested_.store(false);};
+    Require(!service.Run()&&kernel.tun_launches==1&&kernel.ready_calls==1&&!kernel.tun_effects,"stopped_start_admitted_adapter_network");
+  });
+  test("VPN-fresh-stop-before-launch-never-starts-tun",[&]{
+    VpnConsumer service;service.pending_candidate_=std::make_unique<int>(0);service.requested_.store(false);
+    Require(!service.Run()&&!kernel.ready_calls&&!kernel.tun_launches&&!kernel.tun_effects,"stopped_start_launched_tun");
+  });
+  test("VPN-fresh-tun-launch-failure-never-admits-adapter-network-setup",[&]{
+    VpnConsumer service;service.pending_candidate_=std::make_unique<int>(0);service.tun_launch_result=false;
+    Require(!service.Run()&&kernel.tun_launches==1&&!kernel.adapter_observations&&!kernel.tun_effects,"failed_child_admitted_adapter_network");
+  });
+  test("VPN-fresh-tun-child-exit-prevents-adapter-admission",[&]{
+    VpnConsumer service;service.pending_candidate_=std::make_unique<int>(0);service.tun.running=false;
+    Require(!service.Run()&&kernel.tun_launches==1&&!kernel.ready_calls&&!kernel.adapter_observations&&!kernel.tun_effects,"dead_child_admitted_adapter_network");
+  });
+  std::cout<<"WINDOWS_SOCKS_READINESS_BUDGET_PURE_PASS="<<(total-failed)<<" FAIL="<<failed<<"\n";if(total!=66)return 2;return failed?1:0;
 }
 
 '''
@@ -326,7 +378,8 @@ class Boundaries(unittest.TestCase):
         for name,token in (("native_runtime.h","class SocksReadinessBudget {"),("native_runtime.cpp","bool SocksReady("),
                            ("proxy_service.cpp","  start_time_ = std::chrono::steady_clock::now();"),
                            ("vpn_service.cpp","enum class ListenerState {"),
-                           ("vpn_service.cpp","  // Credentials live only in a private file")):
+                           ("vpn_service.cpp","  const bool fresh_candidate = "),
+                           ("vpn_service.cpp","  bool adapter_ready = false;")):
             for replacement in ("",token+token):
                 data=sources();data[name]=data[name].replace(token,replacement)
                 with self.assertRaises(ValueError):actual(data)
@@ -336,6 +389,15 @@ class Boundaries(unittest.TestCase):
         self.assertNotIn("native::Launch(",text)
         self.assertNotIn("WriteConfig(",text)
         self.assertNotIn("WSAStartup(",text[:text.index("bool SocksReady(")])
+
+    def test_fresh_attempt_follows_no_tunnel_wfp_and_network_setup_follows_auth(self):
+        service=sources()["vpn_service.cpp"]
+        startup=section(service,"  pending_candidate_ = std::move(candidate);","  const bool ready = startup->finished")
+        self.assertIn("protection_.Install(xray_executable_path_, nullptr,",startup)
+        self.assertLess(startup.index("protection_.Install("),startup.index("&VpnService::RunVpn"))
+        admission=section(service,"  const native::SocksReadinessBudget readiness_budget(","  bool adapter_ready = false;")
+        for effect in ("CreateTunnelAddress(","SetTunnelDns(","CreateIpForwardEntry2(","protection_.Install("):
+            self.assertNotIn(effect,admission)
 
 
 def main():
@@ -349,7 +411,7 @@ def main():
         "production_sha256":{n:hashlib.sha256(v.encode()).hexdigest() for n,v in data.items()},
         "test_tool_sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "native_builder_sha256":hashlib.sha256((ROOT/"tool/windows/build_native_tests.cmd").read_bytes()).hexdigest(),
-        "actual_bodies":["SocksReadinessBudget","SocksReady","OwnedListenerState","VPN startup listener admission","Proxy startup listener/API admission"],
+        "actual_bodies":["SocksReadinessBudget","SocksReady","OwnedListenerState","VPN startup listener and early TUN worker admission","Proxy startup listener/API admission"],
         "real_socket_process_thread_Core":False,"source_guards":result.testsRun,
     },indent=2)+"\n")
     return 0

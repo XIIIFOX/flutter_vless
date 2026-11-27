@@ -47,8 +47,9 @@ def actual(data):
     probe = "namespace flutter_vless {\n" + declaration + helper + destructor + serve + check + "}\n"
     # The Windows fd types/macros are fakes, not Darwin's similarly named APIs.
     probe = probe.replace("fd_set", "InertFdSet").replace("timeval", "InertTimeval")
-    # Preserve the actual post-listener admission block before tun config work.
-    admission = section(service, "  const native::SocksReadinessBudget readiness_budget(", "  // Credentials live only in a private file")
+    # Preserve authentication and the cancellation gate before recovery launch.
+    admission = section(service, "  const native::SocksReadinessBudget readiness_budget(",
+                        "  // Automatic recovery keeps adapter creation after authentication.")
     if admission.count("native::SocksReady(") != 1:
         raise ValueError("listener admission boundary changed")
     admission = admission.replace("std::this_thread::sleep_for", "InertSleep")
@@ -82,10 +83,15 @@ class AdmissionConsumer {
   std::atomic<bool> requested_{true};
   struct Process { bool IsRunning() const { return true; } void* hProcess = nullptr; } process;
   Process* xray_process_ = &process;
+  Process* tun2socks_process_ = &process;
+  struct Protection { bool Active() const { return true; } } protection_;
   uint16_t socks_port_ = 10808; std::string username_, password_;
   bool ContinueAfterListener() {
     auto fail = [](const char*) { return false; }; (void)fail;
     [[maybe_unused]] StartupTiming timing;
+    const bool fresh_candidate = false;
+    auto launch_tun = []() -> bool { throw std::runtime_error("unexpected early launch on recovery"); };
+    auto observe_adapter = [] { throw std::runtime_error("unexpected early observation on recovery"); };
 ADMISSION
     ++kernel.tun_side_effects; return true;
   }

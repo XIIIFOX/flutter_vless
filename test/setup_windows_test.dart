@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_vless/src/setup/common.dart';
 import 'package:flutter_vless/src/setup/windows.dart';
+import 'package:flutter_vless/src/setup/wintun_stage.dart';
 import 'package:path/path.dart' as p;
 
 const _cmake = r'''
@@ -66,6 +67,63 @@ void main() {
     expect(calls, 0);
     expect(projectFile('windows/CMakeLists.txt').readAsStringSync(), _cmake);
     expect(projectFile(_fragment).existsSync(), isFalse);
+  });
+
+  test('Wintun inspection and opt-in apply use the pinned runtime path',
+      () async {
+    final request = SetupRequest(
+      root: root,
+      platform: SetupPlatform.windows,
+      mode: SetupMode.vpn,
+      architecture: 'x64',
+    );
+    final actions = <String>[];
+    var present = false;
+    Future<WindowsWintunResult> run(String action, File dll) async {
+      actions.add(action);
+      expect(dll.path, projectFile('$_stage/wintun.dll').path);
+      if (present) return WindowsWintunResult.present;
+      if (action == 'inspect') return WindowsWintunResult.absent;
+      present = true;
+      return WindowsWintunResult.staged;
+    }
+
+    final pending = await inspectWindowsWintun(request, run: run);
+    expect(pending.present, isFalse);
+    expect(actions, ['inspect']);
+    expect(projectFile(_fragment).existsSync(), isFalse);
+    expect(await pending.stage(), isTrue);
+    final repeated = await inspectWindowsWintun(request, run: run);
+    expect(repeated.present, isTrue);
+    expect(await repeated.stage(), isFalse);
+    expect(actions, ['inspect', 'stage', 'inspect']);
+  }, skip: Platform.isWindows &&
+      (Platform.environment['PROCESSOR_ARCHITEW6432'] ??
+                  Platform.environment['PROCESSOR_ARCHITECTURE'])
+              ?.toLowerCase() ==
+          'arm64');
+
+  test('Wintun staging rejects other architectures and custom runtimes', () {
+    Future<WindowsWintunResult> unexpectedCommand(String action, File dll) {
+      throw StateError('Must reject the request before querying Windows.');
+    }
+
+    for (final (architecture, runtimeDirectory) in [
+      ('arm64', null),
+      ('x64', 'vendor'),
+    ]) {
+      final request = SetupRequest(
+        root: root,
+        platform: SetupPlatform.windows,
+        mode: SetupMode.vpn,
+        architecture: architecture,
+        runtimeDirectory: runtimeDirectory,
+      );
+      expect(
+        inspectWindowsWintun(request, run: unexpectedCommand),
+        throwsA(isA<SetupException>()),
+      );
+    }
   });
 
   test('a digest mismatch leaves the application unchanged', () async {

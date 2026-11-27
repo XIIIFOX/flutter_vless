@@ -25,6 +25,7 @@ Usage: dart run flutter_vless:$command --platform macos|android|windows|ios [--p
   --team-id ID         Apple VPN signing team; reuse Runner's team when set.
   --arch x64|arm64     Windows target architecture; uses host arch on Windows.
   --runtime-dir PATH   Windows directory containing a user-supplied runtime.
+  --stage-wintun       Prepare the pinned Wintun driver on elevated Windows x64 VPN setup.
 ''');
     return;
   }
@@ -52,6 +53,12 @@ Usage: dart run flutter_vless:$command --platform macos|android|windows|ios [--p
     if (platform != SetupPlatform.windows &&
         ['arch', 'runtime-dir'].any(flags.containsKey)) {
       throw const SetupException('--arch and --runtime-dir apply to Windows.');
+    }
+    final stageWintun = flags.containsKey('stage-wintun');
+    if (stageWintun &&
+        (platform != SetupPlatform.windows || mode != SetupMode.vpn)) {
+      throw const SetupException(
+          '--stage-wintun requires --platform windows --vpn.');
     }
     final directory = Directory(flags['project-dir'] ?? '.');
     if (!directory.existsSync()) {
@@ -85,7 +92,11 @@ Usage: dart run flutter_vless:$command --platform macos|android|windows|ios [--p
         planWindows(request, plan);
     }
     final title = '${platform.name} ${mode.name}';
-    final ready = plan.changedPaths.isEmpty && plan.pendingActions.isEmpty;
+    final wintun = stageWintun ? await inspectWindowsWintun(request) : null;
+    final needsWintun = wintun != null && !wintun.present;
+    final ready = plan.changedPaths.isEmpty &&
+        plan.pendingActions.isEmpty &&
+        !needsWintun;
     if (ready) {
       stdout.writeln('$title: project configuration is up to date.');
     } else if (doctor || dryRun) {
@@ -96,6 +107,7 @@ Usage: dart run flutter_vless:$command --platform macos|android|windows|ios [--p
       for (final action in plan.pendingActions) {
         stdout.writeln('  $action');
       }
+      if (needsWintun) stdout.writeln('  Stage the pinned Wintun driver.');
       if (doctor) exitCode = 1;
     } else {
       for (final action in plan.pendingActions) {
@@ -106,6 +118,14 @@ Usage: dart run flutter_vless:$command --platform macos|android|windows|ios [--p
       for (final path in plan.changedPaths) {
         stdout.writeln('  Updated $path');
       }
+      if (needsWintun) {
+        final staged = await wintun.stage();
+        stdout.writeln(
+            staged ? 'Wintun driver staged.' : 'Wintun driver already staged.');
+      }
+    }
+    if (wintun?.present ?? false) {
+      stdout.writeln('Wintun driver already staged.');
     }
     for (final note in plan.notes) {
       stdout.writeln(note);
@@ -127,7 +147,13 @@ Usage: dart run flutter_vless:$command --platform macos|android|windows|ios [--p
 }
 
 Map<String, String?> _parse(List<String> args) {
-  const switches = {'proxy', 'vpn', 'dry-run', 'non-interactive'};
+  const switches = {
+    'proxy',
+    'vpn',
+    'dry-run',
+    'non-interactive',
+    'stage-wintun'
+  };
   const options = {
     'platform',
     'project-dir',

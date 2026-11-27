@@ -85,3 +85,17 @@ runtime cache. Supply an existing runtime with `--runtime-dir`; a matching
 user-supplied runtime is required for `--arch arm64`. Flutter builds for the
 Windows host architecture. Use Visual Studio C++ tools and run the app with
 administrator rights for VPN.
+
+On Windows x64, an administrator can prepare the signed Wintun driver before
+the app's first VPN connection. Use the pinned VPN runtime and run:
+
+```powershell
+dart run flutter_vless:setup --platform windows --vpn --stage-wintun
+dart run flutter_vless:doctor --platform windows --vpn --stage-wintun
+```
+
+Setup creates and closes a temporary Wintun adapter without starting a tunnel.
+The signed driver remains in Windows Driver Store. Repeated setup reuses it.
+`doctor` and `--dry-run` only check the driver state. The optional staging
+step reports a conflict when a different Wintun package or an existing device
+is present and the expected package is missing.

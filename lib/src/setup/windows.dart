@@ -5,6 +5,7 @@ import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 
 import 'common.dart';
+import 'wintun_stage.dart';
 
 const _cmakePath = 'windows/CMakeLists.txt';
 const _fragmentPath = 'windows/flutter_vless_runtime.cmake';
@@ -140,6 +141,26 @@ void planWindows(
   plan.notes.add(
     'Use flutter build windows on a Windows $architecture host with Visual Studio C++ tools.${vpn ? ' VPN mode requires an elevated app process.' : ''}',
   );
+}
+
+/// Inspect Driver Store without editing the project or creating an adapter.
+Future<WindowsWintunStaging> inspectWindowsWintun(
+  SetupRequest request, {
+  WindowsWintunCommand run = runWindowsWintunCommand,
+}) async {
+  const stage = 'windows/$_managedDirectory/x64';
+  if (_architecture(request.architecture) != 'x64' ||
+      _architecture(null) != 'x64' ||
+      request.runtimeDirectory != null ||
+      _isRegularFile(File(request.resolve('windows/xray/xray.exe'))) ||
+      _isRegularFile(File(request.resolve('$stage/.custom-runtime')))) {
+    throw const SetupException(
+      '--stage-wintun requires native Windows x64 and the pinned VPN runtime.',
+    );
+  }
+  final dll = File(request.resolve('$stage/wintun.dll'));
+  final result = await run('inspect', dll);
+  return WindowsWintunStaging(result == WindowsWintunResult.present, dll, run);
 }
 
 void _ignoreRuntime(SetupRequest request, SetupPlan plan) {

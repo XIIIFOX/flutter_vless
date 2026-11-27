@@ -146,11 +146,37 @@ def system_proxy(settings=None):
                 free(option.value.text)
 
 
-def powershell(command):
+def powershell(command, *, timeout=15):
     return subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
-        check=True, capture_output=True, encoding="utf-8", timeout=15,
+        check=True, capture_output=True, encoding="utf-8", timeout=timeout,
     ).stdout.strip()
+
+
+def wintun_driver_inventory():
+    """Query Windows' staged OEM driver packages without touching devices."""
+    return powershell(
+        "$ProgressPreference = 'SilentlyContinue'; "
+        "Get-WindowsDriver -Online -ErrorAction Stop | Where-Object { "
+        "[IO.Path]::GetFileName($_.OriginalFileName) -eq 'wintun.inf' } | "
+        'ForEach-Object { "$($_.Driver)|$($_.Version)" } | Sort-Object', timeout=45,
+    ).splitlines()
+
+
+def wintun_setup_network(probe):
+    assert not powershell(
+        "Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object { "
+        "$_.Name -eq 'flutter_vless_tun' -or $_.InterfaceDescription -like '*Wintun*' } | "
+        "Select-Object -ExpandProperty Name"
+    ), "Windows setup left a Wintun adapter present"
+    routes = powershell(
+        "Get-NetRoute -PolicyStore ActiveStore -ErrorAction Stop | Where-Object { "
+        "$_.DestinationPrefix -in @('0.0.0.0/0', '::/0', '0.0.0.0/1', '128.0.0.0/1', "
+        "'::/1', '8000::/1', '10.0.85.53/32') } | ForEach-Object { "
+        '"$($_.DestinationPrefix)|$($_.InterfaceIndex)|$($_.NextHop)|$($_.RouteMetric)" } | Sort-Object'
+    )
+    assert int(fixtures.native(probe, "policy-count")) == 0, "Windows setup left plugin WFP filters"
+    return routes, system_proxy()
 
 
 def capture_routes():
@@ -294,7 +320,7 @@ def ipv6_underlay_control(bundle, directory, probe):
 
 
 def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, reverse, ipv6_payload,
-              *, address_loss=None, ipv6_underlay=None):
+              *, address_loss=None, ipv6_underlay=None, wintun_benchmark=None):
     receipt = directory / "final.json"
     active = directory / "live.json"
     proceed = directory / "continue"
@@ -453,6 +479,12 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
             if measure_wintun_install:
                 setupapi = setupapi_wintun_delta(installation_baseline)
                 result["setupapi_wintun"] = setupapi
+                if wintun_benchmark:
+                    result["wintun_benchmark"] = wintun_benchmark
+                    assert setupapi["status"] in ("observed", "no_wintun_sections"), setupapi
+                    staged_while_connecting = any(row["stage"] == "driver_stage" for row in setupapi["sections"])
+                    assert staged_while_connecting == (wintun_benchmark == "control" and not reverse), \
+                        "Wintun was installed during the wrong VPN startup"
             event = "WINDOWS_CONSUMER_IPV6_LOSS" if address_loss == "IPv6" else "WINDOWS_CONSUMER_LIVE"
             print(event + " " + json.dumps(result), flush=True)
             if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
@@ -498,7 +530,7 @@ def test_case(bundle, mode, directory, probe, public_ip, underlay, baseline, rev
                 assert guard.wait(timeout=10) == 0, "Runner network watchdog failed"
 
 
-def exercise_consumer(bundle, mode, directory, probe):
+def exercise_consumer(bundle, mode, directory, probe, *, wintun_benchmark=None):
     assert os.name == "nt" and os.environ.get("GITHUB_ACTIONS") == "true" \
         and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted", "Disposable Windows runner required"
     assert ctypes.windll.shell32.IsUserAnAdmin(), "Windows runner token is not elevated"
@@ -523,7 +555,8 @@ def exercise_consumer(bundle, mode, directory, probe):
             case_directory = directory / ("reverse" if reverse else "original")
             case_directory.mkdir(parents=True)
             test_case(bundle, mode, case_directory, probe, public_ip, underlay, baseline, reverse, ipv6_payload,
-                      address_loss="IPv4" if mode == "vpn" and reverse else None)
+                      address_loss="IPv4" if mode == "vpn" and reverse else None,
+                      wintun_benchmark=wintun_benchmark)
         if mode == "vpn":
             case_directory = directory / "ipv6-loss"
             case_directory.mkdir(parents=True)

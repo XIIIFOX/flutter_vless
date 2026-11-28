@@ -135,25 +135,34 @@ def provider_metrics(text, ready):
     return rows
 
 
+def production_sources(root, revision=None):
+    """Read the Swift inputs from one checkout or one pinned Git revision."""
+    for module in ('flutter_vless_macos_privacy', 'flutter_vless_macos_tunnel_support'):
+        prefix = PACKAGE + '/Sources/' + module
+        if revision is not None:
+            paths = subprocess.check_output(
+                ['git', 'ls-tree', '-r', '--name-only', revision, '--', prefix],
+                cwd=root, text=True, timeout=30,
+            ).splitlines()
+        else:
+            paths = [str(p.relative_to(root)) for p in sorted((root / prefix).glob('*.swift'))]
+        for name in paths:
+            if not name.endswith('.swift') or Path(name).name == 'FlutterVlessPacketTunnelProvider.swift':
+                continue
+            data = subprocess.check_output(['git', 'show', revision + ':' + name], cwd=root, timeout=30) \
+                if revision is not None else (root / name).read_bytes()
+            yield name, data
+
+
 def prepare(output, revision):
     directory = output / revision
     directory.mkdir(parents=True)
     hashes = {}
-    for module in ('flutter_vless_macos_privacy', 'flutter_vless_macos_tunnel_support'):
-        prefix = PACKAGE + '/Sources/' + module
-        if revision == 'baseline':
-            paths = subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', BASELINE, '--', prefix], cwd=ROOT, text=True).splitlines()
-        else:
-            paths = [str(p.relative_to(ROOT)) for p in sorted((ROOT / prefix).glob('*.swift'))]
-        for name in paths:
-            if not name.endswith('.swift') or Path(name).name == 'FlutterVlessPacketTunnelProvider.swift':
-                continue
-            data = subprocess.check_output(['git', 'show', BASELINE + ':' + name], cwd=ROOT) \
-                if revision == 'baseline' else (ROOT / name).read_bytes()
-            target = directory / 'Sources' / module / Path(name).name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-            hashes[name] = digest(data)
+    for name, data in production_sources(ROOT, BASELINE if revision == 'baseline' else None):
+        target = directory / 'Sources' / name.split('/Sources/', 1)[1]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        hashes[name] = digest(data)
     test = directory / 'Tests/flutter_vless_macos_tunnel_supportTests' / Path(TEST).name
     test.parent.mkdir(parents=True)
     test.write_bytes((ROOT / TEST).read_bytes())

@@ -58,14 +58,13 @@ def verify_endpoint_startup_timing(root, sha):
         test_hash = digest(root/endpoint_timing.TEST)
         if result.get('test_sha256') != test_hash:
             raise ValueError('Current XCTest hash differs')
-        expected = {str(p.relative_to(root)): digest(p)
-            for module in ('flutter_vless_macos_privacy', 'flutter_vless_macos_tunnel_support')
-            for p in sorted((root/MAC_SOURCES/module).glob('*.swift'))
-            if p.name != 'FlutterVlessPacketTunnelProvider.swift'}
+        expected = {
+            mode: {name: endpoint_timing.digest(data) for name, data in endpoint_timing.production_sources(root, revision)}
+            for mode, revision in [('baseline', endpoint_timing.BASELINE), ('candidate', None)]
+        }
         discovery = MAC_SOURCES+'/flutter_vless_macos_tunnel_support/TunnelEndpointDiscovery.swift'
         production = result.get('production_sha256', {})
-        if discovery not in expected or set(production) != {'baseline', 'candidate'} \
-                or production['candidate'] != expected or set(production['baseline']) != set(expected):
+        if any(discovery not in sources for sources in expected.values()) or production != expected:
             raise ValueError('Incomplete or stale production Swift source map')
         for mode in ('baseline', 'candidate'):
             for name, checksum in production[mode].items():
@@ -98,7 +97,7 @@ def verify_endpoint_startup_timing(root, sha):
         if result.get('provider_policy_metrics') != provider_metrics:
             raise ValueError('Provider readiness timing rows differ')
         return result, [result_path, *logs.values(), *provider_logs]
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError) as error:
         raise ValueError('Endpoint startup timing proof invalid: '+str(error)) from error
 
 

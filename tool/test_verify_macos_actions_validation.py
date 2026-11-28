@@ -3,8 +3,10 @@ import hashlib
 import json
 from pathlib import Path
 import plistlib
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import verify_macos_actions_validation as subject
 
@@ -56,22 +58,35 @@ class WorkerProof(unittest.TestCase):
         self.write(subject.endpoint_timing.TEST, 'inert same-current-XCTest fixture\n')
         self.write(subject.MAC_SOURCES+'/flutter_vless_macos_tunnel_support/TunnelEndpointDiscovery.swift', 'candidate production discovery fixture\n')
         self.write(subject.MAC_SOURCES+'/flutter_vless_macos_tunnel_support/TunnelEndpointResolver.swift', 'candidate production resolver fixture\n')
-        candidate = {str(p.relative_to(self.root)): subject.digest(p)
-            for module in ('flutter_vless_macos_privacy', 'flutter_vless_macos_tunnel_support')
-            for p in (self.root/subject.MAC_SOURCES/module).glob('*.swift')
-            if p.name != 'FlutterVlessPacketTunnelProvider.swift'}
+        current = dict(subject.endpoint_timing.production_sources(self.root))
+        baseline = {name: b'baseline '+data for name, data in current.items()}
+        for name, data in baseline.items():
+            self.write(name, data)
+        def git(*args):
+            return subprocess.check_output(['git', *args], cwd=self.root, text=True, stderr=subprocess.DEVNULL, timeout=10).strip()
+        git('init', '--quiet')
+        git('add', '--', *baseline)
+        git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+            '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'baseline')
+        baseline_ref = patch.object(subject.endpoint_timing, 'BASELINE', git('rev-parse', 'HEAD'))
+        baseline_ref.start(); self.addCleanup(baseline_ref.stop)
+        for name, data in current.items():
+            self.write(name, data)
+        self.candidate_only = subject.MAC_SOURCES+'/flutter_vless_macos_privacy/NativeCoreInspection.swift'
+        self.write(self.candidate_only, 'candidate-only Swift input fixture\n')
+        candidate = dict(subject.endpoint_timing.production_sources(self.root))
         self.benchmark = {'schema': 1, 'success': True, 'dns_only': True, 'live_ne_vpn': False,
             'candidate_ref': self.sha, 'baseline_ref': subject.endpoint_timing.BASELINE,
             'test_sha256': subject.digest(self.root/subject.endpoint_timing.TEST),
-            'production_sha256': {'candidate': candidate, 'baseline': {}}, 'metrics': {},
+            'production_sha256': {}, 'metrics': {},
             'log_sha256': {}, 'provider_policy_source_sha256': {}, 'provider_policy_metrics': {}}
         self.endpoint_logs = {}
-        for mode in ('baseline', 'candidate'):
-            for name in candidate:
+        for mode, sources in [('baseline', baseline), ('candidate', candidate)]:
+            self.benchmark['production_sha256'][mode] = {}
+            for name, data in sources.items():
                 target = 'build/macos-endpoint-startup-timing/'+mode+'/Sources/'+name.split('/Sources/', 1)[1]
-                data = (self.root/name).read_bytes()
-                copied = self.write(target, (b'baseline '+data) if mode == 'baseline' else data)
-                if mode == 'baseline': self.benchmark['production_sha256']['baseline'][name] = subject.digest(copied)
+                copied = self.write(target, data)
+                self.benchmark['production_sha256'][mode][name] = subject.digest(copied)
             self.write('build/macos-endpoint-startup-timing/'+mode+'/Tests/flutter_vless_macos_tunnel_supportTests/'+Path(subject.endpoint_timing.TEST).name,
                 (self.root/subject.endpoint_timing.TEST).read_bytes())
             rows = []
@@ -110,6 +125,8 @@ class WorkerProof(unittest.TestCase):
         self.endpoint_path = self.write('build/macos-endpoint-startup-timing/result.json', json.dumps(self.benchmark))
 
     def test_complete_bound_evidence_qualifies(self):
+        self.assertNotIn(self.candidate_only, self.benchmark['production_sha256']['baseline'])
+        self.assertIn(self.candidate_only, self.benchmark['production_sha256']['candidate'])
         result = subject.qualify(self.root, self.sha)
         self.assertTrue(result['success']); self.assertFalse(result['live_NetworkExtension_VPN_or_owner_network_acceptance'])
         self.assertEqual(result['source_sha'], self.sha); self.assertEqual(set(result['compiled_executables']), {'app','provider'})
@@ -120,6 +137,16 @@ class WorkerProof(unittest.TestCase):
         for folder in ['apple-cold-start-current', 'apple-cold-start-negative']:
             for platform in ['ios', 'macos']:
                 self.assertIn('build/'+folder+'/'+platform+'.log', result['proof_sha256'])
+
+    def test_rehashed_baseline_source_must_match_its_pinned_git_commit(self):
+        name = next(iter(self.benchmark['production_sha256']['baseline']))
+        copied = self.endpoint/'baseline/Sources'/name.split('/Sources/', 1)[1]
+        copied.write_bytes(b'forged historical Swift source')
+        self.benchmark['production_sha256']['baseline'][name] = subject.digest(copied)
+        self.endpoint_path.write_text(json.dumps(self.benchmark))
+        with self.assertRaisesRegex(ValueError, 'Incomplete or stale production Swift source map'):
+            subject.qualify(self.root, self.sha)
+
     def test_same_version_provider_from_old_implementation_cannot_qualify(self):
         binary = self.app/'Contents/PlugIns/XrayTunnel.appex/Contents/MacOS/XrayTunnel'
         binary.write_bytes(b'\xcf\xfa\xed\xfeold provider, same bundle version')

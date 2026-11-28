@@ -645,11 +645,9 @@ jobs:
               record = dict(platform=platform, tag=tag, url=url, sha256=actual)
               if compatibility:
                   sys.path.insert(0, str(root / 'tool'))
-                  from install_published_apple_runtime import HEAD, git_bindings, verify_archive, verify_installed
-                  producer = root / 'build/apple-published-producer'
+                  from install_published_apple_runtime import HEAD, verify_archive, verify_installed, verify_producer
                   consumer_head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
                   assert consumer_head == os.environ['GITHUB_SHA']
-                  assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=producer, text=True).strip() == HEAD
                   manifest = output / 'published-manifest.json'
                   limit = 2 * 1024 * 1024
                   with urllib.request.urlopen(url.rsplit('/', 1)[0] + '/manifest.json', timeout=45) as response:
@@ -657,7 +655,7 @@ jobs:
                   assert len(data) <= limit, 'Published manifest exceeds bound'
                   manifest.write_bytes(data)
                   document = verify_archive(platform, archive, manifest)
-                  git_bindings(producer, HEAD, document['source_sha256'])
+                  verify_producer(root, document['source_sha256'])
                   record.update(producer_head=HEAD, consumer_head=consumer_head,
                                 producer_files_verified=len(document['source_sha256']))
               with zipfile.ZipFile(archive) as zipped:
@@ -763,11 +761,16 @@ jobs:
         run: flutter pub get
       - name: Check published Apple SDK selection guards
         run: python3 tool/test_install_published_apple_runtime.py
+      - name: Check out the published SDK producer source
+        if: ${{ inputs.apple_runtime_source == 'published' }}
+        uses: actions/checkout@v4
+        with:
+          ref: a56429a73d0229ffd5ac5223bfabdcd6a7c19724
+          path: build/apple-published-producer
+          persist-credentials: false
       - name: Install the checksum-pinned published Apple SDKs
         if: ${{ inputs.apple_runtime_source == 'published' }}
-        run: |
-          git fetch --no-tags --depth=1 origin a56429a73d0229ffd5ac5223bfabdcd6a7c19724
-          python3 tool/install_published_apple_runtime.py
+        run: python3 tool/install_published_apple_runtime.py
       - name: Test PacketTunnel Swift helper
         run: |
           python3 tool/test_acceptance_safari_action.py

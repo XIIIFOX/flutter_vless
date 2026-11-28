@@ -76,9 +76,14 @@ jobs:
         with:
           channel: stable
           cache: true
+      - name: Check out the published SDK producer source
+        uses: actions/checkout@v4
+        with:
+          ref: a56429a73d0229ffd5ac5223bfabdcd6a7c19724
+          path: build/apple-published-producer
+          persist-credentials: false
       - name: Install the checksum-pinned published macOS SDK
         run: |
-          git fetch --no-tags --depth=1 origin a56429a73d0229ffd5ac5223bfabdcd6a7c19724
           python3 tool/test_install_published_apple_runtime.py
           python3 tool/install_published_apple_runtime.py --platform macos
       - name: Test macOS host and DNS lifecycle

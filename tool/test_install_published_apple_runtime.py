@@ -87,9 +87,9 @@ class PublishedApple(unittest.TestCase):
         destination = self.root/subject.PATHS['ios']['framework']; destination.mkdir(parents=True)
         (destination/'old-binary').write_bytes(b'old cache')
         with self.assertRaises(ValueError): subject.verify_installed(self.root, 'ios', self.document)
-        with patch.object(subject, 'git_bindings') as source_binding:
+        with patch.object(subject, 'verify_producer') as source_binding:
             result = subject.install(self.root, 'ios', self.archive, self.manifest)
-        source_binding.assert_called_once_with(self.root, subject.HEAD, self.document['source_sha256'])
+        source_binding.assert_called_once_with(self.root, self.document['source_sha256'])
         self.assertEqual(subject.tree(destination), self.document['framework_sha256'])
         self.assertTrue(result['runtime_checks_pending'])
         self.assertTrue(result['xhttp_listener_cleanup_applied'])
@@ -101,27 +101,27 @@ class PublishedApple(unittest.TestCase):
         (cache/'wrong-binary').write_bytes(b'wrong preferred cache')
         destination = self.root/subject.PATHS['ios']['framework']; destination.mkdir()
         (destination/'retained').write_bytes(b'keep until admission')
-        with patch.object(subject, 'git_bindings'), self.assertRaises(ValueError):
+        with patch.object(subject, 'verify_producer'), self.assertRaises(ValueError):
             subject.install(self.root, 'ios', self.archive, self.manifest)
         self.assertTrue((destination/'retained').exists())
 
     def test_spm_pin_mismatch_refuses_before_install(self):
         package = self.root/subject.PATHS['ios']['package']; package.write_text(package.read_text().replace(subject.CORE_VERSION, '26.10.29'))
-        with patch.object(subject, 'git_bindings'), self.assertRaises(ValueError):
+        with patch.object(subject, 'verify_producer'), self.assertRaises(ValueError):
             subject.install(self.root, 'ios', self.archive, self.manifest)
         self.assertFalse((self.root/subject.PATHS['ios']['framework']).exists())
 
     def test_only_canonical_repository_alias_is_admitted(self):
         preferred = (self.root/subject.PATHS['ios']['package']).parent/'XRay.xcframework'
         preferred.symlink_to('../XRay.xcframework')
-        with patch.object(subject, 'git_bindings'):
+        with patch.object(subject, 'verify_producer'):
             subject.install(self.root, 'ios', self.archive, self.manifest)
         subject.verify_installed(self.root, 'ios', self.document)
         preferred.unlink(); preferred.symlink_to(self.root/'foreign-cache')
         with self.assertRaises(ValueError): subject.verify_installed(self.root, 'ios', self.document)
 
     def test_post_test_proof_requires_unchanged_sdk_actual_markers_and_no_duplicates(self):
-        with patch.object(subject, 'git_bindings'):
+        with patch.object(subject, 'verify_producer'):
             subject.install(self.root, 'ios', self.archive, self.manifest)
         output = self.root/'build/published_apple_runtime/ios'
         shutil.copyfile(self.archive, output/'XRay.xcframework.zip'); shutil.copyfile(self.manifest, output/'manifest.json')
@@ -132,17 +132,18 @@ class PublishedApple(unittest.TestCase):
         for wrong in ['', valid.replace(subject.CORE_VERSION, '26.10.29'), valid.replace('CAPABILITY_PASS=2', 'CAPABILITY_PASS=1'),
                       valid+'RUNTIME='+subject.CORE_VERSION+'\n']:
             log.write_text(wrong)
-            with patch.object(subject, 'git_bindings'), self.assertRaises(ValueError): subject.finish(self.root, 'ios')
+            with patch.object(subject, 'verify_producer'), self.assertRaises(ValueError): subject.finish(self.root, 'ios')
         log.write_text(valid)
-        with patch.object(subject, 'git_bindings'): result = subject.finish(self.root, 'ios')
+        with patch.object(subject, 'verify_producer'): result = subject.finish(self.root, 'ios')
         self.assertFalse(result['runtime_checks_pending']); self.assertTrue(result['post_test_framework_unchanged'])
         (self.root/subject.PATHS['ios']['framework']/'Info.plist').write_bytes(b'changed after tests')
-        with patch.object(subject, 'git_bindings'), self.assertRaises(ValueError): subject.finish(self.root, 'ios')
+        with patch.object(subject, 'verify_producer'), self.assertRaises(ValueError): subject.finish(self.root, 'ios')
 
 
 class Workflow(unittest.TestCase):
     def test_published_mode_preserves_runtime_suites_and_skips_all_sdk_rebuilds(self):
-        text = (Path(__file__).resolve().parents[1]/'.github/workflows/ci.yml').read_text()
+        workflows = Path(__file__).resolve().parents[1]/'.github/workflows'
+        text = (workflows/'ci.yml').read_text()
         self.assertIn('apple_runtime_source:', text); self.assertIn('options: [build, published]', text)
         ios = text.split('\n  ios:\n', 1)[1].split('\n  windows:\n', 1)[0]
         self.assertNotIn('REQUIRE_MANAGED_SERVICE_LIFETIMES:', ios.split('    steps:', 1)[0],
@@ -163,33 +164,46 @@ class Workflow(unittest.TestCase):
         self.assertIn('REQUIRE_MANAGED_SERVICE_LIFETIMES:', ios)
         self.assertIn('tool/install_published_apple_runtime.py --verify-installed', ios)
         self.assertIn('build/published_apple_runtime/**/*.json', ios)
-        install = next(step for step in steps if step.startswith('name: Install the checksum-pinned published Apple SDKs'))
-        fetch = f'git fetch --no-tags --depth=1 origin {subject.HEAD}'
-        self.assertIn(fetch, install)
-        self.assertLess(install.index(fetch), install.index('python3 tool/install_published_apple_runtime.py'))
+        worker = (workflows/'macos-validation-worker.yml').read_text()
+        for job in [ios, worker]:
+            checkout = job.split('name: Check out the published SDK producer source', 1)[1].split('\n      - ', 1)[0]
+            self.assertIn(f'ref: {subject.HEAD}', checkout)
+            self.assertIn(f'path: {subject.PRODUCER_CHECKOUT}', checkout)
+            self.assertLess(job.index('name: Check out the published SDK producer source'),
+                            job.index('name: Install the checksum-pinned published'))
 
-    def test_exact_producer_fetch_restores_source_validation_in_a_shallow_checkout(self):
+    def test_pinned_producer_checkout_verifies_older_sources_without_changing_consumer(self):
         def git(directory, *arguments):
             return subprocess.run(['git', '-C', str(directory), *arguments], capture_output=True,
                                   text=True, check=True, timeout=10).stdout.strip()
-        with tempfile.TemporaryDirectory(prefix='apple-published-shallow-') as temporary:
-            root = Path(temporary); origin = root/'origin'; origin.mkdir()
-            git(origin, 'init')
-            (origin/'source.py').write_text('immutable producer source\n')
-            git(origin, 'add', '.')
-            git(origin, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'producer')
-            producer = git(origin, 'rev-parse', 'HEAD')
-            (origin/'unrelated-verifier.py').write_text('later verifier only\n')
-            git(origin, 'add', '.')
-            git(origin, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'consumer')
-            checkout = root/'checkout'
-            subprocess.run(['git', 'clone', '--depth=1', origin.as_uri(), str(checkout)],
-                           capture_output=True, check=True, timeout=10)
-            absent = subprocess.run(['git', '-C', str(checkout), 'show', producer+':source.py'],
-                                    capture_output=True, check=False, timeout=10)
-            self.assertNotEqual(absent.returncode, 0, 'Control must reproduce unavailable producer history')
-            git(checkout, 'fetch', '--no-tags', '--depth=1', 'origin', producer)
-            subject.git_bindings(checkout, producer, {'source.py': subject.digest(checkout/'source.py')})
+
+        with tempfile.TemporaryDirectory(prefix='apple-published-producer-') as temporary:
+            root = Path(temporary)
+            git(root, 'init')
+            source = root/'source.py'
+            source.write_text('immutable producer source\n')
+            source_bindings = {'source.py': subject.digest(source)}
+            git(root, 'add', 'source.py')
+            git(root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'producer')
+            producer_ref = git(root, 'rev-parse', 'HEAD')
+            source.write_text('current consumer source\n')
+            git(root, 'add', 'source.py')
+            git(root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'consumer')
+
+            checkout = root/subject.PRODUCER_CHECKOUT
+            checkout.parent.mkdir(parents=True)
+            git(root, 'worktree', 'add', '--detach', str(checkout), producer_ref)
+            with patch.object(subject, 'HEAD', producer_ref):
+                with self.assertRaisesRegex(ValueError, 'Checkout source binding differs'):
+                    subject.git_bindings(root, producer_ref, source_bindings)
+                subject.verify_producer(root, source_bindings)
+                self.assertEqual(source.read_text(), 'current consumer source\n')
+                (checkout/'source.py').write_text('tampered producer source\n')
+                with self.assertRaisesRegex(ValueError, 'Checkout source binding differs'):
+                    subject.verify_producer(root, source_bindings)
+                git(checkout, 'checkout', '--force', '--detach', git(root, 'rev-parse', 'HEAD'))
+                with self.assertRaisesRegex(ValueError, 'producer checkout differs'):
+                    subject.verify_producer(root, source_bindings)
 
 
 if __name__ == '__main__': unittest.main()

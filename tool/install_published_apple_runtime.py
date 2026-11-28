@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import urllib.request
@@ -16,6 +17,7 @@ from package_apple_core_preview import digest, git_bindings, safe_name, tree
 
 ROOT = Path(__file__).resolve().parents[1]
 HEAD = 'a56429a73d0229ffd5ac5223bfabdcd6a7c19724'
+PRODUCER_CHECKOUT = Path('build/apple-published-producer')
 CORE_COMMIT = '676eaf66f8f05d4d558ee7a74b4736623d3feeb9'
 CORE_VERSION = '26.11.9'
 REVISION = 'r1'
@@ -93,13 +95,24 @@ def verify_installed(root, platform, document):
     verify_preferred(root, platform, document)
 
 
+def verify_producer(root, bindings):
+    """Check released SDK inputs against the checkout used to build them."""
+    producer = root/PRODUCER_CHECKOUT
+    checkout, revision = subprocess.check_output(
+        ['git', 'rev-parse', '--show-toplevel', 'HEAD'], cwd=producer, text=True, timeout=30,
+    ).splitlines()
+    if Path(checkout).resolve() != producer.resolve() or revision != HEAD:
+        raise ValueError('Published Apple SDK producer checkout differs')
+    git_bindings(producer, HEAD, bindings)
+
+
 def install(root, platform, archive, manifest):
     document = verify_archive(platform, archive, manifest)
     package = (root/PATHS[platform]['package']).read_text()
     if re.findall(r'let xrayReleaseTag = "([^"]+)"', package) != [f'xray-{platform}-v{CORE_VERSION}-{REVISION}'] \
             or re.findall(r'let xrayChecksum = "([0-9a-f]{64})"', package) != [PINS[platform]['zip']]:
         raise ValueError('SwiftPM public SDK pins differ')
-    git_bindings(root, HEAD, document['source_sha256'])
+    verify_producer(root, document['source_sha256'])
     verify_preferred(root, platform, document)
     destination = root/PATHS[platform]['framework']
     if destination.is_symlink(): raise ValueError('Apple SDK destination must be a real directory')
@@ -127,7 +140,7 @@ def install(root, platform, archive, manifest):
 def finish(root, platform):
     output = root/'build/published_apple_runtime'/platform
     document = verify_archive(platform, output/'XRay.xcframework.zip', output/'manifest.json')
-    git_bindings(root, HEAD, document['source_sha256'])
+    verify_producer(root, document['source_sha256'])
     verify_installed(root, platform, document)
     log_path = root/f'build/{platform}_privacy_runtime_probe/runtime.log'; log = log_path.read_text()
     markers = ['RUNTIME='+CORE_VERSION, 'APPLE_GEODATA_LIFETIME_CAPABILITY_PASS=1', 'APPLE_XDRIVE_LIFETIME_CAPABILITY_PASS=2',
